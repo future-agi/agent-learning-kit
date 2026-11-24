@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+import contextvars
 import json
 import math
 import logging
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from pathlib import Path
 from collections.abc import Awaitable, Callable
-from typing import Any, AsyncIterable
+from typing import Any, AsyncIterable, AsyncIterator
 from uuid import uuid4
 
 try:
@@ -64,6 +65,15 @@ from .caller_barge_in import (
     selected_call_indices,
 )
 from .opening import PromptOpeningGate
+from .call_actor_voice import (
+    SILENCE_RMS,
+    CallActorsOnCall,
+    CallActorVoice,
+    at_level,
+    with_call_actor_turns,
+    world_access,
+    world_records,
+)
 from fi.simulate.agent.definition import (
     AgentDefinition,
     LiveKitSimulatorRuntime,
@@ -93,7 +103,12 @@ from fi.simulate.endpoints.originators import (
 )
 from fi.simulate.simulation.bridge import LiveKitAudioBridge
 from fi.simulate.simulation.bridge.audio import PCMResampler
-from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
+from fi.simulate.simulation.livekit_models import (
+    LiveKitModels,
+    build_livekit_llm,
+    build_livekit_models,
+    build_livekit_tts,
+)
 from fi.simulate.recording.room_recorder import (
     RoomRecorder,
     mix_recordings,
@@ -109,6 +124,10 @@ from fi.simulate.runtime import (
 from fi.simulate.simulation.engines.base import BaseEngine
 from fi.simulate.simulation.generator import ScenarioGenerator
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
+from fi.simulate.simulation.call_actors import (
+    ACTOR_VOICES_ALIAS,
+    ACTOR_WORLD_ALIAS,
+)
 from fi.simulate.simulation.voice_prompt import (
     HOLD_MARKER,
     CallType,
@@ -708,6 +727,11 @@ class _TestRunnerAgent(Agent):
         self._usage_collector = metrics.ModelUsageCollector()
         self._prompt_opening: PromptOpeningGate | None = None
         self._caller_barge_in: CallerBargeIn | None = None
+        # Told about each committed agent turn; True while an actor holds the line.
+        self._call_actor_turn: Any = None
+        # The person's speech so far, so a background voice is set against how loud they are.
+        self._voice_squares = 0.0
+        self._voice_samples = 0
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         if self._call_over:
@@ -717,6 +741,14 @@ class _TestRunnerAgent(Agent):
         gate = self._prompt_opening
         if gate is not None and not gate.accepts(new_message.text_content):
             logger.info("prompt opening gate: waiting after non-interactive disclosure")
+            raise StopResponse()
+        if self._call_actor_turn is not None and await self._call_actor_turn(
+            new_message.text_content or ""
+        ):
+            # Someone else holds the line and has answered this turn; the person stays silent.
+            if self._session is not None:
+                self._session.history.insert(new_message)
+            await _remember_answered_turn(self, new_message)
             raise StopResponse()
         if self._caller_barge_in is not None:
             self._caller_barge_in.target_ended()
@@ -916,7 +948,12 @@ class _TestRunnerAgent(Agent):
             # Nothing stands behind a recording, and a room behind one gives the game away.
             logger.info("mailbox answered, so ambience is dropped (noise %r)", source)
             source = ""
-        if not source and not tone_style and not _answered_by_voicemail():
+        if (
+            not source
+            and not tone_style
+            and not _answered_by_voicemail()
+            and not _bound_call_actor_voices()
+        ):
             return
 
         try:
@@ -1285,6 +1322,20 @@ class _TestRunnerAgent(Agent):
         logger.info("simulator hold rescue generating check-in")
         session.generate_reply(instructions=_HOLD_CHECK_IN)
 
+    def _hear_own_voice(self, frame: Any) -> None:
+        samples = array.array("h", bytes(frame.data))
+        squares = sum(sample * sample for sample in samples)
+        # Speech only: pauses would make the person seem quieter than they sound.
+        if samples and squares / len(samples) > SILENCE_RMS**2:
+            self._voice_squares += squares
+            self._voice_samples += len(samples)
+
+    def voice_rms(self) -> float | None:
+        """The person's speech level so far, or None before they have said anything."""
+        if not self._voice_samples:
+            return None
+        return math.sqrt(self._voice_squares / self._voice_samples)
+
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         started = time.monotonic()
         frames = 0
@@ -1300,6 +1351,8 @@ class _TestRunnerAgent(Agent):
                         time.monotonic() - started,
                     )
                 frames += 1
+                if self._call_actor_turn is not None:
+                    self._hear_own_voice(frame)
                 yield frame
         except asyncio.CancelledError:
             state = "cancelled"
@@ -1917,7 +1970,7 @@ class LiveKitEngine(BaseEngine):
             if not _cleanup_started:
                 _cleanup_started.append(time.monotonic())
             spent = time.monotonic() - _cleanup_started[0]
-            remaining = max(0.1, cleanup_timeout - spent)
+            remaining = max(0.1, _cleanup_limit(cleanup_timeout) - spent)
             return min(cap, remaining)
 
         api_key = os.environ.get(runtime.api_key_env)
@@ -1942,6 +1995,7 @@ class LiveKitEngine(BaseEngine):
         target_transcription_handler_registered = False
         target_transcription_tasks: set[asyncio.Task[None]] = set()
         caller_barge_in: CallerBargeIn | None = None
+        call_actors = CallActorsOnCall([], seed="", play=None, say=None)
         # Set the moment the conversation ends. A target transcription stream
         # still in flight at that point is the target's final utterance; it must
         # be recorded into the transcript, but WITHOUT triggering another
@@ -2342,6 +2396,13 @@ class LiveKitEngine(BaseEngine):
 
                 session.on("agent_state_changed", on_simulator_state_changed)
 
+            call_actors = self._call_actors_on_call(
+                customer_agent, models, session, seed=run_id
+            )
+            customer_agent._call_actor_turn = (
+                call_actors.agent_turn if call_actors else None
+            )
+            call_actors.prepare_menu()
 
             # "Agent speaks first" is a four-second race for speech ONSET, not four seconds of
             # silence after the target finishes. Register before dispatch/readiness so even an
@@ -2473,15 +2534,7 @@ class LiveKitEngine(BaseEngine):
                             "transport": transport.kind,
                         },
                     )
-                    outcome = _failure_outcome(
-                        TestCaseStatus.FAILED,
-                        FailureStage.PREPARING,
-                        "web_bridge_start_failed",
-                        "Failed to start the provider web bridge",
-                        details=_safe_provider_error_details(
-                            exc, operation="web_bridge_start"
-                        ),
-                    )
+                    outcome = _web_bridge_start_failure(exc)
                     raise _PreparationFailed
             if profile.places_outbound_call and api_client is not None:
                 try:
@@ -2749,8 +2802,12 @@ class LiveKitEngine(BaseEngine):
                 if prompt_opening is not None:
                     prompt_opening.stream_started()
                 opening_turn = target_transcription_sequence == 1
+                # Only an agent-first opening is ever classified; waiting on it when the caller
+                # spoke first would silence the caller for the rest of the call.
                 await_opening_classification = (
-                    not opening_turn and not opening_transcription_classified.is_set()
+                    conversation_direction == "agent_first"
+                    and not opening_turn
+                    and not opening_transcription_classified.is_set()
                 )
                 # Authoritative target transcription disables the simulator's
                 # STT audio input, so a later real greeting may not produce a
@@ -2791,6 +2848,7 @@ class LiveKitEngine(BaseEngine):
                         opening_followup_started=target_after_preamble_started,
                         prompt_opening=prompt_opening,
                         caller_barge_in=caller_barge_in,
+                        call_actor_turn=call_actors.agent_turn if call_actors else None,
                     )
                 )
                 target_transcription_tasks.add(task)
@@ -2811,7 +2869,22 @@ class LiveKitEngine(BaseEngine):
 
             opener: asyncio.Task[None] | None = None
             preamble_opener: asyncio.Task[None] | None = None
-            if conversation_direction == "simulator_first" or _answered_by_voicemail():
+            menu_answers = (
+                conversation_direction == "simulator_first"
+                and not _answered_by_voicemail()
+            )
+            if call_actors.menu() is not None and not menu_answers:
+                call_actors.menu_cannot_answer(
+                    "the agent spoke first, so the person's phone menu never answered"
+                )
+            if call_actors.menu() is not None and menu_answers:
+                # The person's menu answers; the person comes on once it puts the call through. A menu that
+                # could not speak leaves the call to the person, never to a silence on both sides.
+                if not await call_actors.answer_first():
+                    customer_agent.open_conversation()
+            elif (
+                conversation_direction == "simulator_first" or _answered_by_voicemail()
+            ):
                 # A mailbox speaks first and needs no watchdog to break a mutual silence.
                 customer_agent.open_conversation()
             elif prompt_opening is not None:
@@ -2867,6 +2940,7 @@ class LiveKitEngine(BaseEngine):
             customer_agent.end_of_call()
             if caller_barge_in is not None:
                 await caller_barge_in.close()
+            await call_actors.close()
             if stop_reason == "simulator_end_call":
                 wait_for_end_speech = getattr(
                     customer_agent,
@@ -2885,7 +2959,10 @@ class LiveKitEngine(BaseEngine):
                         extra={"run_id": run_id, "test_case_id": test_case_id},
                     )
             _loop = asyncio.get_running_loop()
-            _commit_deadline = _loop.time() + _FINAL_TURN_COMMIT_WAIT_SECONDS
+            # A person's Stop cuts the call where it is: no wait for the turn in flight or the target's last words.
+            _commit_deadline = _loop.time() + (
+                0.0 if stop_reason == "user_canceled" else _FINAL_TURN_COMMIT_WAIT_SECONDS
+            )
             while _loop.time() < _commit_deadline:
                 try:
                     if session.current_speech is None:
@@ -2894,7 +2971,7 @@ class LiveKitEngine(BaseEngine):
                     break
                 await asyncio.sleep(0.2)
             session_messages = _session_messages(session)
-            waited = await _await_target_last_words(
+            waited = 0.0 if stop_reason == "user_canceled" else await _await_target_last_words(
                 speaking=lambda: bool(target_transcription_tasks)
                 or getattr(session, "user_state", None) == "speaking",
                 present=lambda: any(
@@ -3005,6 +3082,7 @@ class LiveKitEngine(BaseEngine):
             )
             if caller_barge_in is not None:
                 await caller_barge_in.close()
+            await call_actors.close()
             if customer_agent is not None:
                 customer_agent.end_of_call()
             # Stop the media source before flushing its final transcription.
@@ -3241,6 +3319,8 @@ class LiveKitEngine(BaseEngine):
                     "livekit_outcome_missing",
                     "LiveKit test case ended without an outcome",
                 )
+        call_actor_events = call_actors.events()
+        messages = with_call_actor_turns(messages, call_actor_events)
         # Failed calls keep their evidence and original failure, too.
         outcome.messages = messages
         outcome.transcript = "\n".join(
@@ -3297,6 +3377,8 @@ class LiveKitEngine(BaseEngine):
         outcome.metadata.update(
             {
                 "simulator_participant_identity": simulator_identity,
+                "call_actor_events": call_actor_events,
+                "call_actors": call_actors.summary(),
                 "caller_barge_in": (
                     caller_barge_in.summary() if caller_barge_in is not None
                     else {
@@ -3363,6 +3445,101 @@ class LiveKitEngine(BaseEngine):
         )
         return outcome
 
+    def _call_actors_on_call(
+        self, customer_agent: Any, models: Any, session: Any, *, seed: str
+    ) -> CallActorsOnCall:
+        """Every actor this call carries, each in a voice of its own."""
+        llm_config = (getattr(self, "_last_simulator_setup", None) or {}).get("llm_config")
+        player = getattr(customer_agent, "_background_player", None)
+        base = (getattr(self, "_last_simulator_setup", None) or {}).get("tts_config")
+
+        async def heard(note: str) -> None:
+            context = customer_agent.chat_ctx.copy()
+            context.add_message(role="system", content=note)
+            await customer_agent.update_chat_ctx(context)
+
+        def conversation() -> list[str]:
+            # The person's context: the agent is its user, the person its assistant.
+            speakers = {"user": "The agent", "assistant": "The person"}
+            return [
+                f"{speakers[item.role]}: {item.text_content}"
+                for item in customer_agent.chat_ctx.items
+                if getattr(item, "type", "") == "message"
+                and item.role in speakers
+                and item.text_content
+            ]
+
+        async def say(frames: AsyncIterable[Any], text: str, name: str) -> None:
+            # Spoken on the person's line as its own turn, and noted in the person's context.
+            handle = session.say(
+                text, audio=frames, allow_interruptions=False, add_to_chat_ctx=False
+            )
+            waiter = getattr(handle, "wait_for_playout", None)
+            if callable(waiter):
+                try:
+                    await waiter()
+                except asyncio.CancelledError:
+                    # Out of actor time: the line stops, so the person can take the phone back.
+                    handle.interrupt(force=True)
+                    raise
+            await heard(f"{name} said on the line: {text}")
+
+        async def play(
+            frames: AsyncIterable[Any], ratio: float, text: str, name: str
+        ) -> None:
+            level = at_level(frames, ratio, customer_agent.voice_rms())
+            handle = player.play(AudioConfig(_stream_at_mixer_rate(level), volume=1.0))
+            try:
+                await handle.wait_for_playout()
+            except asyncio.CancelledError:
+                handle.stop()
+                raise
+            await heard(
+                f"{name} said nearby, and you heard it: {text} React as you would in person: if it calls"
+                f" for an answer, answer {name} briefly in your next line, then carry on with the call."
+                " What you want from the call stays your own."
+            )
+
+        voices = []
+        for actor in _bound_call_actor_voices():
+            delivery = {
+                key: actor[key] for key in ("speed", "emotion") if actor.get(key)
+            }
+            try:
+                tts = build_livekit_tts(
+                    _with_voice(base, str(actor["voice"]), **delivery),
+                    models.http_session,
+                )
+            except Exception:  # noqa: BLE001 - never the person's voice: the agent could not tell them apart
+                logger.warning("actor %s has no voice of its own", actor.get("id"))
+                tts = None
+            else:
+                # Connected now, as the person's voice is, so a first line is not held up by a cold start.
+                tts.prewarm()
+                tts.on("metrics_collected", customer_agent._usage_collector.collect)
+            voices.append(
+                CallActorVoice(
+                    actor=actor,
+                    model=actor_llm(
+                        actor, models.llm, llm_config, getattr(customer_agent, "_usage_collector", None)
+                    ),
+                    tts=tts,
+                    situation=str(actor.get("situation") or ""),
+                    language=str(actor.get("language") or ""),
+                    report_action=_action_reporter(_bound_call_actors()["actions_file"]),
+                )
+            )
+        return CallActorsOnCall(
+            voices,
+            seed=seed,
+            play=play if player is not None else None,
+            say=say,
+            tools_called=world_access(os.environ.get(ACTOR_WORLD_ALIAS, "")),
+            records=world_records(os.environ.get(ACTOR_WORLD_ALIAS, "")),
+            limits=_bound_call_actors()["limits"],
+            conversation=conversation,
+        )
+
     async def _create_customer_agent(
         self,
         persona: Persona,
@@ -3428,8 +3605,7 @@ class LiveKitEngine(BaseEngine):
             else None
         )
         if persona_voice:
-            field = "model" if tts_config.provider == "deepgram" else "voice"
-            tts_config = tts_config.model_copy(update={field: str(persona_voice)})
+            tts_config = _with_voice(tts_config, str(persona_voice))
         models = await build_livekit_models(
             llm_config=llm_config,
             stt_config=stt_config,
@@ -3538,6 +3714,7 @@ async def _forward_target_transcription(
     opening_followup_started: asyncio.Event | None = None,
     prompt_opening: PromptOpeningGate | None = None,
     caller_barge_in: CallerBargeIn | None = None,
+    call_actor_turn: Any = None,
 ) -> None:
     # Receiver-side wall clock — same clock domain as the simulator's
     # ChatMessage.metrics, and the target's transcript IO is playback-synced
@@ -3623,6 +3800,18 @@ async def _forward_target_transcription(
                     getattr(session, "current_agent", None), message
                 )
                 return
+        ended = conversation_ended is not None and conversation_ended.is_set()
+        if (
+            call_actor_turn is not None
+            and not ended
+            and await call_actor_turn(transcript)
+        ):
+            # Someone else holds the line and has answered this turn; the person stays silent.
+            message = session.history.add_message(role="user", content=transcript)
+            await _remember_answered_turn(
+                getattr(session, "current_agent", None), message
+            )
+            return
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays
         # silent. The turn MUST travel through ``generate_reply(user_input=...)``:
@@ -3851,6 +4040,61 @@ async def _await_target_last_words(
     return loop.time() - started
 
 
+# The hosting harness's Stop, read while a conversation runs: set by the voice environment for one run, so a person's
+# Stop ends the call at once and the call is sealed with what was said up to it.
+STOP_CHECK: contextvars.ContextVar[Callable[[], bool] | None] = contextvars.ContextVar(
+    "livekit_stop_check", default=None
+)
+_STOP_POLL_SECONDS = 0.25
+
+
+# After a person's Stop the call is sealed with what it has: teardown gets this much in all, so the transcript and the
+# recording reach the harness inside its seal bound (15 s from the stop) however long LiveKit takes to let go.
+_STOPPED_CLEANUP_SECONDS = 8.0
+
+
+# Until when the target is known to be working with nobody speaking (a tool call the harness's world is holding for
+# its timeout), as an epoch second; read while a conversation runs. Unset, the silence backstop is as it always was.
+TARGET_BUSY_UNTIL: contextvars.ContextVar[Callable[[], float | None] | None] = contextvars.ContextVar(
+    "livekit_target_busy_until", default=None
+)
+
+
+def _target_held() -> bool:
+    """Whether the hosting harness says the target is still working on a held tool call."""
+    check = TARGET_BUSY_UNTIL.get()
+    if check is None:
+        return False
+    try:
+        until = check()
+    except Exception:  # noqa: BLE001 - a failing check is no hold
+        return False
+    return until is not None and time.time() < until
+
+
+def _stop_requested() -> bool:
+    check = STOP_CHECK.get()
+    try:
+        return bool(check is not None and check())
+    except Exception:  # noqa: BLE001 - a failing check is no stop
+        return False
+
+
+def _cleanup_limit(cleanup_timeout: float) -> float:
+    """The whole teardown's budget: the run's own, cut short once the person stopped the call."""
+    return min(cleanup_timeout, _STOPPED_CLEANUP_SECONDS) if _stop_requested() else cleanup_timeout
+
+
+async def _wait_for_stop(check: Callable[[], bool]) -> None:
+    while True:
+        try:
+            if check():
+                return
+        except Exception:  # noqa: BLE001 - a failing check never ends the call
+            pass
+        await asyncio.sleep(_STOP_POLL_SECONDS)
+
+
 async def _wait_for_conversation_end(
     room: rtc.Room,
     session: AgentSession,
@@ -3922,6 +4166,9 @@ async def _wait_for_conversation_end(
         )
     if provider_task is not None:
         tasks["provider_disconnected"] = provider_task
+    stop_check = STOP_CHECK.get()
+    if stop_check is not None:
+        tasks["user_canceled"] = asyncio.create_task(_wait_for_stop(stop_check))
     try:
         done, pending = await asyncio.wait(
             set(tasks.values()),
@@ -3951,15 +4198,26 @@ async def _wait_for_conversation_end(
             else:
                 monitor_failures[name] = exc
         for name, exc in monitor_failures.items():
+            extra: dict[str, object] = {
+                "monitor": name,
+                "target_identity": target_identity,
+            }
+            if name == "provider_disconnected" and isinstance(exc, Exception):
+                # Only the sanitized code and status, never the message.
+                extra.update(
+                    _safe_provider_error_details(exc, operation="provider_audio")
+                )
             logger.warning(
                 "conversation end monitor failed",
                 exc_info=redacted_exc_info(exc),
-                extra={"monitor": name, "target_identity": target_identity},
+                extra=extra,
             )
         # A bridge task error is still a real provider-side disconnect.
         if "provider_disconnected" in monitor_failures:
             completed.add("provider_disconnected")
         for reason in (
+            # The person's Stop outranks every other ending.
+            "user_canceled",
             "simulator_end_call",
             "target_disconnected",
             "room_disconnected",
@@ -4126,7 +4384,8 @@ async def _wait_for_conversation_silence(
             await asyncio.sleep(0.1)
             continue
         now = loop.time()
-        participant_busy = _either_side_busy(session)
+        # A tool call the world holds keeps the target working in silence: the wait starts again once it is answered.
+        participant_busy = _either_side_busy(session) or _target_held()
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
@@ -4264,6 +4523,29 @@ def _frame_at_mixer_rate(frame: "rtc.AudioFrame") -> "rtc.AudioFrame":
     )
 
 
+async def _stream_at_mixer_rate(frames: AsyncIterable[Any]) -> AsyncIterator[Any]:
+    """A voice's audio at the mixer's rate. The mixer reinterprets what it is given, so a voice made at
+    another rate would play fast and high. One resampler per stream, as its state carries between frames."""
+    resampler = None
+    async for frame in frames:
+        if frame.sample_rate == _BACKGROUND_MIXER_RATE:
+            yield frame
+            continue
+        resampler = resampler or PCMResampler(
+            from_rate=frame.sample_rate,
+            to_rate=_BACKGROUND_MIXER_RATE,
+            channels=frame.num_channels,
+        )
+        converted = resampler.convert(bytes(frame.data))
+        if converted:
+            yield rtc.AudioFrame(
+                data=converted,
+                sample_rate=_BACKGROUND_MIXER_RATE,
+                num_channels=frame.num_channels,
+                samples_per_channel=len(converted) // (2 * frame.num_channels),
+            )
+
+
 def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
     """One frame of sine, faded in and out: a burst at full amplitude clicks and a detector hears the click."""
     total = int(_BACKGROUND_MIXER_RATE * seconds)
@@ -4285,6 +4567,54 @@ def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
         num_channels=1,
         samples_per_channel=total,
     )
+
+
+def _with_voice(tts_config: Any, voice: str, **delivery: Any) -> Any:
+    """This TTS setting in another voice. Deepgram encodes the voice in the model name (``aura-*``)."""
+    field = "model" if tts_config.provider == "deepgram" else "voice"
+    return tts_config.model_copy(update={field: voice, **delivery})
+
+
+def _bound_call_actors() -> dict[str, Any]:
+    """The speaking actors this call carries and the limits in force; set per scenario by the call runner, as
+    `{"voices": [...], "limits": {...}}` (a bare list is voices with the default limits)."""
+    try:
+        bound = json.loads(os.environ.get(ACTOR_VOICES_ALIAS, "") or "[]")
+    except ValueError:
+        return {"voices": [], "limits": None, "actions_file": None}
+    if isinstance(bound, list):
+        bound = {"voices": bound, "limits": None}
+    if not isinstance(bound, dict):
+        return {"voices": [], "limits": None, "actions_file": None}
+    voices = bound.get("voices")
+    limits = bound.get("limits")
+    actions = bound.get("actions_file")
+    return {
+        "voices": [one for one in voices if isinstance(one, dict)] if isinstance(voices, list) else [],
+        "limits": limits if isinstance(limits, dict) else None,
+        "actions_file": actions if isinstance(actions, str) and actions else None,
+    }
+
+
+def _action_reporter(path: str | None) -> Callable[[dict[str, Any]], None] | None:
+    """Where an actor's decided action goes: one JSON line in the file the run reads during the call. The run, which
+    holds the trial's token, sends it through the world's door; this process never does."""
+    if not path:
+        return None
+
+    def report(action: dict[str, Any]) -> None:
+        try:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(action, default=str) + "\n")
+        except OSError:
+            logger.warning("an actor's action could not be handed to the run")
+
+    return report
+
+
+def _bound_call_actor_voices() -> list[dict[str, Any]]:
+    """The speaking actors this call carries; set per scenario by the call runner."""
+    return _bound_call_actors()["voices"]
 
 
 def _answered_by_voicemail() -> bool:
@@ -4940,6 +5270,14 @@ def _conversation_outcome(
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
     )
+    if stop_reason == "user_canceled":
+        # Stopped by the person: the call is kept as said up to the stop; the harness reports it as cancelled.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={"stop_reason": stop_reason},
+        )
     if (
         stop_reason in {"target_disconnected", "room_disconnected"}
         and _has_role_alternation(messages)
@@ -5132,6 +5470,19 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
         }:
             return True
     return False
+
+
+def _web_bridge_start_failure(exc: BaseException) -> _CaseOutcome:
+    """The case outcome when a provider's web bridge doesn't start. A cause the bridge marks
+    as passing (a rate limit, media servers at capacity, a timeout) can be retried."""
+    return _failure_outcome(
+        TestCaseStatus.FAILED,
+        FailureStage.PREPARING,
+        "web_bridge_start_failed",
+        "Failed to start the provider web bridge",
+        retryable=bool(getattr(exc, "retryable", False)),
+        details=_safe_provider_error_details(exc, operation="web_bridge_start"),
+    )
 
 
 def _failure_outcome(
@@ -5352,6 +5703,22 @@ def _target_evidence_base_url(target: VoiceProviderTarget | None) -> str | None:
         parsed = urlsplit(str(target.api_url))
         return f"{parsed.scheme}://{parsed.netloc}"
     return None
+
+
+def actor_llm(actor: dict[str, Any], shared: Any, llm_config: Any, collector: Any, build: Any = None) -> Any:
+    """A speaking actor's own model when it names one, on the simulator's provider, its calls counted as simulator
+    usage like the caller's. Otherwise the caller's model, whose calls the session already counts."""
+    named = str(actor.get("model") or "")
+    if not named or llm_config is None or named == getattr(llm_config, "model", None):
+        return shared
+    try:
+        own = (build or build_livekit_llm)(llm_config.model_copy(update={"model": named}))
+    except Exception:  # noqa: BLE001 - an actor on the caller's model is still played
+        logger.warning("actor %s cannot use model %s; it uses the caller's", actor.get("id"), named)
+        return shared
+    if collector is not None:
+        own.on("metrics_collected", collector.collect)
+    return own
 
 
 def _default_simulator_llm_config() -> LLMConfig:

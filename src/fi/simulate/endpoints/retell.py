@@ -21,20 +21,6 @@ from typing import Any, Literal
 
 import httpx
 
-try:
-    import retell
-    from retell import AsyncRetell, NoneType
-except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
-    # retell-sdk is an optional dependency: an environment running only
-    # chat/Vapi jobs must still be able to import this module (and the rest
-    # of fi.simulate.endpoints) without it installed. Only
-    # RetellCallOriginator (the class that actually talks to the SDK) fails
-    # loudly, in its own __init__ below — RetellAgentEndpoint/RetellCall
-    # stay httpx-only and never touch these names.
-    retell = None  # type: ignore[assignment]
-    AsyncRetell = None  # type: ignore[assignment,misc]
-    NoneType = type(None)
-
 from fi.simulate.realtime.events import RealtimeEvent
 from fi.simulate.realtime.media import AudioFrame
 from fi.simulate.runtime.capabilities import EndpointCapabilities
@@ -49,6 +35,17 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sdk() -> Any:
+    """retell-sdk, or None without it. An environment running only chat or Vapi jobs may not
+    have it, and importing it takes about a second, so only RetellCallOriginator (the class
+    that talks to the SDK) loads it. RetellAgentEndpoint and RetellCall stay httpx-only."""
+    try:
+        import retell
+    except ImportError:
+        return None
+    return retell
 
 
 def _select_call_rows(payload: Any) -> tuple[list[dict[str, Any]], bool]:
@@ -153,7 +150,8 @@ class RetellCallOriginator:
         destination: str,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if retell is None:
+        self._sdk = _sdk()
+        if self._sdk is None:
             raise RuntimeError(
                 "retell_sdk_missing: RetellCallOriginator needs "
                 "retell-sdk>=5.64,<6 (pip install 'retell-sdk>=5.64,<6')"
@@ -168,7 +166,7 @@ class RetellCallOriginator:
         # given, owned or not, which would close a caller-injected client.
         self._owns_client = client is None
         self._http = client or httpx.AsyncClient()
-        self._client = AsyncRetell(
+        self._client = self._sdk.AsyncRetell(
             api_key=api_key,
             base_url=os.environ.get("RETELL_API_BASE_URL", self._base_url),
             timeout=httpx.Timeout(30.0, connect=10.0),
@@ -252,9 +250,9 @@ class RetellCallOriginator:
             options["timeout"] = timeout
         try:
             await self._client.post(
-                f"/v2/stop-call/{call_id}", cast_to=NoneType, options=options
+                f"/v2/stop-call/{call_id}", cast_to=type(None), options=options
             )
-        except retell.APIStatusError as exc:
+        except self._sdk.APIStatusError as exc:
             if exc.status_code not in self._TOLERATED_STOP_STATUSES:
                 raise
 
@@ -356,7 +354,7 @@ class RetellCallOriginator:
                     # "NoneType"), same as before this round.
                     payload = response
                     rows, recognised = _select_call_rows(payload)
-        except (retell.APIError, httpx.HTTPError, ValueError) as exc:
+        except (self._sdk.APIError, httpx.HTTPError, ValueError) as exc:
             # retell.APIError covers both APIStatusError (non-2xx) and
             # APIConnectionError (transport failure) — the SDK's hierarchy
             # is not httpx's, so APIConnectionError is NOT an
@@ -545,7 +543,7 @@ class RetellCallOriginator:
 
         try:
             await self.stop(call_id, timeout=self._RECONCILE_TIMEOUT)
-        except (retell.APIError, httpx.HTTPError) as exc:
+        except (self._sdk.APIError, httpx.HTTPError) as exc:
             # httpx.HTTPError is kept as insurance only — the SDK's own
             # errors (APIStatusError, APIConnectionError) are never
             # httpx.HTTPError subclasses (probed); the transport-error net

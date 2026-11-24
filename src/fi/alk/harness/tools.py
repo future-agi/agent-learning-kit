@@ -7,20 +7,83 @@ the next turn instead of surfacing once the session is already over.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from pathlib import Path
-from typing import Any
+import logging
+import secrets
+import sys
+import weakref
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any
 
+from fi.simulate.agent.wrappers.http_events import (
+    CompletedToolEvents,
+    CompletedToolRows,
+)
+from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
+
+from .agent_type_check import (
+    SECOND_LOOK_READ,
+    SecondLook,
+    agent_type_failure,
+    browser_scan,
+    code_the_agent_reaches,
+    failure_message,
+    is_browser,
+    modality_text,
+)
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
+from .backends.files import secret_text
 
 from .contract import (
+    prompt_quote,
     CALL_DIRECTIONS,
     AgentContract,
+    Runtime,
+    RuntimeInterface,
+    ToolEntry,
+    RuntimeSecretFile,
+    RuntimeConfigFile,
+    HttpObservation,
+    RuntimeHttpFailureRule,
+    RuntimeHttpSetupRequest,
+    LocalHttpAuth,
     known_modalities,
+    generated_chat_interface_problem,
+    runtime_public_environment,
     validate_contract,
+    write_contract,
+    CONTRACT_FILE,
 )
+from .failure_file import FAILURE_FILE, write_failure_file
+from .job import FailureDomain, HarnessFailure, HarnessStage
 from .instrumentation_evidence import detect_instrumentation
+from .runtime_selection import (
+    COMPOSE_SERVICE_OUTSIDE_FOLDER,
+    PathLookupsSpent,
+    RuntimeSelectionError,
+    charged_path,
+    path_lookup_budget,
+    select_runtime,
+)
+from .model_citation import (
+    model_problems,
+    quote_pieces,
+    quote_problem,
+    says_something,
+    read_source,
+    resolved_in_source,
+    source_lines,
+)
+from .python_source import utf8_size
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+
+if TYPE_CHECKING:
+    from .save_checker import Mode
+
+_LOG = logging.getLogger(__name__)
 
 CONTRACT_SERVER = "contract"
 
@@ -124,45 +187,488 @@ def unwrapped(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def accept_contract(
-    payload: dict[str, Any], destination: Path, *, source_root: Path | None = None
+    payload: dict[str, Any],
+    destination: Path,
+    *,
+    source_root: Path | None = None,
+    require_setup_contract: bool = False,
+    subfolder: str | None = None,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
     A plain function rather than only a tool body, so the rule that decides whether a contract
     is usable can be exercised and reasoned about without standing up a session.
     """
+    checked = _checked_contract(
+        payload,
+        source_root=source_root,
+        require_setup_contract=require_setup_contract,
+        subfolder=subfolder,
+    )
+    if isinstance(checked, dict):
+        return checked
+    return _save_contract(checked, destination)
+
+
+def _checked_contract(
+    payload: dict[str, Any],
+    *,
+    source_root: Path | None,
+    require_setup_contract: bool,
+    subfolder: str | None,
+    reached: list[Path] | None = None,
+    asked: set[str] | None = None,
+    held: dict[str, str] | None = None,
+    instrumentation: str | None = None,
+    progress: Callable[[str, list[str]], None] | None = None,
+) -> AgentContract | dict[str, Any]:
+    """The contract to save, or the problems to send back. It reads the customer's files and
+    writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
+    folder the browser scan found the agent reaches, when it has run. ``instrumentation``, when
+    given, is the answer already found for this session, so it isn't read again. ``progress`` is
+    told each stage's new problems as the stage ends, so a save cut partway can still answer
+    with what was found."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
-    payload = _without_nulls(unwrapped(payload))
+    payload = _contract_payload(payload)
     try:
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
-        return _problems([f"schema:{invalid}"[:600]], arrived)
+        schema_problems = [f"schema:{invalid}"[:600]]
+        if progress is not None:
+            progress("contract", list(schema_problems))
+        return _problems(schema_problems, arrived)
+    # Only the save records lines it couldn't confirm.
+    contract.unconfirmed_prompt_from = []
 
     problems = validate_contract(contract)
+    for entry in contract.tool_entrypoints:
+        if (
+            entry.mode in _ROOTED_MODES
+            and entry.module
+            and not all(part.isidentifier() for part in entry.module.split("."))
+        ):
+            problems.append(
+                f"tool[{entry.tool}]:module-not-dotted-identifier: module {entry.module[:80]!r} "
+                "must be a dotted Python name such as `agent` or `pkg.tools`, each part an "
+                "identifier; it is not a file path."
+            )
+    if (
+        require_setup_contract
+        and contract.modality != "voice"
+        and (contract.data_store is None or not contract.data_store.kind.strip())
+    ):
+        problems.append(
+            "missing-storage-decision: inspect the source and declare data_store.kind. "
+            "Use its actual storage engine, filesystem for file-backed state, in_process "
+            "for memory-only state, or none when there is no state store. "
+            "Omitting data_store does not declare a stateless agent."
+        )
+    if require_setup_contract and contract.modality == "chat":
+        problem = generated_chat_interface_problem(contract.runtime)
+        if problem and not _build_writes_the_interface(contract.runtime, source_root, subfolder):
+            problems.append(problem)
+    if progress is not None:
+        progress("contract", list(problems))
+    with path_lookup_budget():
+        return _checked_against_source(
+            contract,
+            problems,
+            arrived,
+            source_root,
+            subfolder,
+            reached,
+            asked,
+            held,
+            instrumentation=instrumentation,
+            progress=progress,
+        )
+
+
+def _build_writes_the_interface(
+    runtime: Runtime | None, source_root: Path | None, subfolder: str | None
+) -> bool:
+    """Whether the build writes the chat interface this runtime leaves out, so the reading is
+    not asked for one. Today that is `adk web` serving the one app its folder holds: the
+    source holds no interface to find for it. The build decides, so the two can't disagree."""
+    if source_root is None or runtime is None or not runtime.command:
+        return False
+    if runtime.interface is not None and runtime.interface.kind:
+        return False
+    from .framework_servers import _adk_web_interface, _is_adk_web_command
+
+    # Asked of the command alone first, so no other command costs a lookup on disk.
+    if not _is_adk_web_command(list(runtime.command)):
+        return False
+    try:
+        with path_lookup_budget():
+            bound = bind_runtime(runtime.model_dump(), source_root, subfolder)
+            return _adk_web_interface(Path(source_root), dict(bound or {})) is not None
+    except (OSError, RuntimeError, ValueError, SubfolderNotFound, PathLookupsSpent):
+        # A folder or workdir that can't be bound is refused on its own line further on.
+        return False
+
+
+def _contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload as the contract is read from it, shared by the quick check and the full one so
+    neither refuses what the other accepts. The harness records the folder; one the model wrote
+    itself is dropped, never refused."""
+    payload = _without_nulls(unwrapped(payload))
+    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+        payload["runtime"].pop("source_subfolder", None)
+    return payload
+
+
+def _quick_schema(payload: dict[str, Any], arrived: list[str]) -> dict[str, Any] | None:
+    """The schema refusal, answered without waiting on the checks that read files."""
+    try:
+        AgentContract.model_validate(_contract_payload(payload))
+    except Exception as invalid:
+        return _problems([f"schema:{invalid}"[:600]], arrived)
+    return None
+
+
+def _checked_against_source(
+    contract: AgentContract,
+    problems: list[str],
+    arrived: list[str],
+    source_root: Path | None,
+    subfolder: str | None,
+    reached: list[Path] | None = None,
+    asked: set[str] | None = None,
+    held: dict[str, str] | None = None,
+    *,
+    instrumentation: str | None = None,
+    progress: Callable[[str, list[str]], None] | None = None,
+) -> AgentContract | dict[str, Any]:
+    """The checks that read the customer's files, under the save's one path lookup budget.
+    ``asked`` is the reading's record of what it has been asked once. A model whose citation was
+    refused before is left out the second time, and lines that didn't hold the quote are left out
+    for the quote, rather than refused again: both are optional, and neither may cost the
+    reading its turns. ``held`` is the reading's latest quote (submit_contract keeps it), so
+    lines named later without one are still checked against what was quoted."""
+    # Where the stage now running began in problems, so each report holds only its own.
+    stage, since = "tool_evidence", len(problems)
+
+    def stage_ended(name: str, then: str | None) -> None:
+        nonlocal stage, since
+        if progress is not None:
+            progress(name, problems[since:])
+        if then is not None:
+            stage, since = then, len(problems)
+
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
-        problems.extend(tool_evidence_problems(contract, source_root))
-        problems.extend(_copy_prompt(contract, source_root))
+        quote = own = contract.system_prompt_excerpt
+        # Lines named with no quote of their own (or one too short to say anything), checked
+        # against the reading's latest quote, which submit_contract holds.
+        alone = False
+        if (
+            held is not None
+            and contract.system_prompt_from
+            and not quote_pieces(quote)
+            and held.get("prompt-quote")
+            # A short quote held for this very call is this call's own, not one given before.
+            and held["prompt-quote"] != quote
+        ):
+            quote = held["prompt-quote"]
+            alone = True
+        # Said when the fallback below sets the lines aside in a call refused for something else.
+        set_aside: list[str] = []
+        try:
+            problems.extend(tool_evidence_problems(contract, source_root, subfolder))
+            stage_ended("tool_evidence", "prompt_copy")
+            copy_problems = _copy_prompt(contract, source_root)
+            problems.extend(copy_problems)
+            if contract.system_prompt_from and not copy_problems:
+                named = ", ".join(
+                    f"{where.path[:200]} {where.start_line}-{where.end_line}"
+                    for where in contract.system_prompt_from
+                )
+                mismatch = quote_problem(quote, contract.system_prompt_excerpt, named)
+                confirmed = None if mismatch else quote
+                if (
+                    mismatch
+                    # Only lines checked against a held quote can hold their own instead (and
+                    # the second search is spent only then).
+                    and alone
+                    and says_something(own)
+                    # Words, not a name: PROMPT or SYSTEM_PROMPT is on almost any prompt's lines.
+                    and len(own.split()) > 1
+                    # A quote some lines already held stands: a short one doesn't replace it.
+                    and held.get("prompt-quote-confirmed") != quote
+                    and quote_problem(own, contract.system_prompt_excerpt, named) is None
+                ):
+                    # The call's own short quote is in its lines letter for letter: that is this
+                    # call's evidence, and the quote it passed with is the reading's latest now.
+                    mismatch = None
+                    held["prompt-quote"] = confirmed = own
+                if held is not None and confirmed and says_something(confirmed):
+                    held["prompt-quote-confirmed"] = confirmed
+                if mismatch:
+                    if asked is None:
+                        problems.append(mismatch)
+                    elif alone and "prompt-lines-alone" not in asked:
+                        # The lines may be right and the quote they were checked against wrong:
+                        # asked once to quote these lines, before either is given up.
+                        asked.add("prompt-lines-alone")
+                        shown = " ".join(quote.split())[:80]
+                        outcome = (
+                            "the quote is kept and the lines are recorded as unconfirmed"
+                            if quote_pieces(quote)
+                            else "the lines are recorded as unconfirmed and no prompt is saved, "
+                            "since that quote is too short to stand for it"
+                        )
+                        problems.append(
+                            f"system_prompt_from: the lines named ({named}) don't hold the quote "
+                            f"you gave before ({shown}); if these lines are the prompt, quote "
+                            "them word for word in system_prompt_excerpt, with ... where you "
+                            f"leave text out. If they are refused again against it, {outcome}"
+                        )
+                    elif asked & {"prompt-quote", "prompt-lines-alone"}:
+                        # Either way the lines are kept on record as unconfirmed.
+                        contract.unconfirmed_prompt_from = list(contract.system_prompt_from)
+                        if quote_pieces(quote):
+                            # The quote, which is what was read, rather than lines nobody
+                            # confirmed.
+                            contract.system_prompt_excerpt = quote
+                            contract.system_prompt_from = []
+                            set_aside.append(
+                                f"system_prompt_from: the lines named ({named}) are left out and "
+                                "the quote is kept, since they don't hold it"
+                            )
+                        else:
+                            # A quote of a few words says too little to stand for the prompt, and
+                            # lines nobody confirmed would be shown as it.
+                            contract.system_prompt_excerpt = ""
+                            contract.system_prompt_from = []
+                            set_aside.append(
+                                f"system_prompt_from: the lines named ({named}) are recorded as "
+                                "unconfirmed and no prompt is saved, since they don't hold the "
+                                "quote and it is too short to stand for the prompt"
+                            )
+                    else:
+                        problems.append(mismatch)
+                        asked.add("prompt-quote")
+                        problems.append(
+                            "system_prompt_from: lines named later are checked against this "
+                            "quote until you give another; a later mismatch records the lines as "
+                            "unconfirmed and keeps the quote, or saves no prompt if the quote has "
+                            "fewer than 16 letters"
+                        )
+            stage_ended("prompt_copy", "model")
+            if cited := model_problems(contract, source_root):
+                if asked is not None and "model" in asked:
+                    contract.model = None
+                else:
+                    problems.extend(cited)
+                    if asked is not None:
+                        asked.add("model")
+                        problems.append("model: if the model is refused again, it is left out")
+            stage_ended("model", None)
+        except PathLookupsSpent as spent:
+            if progress is not None:
+                progress(stage, [*problems[since:], str(spent)])
+            return _problems([*problems, str(spent)], arrived)
+        # After the model's report: a save cut later answers without the notes on lines set aside.
+        if problems:
+            problems.extend(set_aside)
+    else:
+        # With no source there is no line to find the name on, so the model is unknown.
+        contract.model = None
+        # Every stage is reported on every save, so the one that reads no file says it found
+        # nothing rather than leaving a cut save to wonder whether it ran.
+        for name in ("tool_evidence", "prompt_copy", "model"):
+            stage_ended(name, None)
+    since = len(problems)
+    runtime = contract.runtime
+    if subfolder and source_root is not None:
+        try:
+            runtime = Runtime.model_validate(
+                bind_runtime(
+                    runtime.model_dump() if runtime is not None else None,
+                    source_root,
+                    subfolder,
+                )
+            )
+            # A shell can change folder before the program starts, past the check on its
+            # arguments; repair refuses a shell anyway.
+            from .runtime_repair import _SHELL_LAUNCHERS
+
+            if runtime.command and Path(runtime.command[0]).name.casefold() in _SHELL_LAUNCHERS:
+                raise ValueError(
+                    f"runtime_command_shell_forbidden: {runtime.command[0]}; name the program "
+                    f"and its arguments directly so the command stays in {subfolder}"
+                )
+            if refusal := _builds_a_sibling(source_root, runtime, subfolder):
+                problems.append(refusal)
+            if rooted := _modules_as_the_process_imports_them(
+                contract.tool_entrypoints, source_root, runtime.workdir, subfolder
+            ):
+                contract = contract.model_copy(update={"tool_entrypoints": rooted})
+        except SubfolderNotFound:
+            problems.append(
+                f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
+                "so no description of it can be saved."
+            )
+        except PathLookupsSpent as spent:
+            problems.append(str(spent))
+        except ValueError as invalid:
+            problems.append(str(invalid))
+    elif runtime is not None and runtime.source_subfolder:
+        runtime = runtime.model_copy(update={"source_subfolder": ""})
+    if runtime is not None and source_root is not None:
+        # The first save is the only place a listed name can be stopped from entering the
+        # contract: a later repair judges only the names it adds. Only this model-facing route
+        # asks (the kit's own write_contract does not pass through here). The name isn't echoed.
+        from .runtime_repair import (
+            _SHELL_LAUNCHERS,
+            _runs_inline_code,
+            _runtime_names_listed_file,
+        )
+
+        if _runtime_names_listed_file(source_root.resolve(), runtime):
+            problems.append(
+                "runtime: a command or path in the runtime names a file that is kept out of "
+                "this task; name only the program and the source files it runs"
+            )
+        elif _runs_inline_code(runtime.command) and not (
+            # A shell is its own policy (saved at the root, refused by repair and in a folder).
+            runtime.command and Path(runtime.command[0]).name.casefold() in _SHELL_LAUNCHERS
+        ):
+            problems.append(
+                "runtime: the command hands an interpreter its program as an argument "
+                "(-c, -e, -p, --eval, --print); name the source file it runs instead"
+            )
+    stage_ended("runtime", None)
     if problems:
         return _problems(problems, arrived)
-    contract = contract.model_copy(
-        update={"instrumentation": detect_instrumentation(source_root)}
-    )
+    if instrumentation is None:
+        # With a folder, what it imports from elsewhere is read too, as the other scans do.
+        instrumentation = (
+            detect_instrumentation(
+                agent_folder(source_root, subfolder),
+                code_the_agent_reaches(source_root, subfolder) if reached is None else reached,
+            )
+            if source_root and subfolder
+            else detect_instrumentation(source_root)
+        )
+    return contract.model_copy(update={"instrumentation": instrumentation, "runtime": runtime})
 
-    destination.mkdir(parents=True, exist_ok=True)
-    path = destination / "contract.json"
-    path.write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return _ok(
+
+def _modules_as_the_process_imports_them(
+    entries: list[ToolEntry], source_root: Path, workdir: str, subfolder: str = ""
+) -> list[ToolEntry] | None:
+    """The entries with each module written as the agent's own process imports it, or None when
+    none changes. Only with a subfolder, where the process starts in the bound ``workdir``: a
+    reading writes ``examples.harness.x.agent`` for the file the process knows as ``agent``,
+    and the tracer matches a frame's module name exactly.
+
+    A module is rewritten when all of these hold; each is a file check, never an import, and
+    each is charged to the save's lookup budget:
+    - it starts with the workdir's path written dotted, and the rest names a file under the
+      workdir (``<rest>.py`` or ``<rest>/__init__.py``);
+    - the name as written is not itself a file under the workdir (``svc/agent.py`` beside
+      ``svc/svc/agent.py``: with the process in ``svc``, ``svc.agent`` is the inner one);
+    - no folder from the repository root down to the workdir has an ``__init__.py``: one that
+      does is part of a regular package, whose code knows its modules by the qualified name
+      (``GeneratedWorld.reach`` puts the package root on the path for exactly that).
+
+    An ``import`` or ``construct`` entry is also compiled to a handler, which imports through
+    ``GeneratedWorld.reach(source_root, subfolder)``: the root and the subfolder are on its path,
+    never the workdir. So those entries are rewritten only when the workdir is the subfolder
+    itself; an ``unreachable`` entry has no handler and only the tracer reads it, so it keeps the
+    workdir as its root.
+    """
+    from .source_tool_evidence import _file_in
+
+    folders = [part for part in PurePosixPath(workdir or "").parts if part != "."]
+    if not folders or ".." in folders or not all(part.isidentifier() for part in folders):
+        return None
+    if not any(entry.module and entry.mode in _ROOTED_MODES for entry in entries):
+        return None
+    root = Path(source_root).resolve()
+    try:
+        start = charged_path(root / Path(*folders))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not is_within(start, root) or start == root:
+        return None
+    # The root and every folder down to the workdir, along the dotted path.
+    for depth in range(len(folders) + 1):
+        if _file_in(root.joinpath(*folders[:depth], "__init__.py"), root):
+            return None
+    prefix = ".".join(folders) + "."
+    subfolder_parts = [part for part in PurePosixPath(subfolder or "").parts if part != "."]
+    handler_root = subfolder_parts == folders
+
+    resolved: dict[str, bool] = {}
+
+    def names_a_file(dotted: str) -> bool:
+        # One resolution per name within a save: many entries can name one module.
+        if dotted not in resolved:
+            module = start.joinpath(*dotted.split("."))
+            resolved[dotted] = _file_in(module.with_suffix(".py"), start) or _file_in(
+                module / "__init__.py", start
+            )
+        return resolved[dotted]
+
+    rewritten, changed = [], False
+    for entry in entries:
+        module = entry.module
+        if (
+            entry.mode in _ROOTED_MODES
+            and (handler_root or entry.mode == "unreachable")
+            and module.startswith(prefix)
+            and all(part.isidentifier() for part in module.split("."))
+            and not names_a_file(module)
+            and names_a_file(rest := module[len(prefix) :])
+            # `calendar.py` in the folder is not what `import calendar` finds first.
+            and rest.split(".")[0] not in sys.stdlib_module_names
+        ):
+            entry = entry.model_copy(update={"module": rest})
+            changed = True
+        rewritten.append(entry)
+    return rewritten if changed else None
+
+
+_ROOTED_MODES = {"import", "construct", "unreachable"}
+
+
+def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
+    # write_contract writes beside the file and moves it into place: a write that fails partway
+    # leaves the contract an earlier call was told was saved as it was.
+    write_contract(contract, destination)
+    path = destination / CONTRACT_FILE
+    said = (
         f"Accepted and saved to {path}.\n"
         f"{len(contract.tools)} tools: {', '.join(sorted(contract.tool_names()))}\n"
         f"{len(contract.hard_constraints)} rules, "
         f"{len(contract.real_use_cases)} use cases, "
         f"{len(contract.open_questions)} open questions."
     )
+    if contract.unconfirmed_prompt_from:
+        named = ", ".join(
+            f"{where.path[:200]} {where.start_line}-{where.end_line}"
+            for where in contract.unconfirmed_prompt_from
+        )
+        kept = (
+            "the quote is the prompt"
+            if contract.system_prompt_excerpt
+            else "no prompt is saved, since the quote is too short to stand for it"
+        )
+        said += (
+            f"\nsystem_prompt_from: the lines named ({named}) are recorded as unconfirmed, since "
+            f"they don't hold the quote; {kept}."
+        )
+    return _ok(said)
+
+
+# One prompt file, and what the excerpt copies from all of them: the same file named a hundred
+# times would otherwise write a hundred of it into contract.json.
+_LARGEST_PROMPT_FILE = 1024 * 1024
+# What the copy reads from distinct files in all.
+_LARGEST_PROMPT_READ = 4 * _LARGEST_PROMPT_FILE
 
 
 def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
@@ -170,19 +676,69 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     root = source_root.resolve()
     parts: list[str] = []
     problems: list[str] = []
+    lines_of: dict[Path, list[str]] = {}
+    # A file past the limit is read once too, and what was read of it counts.
+    too_large: set[Path] = set()
+    # Each path named is resolved once, however many entries name it.
+    found_at: dict[str, Path | None] = {}
+    read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
-        path = (root / where.path).resolve()
-        if not path.is_relative_to(root) or not path.is_file():
+        if where.path not in found_at:
+            # Through links, resolving one path can cost a lookup for each part of every
+            # target; each is charged to the save's budget.
+            found_at[where.path] = resolved_in_source(root, where.path)
+        path = found_at[where.path]
+        if path is not None and secret_text(path.relative_to(root).as_posix()):
+            # Judged where it resolves, inside the source, before anything is opened: a file
+            # that exists, one that doesn't and a link to either get this same answer.
+            problems.append(
+                f"system_prompt_from[{index}]: {where.path} is kept out of this session because "
+                "it holds credentials; name the file the prompt is written in"
+            )
+            continue
+        raw = None
+        if path is not None and path not in lines_of and path not in too_large:
+            raw = read_source(path, _LARGEST_PROMPT_FILE)
+            if raw is None:
+                # Not a regular file, or one that can't be opened: the same answer as missing.
+                found_at[where.path] = path = None
+        if path is None:
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if raw is not None:
+            read += len(raw)
+            if read > _LARGEST_PROMPT_READ:
+                problems.append(
+                    f"system_prompt_from[{index}]: the files named so far come to more than "
+                    "4 MiB; name only the files the prompt is written in"
+                )
+                break
+            if len(raw) > _LARGEST_PROMPT_FILE:
+                too_large.add(path)
+            else:
+                lines_of[path] = source_lines(raw)
+        if path in too_large:
+            problems.append(
+                f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
+                "file the prompt is written in"
+            )
+            continue
+        lines = lines_of[path]
         if not 1 <= where.start_line <= where.end_line <= len(lines):
             problems.append(
                 f"system_prompt_from[{index}]: lines {where.start_line}-{where.end_line} are "
                 f"outside {where.path}, which has {len(lines)} lines"
             )
             continue
-        parts.append("\n".join(lines[where.start_line - 1 : where.end_line]))
+        excerpt = "\n".join(lines[where.start_line - 1 : where.end_line])
+        copied += utf8_size(excerpt)
+        if copied > _LARGEST_PROMPT_FILE:
+            problems.append(
+                f"system_prompt_from[{index}]: the lines named so far come to more than 1 MiB; "
+                "name only the prompt's own lines, once each"
+            )
+            break
+        parts.append(excerpt)
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
     return problems
@@ -192,7 +748,9 @@ def _without_nulls(value: Any) -> Any:
     """Treat JSON null like an omitted optional field, including in nested records."""
     if isinstance(value, dict):
         return {
-            key: _without_nulls(item) for key, item in value.items() if item is not None
+            key: item if key == "failure_values" else _without_nulls(item)
+            for key, item in value.items()
+            if item is not None
         }
     if isinstance(value, list):
         return [_without_nulls(item) for item in value if item is not None]
@@ -203,17 +761,122 @@ def _without_nulls(value: Any) -> Any:
 MOST_CHOSEN_EVALS = 6
 
 
+def _new_receipt() -> str:
+    return secrets.token_hex(4)
+
+
+def _stop_message(destination: Path) -> str:
+    said = failure_message(destination) or "This build can't go on."
+    return f"{said} Don't submit again or do more work; tell the person."
+
+
+# alk.yaml and the Compose files together; the largest real Compose file seen is 53 KB.
+_SAVE_YAML_BYTES = 128 * 1024
+
+
+def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> str | None:
+    """The refusal when the runtime's service builds another agent's folder, told to the model
+    here because it can fix that. Any other fault in selecting is left for bundling to meet, as
+    it does with no folder: the model can't repair a Compose file nobody can read."""
+    from .bundle_author_v2 import _declared_runtime_environment
+
+    # Overlays run `docker compose config`, and a file past real sizes takes seconds to read,
+    # which the save would wait for; bundling refuses the same service, so they're left to it.
+    if runtime.compose_overrides:
+        return None
+    try:
+        folder = agent_folder(source_root, subfolder)
+        manifest = folder / "alk.yaml"
+        spent = 0
+        if manifest.is_file():
+            with manifest.open("rb") as handle:
+                spent = len(handle.read(_SAVE_YAML_BYTES + 1))
+        if spent > _SAVE_YAML_BYTES:
+            return None
+        select_runtime(
+            source_root,
+            runtime.model_dump(),
+            # The values bundling sees, or this refuses what bundling accepts.
+            public_environment={
+                **_declared_runtime_environment(folder),
+                **runtime_public_environment(runtime.model_dump()),
+            },
+            validate_environment_dependencies=False,
+            compose_bytes=_SAVE_YAML_BYTES - spent,
+        )
+    except RuntimeSelectionError as refused:
+        if str(refused).startswith(f"{COMPOSE_SERVICE_OUTSIDE_FOLDER}:"):
+            return str(refused)
+    except (ValueError, OSError, RuntimeError) as exc:
+        # What the customer's files can make selecting raise; bundling selects again and owns
+        # that failure. Anything else is a bug and isn't caught here. The type only: the message
+        # can quote a line of the customer's file.
+        _LOG.warning("sibling check skipped: %s", type(exc).__name__)
+    return None
+
+
+def _tools_in_agent_folder(
+    scan_root: Path | None, subfolder: str | None, reached: list[Path] | None = None
+) -> tuple[list[str], frozenset[str]]:
+    """The browser tools this agent uses, which a sibling's aren't, and the limits that cut the
+    scan. ``reached`` is filled with the code it reaches outside its folder."""
+    if not scan_root or not subfolder:
+        return browser_scan(scan_root)
+    try:
+        return browser_scan(scan_root, subfolder, reached)
+    except SubfolderNotFound:
+        # The folder check reports this; the model's reading shouldn't be refused for it too.
+        return [], frozenset()
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    scan_root: Path | None = None,
+    require_setup_contract: bool = False,
+    subfolder: str | None = None,
+    save_checks: Mode | None = None,
+    save_stand_in: str | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
+
+    ``save_checks`` picks where the checks that read the customer's files run (the default is the
+    kit's); ``save_stand_in`` names a module whose stages replace the real ones in the child, for
+    tests.
     """
+    # Here rather than at the top: the checker's child imports this module.
+    from . import save_checker
+    from .save_checker import SAVE_DEADLINE, ChildKeepsEnding, NotInTime, Saved
+
+    events_schema = CompletedToolEvents.model_json_schema()
+    events_schema["properties"]["failure_events"]["items"] = (
+        events_schema.pop("$defs")["CompletedToolFailureEvent"]
+    )
+    sse_schema = HTTPStreamSpec.model_json_schema()
+    sse_definitions = sse_schema.pop("$defs")
+
+    def inline_sse_references(value):
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if reference:
+                name = reference.rsplit("/", 1)[-1]
+                return inline_sse_references(sse_definitions[name])
+            return {key: inline_sse_references(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [inline_sse_references(item) for item in value]
+        return value
+
+    sse_schema = inline_sse_references(sse_schema)
+    observation_schema = HttpObservation.model_json_schema()
+    observation_schema["properties"]["parameters"]["additionalProperties"] = (
+        observation_schema.pop("$defs")["ObservationParameter"]
+    )
+
     # Name to modality, empty or "any" for all. Refused here too, where it is still free to fix.
     offered_modality = {
         str(one.get("name") or "").strip(): str(one.get("modality") or "")
@@ -228,6 +891,25 @@ def contract_tools(
     # A gate with no way through would permanently block the rare agent that genuinely lacks it,
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
+    # What was quoted for the prompt when the lines named for it were refused.
+    held: dict[str, str] = {}
+    refused = False
+    second_look = SecondLook()
+    found: list[str] | None = None
+    # Set with found, from the same scan: a later call skips the scan and must still see its cut.
+    cut: frozenset[str] = frozenset()
+    # Calls in one message check side by side, so the one sent last can finish first; it's the
+    # model's last word, and an earlier call that finishes later mustn't write over it.
+    sent = saved = 0
+    # The customer's files are read where a crafted repository can't hold the conversation: the
+    # checker owns the scan, which calls in one message share, and each save's checks.
+    checker = save_checker.SaveChecker(
+        scan_root=scan_root,
+        source_root=source_root,
+        subfolder=subfolder,
+        mode=save_checks,
+        stand_in=save_stand_in,
+    )
 
     @tool(
         "submit_contract",
@@ -249,6 +931,11 @@ def contract_tools(
         # call and a sequence of rejected guesses.
         schema(
             {
+                SECOND_LOOK_READ: {
+                    "type": "string",
+                    "description": "Only when a second look asked for it: the value it gave. "
+                    "It is not part of the contract.",
+                },
                 "agent": {
                     "type": "string",
                     "description": "Short lower-case identifier, no spaces. Only a label for "
@@ -261,9 +948,10 @@ def contract_tools(
                 "modality": {
                     "type": "string",
                     "enum": list(known_modalities()),
-                    "description": "How a person reaches it, read from its runtime. A voice "
-                    "session (LiveKit, telephony, TTS/STT) is voice; a text interface is chat; "
-                    "a browser-driving agent is browser. This decides how it is later run.",
+                    "description": "How this agent is run, read from its runtime. A voice "
+                    "session (LiveKit, telephony, TTS/STT) is voice; a text conversation is chat; "
+                    "an agent a person uses to carry out work on websites or a computer is "
+                    "browser. This decides how it is later run.",
                 },
                 "call_direction": {
                     "type": "string",
@@ -306,7 +994,26 @@ def contract_tools(
                     },
                     "description": "Where the agent's whole prompt is written: every part it is "
                     "assembled from, in order, as a path relative to the source root and the first "
-                    "and last line of each. These lines replace system_prompt_excerpt as written.",
+                    "and last line of each. Once they are checked against your quote in "
+                    "system_prompt_excerpt, these lines replace it as written: keep the quote too.",
+                },
+                # Nothing required inside it either: a model sent without its line reaches the
+                # save, which says what is missing, instead of failing the whole call here.
+                "model": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "name": {"type": "string"},
+                        "path": {"type": "string"},
+                        "line": {"type": "integer"},
+                    },
+                    "description": "The model the agent talks to the person with, read from its "
+                    "source: provider as the source names it (openai, anthropic, google...; leave "
+                    "out when it doesn't say), name exactly as written (letters, digits and "
+                    ". _ : / @ - only), and the file (relative to "
+                    "the source root) and line the name is written on. One model; a voice agent's "
+                    "speech-to-text and text-to-speech models don't count. Leave model out when "
+                    "the name is only set at run time.",
                 },
                 "hard_constraints": {
                     "type": "array",
@@ -340,6 +1047,33 @@ def contract_tools(
                                 "description": "Real permitted values per argument where it is "
                                 "constrained to a set, an enum or a lookup: "
                                 '{"priority": ["low", "normal", "urgent"]}.',
+                            },
+                            "arg_units": {
+                                "type": "object",
+                                "description": "The unit or format of every amount, duration, date or "
+                                "time argument whose name does not say it, from the code that reads it, the "
+                                "data it holds or what the person you work with said; when the code and "
+                                "their words disagree, the code's: "
+                                '{"<an amount field>": "<its minor unit and currency>", "timeout": "milliseconds"}.',
+                            },
+                            "returns": {
+                                "type": "object",
+                                "description": "Every field the tool hands back, with its type and, where the "
+                                "name does not say it, its unit or format, read from the code that builds the "
+                                "result or the record it returns: "
+                                '{"<an id field>": "string", "<an amount field>": "integer, <its minor unit and '
+                                'currency>"}.',
+                            },
+                            "tables_read": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool reads, declared from its code.",
+                            },
+                            "tables_changed": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The world's tables the tool adds to, changes or deletes from, "
+                                "declared from its code.",
                             },
                             "description": {"type": "string"},
                             "requires": {
@@ -379,6 +1113,28 @@ def contract_tools(
                         # That every tool has none is the real defect, and validate_contract
                         # is where it is caught, with an explanation.
                     },
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tools": {"type": "array", "items": {"type": "string"}},
+                            "allowed_tools": {"type": "array", "items": {"type": "string"}},
+                            "binding": {"type": "string", "enum": ["separate", "shared"]},
+                            "address_env": {"type": "string"},
+                            "process": {"type": "string"},
+                        },
+                        "required": ["id"],
+                    },
+                    "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
+                    "gives the agent (its spans carry it), the names of the tools above that it holds, "
+                    "separate when its tools run through code of their own, with address_env naming the "
+                    "environment variable that code reads for its tools' base address, allowed_tools when it "
+                    "may use fewer tools than its code holds, and process naming the environment process that runs "
+                    "it alone when the app serves it as its own service. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",
@@ -546,12 +1302,21 @@ def contract_tools(
                                 "that has to be built first. service: its effect is implemented "
                                 "by a shipped HTTP service. unreachable: no runnable seam exists, "
                                 "which blocks environment creation rather than generating a "
-                                "replacement.",
+                                "replacement. The kit can't call it, but traces it when `module` "
+                                "and `callable` say where it is. Use it for a tool whose module "
+                                "attribute is an object the kit can't call, such as the OpenAI "
+                                "Agents SDK's `@function_tool`: name the module and the def's own "
+                                "name. A LangChain `@tool` or a LiveKit `@function_tool` method "
+                                "stays `import` or `construct`.",
                             },
                             "module": {
                                 "type": "string",
-                                "description": "Importable path as the agent's own code would "
-                                "write it, e.g. package.module.file. Not a filesystem path.",
+                                "description": "The dotted name the agent's own process imports, "
+                                "from the folder it runs in: `agent` for the file agent.py "
+                                "there, not the name counted from the repository root. For "
+                                "`import` and `construct` the name is counted from the "
+                                "subfolder, and is rewritten only when the runtime's workdir "
+                                "is that subfolder. Not a filesystem path.",
                             },
                             "callable": {
                                 "type": "string",
@@ -588,6 +1353,12 @@ def contract_tools(
                                 "enum": ["POST"],
                                 "description": "HTTP method used by the submitted implementation.",
                             },
+                            "effect": {
+                                "type": "string",
+                                "enum": ["read", "write"],
+                                "description": "read when the tool only reads (a lookup, a search, a list), write "
+                                "when it changes anything. Leave out to go by the HTTP method.",
+                            },
                             "notes": {
                                 "type": "string",
                                 "description": "Anything about reaching it that the fields above "
@@ -607,12 +1378,13 @@ def contract_tools(
                 "data_store": {
                     "type": "object",
                     "description": "What the agent's tools read and write, and how to point them "
-                    "at a different one.",
+                    "at a different one. Explicitly declare kind, including none for a stateless "
+                    "agent, during autonomous source setup.",
                     "properties": {
                         "kind": {
                             "type": "string",
                             "description": "postgres, clickhouse, mysql, sqlite, in_process for "
-                            "state held in memory, or none.",
+                            "state held in memory, filesystem for file-backed state, or none.",
                         },
                         "configured_by": {
                             "type": "string",
@@ -635,6 +1407,13 @@ def contract_tools(
                             "type": "string",
                             "description": "The module that loader is imported from, so it can "
                             "be called rather than reimplemented.",
+                        },
+                        "loads": {
+                            "type": "string",
+                            "enum": ["", "start", "each_call"],
+                            "description": "When that loader runs, read from the code: `start` when "
+                            "the agent loads its data once as it starts, `each_call` when it reads "
+                            "it again on every request. Empty when the code does not show it.",
                         },
                         "version": {
                             "type": "string",
@@ -676,30 +1455,113 @@ def contract_tools(
                     "type": "object",
                     "description": "What it takes to run the agent's code.",
                     "properties": {
-                        "language": {"type": "string"},
+                        "language": {
+                            "type": "string",
+                            "description": Runtime.model_fields["language"].description,
+                        },
                         "version": {"type": "string"},
                         "install": {
                             "type": "string",
-                            "description": "Its own install command, e.g. from its lockfile or "
-                            "requirements. Recorded as evidence; generated packaging derives "
-                            "the executable install from the submitted manifest/lockfile.",
+                            "description": Runtime.model_fields["install"].description,
                         },
                         "extras": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional dependency groups declared by the source "
-                            "manifest that this runtime needs, such as voice or qdrant. Never "
-                            "invent a group that the manifest does not declare.",
+                            "description": Runtime.model_fields["extras"].description,
+                        },
+                        "requirements_files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": Runtime.model_fields[
+                                "requirements_files"
+                            ].description,
+                        },
+                        "observations": {
+                            "type": "object",
+                            "maxProperties": 32,
+                            "additionalProperties": observation_schema,
+                        },
+                        "workspaces": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                            "description": Runtime.model_fields[
+                                "workspaces"
+                            ].description,
+                        },
+                        "config_files": {
+                            "type": "object",
+                            "additionalProperties": RuntimeConfigFile.model_json_schema(),
+                            "description": "Source-relative dotenv instance resources. Public values and declared target-provider aliases only; confidential files remain outside build contexts.",
+                        },
+                        "directories": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Source-relative missing writable bind directories created independently per instance.",
+                        },
+                        "secret_files": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": RuntimeSecretFile.model_json_schema(),
+                            },
+                            "description": "Confidential files by selected service. Bind declared target-provider aliases to absolute container destinations; never include secret values.",
                         },
                         "workdir": {
                             "type": "string",
                             "description": "Where in the source imports resolve from, if not the "
                             "root.",
                         },
+                        "execution": {
+                            "type": "string",
+                            "enum": ["auto", "native", "compose"],
+                            "description": "Select native or compose explicitly from source evidence. auto preserves legacy discovery.",
+                        },
+                        "service": {
+                            "type": "string",
+                            "description": "Exact selected Compose service. Its dependency closure is retained.",
+                        },
+                        "additional_services": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
+                        },
+                        "required_environment": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "uniqueItems": True,
+                            },
+                            "description": "Required environment names by selected process name. Native control process is agent. No values.",
+                        },
                         "compose_file": {
                             "type": "string",
-                            "description": "Exact path to the submitted Compose file to run "
+                            "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
+                        },
+                        "compose_image_services": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": Runtime.model_fields["compose_image_services"].description,
+                        },
+                        "compose_overrides": {
+                            "type": "array",
+                            "maxItems": 8,
+                            "uniqueItems": True,
+                            "items": {"type": "string", "maxLength": 1024},
+                            "description": "Ordered repository-relative source Compose overlays applied after compose_file using the native Compose CLI. Requires explicit compose_file and service. Never synthesize overlays or change upstream files.",
                         },
                         "dockerfile": {
                             "type": "string",
@@ -717,7 +1579,8 @@ def contract_tools(
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Repository-relative large generated outputs or "
-                            "documentation to omit from a generated build context. Never omit "
+                            "documentation or repeated test-only patterns to omit from a generated "
+                            "build context. Simple * and ** patterns are supported. Never omit "
                             "runtime source, dependency manifests, seed data, or tool data.",
                         },
                         "platform": {
@@ -734,16 +1597,20 @@ def contract_tools(
                             "properties": {
                                 "kind": {
                                     "type": "string",
-                                    "enum": ["http", "websocket", "callable"],
-                                    "description": "How the simulator reaches the running "
-                                    "agent. HTTP is currently the hosted repository path.",
+                                    "enum": ["http", "websocket", "callable", "command"],
+                                    "description": RuntimeInterface.model_fields["kind"].description,
                                 },
                                 "protocol": {
                                     "type": "string",
                                     "enum": ["fi.alk", "openai_chat", "json_template"],
-                                    "description": "The submitted endpoint's request/response "
-                                    "envelope. Use json_template for any other source-owned JSON "
-                                    "API and describe its exact envelope below.",
+                                    "description": RuntimeInterface.model_fields["protocol"].description,
+                                },
+                                "model": {
+                                    "type": "string",
+                                    "description": "For openai_chat: exact source-owned model "
+                                    "or profile identifier accepted by this endpoint. Read it "
+                                    "from the source API or configuration; do not substitute "
+                                    "the backing provider model unless the endpoint expects it.",
                                 },
                                 "port": {
                                     "type": "integer",
@@ -752,7 +1619,9 @@ def contract_tools(
                                 },
                                 "path": {
                                     "type": "string",
-                                    "description": "Exact POST path for one conversational turn.",
+                                    "description": "Exact POST path for one conversational turn. "
+                                    "Path placeholders may use canonical inputs or prior setup "
+                                    "captures; substituted values are encoded as path segments.",
                                 },
                                 "health_path": {
                                     "type": "string",
@@ -776,9 +1645,73 @@ def contract_tools(
                                 },
                                 "response_path": {
                                     "type": "string",
-                                    "description": "For json_template only: optional dotted path "
-                                    "to assistant text in the JSON response, including numeric "
-                                    "list indexes such as '-1.content.parts.0.text'.",
+                                    "description": RuntimeInterface.model_fields["response_path"].description,
+                                },
+                                "sse": {
+                                    **sse_schema,
+                                    "description": RuntimeInterface.model_fields["sse"].description,
+                                },
+                                "completed_tools": CompletedToolRows.model_json_schema(),
+                                "completed_tool_events": events_schema,
+                                "local_auth": LocalHttpAuth.model_json_schema(),
+                                "setup_secrets": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                    "maxProperties": 16,
+                                    "description": "Map private setup placeholder names to declared target-provider secret aliases. Values resolve privately into setup bodies/headers only. Never put credential values in this declaration.",
+                                },
+                                "failure_rule": {
+                                    "type": "object",
+                                    "required": ["status_path"],
+                                    "oneOf": [
+                                        {"required": ["failure_values"]},
+                                        {"required": ["success_values"]},
+                                    ],
+                                    "description": "Optional source-declared application failure envelope. Never infer failures from an arbitrary error field.",
+                                    "properties": {
+                                        "status_path": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 512,
+                                        },
+                                        "failure_values": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 32,
+                                            "items": {
+                                                "type": [
+                                                    "string",
+                                                    "number",
+                                                    "boolean",
+                                                    "null",
+                                                ]
+                                            },
+                                        },
+                                        "success_values": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 32,
+                                            "items": {
+                                                "type": [
+                                                    "string",
+                                                    "number",
+                                                    "boolean",
+                                                    "null",
+                                                ]
+                                            },
+                                            "description": "Alternative to failure_values. Any status outside this explicit successful set fails, including missing status fields. Preserve JSON scalar types: [null] for JSON null, [0] for numeric zero, [false] for boolean false. An empty list is invalid.",
+                                        },
+                                        "message_path": {
+                                            "type": "string",
+                                            "maxLength": 512,
+                                        },
+                                    },
+                                },
+                                "headers_template": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                    "maxProperties": 32,
+                                    "description": RuntimeInterface.model_fields["headers_template"].description,
                                 },
                                 "setup_requests": {
                                     "type": "array",
@@ -798,6 +1731,34 @@ def contract_tools(
                                             },
                                             "path": {"type": "string"},
                                             "body_template": {},
+                                            "encoding": {
+                                                "type": "string",
+                                                "enum": ["json", "form"],
+                                            },
+                                            "headers_template": {
+                                                "type": "object",
+                                                "description": RuntimeHttpSetupRequest.model_fields["headers_template"].description,
+                                                "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "maxProperties": 32,
+                                            },
+                                            "capture_headers": {
+                                                "type": "object",
+                                                "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "maxProperties": 16,
+                                                "description": "Map placeholder names to response header names. Use capture for JSON response fields; cookies are automatic.",
+                                            },
+                                            "failure_rule": {
+                                                **RuntimeHttpFailureRule.model_json_schema(),
+                                                "oneOf": [
+                                                    {"required": ["failure_values"]},
+                                                    {"required": ["success_values"]},
+                                                ],
+                                                "description": "Optional source-declared application status rule for this setup response. Checked after HTTP status and before captures or the next request. Use it when HTTP success can contain application failure.",
+                                            },
                                             "accepted_statuses": {
                                                 "type": "array",
                                                 "items": {"type": "integer"},
@@ -825,7 +1786,86 @@ def contract_tools(
         ),
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
-        payload = unwrapped(args)
+        payload = dict(unwrapped(args))
+        # The quote as the contract will read it: under any alias, a list joined.
+        excerpt = prompt_quote(_without_nulls(payload))
+        if not excerpt.strip():
+            excerpt = ""
+        # Held before anything can send this call back (a nudge, a refusal, a schema problem), so
+        # lines named later without a quote are checked against the reading's latest one. A short
+        # quote is held only while nothing longer is: it says less.
+        if quote_pieces(excerpt) or (
+            says_something(excerpt) and not quote_pieces(held.get("prompt-quote", ""))
+        ):
+            held["prompt-quote"] = excerpt
+        # What this call was already asked, as it stood when the call was sent: a call sent in the
+        # same message as one that is refused hasn't seen that refusal yet.
+        asked_before = set(nudged)
+        receipt = payload.pop(SECOND_LOOK_READ, None) or (
+            args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
+        )
+        nonlocal refused, found, cut, sent, saved
+
+        def _end_the_stage(worn: ChildKeepsEnding) -> dict[str, Any]:
+            nonlocal refused
+            # Set first, as for the agent-type refusal: no resubmission gets through.
+            refused = True
+            write_failure_file(
+                HarnessFailure(
+                    domain=FailureDomain.AGENT,
+                    stage=HarnessStage.UNDERSTANDING_AGENT,
+                    code="save_checks_child_keeps_ending",
+                    message=str(worn),
+                    retryable=False,
+                    details={"deaths": worn.deaths},
+                ),
+                destination,
+            )
+            return _ok(_stop_message(destination))
+
+        # Taken before the scan's wait: a call already running when a look went out hasn't read it.
+        looked_before = second_look.given
+        sent += 1
+        mine = sent
+        if refused or (destination / FAILURE_FILE).is_file():
+            return _ok(_stop_message(destination))
+        # One deadline for everything this call waits on, so waiting on the scan leaves the
+        # checks less time rather than starting the clock again.
+        deadline = asyncio.get_running_loop().time() + SAVE_DEADLINE
+        if found is None:
+            try:
+                answer = await checker.scan(deadline=deadline)
+            except ChildKeepsEnding as worn:
+                return _end_the_stage(worn)
+            if isinstance(answer, NotInTime):
+                return answer.response
+            found, cut = answer.found, answer.cut
+            # A call running alongside this one may have refused while this one waited.
+            if refused or (destination / FAILURE_FILE).is_file():
+                return _ok(_stop_message(destination))
+        claimed = modality_text(payload.get("modality"))
+        if claimed and not is_browser(claimed) and claimed not in known_modalities():
+            return _problems(
+                [
+                    f"{claimed!r} is not a modality. Use voice or chat, or browser if its main "
+                    "job is work on websites or a computer."
+                ]
+            )
+        verdict = second_look.verdict(
+            claimed, receipt, found, given_before=looked_before, cut=cut
+        )
+        if verdict == "refuse":
+            # Set first: if the write fails, the model must not get a resubmission through.
+            refused = True
+            # First: an earlier reading in this folder would otherwise build the agent just
+            # refused, even if the write below fails.
+            try:
+                (destination / "contract.json").unlink(missing_ok=True)
+            finally:
+                write_failure_file(agent_type_failure(found), destination)
+            return _ok(_stop_message(destination))
+        if verdict == "second_look":
+            return _problems([second_look.issue(claimed, found, _new_receipt(), cut=cut)])
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}
@@ -1002,23 +2042,26 @@ def contract_tools(
                 "prompt",
                 bool(payload.get("conversational", True))
                 and not payload.get("hard_constraints")
-                and not str(payload.get("system_prompt_excerpt") or "").strip(),
+                and not excerpt
+                # Lines named are the prompt, found: copied whole, with no quote needed.
+                and not payload.get("system_prompt_from"),
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
-                "is none.",
+                "is none. If you find it, name its lines in system_prompt_from so it is copied "
+                "whole.",
             ),
             (
                 "data",
                 bool(payload.get("tools"))
+                and structured_seed_store
                 and not payload.get("data_schema")
                 and not payload.get("base_environment"),
-                "no data_schema and no base_environment, for an agent that has tools. The world "
-                "every test runs against is built from exactly these two, so without them the "
-                "next stage has no schema to create and no rows to seed, and every tool call it "
-                "makes will refuse. Record the shape of each kind of record the tools read or "
-                "write, and enough real rows to reach every branch those tools have — a "
-                "representative sample for a large dataset, the whole thing for a small one.",
+                "no data_schema and no base_environment, although data_store declares a "
+                "structured database. Record the source-owned schema and any existing records "
+                "the tools require, using real source identifiers and values. An initially "
+                "empty database may be correct; do not invent records or schema to satisfy "
+                "this warning.",
             ),
             (
                 "starting-data",
@@ -1045,17 +2088,71 @@ def contract_tools(
                 "values. Semantic summaries such as rooms, notable_bookings or restaurant_slots "
                 "cannot seed or verify the submitted store.",
             ),
+            (
+                # A quote may stop short of the whole prompt; lines are copied whole. Asked once,
+                # since a prompt built at run time has no lines to name, and its quote is kept.
+                "prompt-lines",
+                source_root is not None
+                and bool(excerpt)
+                and not payload.get("system_prompt_from")
+                # Asked already, with the "prompt" nudge or a refusal of named lines: the lines
+                # aren't asked for twice.
+                and not asked_before & {"prompt", "prompt-quote", "prompt-lines-alone"},
+                "system_prompt_excerpt is a quote, and system_prompt_from names no lines. If the "
+                "prompt is written in the source, name its lines in system_prompt_from so it is "
+                "copied whole.",
+            ),
         ]
         # All of them together, and each only once. Nudging in sequence would cost a turn per
         # nudge and read as though the requirements were being invented one at a time.
-        say = [said for key, when, said in thin if when and key not in nudged]
+        say = [said for key, when, said in thin if when and key not in asked_before]
         nudged.update(key for key, when, _ in thin if when)
         if say:
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(payload, destination, source_root=source_root)
+        # A malformed payload is answered here, without waiting on the checks that read files.
+        quick = _quick_schema(payload, sorted(payload))
+        if quick is not None:
+            nudged.update(asked_before)
+            return quick
+        # The checks read the customer's files, which can take seconds on a crafted one, so they
+        # run where the deadline can stop them. The write stays here, after a refusal that came
+        # meanwhile.
+        try:
+            checked = await checker.check(
+                payload,
+                require_setup_contract=require_setup_contract,
+                asked=asked_before,
+                held=held,
+                deadline=deadline,
+            )
+        except ChildKeepsEnding as worn:
+            nudged.update(asked_before)
+            return _end_the_stage(worn)
+        # Whatever this call asked is asked for the calls sent after it.
+        nudged.update(asked_before)
+        if not isinstance(checked, Saved):
+            # Refused, or not checked in time: either way nothing is saved.
+            return checked.response
+        if refused or (destination / FAILURE_FILE).is_file():
+            return _ok(_stop_message(destination))
+        if mine < saved:
+            return _ok(
+                "Not saved: a contract submitted after this one, in the same turn, was saved "
+                "instead. Don't submit this one again."
+            )
+        result = _save_contract(checked.contract, destination)
+        # After the write: if it raised, nothing was saved for an earlier call to defer to.
+        saved = mine
+        return result
 
+    if scan_root is not None or source_root is not None:
+        checker.start()
+        # On the handler, not the server: every copy of the server the session makes keeps the
+        # handler, so the child ends only when the last of them is gone.
+        weakref.finalize(submit_contract.handler, checker.close)
+        save_checker._OPEN.add(checker)
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 
 

@@ -13,17 +13,36 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import logging
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
-from .backends import tool, tool_server
+from fi.simulate.simulation.call_actors import (
+    EVALUATED_BY,
+    TRIGGER_ABOUT,
+    at_least,
+    available_channels,
+    default_share,
+    described,
+    named_in,
+)
 
-from .amend import add_rule, drop_rule, fix_tool, widen
+from .backends import tool, tool_server
+from .job import actors_on, current_actors_switch
+
+from .amend import add_rule, drop_rule, fix_tool, set_worker_tools, widen
 from .background_noise import place_for, places
+from .call_actor import (
+    CallActorList,
+    load_call_actors,
+    speaking_entries,
+    scenario_problems,
+)
 from .catalogue import (
+    worker_subjects_note,
     CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     NO_OVERLAY,
@@ -54,7 +73,18 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
-from .prove import executes, play_reference_step, prepared, prove
+from .proofs import record_proof, record_unprovable
+from .prove import (
+    executes,
+    native_runtime,
+    native_source_problem,
+    play_reference_step,
+    prepared,
+    prove,
+    workspace_bindings,
+    workspace_fixture,
+)
+from .actors import ACTOR_SCENARIO_FIELDS, ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -85,6 +115,7 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
+from .world_door import ToolCall, call_effect, route_action
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
@@ -177,9 +208,11 @@ def _no_longer_hold(
                 scenario, catalogue, world_root, postgres_only=attached_tools(world_root)
             )
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
+            record_unprovable(destination, scenario.scenario_key, type(exc).__name__)
             failed.append((scenario.name, type(exc).__name__))
             continue
-        if not proof.holds:
+        record_proof(destination, scenario.scenario_key, proof)
+        if not proof.holds and not (proof.deferred and not proof.broken):
             why = "not ready" if not proof.ready else (
                 "the reference solution no longer passes it"
                 if not proof.solvable
@@ -187,6 +220,475 @@ def _no_longer_hold(
             )
             failed.append((scenario.name, why))
     return failed
+
+
+def actors_off_fields(args: dict[str, Any]) -> list[str]:
+    """The actor-only fields (`ACTOR_SCENARIO_FIELDS`) a submission sends that carry anything."""
+    return [name for name in ACTOR_SCENARIO_FIELDS if args.get(name) not in (None, [], {}, "")]
+
+
+def actors_off_refusal(sent: list[str]) -> str:
+    return (
+        "Not kept. Actors and faults are off for this environment, so a scenario takes none of: "
+        + ", ".join(sent)
+        + ". Send it without them."
+    )
+
+
+def _actor_fields() -> dict[str, Any]:
+    """The actors field of a scenario."""
+    return {
+        "actors": {
+            "type": "array",
+            "description": "Actors from the environment's list this scenario includes, by id from add_actor. An "
+            "actor that speaks on calls (listed with a channel) gets its `instruction`, who they are here and "
+            "what they say, written to them, and its `trigger`, the only thing that decides when they speak: "
+            + described(TRIGGER_ABOUT)
+            + ". Give them a part of their own, never the person's goal: they never make, confirm, change or "
+            "cancel the person's request, and never give a detail the agent needs from the person. The person's "
+            "own instruction never names, mentions or plans for another actor, as the run tells the person who is "
+            "with them, and the scenario's name never says who else is on the call. An actor that acts in the "
+            "world gets its `actions` here in order: a world action with its arguments and when it fires: "
+            "`on_tool` on the agent's `on_call`th call of `tool`, `contacted` when the agent reaches one of the "
+            "actor's identities, `after_seconds`, `probability`, or `always`, at the start of the run before the "
+            "agent has done anything. A record change takes `<collection>.put` with the new record's fields, or "
+            "`<collection>.change` with `where` (which records) and `set` (the new values). A decision the agent "
+            "has to wait for and act on (an approval, a refusal, an approval with a condition) fires on the agent's "
+            "own request: `on_tool` on the tool the agent asks with, `contacted`, or `conditional` on the pending "
+            "request record, and some scenarios give it `after_seconds` or no action at all so it is late or never "
+            "comes. `always` means it is already done before the agent starts: that is starting state, and the "
+            "agent is never tested on waiting for it or honouring it. An action the actor is "
+            "not permitted is refused by the world and recorded as "
+            "their attempt. An actor can do both. Whatever an actor brings, one of `sub_goals` checks how the agent "
+            "handled it (honoured the refusal, settled the conflicting fact, used the note); an actor nothing checks is "
+            "scenery. Leave it out for the person alone.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "instruction": {
+                        "type": "string",
+                        "description": "An actor that speaks: who they are here and what they say. Never when: "
+                        "they speak when the trigger fires, so the instruction names no moment, event or turn. Give "
+                        "them something the agent has to handle: a fact that differs from the person's (another year, "
+                        "amount or name) the agent must settle, a request of their own the agent may not grant, or a "
+                        "decision only they can make. An actor who only supplies what the person could say tests "
+                        "nothing.",
+                    },
+                    "trigger": {
+                        "type": "object",
+                        "description": "An actor that speaks: when they come in.",
+                        "properties": {
+                            "kind": {"type": "string", "enum": list(TRIGGER_ABOUT)},
+                            "turn": {"type": "integer"},
+                            "tool": {"type": "string"},
+                            "on_call": {"type": "integer", "minimum": 1},
+                            "words": {"type": "array", "items": {"type": "string"}},
+                            "p": {"type": "number"},
+                            "seconds": {"type": "number"},
+                            "collection": {"type": "string", "description": "conditional: the collection"},
+                            "where": {"type": "object", "description": "conditional: fields the record must hold"},
+                        },
+                        "required": ["kind"],
+                    },
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string"},
+                                "arguments": {"type": "object"},
+                                "verdict": {
+                                    "type": "string",
+                                    "enum": ["approved", "refused"],
+                                    "description": "Only for an action that decides a request someone made of the "
+                                    "actor: whether it approves or refuses it.",
+                                },
+                                "trigger": {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                                "on_tool",
+                                                "contacted",
+                                                "after_seconds",
+                                                "probability",
+                                                "always",
+                                                "conditional",
+                                            ],
+                                        },
+                                        "tool": {
+                                            "type": "string",
+                                            "description": "on_tool: the agent's tool",
+                                        },
+                                        "on_call": {
+                                            "type": "integer",
+                                            "description": "on_tool: which call of it, from 1",
+                                        },
+                                        "seconds": {
+                                            "type": "number",
+                                            "description": "after_seconds",
+                                        },
+                                        "p": {
+                                            "type": "number",
+                                            "description": "probability, 0 to 1",
+                                        },
+                                        "collection": {"type": "string", "description": "conditional"},
+                                        "where": {"type": "object", "description": "conditional"},
+                                    },
+                                    "required": ["kind"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                },
+                "required": ["id"],
+            },
+        },
+        "pre_run": {
+            "type": "array",
+            "description": "Conversations that happened before the run, each in its own place of the world (a channel "
+            "thread, a DM, an email chain, a ticket's comments), that the agent will find. Give the situation only: "
+            "who was in it (`actors`, any number of the environment's actors, the caller included), where (`where`: "
+            "the action that writes there and the arguments naming the place, plus `reply` when replies use another "
+            "action and an id from the first message), and what it was about (`about`). The actors write the messages "
+            "themselves when the scenario is kept; never write their lines. A mocked actor's messages, if any, go in "
+            "`thread`. Sessions are written in order and replayed into the world before every trial; they are never "
+            "graded. `per_trial` writes a fresh conversation inside each trial instead. Leave it out when the world "
+            "starts as seeded.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "actors": {"type": "array", "items": {"type": "string"}},
+                    "where": {"type": "object"},
+                    "about": {"type": "string"},
+                    "per_trial": {"type": "boolean"},
+                    "max_messages": {"type": "integer", "minimum": 1},
+                    "thread": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["actors", "where", "about"],
+            },
+        },
+        "faults": {
+            "type": "array",
+            "description": "Failures the world gives the agent's own calls in this scenario, to test how it copes: "
+            "`timeout_before_commit` (the world never sees the call; the agent hears a timeout), "
+            "`timeout_after_commit` (the world makes the change and the agent never hears back, so a careless retry "
+            "makes it twice), `unavailable` (the service is down: the world never sees the call and the agent hears "
+            "503 at once), or `error` (the world never sees the "
+            "call and the agent gets `status` with `message`; use it when the service refuses in a specific way, a "
+            "429 rate limit or a 500 with a message), on the agent's `on_call`th call of `action`, the world action "
+            "as the environment names it. Give one only where the scenario is about coping with it. A check reading "
+            "the world then fails a duplicate, or one system changed without the other. A write retried after "
+            "`timeout_after_commit` that the world commits twice fails the scenario by itself; a retry carrying the "
+            "first call's `Idempotency-Key` is answered from the first result. When a workflow changes records in "
+            "two systems (`<system A>`, `<system B>`), write one "
+            "scenario whose checks read both, and a negative control where only one changes, which the check over "
+            "the other must fail. Never shown to any actor or the person.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "timeout_before_commit",
+                            "timeout_after_commit",
+                            "unavailable",
+                            "error",
+                            "approval_required",
+                        ],
+                    },
+                    "on_call": {"type": "integer", "minimum": 1},
+                    "delay_seconds": {"type": "number", "minimum": 0, "maximum": 30},
+                    "status": {"type": "integer", "minimum": 400, "maximum": 599},
+                    "message": {"type": "string", "maxLength": 500},
+                    "approval": {
+                        "type": "string",
+                        "description": "For `approval_required` only: the world action an approver takes to approve "
+                        "(a record change or a tool), as the environment names it. Every write of `action` is "
+                        "refused until an actor in this scenario permitted to take it has taken it, with arguments "
+                        "that include `approved_when`; the writes after that go through. Never on a read.",
+                    },
+                    "approved_when": {"type": "object"},
+                },
+                "required": ["action", "mode"],
+                "additionalProperties": False,
+            },
+        },
+        "starts_with": {
+            "type": "object",
+            "description": "Only for an agent started by a task or an event rather than by a person: the one "
+            "message that invokes it. Leave out actor for a task the scenario itself hands the agent (summarize this "
+            "thread, fix this ticket); name an actor only when a real person or system sends it (a meeting-ended "
+            "notice from the calendar). The run has no caller; the agent is graded on what it did in the world.",
+            "properties": {"actor": {"type": "string"}, "text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
+    listed = load_actors(world_root).by_id()
+    problems = [
+        f"actors: {entry.id!r} is not an actor; add it with add_actor first"
+        for entry in scenario.actors
+        if entry.id not in listed
+    ]
+    from .pre_run import problems as session_problems
+
+    for number, session in enumerate(scenario.pre_run, start=1):
+        problems += session_problems(session, number, listed)
+    starter = scenario.starts_with.actor if scenario.starts_with is not None else None
+    if starter is not None and starter not in listed:
+        problems.append(f"starts_with: {scenario.starts_with.actor!r} is not an actor; add it with add_actor first")
+    if any(entry.id == CALLER for entry in scenario.actors):
+        problems.append("actors: the caller is the person in every scenario, through its persona; leave it out of actors")
+    problems += _activation_problems(scenario, listed)
+    problems += _folded_actors(scenario, listed)
+    playing = _in_scenario(scenario)
+    problems += [
+        f"faults: approval_required on {fault.action} needs an actor in this scenario permitted to take "
+        f"{fault.approval}; add one to actors, or drop the fault"
+        for fault in scenario.faults
+        if fault.mode == "approval_required"
+        and not any(fault.approval in listed[one].permitted_actions for one in playing if one in listed)
+    ]
+    for loop in cycles(listed, scenario.actors):
+        if len(loop) == 1:
+            problems.append(
+                f"actors: {loop[0]} waits for a record only it can write (the agent and the seed are not counted as "
+                "writing it), so it never comes in; give it a trigger of its own"
+            )
+            continue
+        problems.append(
+            "actors: " + " and ".join(loop) + " bring each other in (each one's trigger is an action only the next "
+            "can take; the agent and the seed are not counted as writing those records): a cycle no run can settle; "
+            "give one of them a trigger of its own"
+        )
+    return problems
+
+
+def _in_scenario(scenario: Scenario) -> set[str]:
+    """Every actor this scenario plays: in `actors`, in a pre-run session, or sending the message that starts it."""
+    playing = {entry.id for entry in scenario.actors}
+    for session in scenario.pre_run:
+        playing.update(session.actors)
+    if scenario.starts_with is not None and scenario.starts_with.actor:
+        playing.add(scenario.starts_with.actor)
+    return playing
+
+
+def _folded_actors(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
+    """The caller played as a listed actor, read from the persona's name field: the run would never play that person,
+    so what they do is never tested. What the instruction's words mention is never judged here."""
+    persona = scenario.persona
+    caller_name = str((persona.get("name") if isinstance(persona, dict) else getattr(persona, "name", "")) or "")
+    caller = listed.get(CALLER)
+    represented = {caller.on_behalf_of} if caller is not None and caller.on_behalf_of else set()
+    return [
+        f"persona: the caller is played as {actor.name}, who is the actor {actor.id!r}; give the caller a person of "
+        f"their own and put {actor.id} in `actors` with their part"
+        for actor in listed.values()
+        if actor.id != CALLER
+        and actor.id not in represented
+        and actor.name
+        and caller_name.strip().lower() == actor.name.strip().lower()
+    ]
+
+
+def _names_a_caller(actor: Actor, caller_names: set[str]) -> str:
+    """The suite caller's full name this environment-wide actor's own text names, or "": an actor is the same in every
+    scenario, so text written for one caller is wrong in every scenario with another."""
+    text = " ".join([actor.role, actor.goal, actor.prompt]).lower()
+    for name in sorted(caller_names):
+        words = name.split()
+        if len(words) >= 2 and re.search(r"\b" + r"\s+".join(map(re.escape, words)) + r"\b", text):
+            return name
+    return ""
+
+
+def _decided_values_the_caller_states(scenario: Scenario, listed: dict[str, Actor]) -> list[tuple[str, list[str]]]:
+    """Per live or speaking actor, the figures its limits decide that the caller's instruction already states: the
+    caller would arrive with the outcome settled, so the actor has nothing left to decide."""
+    said = set(_FIGURE.findall(scenario.instruction or ""))
+    found = []
+    for entry in scenario.actors:
+        actor = listed.get(entry.id)
+        if actor is None or not (actor.channel or actor.play != "mocked" or entry.instruction):
+            continue
+        limits = " ".join([*actor.constraints.may_agree, *actor.constraints.private, entry.instruction])
+        shared = sorted(said & set(_FIGURE.findall(limits)))
+        if shared:
+            found.append((actor.name or actor.id, shared))
+    return found
+
+
+# A figure an actor can decide: an amount, a percentage or a number of two or more digits, never a lone digit.
+_FIGURE = re.compile(r"[$€£]\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?%|\b\d{2,}(?:[.,]\d+)?\b")
+
+
+def cast_read_back(scenario: Scenario, world_root: Path, caller_names: set[str] | None = None) -> str:
+    """Who this scenario plays and how, beside the environment's actors it leaves out, for the writer to compare with
+    the request before moving on: each action as a record change or a message, whether anyone talked before the run,
+    and who starts it. ``caller_names`` are the suite's callers' full names, lowercased."""
+    from .world_door import record_action
+
+    listed = load_actors(world_root).by_id()
+    others = [one for one in listed.values() if one.id != CALLER]
+    if not others:
+        return ""
+
+    def kind(action: str) -> str:
+        return f"{action} (a record change)" if record_action(action) else f"{action} (a message or tool call)"
+
+    def plays(actor: Actor | None) -> str:
+        if actor is None:
+            return "unknown"
+        if actor.channel:
+            return "speaks, deciding in the moment on each agent turn its channel allows"
+        return {
+            "mocked": "mocked, only the actions listed here",
+            "live": "live, decides its own actions in the moment",
+            "both": "both, the actions listed here and its own decisions",
+        }[actor.play]
+
+    parts = []
+    for entry in scenario.actors:
+        actor = listed.get(entry.id)
+        trigger = entry.trigger.kind if entry.trigger is not None else "its own"
+        acts = ", ".join(kind(one.action) for one in entry.actions) or ("a live part" if entry.instruction else "nothing")
+        parts.append(
+            f"{actor.name if actor else entry.id} ({entry.id}; plays: {plays(actor)}; comes in: {trigger}; does: {acts})"
+        )
+    sessions = [f"{session.where.get('action', '?')} with {', '.join(session.actors)}" for session in scenario.pre_run]
+    if scenario.starts_with is not None:
+        starter = f"a message from {scenario.starts_with.actor}" if scenario.starts_with.actor else "the scenario's own task"
+    else:
+        starter = "the caller (no `starts_with`)"
+    left_out = [f"{one.name} ({one.id})" for one in others if one.id not in _in_scenario(scenario)]
+    settled = [
+        f"{entry.id} ({one.action})"
+        for entry in scenario.actors
+        for one in entry.actions
+        if record_action(one.action) and one.trigger is not None and one.trigger.kind == "always"
+    ]
+    speaking = [entry.id for entry in scenario.actors if entry.instruction]
+    # A chat actor answers the agent again within the person's turn; the person still decides when the chat ends.
+    answering = [
+        entry.id for entry in scenario.actors if entry.id in listed and listed[entry.id].channel == "chat_message"
+    ]
+    persona = scenario.persona
+    raw_name = persona.get("name") if isinstance(persona, dict) else getattr(persona, "name", "")
+    persona_name = " ".join(str(raw_name or "").lower().split())
+    callers = set(caller_names or set()) | ({persona_name} if persona_name else set())
+    written_for_one = [
+        f"{actor.name}'s role names {named.title()}, a caller in this suite"
+        for actor in (listed.get(one) for one in sorted(_in_scenario(scenario)))
+        if actor is not None and (named := _names_a_caller(actor, callers))
+    ]
+    unsent = scenario.starts_with is not None and not scenario.starts_with.actor
+    # Decisions that reach the world only as a record, from an actor who never writes to the agent.
+    silent_deciders = [
+        listed[entry.id].name or entry.id
+        for entry in scenario.actors
+        if entry.id in listed
+        and not listed[entry.id].channel
+        and not entry.instruction
+        and entry.actions
+        and all(record_action(one.action) for one in entry.actions)
+        and any(one.trigger is not None and one.trigger.kind == "on_tool" for one in entry.actions)
+    ]
+    decided = _decided_values_the_caller_states(scenario, listed)
+    return (
+        "\nCast: the caller" + "".join(f"; {one}" for one in parts)
+        + f". Talked before the run: {'; '.join(sessions) if sessions else 'nobody (no `pre_run`)'}. Started by: {starter}."
+        + (f" Listed actors not in it: {', '.join(left_out)}." if left_out else "")
+        + " Compare this with the request: everyone it names as acting during the run is played here; a decision "
+        "someone makes in the world is a record change; people who talked before the run are a `pre_run` session; "
+        "a run started by someone's message has `starts_with`."
+        + (
+            f" Already done before the agent starts (`always`): {', '.join(settled)}. If that is a decision the agent "
+            "asks for and must wait for or honour, fire it on the agent's request instead."
+            if settled
+            else ""
+        )
+        + (
+            f" For {', '.join(speaking)}: name what the agent has to handle because of them (a fact that differs "
+            "from the person's, a request it may not grant, a decision only they make). If they only say what the "
+            "person could have said, change their part with `edit_scenario`."
+            if speaking
+            else ""
+        )
+        + (
+            f" {', '.join(answering)} answer the agent until their live turns run out, but the chat ends when the "
+            "caller closes it: keep what they decide out of the caller's instruction, or the caller closes before "
+            "they have decided."
+            if answering
+            else ""
+        )
+        + (
+            f" {', '.join(silent_deciders)} decide only by writing a record after the agent's call, and say nothing "
+            "to the agent: it learns the decision only from a tool that reads that record or from the person asking "
+            "again. A check that the agent tells the person the outcome needs one of those in the scenario."
+            if silent_deciders
+            else ""
+        )
+        + (
+            " The start message comes from no one, so the agent reads it as a task, not as anyone's message: if the "
+            f"request says someone sends it ({', '.join(f'{one.name} ({one.id})' for one in others)}), give "
+            "`starts_with` that actor."
+            if unsent
+            else ""
+        )
+        + (
+            " " + "; ".join(written_for_one) + ". An actor is the same in every scenario, so its role names people "
+            "by their part (the caller, the caller's spouse), never by one scenario's names: change it with `add_actor`."
+            if written_for_one
+            else ""
+        )
+        + (
+            " The caller's instruction already states "
+            + "; ".join(f"{', '.join(values)}, which {name} decides" for name, values in decided)
+            + ": the caller would arrive with it settled and nothing is left to negotiate. Give the caller only what "
+            "they ask for, and keep the outcome in that actor's limits."
+            if decided
+            else ""
+        )
+    )
+
+
+def _activation_problems(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
+    """Each actor whose trigger (the scenario's, else its own) its runtime cannot evaluate: refused when written, never
+    a trigger that silently never fires."""
+    out = []
+    for entry in scenario.actors:
+        actor = listed.get(entry.id)
+        if actor is None:
+            continue
+        trigger = entry.trigger or (actor.activation.trigger if actor.activation else None)
+        if trigger is None:
+            continue
+        runtime = "speaking" if actor.channel else "world"
+        if trigger.kind not in EVALUATED_BY[runtime]:
+            who = "speaks on the call" if actor.channel else "acts through the world"
+            out.append(
+                f"actors: {entry.id} {who}, where `{trigger.kind}` cannot be evaluated; use one of "
+                + ", ".join(sorted(EVALUATED_BY[runtime]))
+            )
+        if trigger.kind == "conditional" and not trigger.collection:
+            out.append(f"actors: {entry.id}: conditional needs the `collection` whose record brings them in")
+        if trigger.kind == "contacted" and not any(str(one).strip() for one in actor.identities.values()):
+            # Contact is the agent's call naming one of the actor's identities; with none, it can never happen.
+            out.append(
+                f"actors: {entry.id} comes in when contacted but has no identity the agent's calls could name; give it "
+                "`identities`, or bring it in when the record it answers exists (`conditional` with that collection)"
+            )
+    return out
 
 
 def _mailbox_fields() -> dict[str, Any]:
@@ -245,6 +747,31 @@ def worth_delegating(wanted: int) -> bool:
     operator choice something no operator should have to make.
     """
     return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
+
+
+def persona_properties(
+    languages: str = "The one language the caller speaks on the call.",
+) -> dict[str, Any]:
+    """Who a person is, in the platform's own persona fields: the simulated user's and every actor's."""
+    return {
+        "name": {
+            "type": "string",
+            "description": "A given name and a family name you would hear every day where this person lives and "
+            "among people with their accent. Never a rare, old-fashioned or literary name.",
+        },
+        "gender": persona_field("gender"),
+        "age_group": persona_field("age_group"),
+        "occupation": persona_field("occupation"),
+        "location": persona_field("location"),
+        "personality": persona_field("personality"),
+        "communication_style": persona_field("communication_style"),
+        "languages": {
+            "type": "array",
+            "items": persona_field("languages"),
+            "description": languages,
+        },
+        "accent": persona_field("accent"),
+    }
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -544,6 +1071,40 @@ def _red_team_short(
     )
 
 
+def _call_actors_short(
+    args: dict[str, Any],
+    kept: list[Scenario],
+    wanted: int,
+    share: float,
+    usable: list[str],
+) -> str:
+    """Why this scenario without an actor would leave the suite short of its share of scenarios that
+    include one, or "" when it would not."""
+    if not usable or wanted < 4 or any(
+        (one or {}).get("id") in usable for one in args.get("actors") or []
+    ):
+        return ""
+    name = str(args.get("name") or "")
+    others = [one for one in kept if one.name != name]
+    needed = at_least(share, wanted)
+    including = sum(
+        1 for one in others if any(entry.id in usable for entry in one.actors)
+    )
+    if including >= needed or len(others) - including < wanted - needed:
+        return ""
+    return (
+        f"{including} of the {wanted} scenarios you are writing include an actor who speaks on the call and at "
+        f"least {needed} must, and the scenarios still to come can no longer make up the difference. Where "
+        f"someone else fits this person's situation, write this same task with one of the environment's "
+        f"speaking actors ({', '.join(usable)}) in `actors` with its instruction and trigger. Where nobody "
+        "fits, keep this one actor-free and give the actor to a scenario already written whose situation has "
+        "someone else around: resubmit that one with its `scenario_key` and the actor added, then submit this "
+        "one again. If the person asked for another share, call aim_for with `actor_share` set to it: "
+        '{"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their range; no submission '
+        "is refused for the share after that."
+    )
+
+
 def _over_its_share(
     coverage: Any,
     grid: dict[str, list[str]] | None,
@@ -806,6 +1367,101 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
+_LOADED_ONCE = (
+    "change records after the run starts, but this agent loads its data once when it starts and never reads it "
+    "again, so it never sees the change. Make it starting state (`always`), or give the actor a part on the "
+    "conversation instead"
+)
+
+
+def _in_process_store(world_root: Path) -> dict[str, Any]:
+    """The contract's data store when the agent keeps its data inside its own process, else {}."""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    store = contract.get("data_store") or {}
+    return store if str(store.get("kind") or "").strip().lower() == "in_process" else {}
+
+
+def _late_record_changes(scenario: Scenario) -> list[str]:
+    """Each actor record change that fires after the run starts."""
+    from .world_door import record_action
+
+    return [
+        f"{entry.id} ({one.action}, {one.trigger.kind})"
+        for entry in scenario.actors
+        for one in entry.actions
+        if record_action(one.action) and one.trigger.kind != "always"
+    ]
+
+
+def late_changes_note(scenario: Scenario, world_root: Path) -> str:
+    """A note, never a refusal, when an agent with a loader may not see a change made after it starts: the
+    contract does not record whether the loader runs once or on every call."""
+    store = _in_process_store(world_root)
+    if not (store.get("loader_module") or store.get("loaded_by")) or str(store.get("loads") or "").strip():
+        return ""
+    late = _late_record_changes(scenario)
+    return f"\nIf this agent's loader runs only when it starts: {', '.join(late)} {_LOADED_ONCE}." if late else ""
+
+
+def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[str]:
+    """A setup that writes records for an agent whose data lives inside its own process: the agent copied its data
+    at start, so it never sees such a record."""
+    store = _in_process_store(world_root)
+    if not store:
+        return []
+    from .scenario import _CREATES_A_RECORD, _ONLY_TOUCHES_EXISTING
+    from .world_door import record_action
+
+    if store.get("loader_module") or store.get("loaded_by"):
+        # Refused only when the contract records that the loader runs once, at start; otherwise a note.
+        late = _late_record_changes(scenario)
+        if not late or str(store.get("loads") or "").strip().lower() != "start":
+            return []
+        return [f"actors: {', '.join(late)} {_LOADED_ONCE}"]
+
+    out = []
+    setup = scenario.setup_code or ""
+    if _CREATES_A_RECORD.search(setup) or _ONLY_TOUCHES_EXISTING.search(setup):
+        out.append(
+            "this agent keeps its data inside its own process and builds it when it starts, so a record "
+            "setup_code adds or changes is one the agent never sees and every run fails it for something "
+            "the scenario invented. Use only the records the world already holds, as they are, with an "
+            "empty setup_code"
+        )
+    for entry in scenario.actors:
+        changes = [one.action for one in entry.actions if record_action(one.action)]
+        if changes:
+            out.append(
+                f"actors: {entry.id} changes {', '.join(changes)}, but this agent keeps its data inside its own "
+                "process, so it never sees the change and the scenario tests nothing about it. Give the actor a "
+                "part on the conversation instead (what they say or ask), or leave them out"
+            )
+    return out
+
+
+def _budgets_for_unknown_workers(scenario: Scenario, world_root: Path) -> str:
+    """A budget per worker names only the contract's workers, a reference that must resolve. Whether a worker's
+    deadline can be held (a shared worker, no separate one) is not refused here: the trial holds such a scenario."""
+    budgets = scenario.worker_budget_seconds
+    if not isinstance(budgets, dict) or not budgets:
+        return ""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    declared = {str(one.get("id")) for one in contract.get("workers") or [] if isinstance(one, dict)}
+    unknown = sorted(str(worker) for worker in budgets if str(worker) not in declared)
+    if not unknown:
+        return ""
+    return (
+        f"worker_budget_seconds: {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not one of the contract's "
+        f"workers ({', '.join(sorted(declared)) or 'none declared'}); name a declared worker or give one number for all"
+    )
+
+
 def _steps_the_contract_refuses(
     scenario: Scenario, world_root: Path, attached: frozenset[str] = frozenset()
 ) -> list[str]:
@@ -915,6 +1571,72 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+def _service_tools(contract: Any) -> set[str]:
+    """The agent's tools its own tools service runs: the world's tool trace sees each call of them."""
+    return {
+        str(entry.get("tool") or "")
+        for entry in (one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or []))
+        if entry.get("mode") == "service"
+    } - {""}
+
+
+def _read_tools(contract: Any) -> set[str]:
+    """The agent's tools that only read, by the rule the world's door applies (the declared effect, else the method),
+    each by its name and by its route's world action, the two names a fault can give it."""
+    entries = [one if isinstance(one, dict) else one.model_dump() for one in (contract.tool_entrypoints or [])]
+    reads = [
+        entry
+        for entry in entries
+        if call_effect(
+            ToolCall(action="", name="", method=str(entry.get("method") or "POST"), effect=str(entry.get("effect") or ""))
+        )
+        == "read"
+    ]
+    return (
+        {str(entry.get("tool") or "") for entry in reads}
+        | {route_action(str(entry.get("endpoint") or "")) for entry in reads}
+    ) - {""}
+
+
+def _call_actors_that_cannot_run(
+    scenario: Scenario,
+    listing: CallActorList | None,
+    trial: Any,
+    spoken: bool,
+    tools: set[str] | None,
+    service_tools: set[str] | None = None,
+) -> list[str]:
+    """Why the scenario's actors that speak on the call cannot, or nothing."""
+    if not scenario.actors:
+        return []
+    listing = listing or CallActorList()
+    speaking = speaking_entries(scenario.actors, listing)
+    if not speaking:
+        return []
+    # The scenario stands without them; the run tells the person who is there, so the instruction never does.
+    named = [
+        one.name
+        for one in (listing.get(entry.id) for entry in speaking)
+        if one is not None and named_in(scenario.instruction, one.name)
+    ]
+    return scenario_problems(
+        speaking,
+        listing,
+        modality="voice" if spoken else "chat",
+        call_direction=scenario.call_direction,
+        person=scenario.persona.name if scenario.persona else "",
+        tools=tools,
+        # A tool the agent's own tools service runs is seen by the world's tool trace on every call, though the
+        # writer's local world cannot execute it.
+        runs_in_world=lambda tool: tool in (service_tools or set()) or executes(trial, tool),
+    ) + [
+        f"instruction: the person's instruction names {name}, who speaks on this call. Write the person's "
+        "situation as if no one else were there; the trigger brings them in and the run tells the person "
+        "who is with them"
+        for name in named
+    ]
+
+
 def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
     """``held`` with ``change`` applied: a field it names is replaced, and a mapping such as the
     persona changes only the entries it names, at any depth. Each field ``clear`` names, a persona
@@ -992,9 +1714,13 @@ def accept_scenario(
     vocabulary: list[str] | None = None,
     spoken: bool = True,
     instructions: str = "",
+    call_actor_list: CallActorList | None = None,
+    tools: set[str] | None = None,
     used: set[str] | None = None,
     renaming: bool = False,
     attached: frozenset[str] = frozenset(),
+    service_tools: set[str] | None = None,
+    read_tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -1012,6 +1738,25 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    if unlisted := _unlisted_actors(scenario, world_root):
+        return _err("Not kept. " + " ".join(unlisted))
+    if unknown := _budgets_for_unknown_workers(scenario, world_root):
+        return _err("Not kept. " + unknown)
+    if reading := [
+        fault.action
+        for fault in scenario.faults
+        if fault.mode == "approval_required" and fault.action in (read_tools or set())
+    ]:
+        return _err(
+            "Not kept. faults: approval_required holds a change, and " + ", ".join(reading) + " only reads; set it "
+            "on the write that needs the approval"
+        )
+    if scenario.starts_with is not None and spoken:
+        # No transport delivers an event to a voice agent: the scenario would run as an ordinary call instead.
+        return _err(
+            "Not kept. starts_with: this agent is reached by a call, and nothing can deliver an event to it; an "
+            "event-started scenario is only for an agent reached by messages"
+        )
     scenario.branch = _without_kind_label(scenario.branch)
     if not spoken:
         scenario.background_noise = False
@@ -1024,31 +1769,56 @@ def accept_scenario(
 
     proof = None
     if not renaming:
-        # Read against the world this scenario actually runs in, so a setup that creates the table
-        # a check reads is not reported as referring to something that does not exist.
-        trial, _applied, _ready = prepared(scenario, world_root)
-        try:
+        workspace = workspace_fixture(scenario, catalogue)
+        native = native_runtime(world_root) or workspace
+        if native:
             problems = validate_scenario(
                 scenario,
                 catalogue,
-                trial.state(),
+                {},
                 simulator_prompt,
-                allow_empty_solution=allow_empty_solution,
+                allow_empty_solution=allow_empty_solution or workspace,
                 spoken=spoken,
             )
-            problems.extend(
-                contract_sequence_problems(scenario, hard_constraints or [])
-            )
-            problems.extend(_credentials_the_world_lacks(scenario, trial))
-            problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-            problems.extend(
-                _fixed_sources_that_do_not_hold(scenario, trial, instructions)
-            )
+            # A native or workspace agent has no world to prepare here, so the checks that read
+            # one (credentials, invented identifiers, fixed sources) run only in the branch below.
+            problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
             problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
-        finally:
-            trial.close()
+            problems.extend(
+                _call_actors_that_cannot_run(
+                    scenario, call_actor_list, None, spoken, tools, service_tools
+                )
+            )
+        else:
+            # Read against the world this scenario actually runs in, so a setup that creates the
+            # table a check reads is not reported as referring to something that does not exist.
+            trial, _applied, _ready = prepared(scenario, world_root)
+            try:
+                problems = validate_scenario(
+                    scenario,
+                    catalogue,
+                    trial.state(),
+                    simulator_prompt,
+                    allow_empty_solution=allow_empty_solution,
+                    spoken=spoken,
+                )
+                problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+                problems.extend(_credentials_the_world_lacks(scenario, trial))
+                problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+                problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
+                problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
+                problems.extend(_records_the_agent_cannot_see(scenario, world_root))
+                problems.extend(_overlay_asserts_nothing(scenario, catalogue))
+                problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+                problems.extend(
+                    _call_actors_that_cannot_run(
+                        scenario, call_actor_list, trial, spoken, tools, service_tools
+                    )
+                )
+            finally:
+                trial.close()
 
         if problems:
             return _err(
@@ -1056,7 +1826,7 @@ def accept_scenario(
             )
 
         proof = prove(scenario, catalogue, world_root, postgres_only=attached)
-        if not proof.holds:
+        if not proof.holds and not (proof.deferred and not proof.broken):
             said = f"Not kept. {proof.why()}"
             # Code written against the wrong collection shape is the commonest way setup, ready and a
             # check fail here, and the exception alone does not say which collections are mappings and
@@ -1133,6 +1903,10 @@ def accept_scenario(
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
+    # Saved on both paths: parallel writers share this process, so the proof file is safe to
+    # write even where the folders are not. A rename is not proved again: its key keeps its proof.
+    if proof is not None:
+        record_proof(world_root, scenario.scenario_key or _slug(scenario.name), proof)
     if persist:
         write_scenarios(kept, world_root, catalogue)
     else:
@@ -1155,19 +1929,36 @@ def accept_scenario(
         "as demonstrated."
         if proof.assumed
         else ""
+    ) + (
+        "\nNOT PROVED: these world actor actions run on a clock or a chance, which a proof does not "
+        "have, so they were not played: " + ", ".join(proof.unplayed) + "."
+        if proof is not None and proof.unplayed
+        else ""
     )
-    proof_summary = (
-        "Nothing it tests changed, so it was not proved again."
-        if proof is None
-        else "The world is ready for it, and its sub-goals will be judged from the call: the "
-        "recording, the transcript, every action with its arguments and the records left."
-        if proof.judged_only
-        else "The world is ready for it, and on PostgreSQL, where its attached tools run, the "
-        "reference solution passes its checks and they fail when nothing is done."
-        if proof.postgres_only
-        else "All three gates pass: the world is ready for it, the reference solution passes "
-        "its checks, and those checks fail when nothing is done."
-    )
+    if proof is None:
+        proof_summary = "Nothing it tests changed, so it was not proved again."
+    elif proof.deferred:
+        proof_summary = proof.why()
+    elif proof.assumed:
+        proof_summary = (
+            "Local checks passed with assumed tool results; the reference solution remains "
+            "unverified."
+        )
+    elif proof.postgres_only:
+        proof_summary = (
+            "The world is ready for it, and on PostgreSQL, where its attached tools run, the "
+            "reference solution passes its checks and they fail when nothing is done."
+        )
+    elif proof.judged_only:
+        proof_summary = (
+            "The world is ready for it, and its sub-goals will be judged from the call: the "
+            "recording, the transcript, every action with its arguments and the records left."
+        )
+    else:
+        proof_summary = (
+            "All three gates pass: the world is ready for it, the reference solution passes "
+            "its checks, and those checks fail when nothing is done."
+        )
     # Names, bounded: without them a session re-reads the suite to learn what is taken.
     names = [one.name for one in kept]
     recent, more = ", ".join(names), ""
@@ -1297,6 +2088,7 @@ def scenario_tools(
     can_grow: bool = False,
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     postgres_proof: Callable[[Scenario, Catalogue], str] | None = None,
+    catalogue: Catalogue | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -1312,6 +2104,9 @@ def scenario_tools(
     ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
     is never counted as already having what a sibling wrote.
 
+    ``catalogue`` shares one catalogue object with the session's other servers; without it the
+    catalogue is read from disk.
+
     ``can_grow`` lets ``aim_for`` move the cap. Only chat sets it: "add five" reopens a finished
     suite, so the size it was opened with is exactly what the person asked to go past. Authoring
     keeps the cap it was given, because a model raising its own target is how 200 became 559.
@@ -1322,9 +2117,15 @@ def scenario_tools(
     kept: list[Scenario] = (
         list(start_from) if start_from is not None else load_scenarios(destination)
     )
-    catalogue = load_catalogue(destination)
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    # The job's actors switch: off, no scenario takes actors, a pre-run, a first speaker or faults.
+    switch = current_actors_switch()
+    with_actors = actors_on(switch)
+    # The share an earlier session recorded carries over; an environment without one draws the default.
+    if (saved := load_actors(destination).actor_share) is not None:
+        target["actor_share"] = saved.model_dump()
     # Keys this environment has given out, a dropped scenario's included: never given to a new one.
     used = used_keys(destination)
     unique = with_unique_keys(kept, used)
@@ -1335,6 +2136,27 @@ def scenario_tools(
 
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
+
+    def call_actor_share() -> float:
+        """The share of scenarios that include an actor: drawn within the range the person asked for
+        through `aim_for`, else within this environment's default range."""
+        if not with_actors:
+            return 0.0
+        seed = os.environ.get("ALK_HARNESS_JOB_ID") or str(destination)
+        asked = target.get("actor_share")
+        if asked:
+            return default_share(seed, (asked["min"], asked["max"]))
+        # The platform's default range when it sent one, else the kit's own.
+        return default_share(seed, (switch.share[0], switch.share[1])) if switch is not None else default_share(seed)
+
+    def usable_call_actors() -> list[str]:
+        """The listed actors a run can deliver to this agent."""
+        channels = available_channels("voice" if _is_spoken(contract) else "chat")
+        return [
+            one.id
+            for one in load_call_actors(destination).call_actors
+            if one.channel in channels
+        ]
 
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
@@ -1364,18 +2186,12 @@ def scenario_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime(world_root) or not args.get("table"):
+            return _ok(world_summary(world_root))
         world = restore(world_root)
         try:
             state = world.state()
             table = str(args.get("table") or "")
-            if not table:
-                lines = [f"{n}: {len(r)} rows" for n, r in sorted(state.items())]
-                if catalogue.sub_goals:
-                    lines.append("\nsub-goals available:")
-                    for goal in sorted(catalogue.sub_goals, key=lambda one: one.name):
-                        compares = f" Its check compares {goal.reference.strip()}" if goal.reference.strip() else ""
-                        lines.append(f"- {goal.name}: {goal.what.strip()}{compares}")
-                return _ok("\n".join(lines) or "this world has no tables")
             if table not in state:
                 return _err(
                     f"no table {table!r}; this world has {', '.join(sorted(state))}"
@@ -1431,6 +2247,13 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime(world_root) or workspace_fixture(
+            Scenario(name="trial", setup_code=str(args.get("setup_code") or "")),
+            Catalogue(),
+        ):
+            return _err(
+                "DEFERRED: native tools and fixtures run only in the live runtime; no local replay exists."
+            )
         # A suite that already holds what was asked for has nothing left to explore.
         if cap() and len(kept) >= cap():
             return _err(
@@ -1548,23 +2371,53 @@ def scenario_tools(
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal.",
+        "is what makes one available. Leave it empty for an ordinary task sub-goal. "
+        "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
+        "given only that worker's calls, and is inconclusive when the worker made none."
+        + worker_subjects_note(contract)
+        + (
+            " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
+            "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
+            "came into. Leave it empty for a sub-goal about the person's task."
+        ),
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            {
+                "name": str,
+                "what": str,
+                "check": str,
+                "judged": str,
+                "output": str,
+                "overlay": str,
+                "actor": str,
+                "subject": str,
+                **CONTRACT_SCHEMA,
+            },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        sub_goal = SubGoal(
-            name=str(args.get("name") or ""),
-            what=str(args.get("what") or ""),
-            check=str(args.get("check") or ""),
-            judged=str(args.get("judged") or ""),
-            output=str(args.get("output") or "pass_fail"),
-            overlay=str(args.get("overlay") or ""),
-            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
-        )
+        try:
+            sub_goal = SubGoal(
+                name=str(args.get("name") or ""),
+                what=str(args.get("what") or ""),
+                check=str(args.get("check") or ""),
+                judged=str(args.get("judged") or ""),
+                output=str(args.get("output") or "pass_fail"),
+                overlay=str(args.get("overlay") or ""),
+                actor=str(args.get("actor") or ""),
+                subject=str(args.get("subject") or "task"),
+                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            )
+        except ValueError as invalid:
+            return _err(f"Not added: {invalid}")
         problems = validate_sub_goal(sub_goal)
+        if sub_goal.actor and sub_goal.actor not in load_actors(world_root).by_id():
+            problems.append(f"actor: {sub_goal.actor!r} is not an actor of this environment; add it with add_actor first")
+        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
+            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
+        if native_runtime(world_root) and sub_goal.deterministic():
+            if problem := native_source_problem(sub_goal.check, "check"):
+                problems.append(problem)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1675,6 +2528,7 @@ def scenario_tools(
                     "which the agent has to work hardest for.",
                 },
                 **_mailbox_fields(),
+                **(_actor_fields() if with_actors else {}),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
@@ -1692,7 +2546,9 @@ def scenario_tools(
                     "disclose or decide, and no closing line about what counts as done. Those "
                     "are the behaviours under test, and a person primed to expect them plays "
                     "along whether or not they happen, so the check passes on a conversation "
-                    "that never earned it. Give them the value, the preference or the problem "
+                    "that never earned it. Nor the agent's own rules: a customer does not know the "
+                    "limit, the window or who must approve unless someone real would have told them. "
+                    "Give them the value, the preference or the problem "
                     "they arrived with, and let the agent's handling of it be what is measured.\n"
                     "Test every sentence by asking whether this person could say it out loud. "
                     "They have never seen the agent's design, so a parenthetical explaining "
@@ -1708,24 +2564,12 @@ def scenario_tools(
                     "details. This fills the simulator prompt's persona slot."
                     + persona_vocabulary_note(),
                     "properties": {
-                        "name": {"type": "string"},
-                        "gender": persona_field("gender"),
-                        "age_group": persona_field("age_group"),
-                        "occupation": persona_field("occupation"),
-                        "location": persona_field("location"),
-                        "personality": persona_field("personality"),
-                        "communication_style": persona_field("communication_style"),
+                        **persona_properties(),
                         "initial_message": {
                             "type": "string",
                             "description": "The caller's natural opening request, specific to "
                             "this scenario. Do not use a generic greeting.",
                         },
-                        "languages": {
-                            "type": "array",
-                            "items": persona_field("languages"),
-                            "description": "The one language the caller speaks on the call.",
-                        },
-                        "accent": persona_field("accent"),
                         "multilingual": {"type": "boolean"},
                         "metadata": {"type": "object"},
                     },
@@ -1808,7 +2652,8 @@ def scenario_tools(
                                 "what the world holds for them (and where), or the rule in the agent's "
                                 "instructions that names it, quoted. Checks and the judge are shown "
                                 "only these. Leave out any value you picked because the step needed "
-                                "one. Empty when none is fixed.",
+                                "one, and a date the person gives as a relative day (\"tomorrow\"): the "
+                                "run may happen on another day than the one you wrote. Empty when none is fixed.",
                             },
                         },
                         "required": ["tool", "arguments", "fixed"],
@@ -1828,7 +2673,31 @@ def scenario_tools(
                     "description": "Names from the shared catalogue that must hold. Use the "
                     "existing names wherever one fits, so results add up across the suite.",
                 },
-                "max_turns": {"type": "integer"},
+                "max_turns": {
+                    "type": "integer",
+                    "description": "Count the turns this person needs to reach the outcome: one per question the "
+                    "agent must ask them, one per value read back, one for each actor's part and each correction "
+                    "or hold, one to close. Set it above that count. A run cut off before its outcome fails for "
+                    "a budget we chose, and it hits the hardest scenarios first.",
+                },
+                "worker_budget_seconds": {
+                    "anyOf": [
+                        {"type": "integer", "minimum": 1},
+                        {
+                            "type": "object",
+                            "additionalProperties": {"type": "integer", "minimum": 1},
+                            "minProperties": 1,
+                        },
+                    ],
+                    "description": "Only for an agent with workers: a worker-action deadline, seconds from the "
+                    "start of the trial after which a worker's call no longer reaches the world, counted from the "
+                    "trial's start, not from a hand-off. A number holds every worker to one deadline. An object of "
+                    "worker id to seconds holds only those workers, so one worker can pass its deadline while the "
+                    "others finish: to test one worker past its deadline, give only that worker a budget shorter "
+                    "than its work, and leave the workers it depends on out. A worker still acting then has its "
+                    "world calls refused as past its deadline, and a worker that runs as a process of its own is "
+                    "ended. Leave out to use the run's own limit.",
+                },
                 "coverage": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
@@ -1842,15 +2711,24 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent))
         if external_runtime_target and args.get("solution"):
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
 
-        def _refuse(said: str, as_given: dict[str, Any] | None = None) -> dict[str, Any]:
-            seen = _count_refusal(refused, str(args.get("name") or ""), said)
+        def _refuse(said: str, as_given: dict[str, Any] | None = None, gate: str = "") -> dict[str, Any]:
+            # A gate held over the whole suite counts its refusals per stage, so a rename never resets it.
+            seen = (
+                _count_refusal(refused, gate, gate)
+                if gate
+                else _count_refusal(refused, str(args.get("name") or ""), said)
+            )
             if seen >= _REFUSALS_BEFORE_MOVING_ON:
                 return _err(
-                    f"{said}\n\nThis is refusal {seen} of this scenario for the same reason, so "
+                    f"{said}\n\nThis is refusal {seen} "
+                    + ("across the scenarios written here" if gate else "of this scenario")
+                    + " for the same reason, so "
                     "submitting it again will not work. Drop it and write a different scenario for "
                     "this cell, or place it on a level the call actually has."
                 )
@@ -1860,6 +2738,14 @@ def scenario_tools(
             problem = scenario_problem(args)
             if problem:
                 return _refuse(problem)
+        if args.get("pre_run"):
+            # Checked first, so a session that cannot be written is refused with its fix before any model is asked.
+            from .pre_run import session_problems, written
+
+            if unwritable := session_problems(args.get("pre_run"), world_root):
+                return _refuse("Not kept. " + " ".join(unwritable))
+            # The actors write their pre-run conversations now, once, so every trial replays the same thread.
+            args = await written(dict(args), world_root)
 
         # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,
         # so the checks below never count it against itself.
@@ -1886,6 +2772,22 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
+        # The default share is a minimum held for new scenarios; a share the person set is never
+        # refused for. A scenario already in the suite is never refused for it either, so editing one
+        # never changes what it tests.
+        short = (
+            ""
+            if target.get("actor_share") or any(one.name == same for one in kept)
+            else _call_actors_short(
+                {**args, "name": same},
+                kept,
+                cap(),
+                call_actor_share(),
+                usable_call_actors(),
+            )
+        )
+        if short:
+            return _refuse(short, gate="actor_share")
         twin = _already_in_the_suite(
             {**args, "name": same}, kept, _first_names_on_disk(destination, same)
         )
@@ -1904,7 +2806,7 @@ def scenario_tools(
             )
             if crowded:
                 return _refuse(crowded)
-        if args.get("persona") and args.get("fixture"):
+        if not native_runtime(world_root) and args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(
                     [Scenario.model_validate(args)], world_root
@@ -1941,11 +2843,32 @@ def scenario_tools(
             instructions="\n".join(
                 [contract.system_prompt_excerpt, *contract.hard_constraints]
             ),
+            call_actor_list=load_call_actors(destination),
+            tools=set(contract.tool_names()),
             used=used,
             attached=attached,
+            service_tools=_service_tools(contract),
+            read_tools=_read_tools(contract),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
+            try:
+                result["content"][0]["text"] += cast_read_back(
+                    Scenario.model_validate(args), world_root, _first_names_on_disk(destination)
+                )
+            except Exception:  # noqa: BLE001 - the read-back never changes whether a scenario was kept
+                pass
+            try:
+                kept_one = Scenario.model_validate(args)
+                result["content"][0]["text"] += late_changes_note(kept_one, world_root)
+                result["content"][0]["text"] += records_of_someone_else(kept_one, world_root)
+            except Exception:  # noqa: BLE001 - the note never changes whether a scenario was kept
+                pass
+            result["content"][0]["text"] += (
+                "\nRead the instruction as the person would: any sentence saying what the agent will tell them, find, "
+                "approve or refuse hands them the verdict this scenario measures. Replace it with what they want and "
+                "what they would accept, using `edit_scenario`."
+            )
             name = str(args.get("name") or "")
             for key in [key for key in refused if key[0] == name]:
                 refused.pop(key, None)
@@ -1982,6 +2905,24 @@ def scenario_tools(
         return _ok(said) if done else _err(said)
 
     @tool(
+        "set_worker_tools",
+        "Change which of the agent's tools one participant (a contract worker, by id) may use; the test world "
+        "refuses the rest for it. Only when the person asks: it widens or narrows what is tested by their say, not by "
+        "what the source shows, and is recorded as an amendment. The only way to let a participant use a tool, or stop "
+        "it: amend_contract and fix_tool change what a tool accepts or does, never who may use it. Say why.",
+        schema({"worker": str, "allowed_tools": list, "why": str}, ["worker", "allowed_tools", "why"]),
+    )
+    async def set_worker_tools_tool(args: dict[str, Any]) -> dict[str, Any]:
+        done, said = set_worker_tools(
+            contract,
+            world_root,
+            worker=str(args.get("worker") or ""),
+            allowed_tools=[str(one) for one in (args.get("allowed_tools") or [])],
+            why=str(args.get("why") or ""),
+        )
+        return _ok(said) if done else _err(said)
+
+    @tool(
         "add_rule",
         "Give the agent a hard rule its source did not state, when asked for one. It is told to "
         "the agent under test and graded, so this changes what is being tested. Say why.",
@@ -2013,12 +2954,17 @@ def scenario_tools(
     @tool(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. Everything "
-        "is built from these, so a wrong argument name produces a world that refuses everything.",
+        "is built from these, so a wrong argument name produces a world that refuses everything. `arg_units` "
+        "records the unit or format of a field (a currency's minor or major unit, seconds or milliseconds); "
+        "`returns` the fields "
+        "the tool hands back, each with its type and unit.",
         schema(
             {
                 "tool_name": str,
                 "args": list,
                 "arg_types": dict,
+                "arg_units": dict,
+                "returns": dict,
                 "description": str,
                 "refuses": str,
                 "effects": str,
@@ -2039,6 +2985,8 @@ def scenario_tools(
             arg_types={
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
+            arg_units={str(k): str(v) for k, v in (args.get("arg_units") or {}).items()},
+            returns={str(k): str(v) for k, v in (args.get("returns") or {}).items()},
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
@@ -2061,7 +3009,10 @@ def scenario_tools(
         "language or location may then dominate the suite. Set `alike` when they asked for one "
         "kind of caller on purpose, and that bound comes off. Their request decides this, never "
         "your own convenience: a writer that found the bound inconvenient and turned it off has "
-        "made a suite about one person.\n\n"
+        "made a suite about one person. The one other case is an agent that serves one country: "
+        "when its instructions and its customers' records all place them there (local phone "
+        "numbers, a local currency, local names), set `alike`, because a spread of accents across "
+        "those customers is invented, and vary them by temperament and circumstance instead.\n\n"
         "`asked_for` names the coverage levels the person explicitly asked for, for example "
         '{"interface": ["quiet_line"]} for callers with no background noise. Those levels are '
         "not held to their share of the suite. Only what the person said, never a level you "
@@ -2106,6 +3057,18 @@ def scenario_tools(
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
                 },
                 "keywords": {"type": "array", "items": {"type": "string"}},
+                "actor_share": {
+                    "type": "object",
+                    "properties": {
+                        "min": {"type": "number", "minimum": 0, "maximum": 1},
+                        "max": {"type": "number", "minimum": 0, "maximum": 1},
+                    },
+                    "required": ["min", "max"],
+                    "description": "Only when the person's request says how many scenarios should include an "
+                    "actor: that share of the suite as fractions, min and max both 1 for every scenario, both 0 "
+                    "for none, or the range they gave. It replaces the environment's default share. Leave it out "
+                    "otherwise.",
+                },
                 "axes": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -2136,6 +3099,18 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
+        if args.get("actor_share") is not None and not with_actors:
+            return _err("actor_share is not taken: actors are off for this environment, so no scenario includes one.")
+        if args.get("actor_share") is not None:
+            given = args["actor_share"]
+            try:
+                low, high = sorted(min(max(float(given[end]), 0.0), 1.0) for end in ("min", "max"))
+            except (TypeError, KeyError, ValueError):
+                return _err('actor_share takes {"min": <fraction>, "max": <fraction>}, each from 0 to 1')
+            target["actor_share"] = {"min": low, "max": high}
+            if can_save and (destination / ACTORS_FILE).is_file():
+                listed = load_actors(destination)
+                save_actors(destination, listed.model_copy(update={"actor_share": ActorShare(min=low, max=high)}))
         asked = {
             level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
             for axis, levels in (args.get("asked_for") or {}).items()
@@ -2207,6 +3182,32 @@ def scenario_tools(
             said += (
                 f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
                 "because a writer that never sees the list cannot stay inside it"
+            )
+        usable = usable_call_actors() if with_actors else []
+        share = call_actor_share()
+        if usable:
+            said += (
+                f". At least {at_least(share, cap())} of the {cap()} scenarios include an actor"
+                if share > 0
+                else ". No scenario includes an actor, as the person asked"
+            )
+        listing = load_call_actors(destination) if usable and share > 0 else None
+        named = {
+            level_name(level)
+            for levels in (target.get("axes") or {}).values()
+            for level in levels
+        }
+        unplaced = [
+            one
+            for one in (listing.call_actors if listing else [])
+            if one.id in usable and level_name(one.id) not in named
+        ]
+        if unplaced:
+            said += (
+                ". The environment lists these actors and no level is named for them yet. Call aim_for "
+                "again with a level for each, named for it, with a share like any other; at a small count "
+                "that share can be a single scenario:\n"
+                + CallActorList(call_actors=unplaced).summary()
             )
         return _ok(said)
 
@@ -2440,8 +3441,8 @@ def scenario_tools(
             )
             + ". Written to coverage.json.\n"
             + _coverage_gaps(coverage)
-            + "Every one cleared all three gates: the world is ready for it, the reference "
-            "solution passes its checks, and those checks fail when nothing is done.\n"
+            + "Scenarios passed their applicable authoring checks. Deferred runtime checks and "
+            "assumed tool steps still require live execution; saving is not end-to-end proof.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )
         if noted:
@@ -2506,6 +3507,8 @@ def scenario_tools(
         edit_schema,
     )
     async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent).replace("Not kept.", "Not changed."))
         key = str(args.get("scenario_key") or "").strip()
         held = next((one for one in kept if one.scenario_key == key), None)
         if held is None:
@@ -2565,6 +3568,7 @@ def scenario_tools(
             submit_scenario,
             edit_scenario,
             amend_contract,
+            set_worker_tools_tool,
             add_rule_tool,
             drop_rule_tool,
             fix_tool_tool,
@@ -2587,6 +3591,7 @@ _ALWAYS = (
     "submit_scenario",
     "edit_scenario",
     "amend_contract",
+    "set_worker_tools",
     "add_rule",
     "drop_rule",
     "fix_tool",
@@ -2662,6 +3667,40 @@ def _attached_summary(world_root: Path) -> list[str]:
 
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
+    if native_runtime(world_root):
+        return (
+            "NATIVE RUNTIME: no local database or tool replay exists. Write setup(world) using "
+            "world.request(capability, method, relative_path, json=payload) against the real API. "
+            " Use form=fields instead of json for form login; never both. Cookies persist privately "
+            "per capability across setup/ready/checks. In setup, world.set_headers(capability, "
+            "{header: value}) sets private default auth headers from a real login response. "
+            "request(headers=...) overrides defaults for that request only. Use "
+            "capture_headers=[name] to read selected response headers via response['headers']. "
+            "No session credentials enter public world state or artifacts. "
+            "ready(world) must read and verify the exact fixture. Checks may read GET/HEAD "
+            "responses and actual calls. For source-reviewed POST read operations already declared in "
+            "runtime.observations, use world.observe(name, parameters); the fixed request cannot "
+            "be overridden. Local proof is DEFERRED until live validation. "
+            "Do not invent login credentials or fixture IDs; declare fixed values the native "
+            "API accepts and verify them. Setup cannot change simulator fixture slots. "
+            "Existing sub-goals: "
+            + ", ".join(sorted(load_catalogue(world_root).names()))
+        )
+    bindings = workspace_bindings(world_root)
+    workspace_context = (
+        "TARGET FILE WORKSPACES (relative to the target working directory): "
+        + json.dumps(bindings, sort_keys=True)
+        + ". Seed required existing files with world.write_file(name, relative_path, content) in "
+        "setup; ready must read back each file with world.read_file and verify its contents. "
+        "These operate on the actual target directory only at live "
+        "validation, so local file-fixture proof is DEFERRED. Do not seed a database files table.\n"
+        if bindings
+        else "NO TARGET FILE WORKSPACE IS DECLARED. Do not assume repository files, test suites, "
+        "symbols or documents exist in the agent's working directory. File tasks must be "
+        "self-contained: provide all input content in the conversation and ask the agent to "
+        "create it before using it. Otherwise select a task with no existing-file prerequisite. "
+        "The uploaded agent source is not the agent's task workspace.\n"
+    )
     world = restore(world_root)
     try:
         state = world.state()
@@ -2683,6 +3722,23 @@ def world_summary(world_root: Path) -> str:
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
         lines += _attached_summary(world_root)
+        # The caller is in every scenario as the person, through its persona; it is never listed in `actors`.
+        acting = [one for one in load_actors(world_root).actors if one.id != CALLER]
+        if acting:
+            lines.append(
+                "\nACTORS a scenario can include in its `actors`, by id: an actor who speaks on calls with "
+                "what they say and when, an actor who acts in the world with its actions, or both:"
+            )
+            lines += [
+                f"  {one.id}: {one.name}, {one.role or one.kind}"
+                + (f"; speaks on calls ({one.channel})" if one.channel else "")
+                + (
+                    f"; may {', '.join(one.permitted_actions)}"
+                    if one.permitted_actions
+                    else ""
+                )
+                for one in acting
+            ]
         external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:
@@ -2691,7 +3747,7 @@ def world_summary(world_root: Path) -> str:
                 "replay, or inspect provider-owned tools/state. Use solution: [] and judged "
                 "sub-goals; live conversation/tool events are the outcome evidence.\n"
             )
-        return prefix + "\n".join(lines)
+        return prefix + workspace_context + "\n".join(lines)
     finally:
         world.close()
 
@@ -2717,7 +3773,11 @@ def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
 def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]:
     """Scenarios that hand the caller a credential the world does not hold once setup has run."""
     problems: list[str] = []
+    if native_runtime(world_root):
+        return problems
     for scenario in scenarios:
+        if workspace_fixture(scenario, load_catalogue(world_root)):
+            continue
         claimed = _handed_to_the_caller(scenario.fixture)
         if not claimed:
             continue
@@ -2770,8 +3830,12 @@ def _words(text: str) -> set[str]:
 def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[str]:
     """Callers whose own name is nowhere on the record the agent's lookup will return."""
     problems: list[str] = []
+    if native_runtime(world_root):
+        return problems
     base = None
     for scenario in scenarios:
+        if workspace_fixture(scenario, load_catalogue(world_root)):
+            continue
         pinned = [
             one.split("=", 1)[1]
             for one in _pinned_identity(scenario.fixture)
@@ -2798,6 +3862,47 @@ def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[
                 "the persona to the record or seed a record for this person."
             )
     return problems
+
+
+_AN_ID_ARGUMENT = re.compile(r"(^|_)(id|number|ref|reference|account)$", re.IGNORECASE)
+# A field that says whose record it is.
+_A_HOLDER_FIELD = re.compile(r"^(customer|owner|holder|account_holder)(_name)?$|^(full|first|last)_name$", re.IGNORECASE)
+
+
+def records_of_someone_else(scenario: Scenario, world_root: Path) -> str:
+    """A note when the records this scenario's solution acts on carry another person's name than the caller's."""
+    mine = _words(scenario.persona.name or "") if scenario.persona is not None else set()
+    ids = sorted(
+        {
+            str(value).strip()
+            for step in scenario.solution
+            for key, value in step.arguments.items()
+            if key in step.fixed and _AN_ID_ARGUMENT.search(str(key)) and str(value).strip()
+        }
+    )
+    if not mine or not ids:
+        return ""
+    try:
+        rows = restore(world_root).state()
+    except Exception:  # noqa: BLE001 - a note, never a refusal
+        return ""
+    wanted = {one.casefold() for one in ids}
+    known = {
+        str(value).strip()
+        for table in (rows or {}).values()
+        for row in (table if isinstance(table, list) else [])
+        if isinstance(row, dict) and {str(v).strip().casefold() for v in row.values()} & wanted
+        for key, value in row.items()
+        if _A_HOLDER_FIELD.search(str(key)) and str(value).strip()
+    }
+    if not known or set().union(*(_words(one) for one in known)) & mine:
+        return ""
+    return (
+        f"\nThe record {', '.join(ids)} belongs to {', '.join(sorted(known))}, not {scenario.persona.name}. An agent "
+        "that checks whose record it is will rightly refuse this caller. If the agent should serve them, make the "
+        "caller that person; if the scenario is about someone asking for another person's record, its sub-goals "
+        "should expect the refusal."
+    )
 
 
 def world_summary_tables(world_root: Path) -> list[str]:

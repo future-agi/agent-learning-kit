@@ -20,19 +20,36 @@ import asyncio
 import json
 import logging
 import re
-from pathlib import Path
+import sqlite3
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ..backends import tool, tool_server
+from fi.simulate.simulation.call_actors import CHANNELS, available_channels, described
 
+from ..backends import tool, tool_server
+from ..job import actors_on, current_actors_switch
+
+from ..actors import (
+    Actor,
+    ActorList,
+    actor_input_schema,
+    load_actors,
+    save_actors,
+    environment_actions,
+    environment_collections,
+    record_changes,
+)
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
+    worker_subjects_note,
     CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    Catalogue,
     SubGoal,
     load_catalogue,
     save_catalogue,
@@ -42,8 +59,16 @@ from ..catalogue import (
     weak_check_advisory,
     without_delivery_overlay,
 )
+from ..call_actor import (
+    CallActor,
+    entry_problems,
+    load_call_actors,
+    scenarios_using,
+)
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
+from ..seed_rows import only_seed_rows
+from ..source_folder import agent_scope, contract_folder, in_agent_scope
 from ..simulator import (
     load_simulator_prompt,
     save_simulator_prompt,
@@ -60,6 +85,10 @@ from .snapshot import MANIFEST, read_manifest, restore, save
 from .stores.written import API as OPS_API
 
 WORLD_SERVER = "world"
+NATIVE_RUNTIME_HELP = (
+    "Native runtime owns state and tools. Author scenario setup/ready using the real API "
+    "and native response checks; local mutation/replay is unsupported."
+)
 
 # What a handler is actually given. Said again here, and not only in the skill, because this is
 # where the mistake surfaces: a handler that crashed has a model reading *this* message, and an
@@ -285,8 +314,11 @@ def _base_data_problems(
 STORE_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".duckdb", ".dump", ".sql")
 
 
-def _stores_here(source_root: str) -> str:
+def _stores_here(source_root: str, folder: str = "") -> str:
     """Where the agent's code is, and which files under it look like a store.
+
+    With a ``folder``, only the agent's own and those in the folders above it: another agent's
+    store is not a hint for this one.
 
     Said rather than left to be guessed. A message that reports a path was wrong without saying
     what the right ones are turns one call into a search, and the search is over a filesystem this
@@ -298,10 +330,17 @@ def _stores_here(source_root: str) -> str:
             "to resolve against. Give an absolute path, or say that the source root is missing."
         )
     root = Path(source_root)
+    scope = agent_scope(root, folder)
     seen: list[str] = []
     for path in sorted(root.rglob("*")):
         if len(seen) >= 12:
             break
+        if (
+            scope is not None
+            and path.is_file()
+            and not in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
+        ):
+            continue
         if path.is_file() and path.suffix.lower() in STORE_SUFFIXES:
             size = path.stat().st_size
             measure = f"{size // 1024} KB" if size else "empty"
@@ -333,7 +372,7 @@ def _binding(
     """
     root = called.split(".")[0]
     reach = f"from {module} import {root}" if module else ""
-    state = "db.state, " if first_arg else ""
+    state = "True" if first_arg else "False"
     # Their code may be async, which is true of every framework-decorated tool. The result is
     # settled here rather than by the caller so that a handler stays synchronous, which is what
     # every other part of the world already assumes.
@@ -342,16 +381,16 @@ def _binding(
         attr = called.split(".", 1)[1] if "." in called else "__call__"
         return (
             f"{reach}\n"
-            "from fi.alk.harness.world.runtime import settled\n\n"
+            "from fi.alk.harness.world.runtime import call_agent_tool, settled\n\n"
             "def handle(args, db):\n"
             f"    instance = {built}\n"
-            f"    return settled(instance.{attr}({state}**args))\n"
+            f"    return settled(call_agent_tool(instance.{attr}, args, db, state={state}))\n"
         )
     return (
         f"{reach}\n"
-        "from fi.alk.harness.world.runtime import settled\n\n"
+        "from fi.alk.harness.world.runtime import call_agent_tool, settled\n\n"
         "def handle(args, db):\n"
-        f"    return settled({called}({state}**args))\n"
+        f"    return settled(call_agent_tool({called}, args, db, state={state}))\n"
     )
 
 
@@ -383,9 +422,80 @@ def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
             "WHERE table_name = %s",
             (table,),
         )
-        return {str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows} or None
+        return {
+            str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows
+        } or None
     except Exception:  # noqa: BLE001 - an engine that cannot say is not refused for it
         return None
+
+
+def _unreadable_arrays(world: Any, destination: Path) -> list[str]:
+    """Rewrite Postgres array literals in array columns as JSON; the columns left unreadable.
+
+    Uses the source model and the converter the seed import uses, so what saves also seeds.
+    """
+    from ..certification import GenericHarnessArtifactStore
+    from ..source_model import LogicalType
+    from ..world_import.sqlite import array_value
+
+    store = getattr(world, "store", None)
+    artifacts = GenericHarnessArtifactStore(destination / "generic-harness")
+    if getattr(store, "engine", "") != "sqlite" or not (
+        artifacts.root / artifacts.SOURCE_MODEL
+    ).is_file():
+        return []
+    try:
+        source = artifacts.read_source_model()
+    except (OSError, ValueError):
+        return []
+    held = set(store.collections())
+    problems: list[str] = []
+    for table in source.tables:
+        if table.name not in held:
+            continue
+        info = store.query(f'PRAGMA table_info("{table.name}")')
+        columns = {row["name"] for row in info}
+        for column in table.columns:
+            if column.logical_type is not LogicalType.ARRAY:
+                continue
+            if column.name not in columns:
+                continue
+            found = store.query(
+                f'SELECT DISTINCT "{column.name}" AS value FROM "{table.name}" '
+                f'WHERE "{column.name}" IS NOT NULL'
+            )
+            for value in (row["value"] for row in found):
+                try:
+                    items = array_value(value, column.element_type)
+                except ValueError:
+                    problems.append(f"{table.name}.{column.name}")
+                    break
+                if isinstance(value, str) and value.startswith("{"):
+                    store.execute(
+                        f'UPDATE "{table.name}" SET "{column.name}" = ? '
+                        f'WHERE "{column.name}" = ?',
+                        [items, value],
+                    )
+    return problems
+
+
+def _unreadable_json(world: Any, source_root: str, contract: Any) -> list[str]:
+    """The JSON columns, as the agent's own schema declares them, holding values the seed
+    import refuses, such as bare text. The types come from that schema, not the recorded
+    source model: at authoring a repository agent's source model has no tables yet, since
+    the seed-time model is only read from a running database at validation. Nothing is
+    rewritten: bare text could be meant as a string or be a mistake, so the writer decides."""
+    from ..bundle_author_v2 import declared_json_columns
+    from ..world_import.sqlite import unreadable_json_columns
+
+    store = getattr(world, "store", None)
+    if getattr(store, "engine", "") != "sqlite":
+        return []
+    columns = declared_json_columns(
+        source_root,
+        contract=contract.model_dump() if hasattr(contract, "model_dump") else None,
+    )
+    return unreadable_json_columns(store.connection, columns) if columns else []
 
 
 def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> bool:
@@ -405,23 +515,23 @@ def _tables_the_source_lacks(
         return []
     from pathlib import Path as _Path
 
-    from ..bundle_author_v2 import _source_schema_paths
+    from ..bundle_author_v2 import _source_schema_artifacts
 
     try:
-        paths = _source_schema_paths(
+        artifacts = _source_schema_artifacts(
             _Path(source_root),
             contract=contract.model_dump() if hasattr(contract, "model_dump") else None,
         )
     except Exception:
         return []
-    if not paths:
+    if not artifacts:
         return []
     declared: dict[str, set[str]] = {}
     required: dict[str, set[str]] = {}
     cites: dict[str, dict[str, tuple[str, str]]] = {}
-    for path in paths:
+    for artifact in artifacts:
         # Comments first: a trailing `-- matched against caller_ani` is prose, not a column.
-        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        sql = re.sub(r"--[^\n]*", "", artifact.sql)
         for found in re.finditer(
             r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?\w+"?\.)?"?([A-Za-z_]\w*)"?\s*\(',
             sql,
@@ -450,7 +560,10 @@ def _tables_the_source_lacks(
                     re.IGNORECASE,
                 )
                 if cite:
-                    points_at[word.lower()] = (cite.group(1).lower(), cite.group(2).lower())
+                    points_at[word.lower()] = (
+                        cite.group(1).lower(),
+                        cite.group(2).lower(),
+                    )
             declared.setdefault(found.group(1).lower(), set()).update(columns)
             required.setdefault(found.group(1).lower(), set()).update(must)
             cites.setdefault(found.group(1).lower(), {}).update(points_at)
@@ -494,7 +607,9 @@ def _tables_the_source_lacks(
         for row in rows if isinstance(rows, list) else list(rows.values()):
             if isinstance(row, dict):
                 for key, value in row.items():
-                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(str(value))
+                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(
+                        str(value)
+                    )
     for name, rows in state.items():
         for column, (target, target_column) in cites.get(name.lower(), {}).items():
             # An empty target table is still checked: that is exactly the dangling case.
@@ -519,6 +634,272 @@ def _tables_the_source_lacks(
     return problems
 
 
+def world_actor_tools(
+    destination: Path,
+    contract: AgentContract | None = None,
+    collections: Callable[[], list[str]] | None = None,
+) -> list[Any]:
+    """The tools that keep the environment's actors: for the build and the builder chat. `collections` reads the
+    world's collections while it is being built; without it they come from the saved source model."""
+    if not actors_on(current_actors_switch()):
+        # Actors are off for this environment: none is offered, so none is kept.
+        return []
+
+    def world_actions() -> list[str]:
+        # Read when called, so actions adopted later in the build count.
+        return environment_actions(
+            destination, contract.model_dump() if contract is not None else None
+        )
+
+    def world_records() -> list[str]:
+        try:
+            held = collections() if collections is not None else []
+        except Exception:  # noqa: BLE001 - a world that cannot list its tables offers no record changes
+            held = []
+        return record_changes(held or environment_collections(destination))
+
+    modality = str(getattr(contract, "modality", "") or "")
+    speaking = available_channels(modality)
+
+    # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
+    listed = world_actions()
+    records = world_records()
+
+    @tool(
+        "add_actor",
+        "Add an actor, or change one already listed: anyone the agent under test deals with who is not the agent, "
+        "such as the caller, someone with the caller, a manager, a coworker, a teammate on chat or a system. Only "
+        "the fields you send change, the rest stay as they are. An actor may speak on calls, act in the world, or "
+        "both. To speak on calls give `channel`"
+        + (
+            ": "
+            + described({name: CHANNELS[name]["about"] for name in speaking})
+            + ", with `persona` in the caller's fields (the voice is chosen from it)"
+            if speaking
+            else " (this agent's calls carry none)"
+        )
+        + ". To act in the world give `permitted_actions`, exactly what this person may do and nothing more: the "
+        "world's own actions, each named as the environment names it (the route one of its tools calls, with `/` as "
+        "`.`), and record changes on the world's collections, `<collection>.put` to add a record (its fields) and "
+        "`<collection>.change` to edit one (`where` and `set`). Give an actor `identities` in each service it acts "
+        "in, who they are in its records, so the world credits what they do to them; one whose action's tool names "
+        "who acts needs it. A decision someone makes (an approval, a rejection, a grant of access) is "
+        "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
+        "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
+        "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
+        "decided by this list, never by what anyone says. `role` is who they are to the people around them in a few "
+        "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
+        "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
+        "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does. An actor is the "
+        "same in every scenario, so `role` names people by their part (the caller, the caller's spouse), never by "
+        "one scenario's names."
+        + (f" The world's actions: {', '.join(listed)}." if listed else "")
+        + (f" Record changes: {', '.join(records)}." if records else ""),
+        actor_input_schema(),
+    )
+    async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        current = listing.by_id().get(str(args.get("id") or ""))
+        given = {name: value for name, value in args.items() if name not in ("provenance", "share_actions")}
+        confirmed = args.get("share_actions")
+        # One action or a list of them; anything else confirms nothing.
+        shared = (
+            {str(one) for one in confirmed if isinstance(one, str)}
+            if isinstance(confirmed, list)
+            else {confirmed} if isinstance(confirmed, str) else set()
+        )
+        if isinstance(given.get("surface"), str) and given["surface"] in CHANNELS:
+            # A way of speaking sent as the place it acts: said back, never saved as a surface no world has.
+            return _err(
+                f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
+                "`surface` is where it acts in the world."
+            )
+        try:
+            base = current.model_dump(exclude_none=True) if current is not None else {}
+            # A nested field merges the keys sent into what it has, as the top level does.
+            merged = {
+                name: {**base[name], **value}
+                if isinstance(value, dict) and isinstance(base.get(name), dict)
+                else value
+                for name, value in given.items()
+            }
+            actor = Actor.model_validate({**base, **merged})
+        except ValueError as exc:
+            return _err(f"Not added: {exc}")
+        from ..actors import actor_models
+
+        models = actor_models()
+        kept = current.model if current is not None else None
+        if actor.model and actor.model != kept and actor.model not in models:
+            # A run plays the actor on this model, so an unknown one would fail each of its turns.
+            return _err(f"Not added: model is one of {', '.join(models)}, or left out for the environment's model.")
+        if actor.channel:
+            problems = entry_problems(
+                CallActor(
+                    id=actor.id,
+                    name=actor.name,
+                    role=actor.role,
+                    channel=actor.channel,
+                    persona=actor.persona,
+                ),
+                modality=modality,
+            )
+            if problems:
+                return _err("Not added:\n  - " + "\n  - ".join(problems))
+        from ..actor_dispatch import actions_naming_actor
+
+        # Only where the action's own tool declares who acts does the world need the actor's identity there.
+        naming = actions_naming_actor(contract.model_dump()) if contract is not None else set()
+        unnamed = sorted(
+            {
+                one.split(".", 1)[0]
+                for one in actor.permitted_actions
+                if one in naming and not actor.identities.get(one.split(".", 1)[0])
+            }
+        )
+        if unnamed:
+            # Without it the world cannot tell who acted, and credits the actor's post or change to the agent.
+            return _err(
+                f"Not added: {actor.id} acts in {', '.join(unnamed)} but has no identity there. Give `identities` "
+                f"with who they are in each one's records (the member, user or handle the world seeds for them), "
+                f"for example {{{', '.join(repr(one) + ': ...' for one in unnamed)}}}."
+            )
+        services = sorted({one.split(".", 1)[0] for one in world_actions()})
+        # Only the keys sent now: an actor saved before this check keeps its other edits open.
+        stray = sorted(set(given.get("identities") or {}) - set(services)) if services else []
+        if stray:
+            # An identity is looked up by the service an action goes to; under any other key no action finds it.
+            return _err(
+                f"Not added: identities are keyed by the service the person is known in, one of {', '.join(services)}; "
+                f"{', '.join(repr(one) for one in stray)} {'is not one' if len(stray) == 1 else 'are not'}. Send {{'<service>': '<who they are there>'}}."
+            )
+        from ..actors import permission_conflicts
+
+        unconfirmed = [(action, holder) for action, holder in permission_conflicts(listing, actor) if action not in shared]
+        if unconfirmed:
+            # One actor's own action given to a second lets both take it: the person decides, never the builder.
+            return _err(
+                "Not added: "
+                + " ".join(
+                    f"{action} is held only by {holder.name or holder.id} today; giving it to {actor.id} lets both "
+                    "take it."
+                    for action, holder in unconfirmed
+                )
+                + " Ask the person whether both should have it; if they confirm, send it again with `share_actions`."
+            )
+        if current is not None and current.channel != actor.channel:
+            using = scenarios_using(destination, actor.id)
+            if using:
+                # A scenario's trigger and level were written for the way the actor joins the call.
+                return _err(
+                    f"Not changed. These scenarios include {actor.id} as it joins now: "
+                    + ", ".join(using)
+                )
+        try:
+            kept = [one for one in listing.actors if one.id != actor.id]
+            save_actors(destination, ActorList(actors=[*kept, actor], unresolved=listing.unresolved))
+        except ValueError as exc:
+            return _err(f"Not added: {exc}")
+        known = world_actions()
+        changes = world_records()
+        unknown = [one for one in actor.permitted_actions if one not in known and one not in changes]
+        reply = f"{actor.id} may {', '.join(actor.permitted_actions) or 'do nothing in the world'}. "
+        reply += (
+            f"The world's actions: {', '.join(known)}."
+            if known
+            else "The world has no actions an actor can take yet."
+        )
+        if changes:
+            reply += f" Record changes: {', '.join(changes)}."
+        if unknown:
+            reply += (
+                f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
+                "refuses it; send `permitted_actions` again with actions from that list."
+            )
+        return _ok(reply)
+
+    @tool(
+        "drop_actor",
+        "Remove an actor by id, when the person you work with asks for it or this agent's users would never "
+        "have them around. Refused while any scenario includes it.",
+        {"id": str},
+    )
+    async def drop_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        gone = str(args.get("id") or "")
+        kept = [one for one in listing.actors if one.id != gone]
+        if len(kept) == len(listing.actors):
+            return _err(
+                f"no actor {gone!r}. Listed: {', '.join(one.id for one in kept) or 'none'}"
+            )
+        using = scenarios_using(destination, gone)
+        if using:
+            return _err(
+                f"Not dropped. These scenarios include {gone}: " + ", ".join(using)
+            )
+        try:
+            remaining = ActorList(actors=kept, unresolved=listing.unresolved)
+        except ValueError as exc:
+            # Another actor still names this one as its parent, principal or fallback.
+            return _err(f"Not dropped: {exc}")
+        save_actors(destination, remaining)
+        return _ok(f"{gone} dropped")
+
+    @tool(
+        "note_unresolved",
+        "Record a policy point from the agent's material that you could not turn into an actor's permissions or "
+        "knowledge, so the person decides it when they review the cast: a rule with no record the world's rule "
+        "reads, a rule with two readings, a decision no listed actor owns. `policy` is the rule in one sentence as "
+        "the material states it, `why` why it is not modelled, `actor` the actor it is about when there is one. "
+        "Send the same `policy` again with `drop: true` once the person settled it in the chat. Never use it for a "
+        "point you modelled.",
+        {
+            "type": "object",
+            "properties": {
+                "policy": {"type": "string"},
+                "why": {"type": "string"},
+                "actor": {"type": "string"},
+                "drop": {"type": "boolean"},
+            },
+            "required": ["policy"],
+        },
+    )
+    async def note_unresolved(args: dict[str, Any]) -> dict[str, Any]:
+        from ..actors import Unresolved
+
+        listing = load_actors(destination)
+        policy = str(args.get("policy") or "").strip()
+        kept = [one for one in listing.unresolved if one.policy != policy]
+        if args.get("drop"):
+            if len(kept) == len(listing.unresolved):
+                return _err(f"no unresolved point {policy!r}")
+            save_actors(destination, ActorList(actors=listing.actors, limits=listing.limits, unresolved=kept))
+            return _ok("dropped; the person no longer sees it")
+        actor = str(args.get("actor") or "").strip() or None
+        if actor is not None and actor not in listing.by_id():
+            return _err(f"Not noted: no actor {actor!r}. Listed: {', '.join(listing.by_id()) or 'none'}")
+        try:
+            point = Unresolved(policy=policy, why=str(args.get("why") or "").strip(), actor=actor)
+        except ValueError as exc:
+            return _err(f"Not noted: {exc}")
+        save_actors(destination, ActorList(actors=listing.actors, limits=listing.limits, unresolved=[*kept, point]))
+        return _ok(f"noted; {len(kept) + 1} point(s) wait for the person's decision above the cast")
+
+    return [add_actor, drop_actor, note_unresolved]
+
+
+ACTOR_SERVER = "actors"
+
+
+def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None:
+    """The cast alone, for a builder chat on a built environment: who is in the world and who is with the caller can
+    still change after the world's tools and data are fixed. None when there are no actor tools."""
+    tools = world_actor_tools(destination, contract)
+    if not tools:
+        return None
+    return tool_server(name=ACTOR_SERVER, version="0.1.0", tools=tools)
+
+
 def world_tools(
     contract: AgentContract,
     destination: Path,
@@ -527,6 +908,8 @@ def world_tools(
     deferred_runtime: bool = False,
     external_runtime: bool = False,
     implementation: str | None = None,
+    catalogue: Catalogue | None = None,
+    native_runtime: bool = False,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
@@ -534,6 +917,9 @@ def world_tools(
     agent's own implementation; without it the agent was given as a specification and its
     tools have to be written here. ``implementation`` is what `save_world` records as the
     world's `tool_implementation` (a designed environment's handlers are its own).
+
+    ``catalogue`` shares one catalogue object with the session's other servers; without it the
+    catalogue is read from disk.
     """
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
@@ -545,6 +931,9 @@ def world_tools(
     named = str(getattr(getattr(contract, "data_store", None), "kind", "") or "")
     if existing:
         world = restore(destination)
+    elif native_runtime:
+        world = GeneratedWorld(kind="in_process")
+        world.runtime_tools = set(contract.tool_names())
     elif (destination / "environment.json").exists():
         from ..provision import ProvisionedEnvironment, attached_postgres_store
 
@@ -602,6 +991,10 @@ def world_tools(
         world.runtime_tools = set(contract.tool_names())
     else:
         world = GeneratedWorld(":memory:", kind=named)
+    native_runtime = native_runtime or bool(getattr(world, "native_runtime", False))
+    world.native_runtime = native_runtime
+    if native_runtime and (world.state() or world.handlers):
+        raise ValueError("native_authoring_shadow_state_forbidden")
     world.name = contract.agent
     world.external_runtime = external_runtime or bool(
         getattr(world, "external_runtime", False)
@@ -610,9 +1003,11 @@ def world_tools(
     # A designed environment's handlers are its own, model-written: they run isolated.
     world.isolated = getattr(world, "isolated", False) or implementation == "environment"
     if source_root:
-        world.reach(source_root)
+        world.reach(
+            source_root, contract_folder(contract)
+        )
     kind = for_contract(contract)
-    catalogue = load_catalogue(destination)
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     scores: list[float] = []
     # The checks that decide whether this world is usable, written here rather than fixed in
     # advance, because what makes a world usable is a judgement about this agent.
@@ -630,6 +1025,8 @@ def world_tools(
         if existing
         else dict(draft.get("world_checks") or {})
     )
+    if native_runtime and world_checks:
+        raise ValueError("native_authoring_local_world_checks_forbidden")
     # How many times each tool has been attempted, so a binding that cannot be made to work
     # is told to stop rather than tried indefinitely.
     tried: dict[str, int] = {}
@@ -649,6 +1046,13 @@ def world_tools(
             ),
             encoding="utf-8",
         )
+
+    def _runtime_owned() -> set[str]:
+        # The submitted runtime owns exactly the contract's tools: tools declared since a
+        # restore join them, and tools the contract no longer has leave.
+        if deferred_runtime or external_runtime:
+            world.runtime_tools = set(contract.tool_names())
+        return set(getattr(world, "runtime_tools", set()))
 
     def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:
         """How the world's own checks fare, and which of them cannot fail.
@@ -701,6 +1105,8 @@ def world_tools(
         {"sql": str},
     )
     async def create_schema(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "The connected provider owns its external state. A local schema would be a "
@@ -733,6 +1139,8 @@ def world_tools(
         {"table": str, "rows": list},
     )
     async def seed(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "The connected provider owns its external state. Local seed data cannot reach "
@@ -766,6 +1174,8 @@ def world_tools(
         {"sql": str},
     )
     async def change_data(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "There is no harness-controlled provider datastore to change in connect-only "
@@ -797,6 +1207,8 @@ def world_tools(
         schema({"module": str, "callable": str}, ["module", "callable"]),
     )
     async def adopt_state(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "A source-free provider connection has no local state loader to adopt."
@@ -831,6 +1243,8 @@ def world_tools(
         schema({"path": str, "note": str}, ["path"]),
     )
     async def adopt_store(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "A source-free provider connection has no local store to adopt."
@@ -847,7 +1261,8 @@ def world_tools(
             if under.exists():
                 found = under
         if not found.exists():
-            return _err(f"nothing at {found}.\n{_stores_here(source_root)}")
+            folder = contract_folder(contract)
+            return _err(f"nothing at {found}.\n{_stores_here(source_root, folder)}")
         if found.is_file() and found.stat().st_size == 0:
             return _err(
                 f"{found} is empty, so there is nothing to adopt. If the agent builds or "
@@ -900,13 +1315,15 @@ def world_tools(
         ),
     )
     async def adopt_tool(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         name = str(args["tool_name"])
         if name not in contract.tool_names():
             return _err(
                 f"{name!r} is not a tool this agent has. It has: "
                 f"{', '.join(sorted(contract.tool_names()))}"
             )
-        if name in set(getattr(world, "runtime_tools", set())):
+        if name in _runtime_owned():
             return _ok(
                 f"{name} is owned by the submitted runtime. Its dependencies and callable are "
                 "built and exercised inside the isolated execution process; no control-plane "
@@ -979,6 +1396,8 @@ def world_tools(
         schema({"tool_name": str, "arguments": dict}, ["tool_name"]),
     )
     async def run_tool(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         call = world.call(str(args["tool_name"]), args.get("arguments") or {})
         if call.refused:
             return _ok(f"refused: {call.error}")
@@ -999,7 +1418,9 @@ def world_tools(
     async def try_check(args: dict[str, Any]) -> dict[str, Any]:
         source = str(args.get("check") or "")
         if "def check(" not in source:
-            return _err("give the check's Python, defining check(world, calls, reference)")
+            return _err(
+                "give the check's Python, defining check(world, calls, reference)"
+            )
         try:
             calls = [
                 Call(
@@ -1010,7 +1431,9 @@ def world_tools(
                 )
                 for one in args.get("calls") or []
             ]
-            reference = reference_of([Step.model_validate(one) for one in args.get("reference") or []])
+            reference = reference_of(
+                [Step.model_validate(one) for one in args.get("reference") or []]
+            )
         except Exception as invalid:
             return _err(f"invalid call or step: {invalid}"[:600])
         outcome = run_check(source, world, calls, name="trial", reference=reference)
@@ -1029,6 +1452,8 @@ def world_tools(
         schema({"name": str, "calls": list, "expect_state": dict}, ["name", "calls"]),
     )
     async def declare_sequence(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "Provider tools execute only during the live conversation. Do not invent a "
@@ -1133,7 +1558,7 @@ def world_tools(
 
     @tool(
         "set_modality",
-        "Correct how a person actually reaches this agent: voice, chat or browser. Modality "
+        "Correct how a person actually reaches this agent: voice or chat. Modality "
         "picks the world, the simulated person and the transport, so a wrong one does not weaken "
         "a run, it runs a different test. Use it when the operator says where the agent is "
         "deployed and the contract disagrees: an agent's code reads the same answering a chat "
@@ -1158,6 +1583,10 @@ def world_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _ok(
+                "Native state is unavailable during authoring. Live API fixture checks are required."
+            )
         state = world.state()
         table = str(args.get("table") or "")
         if not table:
@@ -1222,7 +1651,8 @@ def world_tools(
     @tool(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. `args` "
-        "replaces its argument names in order; `arg_types` and `description` update those. Set "
+        "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, a "
+        "currency's minor or major unit, seconds or milliseconds) and `description` update those. Set "
         "`remove` to take the tool away entirely. Everything downstream is built from these, so "
         "a wrong argument name produces a world that refuses everything. Say why.",
         schema(
@@ -1230,6 +1660,7 @@ def world_tools(
                 "tool_name": str,
                 "args": list,
                 "arg_types": dict,
+                "arg_units": dict,
                 "description": str,
                 "refuses": str,
                 "effects": str,
@@ -1250,10 +1681,13 @@ def world_tools(
             arg_types={
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
+            arg_units={str(k): str(v) for k, v in (args.get("arg_units") or {}).items()},
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
-            inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
+            inputs_from={
+                str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()
+            },
             remove=bool(args.get("remove")),
         )
         return _ok(said) if done else _err(said)
@@ -1301,30 +1735,57 @@ def world_tools(
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
         "overlay is refused until it names a sub-goal that fails when that overlay is "
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
-        "task sub-goal.",
+        "task sub-goal. "
+        "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
+        "given only that worker's calls, and is inconclusive when the worker made none."
+        + worker_subjects_note(contract),
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            {
+                "name": str,
+                "what": str,
+                "check": str,
+                "judged": str,
+                "output": str,
+                "overlay": str,
+                "subject": str,
+                **CONTRACT_SCHEMA,
+            },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        sub_goal = SubGoal(
-            name=str(args.get("name") or ""),
-            what=str(args.get("what") or ""),
-            check=str(args.get("check") or ""),
-            judged=str(args.get("judged") or ""),
-            output=str(args.get("output") or "pass_fail"),
-            overlay=str(args.get("overlay") or ""),
-            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
-        )
+        # Repairing a sub-goal keeps whose result it checks and the actor it depends on unless the repair says
+        # otherwise: a fix to its check never quietly turns a worker's check into the task's.
+        previous = next((one for one in catalogue.sub_goals if one.name == str(args.get("name") or "")), None)
+        try:
+            sub_goal = SubGoal(
+                name=str(args.get("name") or ""),
+                what=str(args.get("what") or ""),
+                check=str(args.get("check") or ""),
+                judged=str(args.get("judged") or ""),
+                output=str(args.get("output") or "pass_fail"),
+                overlay=str(args.get("overlay") or ""),
+                subject=str(args.get("subject") or (previous.subject if previous is not None else "task")),
+                actor=previous.actor if previous is not None else "",
+                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            )
+        except ValueError as invalid:
+            return _err(f"Not added: {invalid}")
         problems = validate_sub_goal(sub_goal)
+        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
+            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
+        if native_runtime and sub_goal.deterministic():
+            from ..prove import native_source_problem
+
+            if problem := native_source_problem(sub_goal.check, "check"):
+                problems.append(problem)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
         # Run it here, the same way a handler is run the moment it is defined. A check that raises
         # is not a check, and accepting one now means every scenario that names it is refused later
         # for a reason that looks like the scenario's fault rather than this one's.
-        if sub_goal.deterministic():
+        if sub_goal.deterministic() and not native_runtime:
             outcome = run_check(
                 sub_goal.check, world, list(world.calls), name=sub_goal.name
             )
@@ -1368,6 +1829,8 @@ def world_tools(
         schema({"path": str, "contents": str}, ["path", "contents"]),
     )
     async def write_env_file(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         from .workspace import listing, write
 
         try:
@@ -1389,6 +1852,8 @@ def world_tools(
         schema({"command": str}, ["command"]),
     )
     async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         from .workspace import run
 
         # Off the event loop: a docker build takes minutes, and run synchronously
@@ -1423,6 +1888,8 @@ def world_tools(
         ),
     )
     async def write_store_ops(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         from .stores import StoreError, supported
         from .stores.written import register_written
 
@@ -1454,12 +1921,19 @@ def world_tools(
         schema({"name": str, "code": str, "what": str}, ["name", "code"]),
     )
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
         if (
-            (is_data_free_conversation(contract) or external_runtime or runtime_only)
+            (
+                is_data_free_conversation(contract)
+                or external_runtime
+                or native_runtime
+                or runtime_only
+            )
             and not world.state()
             and not world.handlers
         ):
@@ -1495,6 +1969,11 @@ def world_tools(
         {},
     )
     async def check_world(_args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _ok(
+                "DEFERRED: native state, tool behavior and fixture readiness require live validation."
+            )
+        _runtime_owned()
         report = probe(world, contract, sequences=sequences, kind=kind)
         scores.append(report.score)
         # Saying the score is going nowhere, rather than leaving it to be noticed. A stage that
@@ -1533,7 +2012,17 @@ def world_tools(
                 and not world.handlers
                 else "\nNo world checks of your own yet. Add them with add_world_check."
             )
-        return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{stuck}")
+        listed = ""
+        if (
+            actors_on(current_actors_switch())
+            and available_channels(str(contract.modality or ""))
+            and not load_call_actors(destination).call_actors
+        ):
+            listed = (
+                "\nNo actor speaks on calls yet. Add who this agent's users could have around "
+                "them with add_actor and a `channel`."
+            )
+        return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{listed}{stuck}")
 
     @tool(
         "save_world",
@@ -1541,7 +2030,11 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        # The caller is an actor like any other, listed from the first build so the editor always shows it.
+        from ..actors import ensure_caller
+
+        ensure_caller(destination)
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
@@ -1549,18 +2042,43 @@ def world_tools(
         if strayed and _still_refusing(unmovable, "schema", strayed):
             return _err(
                 "Not saved. This world does not match the agent's own schema: "
-                + ", ".join(strayed) + ". The runtime seed is that schema followed by "
+                + ", ".join(strayed)
+                + ". The runtime seed is that schema followed by "
                 "rows from this world, so an insert naming any of these fails and the environment "
                 "never stands up. Use the agent's own names, or drop what it does not have. A "
                 "column it never declares is one its code never reads."
             )
+        if unreadable := _unreadable_arrays(world, destination):
+            return _err(
+                "Not saved. These array columns hold values that are not lists: "
+                + ", ".join(unreadable)
+                + '. The runtime seed reads an array as a JSON list, such as [] or ["a"]. '
+                "Set them with change_data."
+            )
+        if unreadable := _unreadable_json(world, source_root, contract):
+            return _err(
+                "Not saved. These JSON columns hold values that are not JSON: "
+                + ", ".join(unreadable)
+                + ". The runtime seed reads a JSON column as JSON text: an object such as "
+                '{"a": 1}, a list such as [], or a string in quotes such as "2026-06-03". '
+                "Set them with change_data."
+            )
         data_free = (
-            (is_data_free_conversation(contract) or external_runtime or runtime_only)
+            (
+                is_data_free_conversation(contract)
+                or external_runtime
+                or native_runtime
+                or runtime_only
+            )
             and not world.state()
             and not world.handlers
         )
-        report = probe(world, contract, sequences=sequences, kind=kind)
-        if report.score < ACCEPTABLE and not data_free:
+        report = (
+            None
+            if native_runtime
+            else probe(world, contract, sequences=sequences, kind=kind)
+        )
+        if not native_runtime and report.score < ACCEPTABLE and not data_free:
             return _err(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
                 f"score {report.score:.2f}, needs {ACCEPTABLE:.2f}"
@@ -1635,7 +2153,16 @@ def world_tools(
                     "Not saved. The simulator prompt is incomplete:\n  - "
                     + "\n  - ".join(problems)
                 )
-        dirty = dirty_state(world, sequences, kind)
+        dirty = [] if native_runtime else dirty_state(world, sequences, kind)
+        connection = getattr(world.store, "connection", None)
+        if dirty and source_root and isinstance(connection, sqlite3.Connection):
+            # The agent's own seed rows, even in-flight ones, are its starting state.
+            folder = contract_folder(contract)
+            dirty = [
+                name
+                for name in dirty
+                if not only_seed_rows(connection, Path(source_root), name, folder)
+            ]
         if dirty:
             counts = world.state()
             listed = ", ".join(f"{name} ({len(counts[name])} rows)" for name in dirty)
@@ -1688,7 +2215,9 @@ def world_tools(
             "rest only test that an argument was present, which an agent acting on a misheard "
             "detail would pass.\n"
             + (
-                "Tool/data probes not applicable; conversational runtime proof remains required."
+                "DEFERRED: live fixture readiness and native response checks remain required."
+                if native_runtime
+                else "Tool/data probes not applicable; conversational runtime proof remains required."
                 if data_free
                 else f"score {report.score:.2f}"
             )
@@ -1722,6 +2251,11 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
+            *world_actor_tools(
+                destination,
+                contract,
+                collections=lambda: list(getattr(getattr(world, "store", None), "collections", list)()),
+            ),
         ],
     )
     return server, world
@@ -1745,6 +2279,9 @@ TOOL_NAMES = (
     "set_modality",
     "inspect_world",
     "write_simulator_prompt",
+    "add_actor",
+    "drop_actor",
+    "note_unresolved",
     "add_sub_goal",
     "write_store_ops",
     "add_world_check",

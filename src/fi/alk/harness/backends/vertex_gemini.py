@@ -23,13 +23,15 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterator
-from datetime import date
+from contextlib import aclosing
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fi import agentcc
 
 from .base import (
     ASK_TOOL,
+    CALL_BUDGET_SPENT,
     FILE_TOOLS,
     Call,
     ModelReply,
@@ -37,150 +39,63 @@ from .base import (
     SessionOpened,
     SessionSpec,
     StageDone,
+    TERMINAL_SAVE_TOOLS,
     ToolReturned,
     ToolSpec,
     qualified,
+    tool_input_schema,
 )
 from .files import file_tools
 
 DEFAULT_MODEL = "gemini-3.7-flash"
 
-_TERMINAL_SAVE_TOOLS = frozenset(
-    {
-        "mcp__world__save_world",
-        "mcp__provision__save_environment",
-        "mcp__scenarios__save_scenarios",
-        # Source-data review is another persisted authoring boundary.  Its handler only
-        # succeeds after every scenario was reviewed and at least one executable invariant
-        # was declared.  Letting ADK take another turn after that success can burn the entire
-        # call budget and turn a completed review into a spurious validation failure.
-        "mcp__source_data__finish_review",
-        # A validated repair patch is itself the complete output of the repair stage.  Stop
-        # immediately after accepting it instead of spending the remaining agent budget on
-        # another model turn that can only restate or replace an already-valid patch.
-        "mcp__repair__submit_world_ir_patch",
-    }
-)
+# Vertex list pricing per 1M tokens, as rows of (input, output, first_day, last_day) in date order.
+# Today's rates are the platform gateway's litellm model table (agentcc-gateway/internal/modeldb/
+# litellm.json, its vertex_ai/ entries, future-agi 9ec5f9fb1, 2026-11-02). The 2027 Flash rows are
+# Google's Vertex pricing page (cloud.google.com/model-garden/pricing, Global tier, read
+# 2026-11-10), which that table does not carry yet. A row ends either on a published price change
+# (the 2026 Flash rows) or on CHECK_BY, the day every latest row must be re-checked by. Days are
+# UTC days, as the platform's dated rows are. Past CHECK_BY a model keeps its latest row's price,
+# with a warning, so a running release keeps counting cost; a weekly scheduled
+# workflow goes red a month before, so the table is re-checked without blocking PRs. A model with
+# no row at all reports no cost rather than a wrong one, and shows up in `unpriced_turns`.
+CHECK_BY = "2027-03-31"
 
-# Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
-# the platform's litellm model table). An unknown or stale model reports no cost rather than a
-# wrong one, and shows up in `unpriced_turns`.
 # What Vertex charges for a cache read, as a share of the input rate.
 CACHE_READ_SHARE = 0.10
 
 PRICES_PER_MILLION = {
-    "gemini-3.8-flash": (0.75, 3.75, "2026-12-31"),
-    "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
-    "gemini-3.6-flash": (0.75, 3.75, "2026-12-31"),
-    "gemini-3.5-transcribe-preview": (2.5, 12, "2026-12-31"),
-    "gemini-3.5-transcribe-live-preview": (3.5, 21, "2026-12-31"),
-    "gemini-3.5-flash-lite": (0.3, 2.5, "2026-12-31"),
-    "gemini-3.5-flash": (1.5, 9, "2026-12-31"),
-    "gemini-3.1-pro-preview-customtools": (2, 12, "2026-12-31"),
-    "gemini-3.1-pro-preview": (2, 12, "2026-12-31"),
-    "gemini-3.1-flash-lite-preview": (0.25, 1.5, "2026-12-31"),
-    "gemini-3.1-flash-lite-image": (0.25, 1.5, "2026-12-31"),
-    "gemini-3.1-flash-lite": (0.25, 1.5, "2026-12-31"),
-    "gemini-3.1-flash-image-preview": (0.5, 3, "2026-12-31"),
-    "gemini-3.1-flash-image": (0.5, 3, "2026-12-31"),
-    "gemini-3-pro-preview": (2, 12, "2026-12-31"),
-    "gemini-3-pro-image-preview": (2, 12, "2026-12-31"),
-    "gemini-3-pro-image": (2, 12, "2026-12-31"),
-    "gemini-3-flash-preview": (0.5, 3, "2026-12-31"),
+    "gemini-3.8-flash": (
+        (0.75, 3.75, "2026-11-02", "2026-12-31"),
+        (1.50, 7.50, "2027-01-01", CHECK_BY),
+    ),
+    "gemini-3.7-flash": (
+        (0.75, 3.75, "2026-11-02", "2026-12-31"),
+        (1.50, 7.50, "2027-01-01", CHECK_BY),
+    ),
+    "gemini-3.6-flash": (
+        (0.75, 3.75, "2026-11-02", "2026-12-31"),
+        (1.50, 7.50, "2027-01-01", CHECK_BY),
+    ),
+    "gemini-3.5-transcribe-preview": ((2.0, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3.5-transcribe-live-preview": ((3.5, 21, "2026-11-02", CHECK_BY),),
+    "gemini-3.5-flash-lite": ((0.3, 2.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.5-flash": ((1.5, 9, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-pro-preview-customtools": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-pro-preview": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-lite-preview": ((0.25, 1.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-lite-image": ((0.25, 1.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-lite": ((0.25, 1.5, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-image-preview": ((0.5, 3, "2026-11-02", CHECK_BY),),
+    "gemini-3.1-flash-image": ((0.5, 3, "2026-11-02", CHECK_BY),),
+    "gemini-3-pro-preview": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3-pro-image-preview": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3-pro-image": ((2, 12, "2026-11-02", CHECK_BY),),
+    "gemini-3-flash-preview": ((0.5, 3, "2026-11-02", CHECK_BY),),
 }
-
-_PYTHON_TYPES = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-    list: "array",
-    dict: "object",
-}
-
-# The keys Vertex's Schema type accepts. JSON Schema carries more; anything else is dropped
-# rather than passed through, because an unknown key fails declaration validation and takes
-# the whole stage down before its first turn.
-_SCHEMA_KEYS = (
-    "description",
-    "enum",
-    "format",
-    "items",
-    "maximum",
-    "maxItems",
-    "minimum",
-    "minItems",
-    "nullable",
-    "pattern",
-    "properties",
-    "required",
-    "type",
-    "anyOf",
-)
-
-
-def _gemini_schema(schema: Any) -> dict[str, Any]:
-    """A JSON Schema fragment as Vertex's Schema dialect.
-
-    The real difference is nullability: JSON Schema says ``"type": ["string", "null"]``,
-    Vertex says ``"type": "string", "nullable": true``. Everything Vertex does not know is
-    dropped, recursively, so a tool schema written for the loosest backend still declares.
-    """
-    if not isinstance(schema, dict):
-        return {"type": "string"}
-    cleaned: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key not in _SCHEMA_KEYS:
-            continue
-        if key == "type" and isinstance(value, list):
-            bare = [entry for entry in value if entry != "null"]
-            cleaned["type"] = bare[0] if bare else "string"
-            if "null" in value:
-                cleaned["nullable"] = True
-        elif key == "properties" and isinstance(value, dict):
-            cleaned["properties"] = {
-                name: _gemini_schema(inner) for name, inner in value.items()
-            }
-        elif key == "items":
-            cleaned["items"] = _gemini_schema(value)
-        elif key == "anyOf" and isinstance(value, list):
-            cleaned["anyOf"] = [_gemini_schema(inner) for inner in value]
-        elif key == "enum" and isinstance(value, list):
-            # Vertex enums are strings; None inside one is JSON Schema's way of saying
-            # nullable, and everything else is stringified the way the model will echo it.
-            cleaned["enum"] = [str(entry) for entry in value if entry is not None]
-            if None in value:
-                cleaned["nullable"] = True
-        else:
-            cleaned[key] = value
-    # Vertex refuses an array that does not say what it holds. JSON Schema treats items as
-    # optional, and most such arrays here carry row-shaped dicts, so an open object is the
-    # faithful default.
-    if cleaned.get("type") == "array" and "items" not in cleaned:
-        cleaned["items"] = {"type": "object"}
-    return cleaned
-
 
 def _json_schema(schema: Any) -> dict[str, Any]:
-    """The tool's schema as Vertex-safe schema, whichever shorthand it was declared in."""
-    if isinstance(schema, dict) and (
-        "properties" in schema or schema.get("type") == "object"
-    ):
-        return _gemini_schema(schema)
-    if isinstance(schema, dict):
-        return {
-            "type": "object",
-            "properties": {
-                name: (
-                    {"type": "array", "items": {"type": "object"}}
-                    if kind is list
-                    else {"type": _PYTHON_TYPES.get(kind, "string")}
-                )
-                for name, kind in schema.items()
-            },
-            "required": list(schema),
-        }
-    return {"type": "object", "properties": {}}
+    return tool_input_schema(schema)
 
 
 def _project() -> str:
@@ -248,7 +163,7 @@ def _successful_terminal_save(name: str, response: Any) -> bool:
     stage budget; the persisted artifact is the stage's actual completion boundary.
     """
     return bool(
-        name in _TERMINAL_SAVE_TOOLS
+        name in TERMINAL_SAVE_TOOLS
         and isinstance(response, dict)
         and not response.get("is_error")
     )
@@ -274,7 +189,7 @@ _REREADABLE = frozenset(
 )
 
 _READS_KEPT_WHOLE = 2
-_READ_CHARS_BEFORE_FORGETTING = 60_000
+_READ_CHARS_BEFORE_FORGETTING = 180_000
 _FORGOTTEN = "[dropped to keep this session small] "
 
 
@@ -287,7 +202,7 @@ def _forget_old_reads(contents: list[Any]) -> None:
     from google.genai import types
 
     arguments: dict[str, str] = {}
-    reads: list[tuple[Any, str, str]] = []
+    reads: list[tuple[Any, str, str, int]] = []
     held = 0
     for content in contents:
         for part in getattr(content, "parts", None) or []:
@@ -306,13 +221,15 @@ def _forget_old_reads(contents: list[Any]) -> None:
             if text.startswith(_FORGOTTEN):
                 continue
             held += len(text)
-            reads.append((part, name, getattr(answer, "id", "") or ""))
+            reads.append((part, name, getattr(answer, "id", "") or "", len(text)))
     if held <= _READ_CHARS_BEFORE_FORGETTING:
         return
     recent: dict[str, int] = {}
-    for part, name, call_id in reversed(reads):
+    kept_chars = 0
+    for part, name, call_id, size in reversed(reads):
         recent[name] = recent.get(name, 0) + 1
-        if recent[name] <= _READS_KEPT_WHOLE:
+        if recent[name] <= _READS_KEPT_WHOLE or kept_chars + size <= _READ_CHARS_BEFORE_FORGETTING:
+            kept_chars += size
             continue
         said = arguments.get(call_id, "")
         part.function_response = types.FunctionResponse(
@@ -380,7 +297,7 @@ def _spec_tool(name: str, spec: ToolSpec) -> Any:
             return types.FunctionDeclaration(
                 name=name,
                 description=spec.description,
-                parameters=_json_schema(spec.input_schema),
+                parameters_json_schema=_json_schema(spec.input_schema),
             )
 
         async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> Any:
@@ -425,6 +342,10 @@ class VertexGeminiSession:
         self._pending: str | None = None
         # Calls each worker run has taken, keyed by the scope ADK gives that run.
         self._worker_calls: dict[str, int] = {}
+        # Model calls the whole session has made, its workers' included, and whether one was
+        # refused for the session's call budget.
+        self._calls = 0
+        self._budget_spent = False
         self._resume_invocation_id: str | None = None
         context = spec.conversation
         self.session_id = (
@@ -457,6 +378,23 @@ class VertexGeminiSession:
             )
         return offered
 
+    def _spend_a_call(self) -> Any:
+        """Count one model call against the session's budget; a final reply once it is spent.
+
+        Called before every model call, the main loop's and every worker's, so no request goes
+        out past the budget. The reply it returns in place of a call ends that agent's run.
+        """
+        budget = self._spec.call_budget
+        if budget > 0 and self._calls >= budget:
+            self._budget_spent = True
+            return _stopped(f"Stopped: this session's budget of {budget} model calls is spent.")
+        self._calls += 1
+        return None
+
+    def _before_main_call(self, callback_context: Any, llm_request: Any) -> Any:
+        _pruned_history(callback_context, llm_request)
+        return self._spend_a_call()
+
     def _workers(self) -> list[Any]:
         """Every declared worker as a sub-agent this loop may run."""
         from google.adk.agents import LlmAgent
@@ -466,7 +404,7 @@ class VertexGeminiSession:
             def before(callback_context: Any, llm_request: Any) -> Any:
                 _forget_old_reads(llm_request.contents or [])
                 if ceiling <= 0:
-                    return None
+                    return self._spend_a_call()
                 run = (
                     getattr(callback_context, "isolation_scope", None)
                     or getattr(callback_context, "branch", None)
@@ -474,7 +412,7 @@ class VertexGeminiSession:
                 )
                 self._worker_calls[run] = self._worker_calls.get(run, 0) + 1
                 if self._worker_calls[run] <= ceiling:
-                    return None
+                    return self._spend_a_call()
                 return _stopped(
                     f"I have used all {ceiling} of my turns. Everything I submitted is already "
                     "in the suite. Report what is missing to whoever briefed me so it can be "
@@ -524,7 +462,7 @@ class VertexGeminiSession:
             ),
             tools=self._tools(),
             sub_agents=self._workers(),
-            before_model_callback=_pruned_history,
+            before_model_callback=self._before_main_call,
         )
         context = self._spec.conversation
         if context is None:
@@ -595,7 +533,6 @@ class VertexGeminiSession:
 
     async def replies(self) -> AsyncIterator[Any]:
         from google.adk.agents.run_config import RunConfig, StreamingMode
-
         # google.adk.sessions does not re-export it in the locked ADK (2.7.1).
         from google.adk.sessions.base_session_service import GetSessionConfig
         from google.genai import types
@@ -614,6 +551,7 @@ class VertexGeminiSession:
         self._pending = None
         self._resume_invocation_id = None
         turns = 0
+        calls_before = self._calls
         tokens_in = 0
         tokens_out = 0
         tokens_cached = 0
@@ -622,6 +560,17 @@ class VertexGeminiSession:
         context = self._spec.conversation
         run_config = RunConfig(
             max_llm_calls=max(self._spec.max_turns, 1),
+            http_options=types.HttpOptions(
+                timeout=300_000,
+                retry_options=types.HttpRetryOptions(
+                    attempts=8,
+                    initial_delay=2,
+                    max_delay=60,
+                    exp_base=2,
+                    jitter=1,
+                    http_status_codes=[408, 429, 500, 502, 503, 504],
+                ),
+            ),
             streaming_mode=(
                 StreamingMode.SSE
                 if context is not None and context.streaming
@@ -652,82 +601,87 @@ class VertexGeminiSession:
             ),
         )
         try:
-            async for event in self._runner.run_async(
-                user_id=self._user_id,
-                session_id=self.session_id,
-                new_message=message,
-                invocation_id=resume_invocation_id,
-                run_config=run_config,
-            ):
-                usage = getattr(event, "usage_metadata", None)
-                if usage is not None:
-                    tokens_in += usage.prompt_token_count or 0
-                    tokens_out += usage.candidates_token_count or 0
-                    tokens_cached += (
-                        getattr(usage, "cached_content_token_count", 0) or 0
-                    )
-                parts: list[Any] = []
-                returned: list[ToolReturned] = []
-                for part in (event.content.parts if event.content else []) or []:
-                    if getattr(part, "text", None):
-                        parts.append(
-                            Say(
-                                text=part.text,
-                                partial=bool(getattr(event, "partial", False)),
-                                event_id=str(getattr(event, "id", "") or ""),
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
-                                author=str(getattr(event, "author", "") or ""),
+            async with aclosing(
+                self._runner.run_async(
+                    user_id=self._user_id,
+                    session_id=self.session_id,
+                    new_message=message,
+                    invocation_id=resume_invocation_id,
+                    run_config=run_config,
+                )
+            ) as events:
+                async for event in events:
+                    usage = getattr(event, "usage_metadata", None)
+                    if usage is not None:
+                        tokens_in += usage.prompt_token_count or 0
+                        tokens_out += usage.candidates_token_count or 0
+                        tokens_cached += (
+                            getattr(usage, "cached_content_token_count", 0) or 0
+                        )
+                    parts: list[Any] = []
+                    returned: list[ToolReturned] = []
+                    for part in (event.content.parts if event.content else []) or []:
+                        if getattr(part, "text", None):
+                            parts.append(
+                                Say(
+                                    text=part.text,
+                                    partial=bool(getattr(event, "partial", False)),
+                                    event_id=str(getattr(event, "id", "") or ""),
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                    author=str(getattr(event, "author", "") or ""),
+                                )
                             )
-                        )
-                    if getattr(part, "function_call", None):
-                        parts.append(
-                            Call(
-                                id=getattr(part.function_call, "id", None)
-                                or f"call-{uuid.uuid4().hex[:8]}",
-                                name=part.function_call.name or "",
-                                arguments=dict(part.function_call.args or {}),
-                                by=getattr(event, "author", "") or "",
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
+                        if getattr(part, "function_call", None):
+                            parts.append(
+                                Call(
+                                    id=getattr(part.function_call, "id", None)
+                                    or f"call-{uuid.uuid4().hex[:8]}",
+                                    name=part.function_call.name or "",
+                                    arguments=dict(part.function_call.args or {}),
+                                    by=getattr(event, "author", "") or "",
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                )
                             )
-                        )
-                    if getattr(part, "function_response", None):
-                        response = part.function_response.response
-                        response_name = part.function_response.name or ""
-                        terminal_save_succeeded = terminal_save_succeeded or (
-                            _successful_terminal_save(response_name, response)
-                        )
-                        returned.append(
-                            ToolReturned(
-                                id=getattr(part.function_response, "id", None) or "",
-                                text=_flattened(response),
-                                is_error=bool(
-                                    isinstance(response, dict)
-                                    and response.get("is_error")
-                                ),
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
+                        if getattr(part, "function_response", None):
+                            response = part.function_response.response
+                            response_name = part.function_response.name or ""
+                            terminal_save_succeeded = terminal_save_succeeded or (
+                                context is None
+                                and _successful_terminal_save(response_name, response)
                             )
-                        )
-                if parts:
-                    if not getattr(event, "partial", False):
-                        turns += 1
-                    yield ModelReply(parts=parts, model=self._model)
-                for outcome in returned:
-                    yield outcome
-                if terminal_save_succeeded:
-                    settled = True
-                    break
-                if event.is_final_response():
-                    settled = True
+                            returned.append(
+                                ToolReturned(
+                                    id=getattr(part.function_response, "id", None) or "",
+                                    text=_flattened(response),
+                                    is_error=bool(
+                                        isinstance(response, dict)
+                                        and response.get("is_error")
+                                    ),
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                )
+                            )
+                    if parts:
+                        if not getattr(event, "partial", False):
+                            turns += 1
+                        yield ModelReply(parts=parts, model=self._model)
+                    for outcome in returned:
+                        yield outcome
+                    if terminal_save_succeeded:
+                        settled = True
+                        break
+                    if event.is_final_response():
+                        settled = True
         except Exception as exc:
             yield StageDone(
                 outcome="failed",
                 turns=turns,
+                calls=self._calls - calls_before,
                 cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
@@ -739,6 +693,24 @@ class VertexGeminiSession:
                 errors=[str(exc)[:400]],
             )
             return
+        if self._budget_spent:
+            # The final reply was ours, not the model's: the session's budget stopped it.
+            yield StageDone(
+                outcome=CALL_BUDGET_SPENT,
+                is_error=True,
+                turns=turns,
+                calls=self._calls - calls_before,
+                cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                tokens_cached=tokens_cached,
+                session_id=self.session_id,
+                models={self._model},
+                errors=[
+                    f"the session spent its whole budget of {self._spec.call_budget} model calls"
+                ],
+            )
+            return
         # A stream that ends without a final response ran out of its call budget, which is
         # not the same as the model having finished. Reported as success it reads as a stage
         # that did its work, and a half-written suite comes back green.
@@ -746,6 +718,7 @@ class VertexGeminiSession:
             outcome="success" if settled else "max_turns",
             is_error=not settled,
             turns=turns,
+            calls=self._calls - calls_before,
             cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
             tokens_in=tokens_in,
             tokens_out=tokens_out,
@@ -770,26 +743,74 @@ class VertexGeminiSession:
 logger = logging.getLogger(__name__)
 
 
+def _rows(name: str) -> tuple[tuple[Any, ...], ...] | None:
+    rows = PRICES_PER_MILLION.get(name)
+    if rows is None and "/" in name:
+        # A gateway prefixes the route, e.g. "vertex_ai/<model>"; the price belongs to the model.
+        rows = PRICES_PER_MILLION.get(name.rsplit("/", 1)[-1])
+    return rows
+
+
+# (model, day) pairs already warned about, so a stale price warns once a day, not once a turn.
+_STALE_WARNED: set[tuple[str, date]] = set()
+
+
+def _today() -> date:
+    """The price day, in UTC: the platform's dated price rows switch at midnight UTC, so the kit's
+    rows do too, wherever the process runs."""
+    return datetime.now(timezone.utc).date()
+
+
+def current_rates(name: str, today: date | None = None) -> tuple[float, float] | None:
+    """The (input, output) rates per 1M tokens that hold on `today`, or None if no row does.
+
+    Read the table through this rather than by position: a model's price is a schedule of rows.
+    """
+    day = (today or _today()).isoformat()
+    # Every row is checked whatever its place, so the table's order never picks the price; the
+    # check-by test keeps a model's rows from overlapping, so at most one row holds.
+    for rate_in, rate_out, first_day, last_day in _rows(name) or ():
+        if first_day <= day <= last_day:
+            return rate_in, rate_out
+    return None
+
+
 def priced(
     model: str, tokens_in: int, tokens_out: int, tokens_cached: int = 0
 ) -> float | None:
     """What these tokens cost, or None where no price can be stood behind."""
-    prices = PRICES_PER_MILLION.get(model)
-    if prices is None and "/" in model:
-        # A gateway prefixes the route, e.g. "vertex_ai/<model>"; the price belongs to the model.
-        prices = PRICES_PER_MILLION.get(model.rsplit("/", 1)[-1])
-    if prices is None:
+    rows = _rows(model)
+    if rows is None:
         return None
-    if len(prices) > 2 and date.today().isoformat() > str(prices[2]):
-        logger.warning(
-            "no current price for %s: the table's figures expired on %s",
-            model,
-            prices[2],
-        )
-        return None
+    today = _today()
+    rates = current_rates(model, today)
+    if rates is None:
+        latest = max(rows, key=lambda row: row[3])
+        if today.isoformat() <= latest[3]:
+            # Before the model's first row: there is no price to stand behind.
+            logger.warning(
+                "no current price for %s on %s: the table's rows run from %s to %s",
+                model,
+                today.isoformat(),
+                min(row[2] for row in rows),
+                latest[3],
+            )
+            return None
+        # Past the re-check date the latest price is still the best one known. It is off by
+        # whatever changed since, either way; None would stop every turn's cost.
+        if (model, today) not in _STALE_WARNED:
+            _STALE_WARNED.add((model, today))
+            logger.warning(
+                "price for %s is past its re-check date %s: billing at that row's rate; re-check "
+                "the table against the gateway's litellm.json and Google's Vertex pricing page",
+                model,
+                latest[3],
+            )
+        rates = latest[0], latest[1]
+    rate_in, rate_out = rates
     cached = min(max(tokens_cached, 0), max(tokens_in, 0))
-    billed_in = (tokens_in - cached) * prices[0] + cached * prices[0] * CACHE_READ_SHARE
-    return (billed_in + tokens_out * prices[1]) / 1_000_000
+    billed_in = (tokens_in - cached) * rate_in + cached * rate_in * CACHE_READ_SHARE
+    return (billed_in + tokens_out * rate_out) / 1_000_000
 
 
 class VertexGeminiBackend:

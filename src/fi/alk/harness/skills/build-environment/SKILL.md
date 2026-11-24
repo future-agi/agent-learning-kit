@@ -11,6 +11,12 @@ sub-goals just to satisfy a checklist below. Preserve and provision the real wor
 connections; write the simulator prompt and conversational evaluation criteria. Save the empty
 world normally. Internal harness bookkeeping is not agent business data.
 
+Tools do not imply a database. Native filesystem, command and API tools can also have no
+harness-managed record store. Keep that authoring world empty. Do not create tables to stand
+in for files or remote application state. Use completed native tool results with source-grounded
+schemas, declared observations, or real workspace bindings. Private readiness and real chats
+must verify these tools; a local fixture table cannot prove that the target ran them.
+
 You are building the world an AI agent will be tested in. Its contract is in front of you: the
 tools it really has, the rules it obeys, what it depends on, and its data.
 
@@ -219,8 +225,8 @@ then say so plainly, because every scenario after this will be limited to those 
 
 Ask the person for values wherever the contract carries none.
 
-Leave it in its natural starting state: empty carts, no in-flight work. Scenarios add what they
-need.
+Leave it in its natural starting state: empty carts, no in-flight work, unless the agent's own
+seed has them; then reproduce those rows as they are. Scenarios add what else they need.
 
 **Write values, not the names of values.** A generated seed that quotes a function reaches the
 database as a string and the insert fails on the column's type: `'CURRENT_TIMESTAMP'` is eleven
@@ -253,7 +259,11 @@ and a way to run container commands from there:
 Some things worth knowing before you start:
 
 **Use the agent's own Dockerfile if it has one.** The contract records whether it does. Theirs is
-what its authors tested; yours is a guess at it.
+what its authors tested; yours is a guess at it. When source deployment instructions instead
+select a published Compose image, use `runtime.compose_image_services` for that already
+selected service. ALK retains its source-declared image and removes its build from the generated
+runtime only. Never write an image override or alter upstream files. The selection requires a
+container runtime and does not itself verify an immutable image identity.
 
 **Use its own install command**, from its lockfile or requirements, exactly as written. Do not
 substitute a different package manager or add dependencies it did not ask for.
@@ -701,13 +711,17 @@ Every sub-goal, coded or judged:
 
 ### What the build refuses, and what every scenario's proof plays
 
-So you meet these while writing, not after:
-
 - **A check that only matches call names**, such as `any(c.name == "transfer" for c in calls)`. It
-  passes an agent that called the right tool with the wrong arguments.
+  is refused because it passes an agent that called the right tool with the wrong arguments, which
+  is the failure this harness exists to catch. An agent that mishears a name and opens somebody
+  else's account calls exactly the tool it should have. Read `.arguments`, `.result`, or the world.
+  For a dispatcher that wraps subtools, establish success from its source-defined result contract
+  and the returned state. Child names and arguments show intent, not execution. A top-level
+  dispatcher name alone must neither prove nor disprove a subtool's successful effect. Inspect
+  the recorded outcome and verify the relevant returned state or source-declared child outcome. Do not
+  invent separate completed calls by flattening arguments.
 - **A judged sub-goal without its four criteria lines**, or whose "If it does not arise" line does
   not say Pass or Fail.
-- **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
 - **A check that takes `reference` without a contract** saying where each compared value comes from.
 
 Every scenario's proof then plays the scenario's solution, any other ways its writer declared, an
@@ -715,6 +729,33 @@ agent that gets every fixed value right but chooses everything else itself, and 
 fixed value wrong at a time. A check that fails a correct agent is refused as too strict; a fixed
 value that no check notices when wrong is refused as unchecked. The five steps above are how you pass
 these the first time.
+
+## Actors
+
+Only when `add_actor` is offered. An actor is someone on the person's side who is not the
+person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
+while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
+tested, so the run never plays them. Read the contract and add one for each channel `add_actor` offers
+that this agent's users could have around them.
+
+The list says who each one is: an ordinary, invented name that is never the person's and never a known public
+figure, a `role` (their relationship to the
+person in a few words; never someone there to help with the person's request), and a
+`persona` in the person's fields, true to who they are in this world, from which their
+voice is chosen. What they do is written by each scenario that includes them, so the list carries no
+script. Never add one for a situation the agent's users would not be in.
+
+Someone who acts through the world (a manager who approves, a lead who can reject, someone who grants access) gets
+`permitted_actions` and no channel unless they also speak. Give each exactly what the request says they may do, and
+nothing more: a decision is a record change on the collection the world's rule reads (`<collection>.put` or
+`.change`, listed in `add_actor`'s reply), never one of the agent's own actions unless the request has that actor take
+it. Write the rule that reads the record into the world, so the agent's dependent action is refused until it exists.
+Before you save, read each actor's list against the request: every permission asked for is on someone's list.
+
+A policy point in the agent's material you cannot turn into an actor's permissions or knowledge (a rule with no
+record the world's rule reads, a rule with two readings, a decision no listed actor owns) is never dropped silently
+and never guessed: record it with `note_unresolved`, the rule in one sentence and why it is not modelled. The person
+sees each one above the cast as needing their decision, and accepts the cast as written or edits an actor for it.
 
 ## If the contract is wrong
 
@@ -746,7 +787,10 @@ Never work around a contract you believe is wrong. Everything after you inherits
    before adding a check, run it with `try_check` against three agents you write yourself, one that
    does it right the way the reference does, one that does it right another way its instructions
    allow, and one that gets a fixed value wrong. The first two must hold and the third must fail;
-   if any verdict is wrong, the check is wrong.
+   if any verdict is wrong, the check is wrong. When the contract lists workers, add, for each declared
+   worker whose actions the world records, one sub-goal with `subject: worker:<id>` that checks that
+   worker's own work: what it called and tried, never an outcome the world enforces for it (a refused
+   tool, a deadline), which holds for every agent.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.

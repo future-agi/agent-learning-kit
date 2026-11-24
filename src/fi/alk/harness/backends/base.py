@@ -30,6 +30,78 @@ from typing import Any, Protocol, runtime_checkable
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
+_PYTHON_SCHEMA_TYPES = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
+
+
+def tool_input_schema(schema: Any) -> dict[str, Any]:
+    """Return one provider-safe JSON Schema with local references inlined."""
+    if isinstance(schema, dict) and any(
+        key in schema
+        for key in ("type", "properties", "$ref", "$defs", "anyOf", "oneOf")
+    ):
+        root = schema
+    elif isinstance(schema, dict):
+        root = {
+            "type": "object",
+            "properties": {
+                name: (
+                    {"type": "array", "items": {"type": "object"}}
+                    if kind is list
+                    else {"type": _PYTHON_SCHEMA_TYPES.get(kind, "string")}
+                )
+                for name, kind in schema.items()
+            },
+            "required": list(schema),
+        }
+    else:
+        root = {"type": "object", "properties": {}}
+
+    def target(ref: str) -> Any:
+        if not ref.startswith("#/"):
+            raise ValueError("tool_schema_external_reference_unsupported")
+        value: Any = root
+        for raw in ref[2:].split("/"):
+            key = raw.replace("~1", "/").replace("~0", "~")
+            if not isinstance(value, dict) or key not in value:
+                raise ValueError("tool_schema_reference_missing")
+            value = value[key]
+        return value
+
+    def normalize(value: Any, resolving: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, list):
+            return [normalize(item, resolving) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "$ref" in value:
+            ref = value["$ref"]
+            if not isinstance(ref, str):
+                raise ValueError("tool_schema_reference_invalid")
+            if ref in resolving:
+                raise ValueError("tool_schema_recursive_reference_unsupported")
+            resolved = normalize(target(ref), (*resolving, ref))
+            if not isinstance(resolved, dict):
+                raise ValueError("tool_schema_reference_invalid")
+            siblings = {
+                key: normalize(item, resolving)
+                for key, item in value.items()
+                if key != "$ref"
+            }
+            return {**resolved, **siblings}
+        return {
+            key: normalize(item, resolving)
+            for key, item in value.items()
+            if key not in {"$defs", "definitions"}
+        }
+
+    return normalize(root)
+
 
 def qualified(server: str, tool_name: str) -> str:
     """The fully qualified name a session grants and a model calls.
@@ -104,6 +176,17 @@ KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL, *OPERATOR_TOOLS)
 # Ceiling on workers in flight at once.
 MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "48") or 48)
 
+TERMINAL_SAVE_TOOLS = frozenset(
+    {
+        "mcp__world__save_world",
+        "mcp__provision__save_environment",
+        "mcp__scenarios__save_scenarios",
+        "mcp__source_data__finish_review",
+        "mcp__repair__submit_world_ir_patch",
+        "mcp__runtime_repair__submit_runtime_plan_patch",
+    }
+)
+
 
 @dataclass
 class WorkerSpec:
@@ -176,6 +259,16 @@ class SessionSpec:
     # Workers this session may run, by name.
     workers: dict[str, WorkerSpec] = field(default_factory=dict)
     conversation: ConversationSession | None = None
+    # Model calls the whole session may make, its workers' included, across every message sent
+    # to it. Zero sets none, leaving the per-loop and per-worker turn limits as the only bounds.
+    # The Gemini backend checks it before each call and sends nothing past it. The Claude backend
+    # can only count calls as they arrive: it says when the count reaches the budget
+    # (`CallBudgetSpent`) and refuses every tool after, and its caller stops the session, so the
+    # calls already on their way, at most one per loop then running, land past the number.
+    call_budget: int = 0
+    # Workers this session may run at once; zero takes MOST_WORKERS_AT_ONCE. The Claude backend
+    # holds it; the Gemini backend has no such bound.
+    workers_at_once: int = 0
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""
@@ -247,12 +340,31 @@ class ToolReturned:
     invocation_id: str = ""
 
 
+# The outcome of an exchange stopped because the session's call budget was spent.
+CALL_BUDGET_SPENT = "call_budget_spent"
+
+
+@dataclass
+class CallBudgetSpent:
+    """A model call past the session's budget was made; ``calls`` is the count so far.
+
+    From a backend that cannot stop a call before it is made. Sent for the first call past the
+    budget and again for each call after it, so the caller knows to stop the session and what
+    the stop cost. The call that reaches the budget is inside it and sends nothing.
+    """
+
+    calls: int
+
+
 @dataclass
 class StageDone:
     """The exchange is over. The raw facts; Stage turns them into words."""
 
     outcome: str = "success"
     turns: int = 0
+    # Model calls this exchange made, its workers' included, where the backend counts them; the
+    # number a call budget is held to. Zero from a backend that does not count them.
+    calls: int = 0
     cost_usd: float | None = None
     # The units behind the price, so a bill can be checked rather than trusted.
     tokens_in: int = 0

@@ -1,0 +1,2 @@
+crewai==1.15.33
+agent-simulate==0.1.3

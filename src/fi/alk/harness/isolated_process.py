@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import signal
+import socket
+import struct
 import sys
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping
@@ -15,10 +18,97 @@ from typing import Any
 
 MAX_RESULT_BYTES = 16 * 1024 * 1024
 GRACEFUL_SHUTDOWN_SECONDS = 90.0
+# The person stopped the run: the worker seals what its call kept and writes its result, unlike SIGTERM.
+STOP_SIGNAL = signal.SIGUSR1
+_STOP_POLL_SECONDS = 0.5
+_stop_requested = False
+
+
+def stop_requested() -> bool:
+    """Inside a worker: whether its parent passed on the person's stop."""
+    return _stop_requested
+
+
+# The worker finds its end of the parent's channel under this name, when the parent serves one.
+CHANNEL_FD_ENV = "ALK_WORKER_CHANNEL_FD"
+# A 1 MiB workspace file, JSON-escaped, stays under it.
+MAX_CHANNEL_MESSAGE_BYTES = 8 * 1024 * 1024
+_LENGTH = struct.Struct(">I")
 
 
 class IsolatedWorkerError(RuntimeError):
     """The worker exited without a valid result."""
+
+
+# -- one channel message: a 4-byte length, then a JSON object --------------------------------
+
+
+def encode_message(message: Mapping[str, Any]) -> bytes:
+    return json.dumps(message, default=str).encode("utf-8")
+
+
+def _decode_message(body: bytes) -> dict[str, Any]:
+    message = json.loads(body)
+    if not isinstance(message, dict):
+        raise ValueError("a channel message must be an object")
+    return message
+
+
+def send_message(sock: socket.socket, body: bytes) -> None:
+    sock.sendall(_LENGTH.pack(len(body)) + body)
+
+
+def _receive_exactly(sock: socket.socket, size: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < size:
+        chunk = sock.recv(size - len(chunks))
+        if not chunk:
+            raise EOFError("the channel closed")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def receive_message(sock: socket.socket, *, limit: int) -> dict[str, Any]:
+    """The next message; EOFError when the other end closed, ValueError when it broke the frame."""
+    (size,) = _LENGTH.unpack(_receive_exactly(sock, _LENGTH.size))
+    if size > limit:
+        raise ValueError("channel message exceeds the limit")
+    return _decode_message(_receive_exactly(sock, size))
+
+
+async def _serve(
+    sock: socket.socket, serve: Callable[[dict[str, Any]], dict[str, Any]]
+) -> None:
+    """Answer the worker's requests in order until its end closes or breaks the frame."""
+    reader, writer = await asyncio.open_unix_connection(sock=sock)
+    try:
+        while True:
+            try:
+                (size,) = _LENGTH.unpack(await reader.readexactly(_LENGTH.size))
+                if size > MAX_CHANNEL_MESSAGE_BYTES:
+                    return
+                request = _decode_message(await reader.readexactly(size))
+            except (asyncio.IncompleteReadError, ValueError, OSError, RecursionError):
+                # A worker that closed or broke the frame loses its channel, not its phase.
+                return
+            try:
+                reply = encode_message(await asyncio.to_thread(serve, request))
+            except Exception:
+                # The worker sees its channel close; the cause stays in this process's log.
+                logging.getLogger(__name__).exception("isolated_worker_channel_failed")
+                return
+            if len(reply) > MAX_CHANNEL_MESSAGE_BYTES:
+                logging.getLogger(__name__).error(
+                    "isolated_worker_channel_reply_too_large"
+                )
+                return
+            try:
+                writer.write(_LENGTH.pack(len(reply)) + reply)
+                await writer.drain()
+            except OSError:
+                return
+    finally:
+        writer.close()
 
 
 async def _finish(task: asyncio.Task) -> bool:
@@ -32,8 +122,9 @@ async def _finish(task: asyncio.Task) -> bool:
     return canceled
 
 
-def run_worker(main: Callable[[], Awaitable[None]]) -> None:
-    """Translate termination into one cancellation so async cleanup can finish."""
+def run_worker(main: Callable[[], Awaitable[None]], *, cancel_on_stop: bool = False) -> None:
+    """Translate termination into one cancellation so async cleanup can finish. The stop signal sets
+    `stop_requested()`; with `cancel_on_stop` it also cancels `main` once, so a call seals its partial evidence."""
 
     logging.basicConfig(
         level=logging.WARNING,
@@ -54,11 +145,30 @@ def run_worker(main: Callable[[], Awaitable[None]]) -> None:
             if not getattr(task, "cancelling", lambda: 0)():
                 task.cancel()
 
+        def stop() -> None:
+            global _stop_requested
+            if _stop_requested:
+                return
+            _stop_requested = True
+            logging.getLogger(__name__).info("isolated_worker_stop_received")
+            if cancel_on_stop and not termination_requested and not task.done():
+                task.cancel()
+
         loop.add_signal_handler(signal.SIGTERM, cancel_once)
+        loop.add_signal_handler(STOP_SIGNAL, stop)
+        finished = False
         try:
             await task
+            finished = True
         finally:
             loop.remove_signal_handler(signal.SIGTERM)
+            loop.remove_signal_handler(STOP_SIGNAL)
+            if _stop_requested:
+                # A thread blocked on the agent would hold the loop's shutdown: exit with what was written.
+                logging.shutdown()
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os._exit(0 if finished else 1)
 
     asyncio.run(supervised())
 
@@ -93,17 +203,82 @@ async def _reap(
         await process.wait()
 
 
+async def _communicate(
+    process: asyncio.subprocess.Process, payload: bytes, stop_requested: Callable[[], bool] | None
+) -> None:
+    exchange = asyncio.ensure_future(process.communicate(payload))
+    try:
+        stopped = stop_requested is None
+        while not exchange.done():
+            await asyncio.wait({exchange}, timeout=_STOP_POLL_SECONDS)
+            if not stopped and not exchange.done() and stop_requested():
+                stopped = True
+                logging.getLogger(__name__).info("isolated_worker_stop_sent pid=%s", process.pid)
+                try:
+                    process.send_signal(STOP_SIGNAL)
+                except ProcessLookupError:
+                    pass
+        exchange.result()
+    finally:
+        if not exchange.done():
+            exchange.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await exchange
+
+
 async def run_json_worker(
     module: str,
     payload: Mapping[str, Any],
     *,
     environ: Mapping[str, str],
     work_directory: Path,
+    suppress_output: bool = False,
+    stop_requested: Callable[[], bool] | None = None,
+    pass_fds: tuple[int, ...] = (),
+    serve: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Run a fresh interpreter; cancellation waits for process-group termination."""
+    """Run a fresh interpreter; cancellation waits for process-group termination.
+
+    Once `stop_requested()` reads true the worker gets the stop signal once and still returns its result.
+    The worker inherits `pass_fds`; the caller keeps its own copies and closes them.
+    With ``serve``, the worker also gets a channel to this process (its descriptor is named by
+    ``CHANNEL_FD_ENV``), and ``serve`` answers each of its requests while it runs.
+    """
     if os.name != "posix":
         raise IsolatedWorkerError("isolated workers require POSIX process groups")
     work_directory.mkdir(parents=True, exist_ok=True)
+    parent_end, child_end = socket.socketpair() if serve is not None else (None, None)
+    try:
+        return await _run_json_worker(
+            module,
+            payload,
+            environ,
+            work_directory,
+            suppress_output,
+            stop_requested,
+            pass_fds,
+            serve,
+            parent_end,
+            child_end,
+        )
+    finally:
+        for end in (parent_end, child_end):
+            if end is not None:
+                end.close()
+
+
+async def _run_json_worker(
+    module,
+    payload,
+    environ,
+    work_directory,
+    suppress_output,
+    stop_requested,
+    pass_fds,
+    serve,
+    parent_end,
+    child_end,
+) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="worker-", dir=work_directory) as directory:
         root = Path(directory)
         result_path = root / "result.json"
@@ -121,6 +296,8 @@ async def run_json_worker(
         # It imports the same harness code as this process, wherever that code was loaded from.
         if os.environ.get("PYTHONPATH"):
             child_env.setdefault("PYTHONPATH", os.environ["PYTHONPATH"])
+        if child_end is not None:
+            child_env[CHANNEL_FD_ENV] = str(child_end.fileno())
         creation = asyncio.create_task(
             asyncio.create_subprocess_exec(
                 sys.executable,
@@ -128,19 +305,31 @@ async def run_json_worker(
                 module,
                 str(result_path),
                 stdin=asyncio.subprocess.PIPE,
-                stdout=None,
-                stderr=None,
+                stdout=asyncio.subprocess.DEVNULL if suppress_output else None,
+                stderr=asyncio.subprocess.DEVNULL if suppress_output else None,
                 env=child_env,
                 cwd=root,
                 start_new_session=True,
+                pass_fds=(
+                    *pass_fds,
+                    *(() if child_end is None else (child_end.fileno(),)),
+                ),
             )
         )
-        canceled = await _finish(creation)
+        try:
+            canceled = await _finish(creation)
+        finally:
+            if child_end is not None:
+                # The worker holds its own copy; this one would keep the channel open after it.
+                child_end.close()
         process = creation.result()
+        channel = (
+            None if serve is None else asyncio.create_task(_serve(parent_end, serve))
+        )
         try:
             if canceled:
                 raise asyncio.CancelledError
-            await process.communicate(json.dumps(payload).encode())
+            await _communicate(process, json.dumps(payload).encode(), stop_requested)
             if process.returncode != 0:
                 logging.getLogger(__name__).error(
                     "isolated_worker_failed module=%s exit_status=%s result_present=%s",
@@ -165,5 +354,12 @@ async def run_json_worker(
         finally:
             cleanup = asyncio.create_task(_reap(process))
             # Do not allow repeated cancellation to release a world before cleanup.
-            if await _finish(cleanup):
+            canceled = await _finish(cleanup)
+            if channel is not None:
+                # End the channel even if a process that left the group still holds the
+                # worker's copy, and let a request in flight finish before the world returns.
+                with contextlib.suppress(OSError):
+                    parent_end.shutdown(socket.SHUT_RDWR)
+                canceled = await _finish(channel) or canceled
+            if canceled:
                 raise asyncio.CancelledError

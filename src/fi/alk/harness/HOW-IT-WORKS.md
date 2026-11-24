@@ -65,7 +65,7 @@ calls `submit_contract`.
 
 | Field | Why it matters |
 |---|---|
-| `tools[]` — name, `args`, `arg_types`, `arg_values`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
+| `tools[]` — name, `args`, `arg_types`, `arg_values`, `arg_units`, description | The agent's action space. `arg_values` are the real permitted values — the menu, the enum, the lookup |
 | `hard_constraints[]` | Rules the agent must follow. Told to the agent under test, and graded by the judge |
 | `base_environment` | Its real starting data, reproduced row for row |
 | `real_use_cases[]` | What it is actually for |
@@ -78,6 +78,50 @@ not exist, or — the one that mattered most in practice — *every* tool having
 means the arguments were read and then not recorded. Problems are returned **into the
 conversation**, so the model corrects and resubmits rather than a bad contract landing.
 
+A browser reading gets one second look first, naming any browser, crawling or
+computer-use tool the code check found in the source. So does a chat or voice reading of source
+where the check found one, or where the check stopped before reading all of it. The next
+submission stands: a browser answer is refused to
+`failure.json` and the build exits 78, and a chat or voice answer is saved. The look gives a value
+to send back, which only tells apart calls in one model message: those run before the model reads
+any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look. Once an answer with the value has come back, a later browser answer without it gets a look again, so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic job read unattended), never a refusal without a look.
+
+**A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
+it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the
+reminder's. The platform sets it in `ALK_READING_MAX_MODEL_CALLS`; a missing, unreadable or
+non-positive value means 60, never no limit. Its reader gets 12 turns of its own, and at most 4
+readers run at once. The Gemini backend checks the budget before each call and sends nothing past
+it. On both, the call that reaches the budget is inside it and finishes what it asked for, a save
+included. The Claude backend can only count calls as they arrive, one per provider message id, so
+the reading stops when it sees the first call past the budget, the same way it stops at its time
+limit, and refuses that call's tools. It ends up to 5 calls past the budget: that call, and one for
+each reader still running. Either way a contract or failure already saved stands; otherwise the
+reading ends as `agent_reading_call_limit` and is not retried.
+
+What is counted differs by backend. The Gemini count is of calls made. The Claude count is of
+replies seen in the session's stream, plus each reader's closing reply the stream did not show. The
+CLI may hand that reply back only as the result of the call that sent the reader out, so each such
+result counts one more call unless the stream shows there was none: the reader was refused or
+failed, its last call in the stream asked for no tool (that call was its answer), or its calls in
+the stream reached the turn limit the kit set for it. The result's own text and status are not
+read. Readers are followed by the call that sent each out, never by the worker's name, since several
+readers of one worker run at once. When a reader's turn limit is not known, the result counts one
+call and a warning is logged, so a change in the CLI can make the count high but never quietly low.
+
+Still not counted on Claude, because the CLI makes these calls without putting a reply in the
+stream or anywhere else the kit can read, and offers no hook before a call:
+- the one call per session it makes for a title of its own, so the gateway shows the kit's count
+  plus one;
+- its own retry after a failed request;
+- its second call when a sub-agent's answer comes back empty: it asks again, once, and neither
+  empty reply reaches the stream, so the sub-agent's result counts one call, not two;
+- its summary call when it compacts a long conversation.
+
+Each is bounded by the counted calls around it, and the time limit holds the rest.
+A request the provider client retries on its own is not counted on either backend. The spend
+record keeps the limit in force (`call_limit`) beside the calls counted, for every stage that had
+one.
+
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
 agent and what came from us:
@@ -87,6 +131,17 @@ agent and what came from us:
 - `fix_tool` — correct argument names, types, description, or remove a tool that does not exist
 
 Each demands a `why`. A contract that can be rewritten invisibly is no longer evidence.
+
+**Where the save's file checks run** (`save_checker.py`). Every `contract_tools(...)` call that
+has a `source_root` or a `scan_root` reads the customer's files in a child process, started
+through a fork server, so a hostile tree can be cut at the save's deadline and its memory
+capped. That child imports the parent's `__main__` module before it serves. A script that calls
+the kit at top level, without an `if __name__ == "__main__":` guard, is therefore run a second
+time inside the child (model calls included). Its own nested start fails and falls back, and it doesn't
+serve until the script's top level returns. After 15 s the parent kills it and runs that
+call's checks in its own process from then on, with no deadline cut and no memory cap. Put
+the kit's calls under the guard. A script that cannot take the guard sets
+`ALK_SAVE_CHECKS=thread`, which runs the checks in the parent's own process, as before.
 
 ---
 
@@ -261,6 +316,28 @@ always succeed, including removing an item that was never added"*, *"mock respon
 argument"*, *"world state does not change unless a scenario sets `state_updates`"* — are all the
 same defect, and a world that really holds rows and can really refuse answers all three.
 
+### Worker events
+
+Every row of a call's sealed tool trace carries `worker_events`: what the row means for the app's
+workers, in one shape whatever the framework (`world/runtime.py::worker_events`). A row gives one
+event, or two for a hand-off whose worker came back.
+
+| Field | Meaning |
+|---|---|
+| `type` | `tool_call`, `delegated` (work handed to a worker), `transferred` (control passed; nothing returns) or `returned` |
+| `id` | The event's id; a `returned` event shares its hand-off's id |
+| `worker_id` | The worker that made the tool call, or the worker handed the work: the contract's worker id when the name the framework gives it matches a declared worker's `name`, else that name; `null` when the runtime did not say |
+| `worker_name` | The name the runtime gave that worker, as it gave it |
+| `by`, `by_name` | Hand-offs and returns only: the worker that handed the work over, as `worker_id` and `worker_name` |
+| `parent_id` | The `id` of the hand-off this event ran in; empty at the top level or when unknown |
+| `relationship` | `observed` when the runtime's record links the event to `parent_id`, otherwise `unknown` |
+| `tool` | The tool call's name, or the name of the call that made the hand-off |
+| `at` | When it started (a `returned` event: when the worker came back), seconds since the epoch |
+| `ended_at`, `status` | Tool calls: when the call ended (`null` if unknown) and `ok`, `error` or `refused`; `returned` events carry `status` too |
+
+A hand-off still out when the call ended has no `returned` event. Runs sealed before this field
+existed do not have it.
+
 ---
 
 ## What is exact, and what is judgement
@@ -295,3 +372,154 @@ The split is deliberate and worth defending:
 - Judged sub-goals are reported as judged, not actually sent to a judge yet
 - Results do not post to the platform
 - Nothing reports which of the contract's use cases have no scenario
+
+
+## Required tool workflows
+
+A `HarnessJob` accepts `guidance`, a list of operator instructions, and
+`require_tool_workflow`, which defaults to `false`. Both travel through understanding,
+environment authoring, scenario authoring, adjustment rewinds, and runtime repairs.
+Use `require_tool_workflow: true` only when every scenario must exercise a tool.
+
+With this requirement enabled, authoring rejects a contract unless a declared tool
+has an executable import, constructed callable, or service entrypoint. Runtime
+validation checks the contract again after repairs. ALK does not invent tools or
+modify submitted agent code to satisfy the requirement.
+
+Declarations do not prove execution. Local, resumed, certified, and hosted execution
+require captured tool calls in every scenario. Saved job requirements also apply to
+interactive scenario tools and cannot be disabled by a caller passing false. A conversation without tool evidence follows
+the existing `evidence_missing` retry and errored-receipt policy, even if its generated
+scenario claims tool evidence is optional. Ordinary chat and voice jobs keep their
+existing behavior when the requirement is omitted. Scenarios intended to refuse a
+request without calling tools belong in a separate job without this requirement.
+
+
+## Selected runtime and configuration
+
+Use `runtime.execution: native` with a source-owned `command`, or
+`runtime.execution: compose` with a repository-relative `compose_file` and `service`.
+Omitting execution retains automatic selection. Explicit native selection ignores
+unrelated Compose files. Explicit Compose selection preserves the selected service's
+transitive dependencies and resolves build contexts relative to its Compose file.
+Selection does not add execution support: unsupported images, engines, installers,
+and container launch semantics fail with a capability error.
+
+`runtime.required_environment` maps process names to required environment-variable
+names. Only values delivered to that process satisfy its declaration. Source-wide
+credential discovery remains an inventory of possible requirements. The preflight
+response preserves `ready_to_submit` as its legacy inventory result and separately
+reports `can_submit_for_authoring` and `configuration_status`. Submission permission
+is not proof that the selected runtime will start or complete a conversation.
+
+For an OpenAI-compatible ingress, `runtime.interface.model` records the exact model
+or profile identifier accepted by that endpoint. It is passed unchanged in the
+`openai_chat` request's `model` field; it may differ from the backing provider model.
+Omitting it preserves the legacy `agent-learning-target` default. Authoring should
+record a source-evidenced identifier when the endpoint requires one. For a custom
+JSON envelope, `json_template` can instead supply a literal `model` and
+`"messages": "{{messages}}"` in `request_template`; `openai_chat` does not use templates.
+
+`agent.config.target_model` supplies the caller's desired backing model, for example
+`vertex_ai/gemini-3.7-flash`. Authoring and runtime repair receive this preference and
+the names of supplied target environment values. They must derive the repository's
+provider configuration and initialization requests from source and verify a real
+chat. Secret values, vault references, simulator credential names, and arbitrary
+connection settings are not included in this briefing. The backing model preference
+does not replace `runtime.interface.model`, which may identify an application profile.
+
+The model gateway routes a target model unless it is one of OpenAI's own model families
+(`gpt`, `chatgpt`, `o1` to `o9`, `text-embedding`, `codex`, `davinci`, `babbage`,
+`whisper`, `tts`, `dall-e`, `omni-moderation`, `computer-use`, or an `ft:` fine-tune).
+A routed model gets the Agents SDK's chat-completions mark and guidance.
+`agent.config.direct_model_names` lists other bare names that stay direct, such as an
+Azure OpenAI deployment name (`prod-gpt4o`) the agent sends to Azure itself.
+
+`runtime.extras` selects optional dependency groups declared in the selected Python
+project. For a uv workspace root, a group absent from the root must have exactly
+one owner among included members. The installer then includes workspace packages
+and only the named extras. Root-owned groups use the root project alone; ambiguous,
+unknown, invalid, and unsupported selections fail before installation. Compose
+applies these selections only to the control process. Existing pip project paths
+install the selected `.[extras]`; requirements-only sources cannot declare extras
+without a project manifest. Locked uv installs and their stale-lock retry preserve
+the same selection. Source manifests and lockfiles are not rewritten by selection.
+`runtime.install` remains descriptive metadata; arbitrary installation instructions
+are not executed by the process compiler. Declare supported optional groups through
+`runtime.extras` rather than relying on that string. A complete local editable declaration
+such as `pip install -e sdk[cloud] -e tools` is checked against the selected
+project and its uv workspace. If the exact source owner declares an installable
+group omitted from `extras`, compilation returns `generated_runtime_extra_omitted`
+through the runtime-plan repair path. A repair must preserve the proven source
+owner and select the group; deleting the install text does not resolve the error.
+Unsupported install syntax remains documentary and never executes.
+
+`runtime.requirements_files` selects additional Python dependency manifests relative
+to the selected component. Both compilers install these into the same environment
+after project dependencies and extras, preserving every installed package version.
+Conflicting supplemental requirements fail instead of replacing the selected baseline.
+Selection accepts registry package requirements
+and local `-r` / `-c` includes; paths must remain inside the submitted component,
+exist in the build context, and have an acyclic bounded include graph. URLs and
+other pip options fail explicitly. The bounded chat-readiness repair may add
+source-evidenced manifests while retaining existing selections and all other runtime
+fields. `runtime.install` alone does not select a requirements file.
+
+HTTP endpoint paths can reference canonical inputs and earlier setup captures, such
+as `/threads/{{session_id}}/turns`. Setup runs first; the main path then renders for
+each call without changing the stored endpoint. Each substituted value is encoded
+as one path segment, so it cannot introduce a new host, path separator, query, or
+fragment. Missing values fail before the dependent request. Placeholders outside
+the URL path are unsupported. Traces retain the endpoint template and redact captured
+values, including their encoded forms, from failure diagnostics.
+
+## Failure evidence
+
+HTTP status failures take precedence over success-response extraction. For an API
+that returns application failures with a successful HTTP status, declare
+`runtime.interface.failure_rule`, for example:
+
+```json
+{"status_path": "state", "failure_values": ["failed"], "message_path": "detail"}
+```
+
+Each `runtime.interface.setup_requests` entry also accepts `failure_rule`. Its
+application status is checked after the accepted HTTP status and before captures or
+the next request. For example, `{"status_path":"code","success_values":[0]}`
+rejects an HTTP 200 setup response whose application code is 102. Comparisons preserve
+JSON scalar types; numeric zero does not match boolean false or the string "0".
+
+ALK does not infer failure merely because an arbitrary response contains an `error`
+field. Failed calls retain partial conversation evidence and bounded diagnostics.
+Excerpts are omitted when the caller cannot supply credential context. HTTP bodies
+larger than 1 MiB are rejected explicitly. Process tails survive reset and teardown;
+retention reads at most 64 KiB per file, sanitizes before persistence, and retains up
+to 8,192 characters per tail with a 512-log attempt budget. This is diagnostic
+redaction, not a guarantee that arbitrary personal data has been removed.
+
+Public PEM keys and certificate-only chains may pass source and artifact checks when
+the complete bounded content parses as public material. Private, mixed, malformed,
+oversized, and credential-named files remain blocked.
+
+## Chat readiness before certification
+
+For generic source-owned HTTP or callable chat agents, ALK runs one representative
+opening request after scenario setup and ready checks, before source-data invariant
+review. It uses the execution transport, edited persona opening or a greeting, and
+the declared model, setup requests, response mapping, and tools. Valid text,
+clarification, refusal, or structurally usable tool requests establish interface
+readiness. ALK does not replay returned tools or judge task success in this check.
+The target itself may execute tools during the request.
+
+Failed requests prevent certification. Candidate configuration errors use the
+existing source-backed runtime-plan repair budget. Authentication and unexplained
+application failures remain errors; they do not permit rewriting scenario outcomes.
+Each attempt retains a bounded sanitized receipt under `generic-harness/chat-readiness`.
+ALK resets a successful disposable instance before continuing and closes failed
+instances. Certificates require explicit `chat_ingress` evidence. Voice and external
+connect-only providers record that this check is not applicable.
+
+One successful opening does not prove every scenario or a complete workflow. Socket
+operations share a deadline, but urllib DNS resolution and response-header parsing
+are not independently interruptible. The enclosing job and sandbox limits remain
+the final execution bounds; cancellation drains the client worker before cleanup.

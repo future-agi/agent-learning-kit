@@ -230,46 +230,28 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
         said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
         assert said.get("is_error"), can_save
         assert "2 of 2 written" in said["content"][0]["text"]
-    contract = AgentContract(
-        agent="cart", real_use_cases=["add an item", "remove an item"]
+
+
+def test_the_cap_counts_the_scenarios_already_on_disk(tmp_path):
+    """A session that starts from what is saved counts it towards the cap."""
+    import asyncio
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools, write_scenarios
+
+    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    (tmp_path / "manifest.json").write_text("{}")
+    write_scenarios(
+        [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(2)], tmp_path
     )
-    # Above FEWEST_WORTH_DELEGATING, or the fan-out tool is not published at all.
-    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=20)
-    suite = next(spec for spec in server.tools if spec.name == "generate_suite")
 
-    asked_for: list[int] = []
+    server, kept = scenario_tools(contract, tmp_path, tmp_path, wanted=2)
+    submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+    said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
 
-    async def _fake_parallel(contract, *, out, wanted, use_cases, slices, at_once):
-        asked_for.append(wanted)
-        return []
-
-    monkeypatch.setattr("fi.alk.harness.scenarios.write_in_parallel", _fake_parallel)
-    # Nothing on disk yet: the full ask goes through.
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20]
-
-    # Fourteen already written, and the model asks for twenty again: six are outstanding.
-    monkeypatch.setattr(
-        st,
-        "load_scenarios",
-        lambda _d: [
-            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(14)
-        ],
-    )
-    monkeypatch.setattr(st, "journalled", lambda _d: [])
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20, 6]
-
-    monkeypatch.setattr(
-        st,
-        "load_scenarios",
-        lambda _d: [
-            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)
-        ],
-    )
-    said = asyncio.run(suite.handler({"count": 20}))
-    assert "already holds the 20" in said["content"][0]["text"]
-    assert asked_for == [20, 6]
+    assert len(kept) == 2
+    assert said.get("is_error")
+    assert "2 of 2 written" in said["content"][0]["text"]
 
 
 def test_only_chat_can_grow_a_finished_suite(tmp_path):
@@ -491,6 +473,22 @@ def test_an_overlay_claim_is_recognised_by_its_shared_first_word():
     assert not goal("otp_verified").settles("otp_pressure")
 
 
+def test_an_overlay_claim_by_field_or_whole_name_skips_the_first_word_guess():
+    from fi.alk.harness.catalogue import SubGoal
+
+    def goal(name, overlay=""):
+        return SubGoal(name=name, what="x", overlay=overlay)
+
+    assert goal("emergency_crisis_escalated").claims("emergency_crisis")
+    assert goal("pii_withheld", "privacy_pii").claims("privacy_pii")
+    assert goal("crisis").claims("emergency_crisis")
+    # What only the first word ties to the level settles it for the gate, but claims nothing.
+    assert goal("emergency_contact_updated").settles("emergency_crisis")
+    assert not goal("emergency_contact_updated").claims("emergency_crisis")
+    assert not goal("pii_withheld").claims("privacy_pii")
+    assert not goal("anything").claims("")
+
+
 def test_a_hosted_world_still_says_which_commit_its_tools_came_from(tmp_path):
     import json
 
@@ -566,3 +564,41 @@ def test_a_scenario_with_one_sub_goal_is_kept():
     catalogue = Catalogue(sub_goals=[SubGoal(name="change_made_as_asked", what="the change", judged="j")])
     one = Scenario(name="makes_a_change", instruction="Ask for a change.", sub_goals=["change_made_as_asked"])
     assert not any("sub-goal" in line for line in validate_scenario(one, catalogue, {}))
+
+
+def test_a_sub_goal_can_check_one_declared_worker_and_never_an_undeclared_one(tmp_path):
+    import asyncio
+
+    import fi.alk.harness.scenario_tools as st
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(
+        agent="returns", real_use_cases=["refund"], tools=[{"name": "issue_refund"}],
+        workers=[{"id": "refund", "tools": ["issue_refund"]}],
+    )
+    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=1)
+    add = next(spec for spec in server.tools if spec.name == "add_sub_goal")
+    check = (
+        "def check(world, calls):\n"
+        "    ok = [c for c in calls if c.name == 'issue_refund' and c.ok and c.arguments.get('order_id') == '1043']\n"
+        "    return None if ok else 'order 1043 was not refunded'\n"
+    )
+    said = asyncio.run(add.handler({"name": "refund_issued", "what": "the refund worker refunds", "check": check,
+                                    "subject": "worker:refund"}))
+    assert not said.get("is_error"), said
+    assert load_catalogue(tmp_path).sub_goals[0].subject == "worker:refund"
+    refused = asyncio.run(add.handler({"name": "audit", "what": "audits", "check": check, "subject": "worker:audit"}))
+    assert refused.get("is_error") and "subject_unknown_worker: audit" in refused["content"][0]["text"]
+
+
+def test_a_scenario_writer_and_an_editor_can_set_a_worker_budget(tmp_path):
+    import fi.alk.harness.scenario_tools as st
+    from fi.alk.harness.contract import AgentContract
+
+    server, _kept = st.scenario_tools(AgentContract(agent="returns", real_use_cases=["refund"]), tmp_path, tmp_path, wanted=1)
+    tools = {spec.name: spec for spec in server.tools}
+    for name in ("submit_scenario", "edit_scenario"):
+        shapes = tools[name].input_schema["properties"]["worker_budget_seconds"]["anyOf"]
+        # One number for all workers, or a number per named worker.
+        assert [shape["type"] for shape in shapes] == ["integer", "object"]

@@ -13,11 +13,13 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from fi.alk.harness import hosted_scheduler as hs
+from fi.alk.harness.judge import INCONCLUSIVE
 from fi.alk.harness.outbound import (
     ChannelError,
     ChannelOutcome,
@@ -200,6 +202,7 @@ class FakeSubGoal:
     fn: Any
     judged: str = ""
     both: bool = False
+    actor: str = ""
 
     def check(self, world: Any, calls: Any) -> object:
         return self.fn(world, calls)
@@ -348,6 +351,25 @@ def _pool(
         outbound=outbound,
     )
     return pool, fake
+
+
+def _spy_world_outcomes(pool: hs.WorldPool) -> list[tuple[str, int]]:
+    """Records each `release` and `mark_unhealthy` the scheduler makes, so a test reads how a world was handed back
+    rather than the pool's state after the background reconcile may already have recovered it."""
+    seen: list[tuple[str, int]] = []
+    release, mark_unhealthy = pool.release, pool.mark_unhealthy
+
+    async def spy_release(world_index: int, *args: Any, **kwargs: Any) -> None:
+        seen.append(("release", world_index))
+        await release(world_index, *args, **kwargs)
+
+    async def spy_mark_unhealthy(world_index: int, *args: Any, **kwargs: Any) -> None:
+        seen.append(("mark_unhealthy", world_index))
+        await mark_unhealthy(world_index, *args, **kwargs)
+
+    pool.release = spy_release  # type: ignore[method-assign]
+    pool.mark_unhealthy = spy_mark_unhealthy  # type: ignore[method-assign]
+    return seen
 
 
 # --- WorldPool -------------------------------------------------------------------------------
@@ -1786,6 +1808,7 @@ def test_setup_crash_errors_without_retrying() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
+        handed_back = _spy_world_outcomes(pool)
 
         def boom(world: Any) -> None:
             raise ValueError("scenario code bug")
@@ -1812,7 +1835,7 @@ def test_setup_crash_errors_without_retrying() -> None:
         assert receipt.scenario_attempt == 1
         # M13: an exception outcome discards the world (mark_unhealthy), never release() -- it is
         # down, not immediately available, until the background reconcile recovers it.
-        assert 0 in pool._down
+        assert handed_back == [("mark_unhealthy", 0)]
         await pool.close()
 
     asyncio.run(scenario())
@@ -1823,6 +1846,7 @@ def test_world_usage_misuse_in_ready_maps_to_world_usage() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
+        handed_back = _spy_world_outcomes(pool)
 
         def misuse(world: Any) -> None:
             raise WorldUsageError("cannot invent a table")
@@ -1846,7 +1870,7 @@ def test_world_usage_misuse_in_ready_maps_to_world_usage() -> None:
         receipt = result.receipts[0]
         assert receipt.failure.code == "world_usage"
         assert receipt.failure.domain == "simulator"
-        assert 0 in pool._down  # M13: discarded, not released
+        assert handed_back == [("mark_unhealthy", 0)]
         await pool.close()
 
     asyncio.run(scenario())
@@ -2620,6 +2644,41 @@ def test_conversation_only_scenario_can_be_judged_without_tool_calls(
         judged = [goal for goal in receipt.sub_goals if goal.judged]
         assert [goal.held for goal in judged] == [True]
         assert judged[0].reason == "the agent refused and named the reason"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_call_with_only_worker_hand_offs_is_evidence_missing() -> None:
+    # A worker's run is not a tool call, so a call that made none still has no evidence for checks.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+        handoff = hs.Call(
+            name="Draft writer", arguments={}, delegated_to="Draft writer", handoff=True
+        )
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                return _call_outcome(calls=(handoff,))
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        assert result.receipts[0].failure.code == "evidence_missing"
         await pool.close()
 
     asyncio.run(scenario())
@@ -4240,7 +4299,26 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
     asyncio.run(scenario())
 
 
-def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, recording=None):
+def test_the_judge_is_given_who_else_took_part_what_each_did_and_each_actor_s_brief(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _all(goals, world, calls, *, messages=(), actors=None):
+        seen["actors"] = actors
+        return {goal.name: (True, "held") for goal in goals}
+
+    with_actors = replace(
+        _call_outcome(),
+        call_actors=({"actor": "mia", "name": "Mia", "triggered": True, "delivered": 1},),
+        world_actions=({"actor_id": "mia", "name": "approve", "outcome": "committed"},),
+        actor_briefs={"mia": "You are Mia, the manager."},
+    )
+    receipt, _ = _two_judged(monkeypatch, _all, outcome=with_actors)
+    assert receipt.status == "passed"
+    assert seen["actors"]["briefs"] == {"mia": "You are Mia, the manager."}
+    assert seen["actors"]["actions"][0]["actor_id"] == "mia"
+
+
+def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, recording=None, outcome=None):
     """Run one scenario with two judged sub-goals; return (receipt, sub-goals the per-goal judge saw)."""
     alone: list[str] = []
 
@@ -4258,7 +4336,7 @@ def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, 
         await pool.start()
         class Runner:
             async def run(self, scenario, runtime):
-                return replace(_call_outcome(turns=0 if silent else 4), recording=recording)
+                return outcome or replace(_call_outcome(turns=0 if silent else 4), recording=recording)
 
         scheduler = hs.HostedScheduler(
             pool=pool,
@@ -4334,6 +4412,8 @@ def test_a_call_with_no_words_and_no_actions_is_not_judged(monkeypatch) -> None:
     receipt, alone = _two_judged(monkeypatch, _all, silent=True)
     assert alone == []
     assert receipt.status == "errored" and receipt.failure.code == "judge_undecided"
+    # Its evidence never arrived: each judged sub-goal reads unmeasured, never pass, fail or a blank.
+    assert {goal.verdict for goal in receipt.sub_goals} == {"unmeasured"}
 
 
 def test_a_call_whose_only_evidence_is_its_recording_is_still_judged(monkeypatch) -> None:
@@ -4341,6 +4421,18 @@ def test_a_call_whose_only_evidence_is_its_recording_is_still_judged(monkeypatch
         return {goal.name: (True, "heard it") for goal in goals}
 
     receipt, _ = _two_judged(monkeypatch, _all, silent=True, recording="/work/call.wav")
+    assert receipt.status == "passed"
+
+
+def test_a_call_whose_only_evidence_is_an_actor_s_action_in_the_world_is_still_judged(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {goal.name: (True, "the manager approved") for goal in goals}
+
+    silent = replace(
+        _call_outcome(turns=0),
+        world_actions=({"name": "approve", "actor_id": "manager", "outcome": "committed"},),
+    )
+    receipt, _ = _two_judged(monkeypatch, _all, silent=True, outcome=silent)
     assert receipt.status == "passed"
 
 
@@ -4407,10 +4499,34 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
         FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
     ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
-    held = {g.name: (g.held, g.reason) for g in receipt.sub_goals}
-    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right")
-    assert held["confirmed"] == (True, "confirmed said right")
+    held = {g.name: (g.held, g.reason, g.verdict) for g in receipt.sub_goals}
+    assert held["saved_feedback"] == (
+        False,
+        "no feedback row saved_feedback said right",
+        "fail",
+    )
+    assert held["confirmed"] == (True, "confirmed said right", "pass")
     assert receipt.status == "failed"
+
+
+def test_a_failed_check_is_not_explained_by_a_not_applicable_judge(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {
+            "saved_feedback": (True, "Not applicable: the caller never asked for it")
+        }
+
+    goals = [
+        FakeSubGoal(
+            "saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True
+        )
+    ]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
+    result = receipt.sub_goals[0]
+    assert (result.held, result.reason, result.verdict) == (
+        False,
+        "no feedback row",
+        "fail",
+    )
 
 
 def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(monkeypatch) -> None:
@@ -4606,6 +4722,940 @@ def test_call_file_written_before_setup_and_removed_after_each_scenario(
 
         assert _call_files(tmp_path) == {}
         assert not list(tmp_path.glob("worlds/*/.simulation_call_execution_id.tmp"))
+@pytest.mark.parametrize(
+    "required,with_calls,expected",
+    [(True, False, "errored"), (True, True, "passed"), (False, False, "passed")],
+)
+def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected):
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                calls = (
+                    (hs.Call(name="lookup", arguments={}, result="found"),)
+                    if with_calls
+                    else ()
+                )
+                return _call_outcome(turns=4, calls=calls)
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+            require_tool_workflow=required,
+        )
+        result = await scheduler.run(
+            [
+                FakeScenario(
+                    "lookup",
+                    "id-lookup",
+                    requires_tool_evidence=False,
+                    sub_goals=[FakeSubGoal("done", lambda world, calls: None)],
+                )
+            ]
+        )
+        receipt = result.receipts[0]
+        assert receipt.status == expected
+        if expected == "errored":
+            assert receipt.failure.code == "evidence_missing"
         await pool.close()
 
     asyncio.run(scenario())
+
+
+def _run_with_friend(monkeypatch, summary, sub_goals, duplicates=()) -> hs.ResultReceipt:
+
+    async def scenario() -> hs.ResultReceipt:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        outcome = replace(_call_outcome(), call_actors=(summary,) if summary else (), duplicates=duplicates)
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({"s1": outcome}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        one = FakeScenario(
+            "s1", "id-1", sub_goals=sub_goals, requires_tool_evidence=False
+        )
+        # As `scenario_source` compiles it for a hosted run: the ids alone.
+        one.actors = one.speaking_actors = ("friend",)
+        result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+def _friend(**seen) -> dict:
+    return {
+        "actor": "friend",
+        "name": "Rowan",
+        "triggered": True,
+        "delivered": 0,
+        "dropped": [],
+        **seen,
+    }
+
+
+@pytest.mark.parametrize(
+    "seen, why",
+    [
+        (_friend(dropped=["not ready in time"]), "Rowan (not_delivered: not ready in time)"),
+        (_friend(dropped=["its model did not answer"]), "Rowan (not_delivered: its model did not answer)"),
+        (_friend(), "Rowan (not_delivered)"),
+        (_friend(waited=["already handled"]), "Rowan (not_delivered: waited (already handled))"),
+        (_friend(triggered=False), "Rowan (not_triggered)"),
+        (None, "friend (not_triggered)"),
+    ],
+)
+def test_a_call_its_call_actor_never_reached_is_graded_with_the_actor_noted(
+    monkeypatch, seen, why
+) -> None:
+    passed = _run_with_friend(
+        monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
+    )
+    assert (passed.status, passed.failure) == ("passed", None)
+    assert [one.verdict for one in passed.sub_goals] == ["pass"]
+    assert passed.reason == f"did not reach the agent: {why}"
+    failed = _run_with_friend(
+        monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")]
+    )
+    assert (failed.status, failed.failure) == ("failed", None)
+    assert [one.verdict for one in failed.sub_goals] == ["fail"]
+    assert failed.reason == f"did not reach the agent: {why}"
+
+
+def test_a_duplicate_commit_beside_an_actor_note_keeps_both_reasons_and_no_failure(monkeypatch) -> None:
+    """The platform refuses a passed or failed receipt carrying a failure, and a refused result reads skipped: a double
+    refund must fail the agent with why in its reason, and the actor's note beside it."""
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(),
+        [FakeSubGoal("booked", lambda w, c: None)],
+        duplicates=({"action": "orders.issue_refund", "name": "issue_refund"},),
+    )
+    assert (receipt.status, receipt.failure) == ("failed", None)
+    assert receipt.reason == (
+        "did not reach the agent: Rowan (not_delivered); "
+        "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
+    )
+
+
+def test_a_fault_after_an_actor_never_reached_the_agent_keeps_the_note_beside_the_fault(monkeypatch) -> None:
+    def broken(world, calls):
+        raise RuntimeError("check crashed")
+
+    receipt = _run_with_friend(monkeypatch, _friend(name="R" * 600), [FakeSubGoal("booked", broken)])
+
+    assert (receipt.status, receipt.failure.code) == ("errored", "check_broken")
+    # The note is kept whole here; it is redacted, then capped, where it leaves the sandbox.
+    assert receipt.reason == f"did not reach the agent: {'R' * 600} (not_delivered)"
+
+
+def test_a_call_actor_a_probability_draw_left_out_leaves_the_call_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(triggered=False, drawn=False),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
+
+
+def test_a_call_actor_that_came_in_leaves_the_call_s_result_as_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
+    failed = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1, dropped=["voice failed"]),
+        [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")],
+    )
+    assert failed.status == "failed"
+
+
+@pytest.mark.parametrize(
+    "seen, verdict, status",
+    [
+        (_friend(triggered=False), "not_applicable", "passed"),
+        (_friend(triggered=False, drawn=False), "not_applicable", "passed"),
+        (_friend(dropped=["not ready in time"]), "pass", "passed"),
+        (_friend(delivered=1), "pass", "passed"),
+    ],
+)
+def test_a_sub_goal_about_an_actor_is_settled_by_whether_the_actor_came_in(monkeypatch, seen, verdict, status) -> None:
+    about = FakeSubGoal("asked_the_friend", lambda w, c: None, actor="friend")
+    task = FakeSubGoal("booked", lambda w, c: None)
+    receipt = _run_with_friend(monkeypatch, seen, [task, about])
+    assert (receipt.status, receipt.failure) == (status, None)
+    assert [one.verdict for one in receipt.sub_goals] == ["pass", verdict]
+
+
+@pytest.mark.parametrize("problem", ["no_world_door", "no_private_token", "not_listed"])
+def test_an_actor_that_could_not_act_names_itself_and_why_in_the_verdict(problem) -> None:
+    outcome = replace(
+        _call_outcome(),
+        call_actors=({"actor": "mia", "name": "Mia", "triggered": False, "delivered": 0, "problem": problem},),
+    )
+    scenario = SimpleNamespace(sub_goals=[], speaking_actors=())
+    assert hs._call_actors_missing(scenario, outcome) == f"Mia ({problem})"
+
+
+@pytest.mark.parametrize(
+    "row, verdict",
+    [
+        ({"triggered": False, "delivered": 0}, "not_applicable"),
+        ({"triggered": True, "delivered": 0}, "pass"),
+        ({"triggered": True, "delivered": 1}, "pass"),
+    ],
+)
+def test_a_sub_goal_about_an_actor_that_acts_through_the_world_reads_its_record(row, verdict) -> None:
+    outcome = replace(_call_outcome(), call_actors=({"actor": "mia", "name": "Mia", "acts_in_world": True, **row},))
+    graded = hs.SubGoalResult(name="approved", held=True, reason="the refund was approved", judged=False)
+    goal = FakeSubGoal("approved", lambda w, c: None, actor="mia")
+    assert hs._about_an_actor(goal, graded, outcome).verdict == verdict
+
+
+@pytest.mark.parametrize(
+    "goal, recording, evidence",
+    [
+        (SimpleNamespace(check="x", judged=""), None, ("world_state", "tool_calls")),
+        (SimpleNamespace(check="", judged="j"), None, ("transcript",)),
+        (SimpleNamespace(check="", judged="j"), "call.wav", ("transcript", "recording")),
+        (SimpleNamespace(check="x", judged="j", both=True), "call.wav", ("world_state", "tool_calls", "transcript", "recording")),
+        # A judged sub-goal's check is only a stand-in: it reads the transcript alone.
+        (SimpleNamespace(check="x", judged="j"), None, ("transcript",)),
+    ],
+)
+def test_each_sub_goal_says_what_it_was_decided_from(goal, recording, evidence) -> None:
+    assert hs._evidence_of(goal, replace(_call_outcome(), recording=recording)) == evidence
+
+
+def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> None:
+    said_nothing = {"actor": "jordan", "name": "Jordan", "triggered": True, "delivered": 0}
+    scenario = SimpleNamespace(sub_goals=[], speaking_actors=("jordan",))
+    posted = replace(
+        _call_outcome(),
+        call_actors=(said_nothing,),
+        world_actions=({"actor_id": "jordan", "outcome": "committed", "name": "post_message"},),
+    )
+    assert hs._call_actors_missing(scenario, posted) == ""
+    refused = replace(posted, world_actions=({"actor_id": "jordan", "outcome": "refused", "name": "post_message"},))
+    # Its refused attempt is the reason it said nothing, so the reader looks at the world data, not the agent.
+    assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered: the world refused its post_message)"
+
+
+def _graded(goals, outcome, delay: float = 0.0, worker_names=None):
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                if delay:
+                    await asyncio.sleep(delay)
+                return outcome
+
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1,
+            worker_names=worker_names,
+        )
+        result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=goals)])
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+@dataclass
+class _WorkerGoal(FakeSubGoal):
+    worker: str = ""
+
+    @property
+    def subject(self) -> str:
+        return f"worker:{self.worker}" if self.worker else "task"
+
+
+def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inconclusive() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund"),
+        hs.Call(name="send_reply", arguments={}),
+    )
+    seen: dict[str, list[str]] = {}
+
+    def lane(name):
+        def check(world, given):
+            seen[name] = [one.name for one in given]
+
+        return check
+
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lane("lookup"), worker="order_lookup"),
+            _WorkerGoal("task_done", lane("task")),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    assert seen == {"lookup": ["get_order"], "task": ["get_order", "issue_refund", "send_reply"]}
+    lookup, task, audit = receipt.sub_goals
+    assert (lookup.verdict, task.verdict) == ("pass", "pass")
+    assert (lookup.subject, task.subject, audit.subject) == ("worker:order_lookup", "task", "worker:audit")
+    # Absence is never a pass: a worker with nothing in the world's log cannot be graded.
+    assert (audit.verdict, audit.held) == ("inconclusive", None)
+    assert audit.reason == "Inconclusive: participant audit made no tool call the test environment recorded"
+
+
+def test_a_worker_s_failed_check_is_reported_beside_the_task_s_verdict_not_folded_into_it() -> None:
+    calls = (hs.Call(name="update_order_status", arguments={}, worker_id="order_lookup"),)
+    outcome = _call_outcome(turns=2, calls=calls)
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lambda w, c: "the lookup worker wrote an order", worker="order_lookup"),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        outcome,
+    )
+    worker, audit, task = receipt.sub_goals
+    # Neither a worker's failure nor a worker that left nothing to grade decides the task.
+    assert (worker.verdict, audit.verdict, task.verdict, receipt.status) == ("fail", "inconclusive", "pass", "passed")
+    failed = _graded([_WorkerGoal("reply_truthful", lambda w, c: "claimed a refund")], outcome)
+    assert failed.status == "failed"
+
+
+def test_a_worker_s_broken_check_is_unmeasured_on_that_worker_and_never_faults_the_call() -> None:
+    calls = (hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),)
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lambda w, c: 42, worker="order_lookup"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    worker, task = receipt.sub_goals
+    # One worker's broken check must not stop the task's own sub-goals being graded.
+    assert (worker.verdict, task.verdict, receipt.status) == ("unmeasured", "pass", "passed")
+    assert "check returned 42" in worker.reason
+
+
+def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_the_task_still_graded() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", ok=False, refused=True,
+                refusal_code="deadline_passed"),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: "no refund", worker="refund"),
+            _WorkerGoal("lookup_done", lambda w, c: None, worker="order_lookup"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    refund, lookup, task = receipt.sub_goals
+    assert (refund.verdict, lookup.verdict, task.verdict) == ("inconclusive", "pass", "pass")
+    assert refund.reason == "Inconclusive: participant refund passed its time limit, so its result is partial"
+
+
+def test_a_worker_stopped_at_its_deadline_reads_partial_even_with_no_later_refusal() -> None:
+    """One successful call, then stopped mid-computation: no refusal follows, but the seal says it was stopped, so its
+    own checks read partial, never a pass or a fail."""
+    from dataclasses import replace
+
+    from fi.alk.harness.call_runner import WORKER_STOPPED_AT_DEADLINE
+
+    calls = (hs.Call(name="issue_refund", arguments={}, worker_id="refund"),)
+    outcome = replace(
+        _call_outcome(turns=2, calls=calls),
+        notices=({"code": WORKER_STOPPED_AT_DEADLINE, "workers": ["refund"]},),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: None, worker="refund"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        outcome,
+    )
+    refund, task = receipt.sub_goals
+    assert (refund.verdict, task.verdict) == ("inconclusive", "pass")
+    assert refund.reason == "Inconclusive: participant refund passed its time limit, so its result is partial"
+
+
+def test_a_worker_s_check_is_graded_on_the_calls_its_framework_names_it_by() -> None:
+    """Spans carry the framework's name for a worker, not the contract id: its check still reads its own calls."""
+    calls = (
+        hs.Call(name="issue_refund", arguments={}, worker_id="Refund Agent"),
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+    )
+    seen: list[str] = []
+    receipt = _graded(
+        [_WorkerGoal("refund_done", lambda w, c: seen.extend(one.name for one in c), worker="refund")],
+        _call_outcome(turns=2, calls=calls),
+        worker_names={"refund": "refund_agent"},
+    )
+    assert seen == ["issue_refund"]
+    assert receipt.sub_goals[0].verdict == "pass"
+
+
+def test_a_worker_whose_limits_the_world_could_not_read_is_not_graded_on_them() -> None:
+    calls = (
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", ok=False, refused=True,
+                refusal_code="limits_unreadable"),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: "no refund", worker="refund"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    refund, task = receipt.sub_goals
+    # The world's failure, never the worker's: no fail on the worker, the task graded as usual.
+    assert (refund.held, task.verdict) == (None, "pass")
+
+
+def test_a_trial_held_before_its_call_is_held_though_nothing_was_captured() -> None:
+    outcome = replace(
+        _call_outcome(turns=0, calls=()),
+        notices=({"code": "worker_limits_not_enforced", "message": "no tool proxy"},),
+    )
+    receipt = _graded([_WorkerGoal("task_done", lambda w, c: None)], outcome)
+    # Not retried as missing evidence on another world: the same environment holds it again.
+    assert receipt.failure is not None and receipt.failure.code == "worker_limits_not_enforced"
+    assert receipt.status != "failed"
+
+
+def test_a_trial_that_could_not_hold_the_worker_limits_its_scenario_relies_on_is_held_not_graded() -> None:
+    outcome = replace(
+        _call_outcome(turns=2, calls=(hs.Call(name="issue_refund", arguments={}),)),
+        notices=({"code": "worker_limits_not_enforced", "message": "sealed before worker limits"},),
+    )
+    ran: list[str] = []
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_refused", lambda w, c: ran.append("worker") or False, worker="refund"),
+            _WorkerGoal("task_done", lambda w, c: ran.append("task") or False),
+        ],
+        outcome,
+    )
+    # Nothing nobody enforced is counted against the agent: no check ran, none settled, the scenario is not failed.
+    assert ran == []
+    assert receipt.status != "failed"
+    assert receipt.failure is not None and receipt.failure.code == "worker_limits_not_enforced"
+    # The sealed environment causes it and a rebuild fixes it.
+    assert receipt.failure.domain == "environment"
+    assert "not the agent's" in receipt.failure.message
+    assert [one.held for one in receipt.sub_goals] == [None, None]
+
+
+def test_a_bypass_leaves_that_worker_s_checks_unmeasured_and_grades_the_task() -> None:
+    calls = (
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", channel=""),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", channel=""),
+    )
+    outcome = replace(
+        _call_outcome(turns=2, calls=calls),
+        notices=({"code": "worker_channel_bypassed", "message": "Refund worker reached the world", "workers": ["refund"]},),
+    )
+    ran: list[str] = []
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_once", lambda w, c: ran.append("worker") or None, worker="refund"),
+            _WorkerGoal("no_second_refund", lambda w, c: ran.append("task") or "a second refund exists"),
+        ],
+        outcome,
+    )
+    worker, task = receipt.sub_goals
+    # The worker's own check is not graded; the task reads the world whichever address was used.
+    assert ran == ["task"]
+    assert (worker.held, worker.verdict) == (None, "unmeasured")
+    assert "used the app's connection instead of its own" in worker.reason
+    assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")
+
+
+
+def test_a_listed_worker_the_in_process_door_cannot_stop_has_its_deadline_not_enforced_and_the_trial_graded(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import call_runner as cr
+
+    (tmp_path / "door.json").write_text('{"present": true, "surface": "in_process", "workers": ["refund"]}')
+    (tmp_path / "contract.json").write_text('{"workers": [{"id": "refund", "name": "Refund"}]}')
+    document = {"worker_budget_seconds": {"refund": 5}}
+    # Listed for the door, so the trial is placed rather than held.
+    assert cr.limits_not_held(document, tmp_path) == []
+    # The door's hook never saw the worker run as a task of its own (a hand-off): its deadline is not enforced.
+    monkeypatch.setattr(cr, "read_worker_runs", lambda _runtime, _since=None: set())
+    [record] = cr.deadlines_not_enforced(object(), document, tmp_path)
+    assert record["worker"] == "refund" and "run on its own" in record["reason"]
+    outcome = replace(
+        _call_outcome(turns=2, calls=(hs.Call(name="issue_refund", arguments={}, worker_id="refund"),)),
+        notices=tuple(cr.unenforced_deadline_notices([record])),
+    )
+    ran: list[str] = []
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_by_deadline", lambda w, c: ran.append("worker") or None, worker="refund"),
+            _WorkerGoal("no_second_refund", lambda w, c: ran.append("task") or "a second refund exists"),
+        ],
+        outcome,
+    )
+    worker, task = receipt.sub_goals
+    assert ran == ["task"]
+    assert (worker.held, worker.verdict) == (None, "unmeasured")
+    assert "time limit of refund wasn't enforced" in worker.reason
+    # Not held: the rest of the trial is graded.
+    assert receipt.failure is None or receipt.failure.code != "worker_limits_not_enforced"
+    assert (task.held, task.verdict, receipt.status) == (False, "fail", "failed")
+
+def _stop_run(runner, scenarios, *, stop_after: float = 0.05, instances: int = 1):
+    """Run the scheduler with a stop that flips `stop_after` seconds in; the runner reads it through its context."""
+
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(instances, outbound=outbound)
+        await pool.start()
+        started = time.monotonic()
+        stopped = lambda: time.monotonic() - started >= stop_after  # noqa: E731
+        runner.stop_requested = stopped
+        judged: list[str] = []
+
+        async def judge(*_args, **_kwargs):
+            judged.append("judge")
+            return True, ""
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+            cancel_requested=stopped,
+            judge=judge,
+        )
+        result = await scheduler.run(scenarios)
+        await pool.close()
+        return result, judged
+
+    return asyncio.run(scenario())
+
+
+class _SealingRunner:
+    """A runner that waits on its call until cut, then seals what it kept as the real runners do on a user stop."""
+
+    def __init__(self) -> None:
+        self.stop_requested = lambda: False
+        self.cancels: dict[str, int] = {}
+
+    async def run(self, scenario, runtime):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.cancels[scenario.scenario_key] = self.cancels.get(scenario.scenario_key, 0) + 1
+            if not self.stop_requested():
+                raise
+            partial = replace(
+                _call_outcome(turns=1, calls=(hs.Call(name="get_order", arguments={}), hs.Call(name="list_refunds", arguments={}))),
+                transcript_artifact=f"t-{scenario.scenario_key}",
+                stop_reason="user_canceled",
+            )
+            raise hs.CallCancelled(partial=partial) from None
+        return _call_outcome()
+
+
+def test_cancel_mid_call_seals_a_user_canceled_receipt_pointing_at_the_partial_transcript() -> None:
+    runner = _SealingRunner()
+    goals = [FakeSubGoal("refund_once", lambda w, c: None, judged="the reply is truthful")]
+    result, judged = _stop_run(runner, [FakeScenario("s1", "id-1", sub_goals=goals)])
+    (receipt,) = result.receipts
+    assert receipt.status == "errored"
+    assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", "platform_sync")
+    assert receipt.call.transcript_artifact == "t-s1"
+    assert receipt.call.stop_reason == "user_canceled"
+    assert [one.held for one in receipt.sub_goals] == [None]
+    assert judged == []
+
+
+def test_user_canceled_is_never_retried() -> None:
+    assert hs._is_retryable("user_canceled") is False
+    assert hs._domain_for("user_canceled") is hs.FailureDomain.PLATFORM_SYNC
+
+
+def test_a_runner_that_ignores_the_cancel_is_cut_at_the_bound(monkeypatch) -> None:
+    monkeypatch.setenv(hs.CANCEL_SEAL_ENV, "0.2")
+
+    class IgnoresTheStop:
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            # Swallows the stop's cancel and keeps working well past the bound, then returns as if nothing happened.
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                pass
+            await asyncio.sleep(3)
+            return _call_outcome()
+
+    started = time.monotonic()
+    result, _ = _stop_run(
+        IgnoresTheStop(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+    )
+    (receipt,) = result.receipts
+    assert receipt.failure.code == "user_canceled"
+    assert receipt.call is None
+    # Cut at the bound (0.2 s plus a poll), not when the runner finally returned.
+    assert time.monotonic() - started < 2.5
+
+
+def test_one_stop_seals_every_call_in_flight_each_with_its_own_transcript() -> None:
+    runner = _SealingRunner()
+    scenarios = [
+        FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+        FakeScenario("s2", "id-2", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+    ]
+    result, _ = _stop_run(runner, scenarios, instances=2)
+    assert sorted((one.failure.code, one.call.transcript_artifact) for one in result.receipts) == [
+        ("user_canceled", "t-s1"),
+        ("user_canceled", "t-s2"),
+    ]
+    # The one watcher cuts each call once; no stop state lives on the shared runner.
+    assert runner.cancels == {"s1": 1, "s2": 1}
+
+
+def test_no_cancel_leaves_receipts_unchanged() -> None:
+    goals = [FakeSubGoal("g", lambda w, c: None)]
+    outcome = _call_outcome(turns=2, calls=(hs.Call(name="get_order", arguments={}),))
+    # The call outlasts the stop watcher's poll, so a watcher that cut calls without a stop would cut this one.
+    plain = _graded(goals, outcome, delay=1.2)
+    assert plain.status == "passed"
+    assert plain.failure is None
+    assert plain.call.stop_reason is None
+
+
+def test_a_runner_that_fails_while_being_stopped_is_sealed_as_the_stop() -> None:
+    class FailsOnStop:
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise RuntimeError("cleanup failed while stopping") from None
+            return _call_outcome()
+
+    result, _ = _stop_run(FailsOnStop(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    (receipt,) = result.receipts
+    # The person's stop, never infrastructure and never retried, whatever the runner raised on the way out.
+    assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", hs.FailureDomain.PLATFORM_SYNC)
+    assert receipt.call is None
+
+
+def test_a_call_that_fails_under_the_stop_keeps_what_it_kept_as_the_stop() -> None:
+    class HungUpUnderIt:
+        """A runner given the seal bound whose call fails on the stop itself (the platform hung the call up)."""
+
+        stops_at_turn_boundary = True
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            for _ in range(60):
+                if self.stop_requested():
+                    partial = replace(_call_outcome(turns=1), transcript_artifact="t-partial")
+                    raise hs.CallAborted("voice call ended: participant left", partial=partial)
+                await asyncio.sleep(0.05)
+            return _call_outcome()
+
+    runner = HungUpUnderIt()
+    result, _ = _stop_run(runner, [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    (receipt,) = result.receipts
+    assert (receipt.failure.code, receipt.failure.domain) == ("user_canceled", hs.FailureDomain.PLATFORM_SYNC)
+    assert receipt.call.transcript_artifact == "t-partial"
+    assert receipt.call.stop_reason == "user_canceled"
+
+
+def test_a_sealed_call_whose_delivery_never_ends_is_cut_at_the_delivery_bound(monkeypatch) -> None:
+    """A stopped call that sealed is left to deliver past the seal bound, but a platform that never answers cannot hold
+    the stopped run open: the delivery bound cuts it."""
+    monkeypatch.setenv(hs.CANCEL_SEAL_ENV, "0.2")
+    monkeypatch.setattr(hs, "_SEALED_DELIVERY_SECONDS", 1.0)
+    cut = []
+
+    class NeverDelivers:
+        stops_at_turn_boundary = True
+        stop_requested = staticmethod(lambda: False)
+
+        async def run(self, scenario, runtime):
+            while not self.stop_requested():
+                await asyncio.sleep(0.02)
+            hs.call_sealed()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cut.append(time.monotonic())
+                raise
+            return _call_outcome()
+
+    started = time.monotonic()
+    result, _ = _stop_run(NeverDelivers(), [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+    (receipt,) = result.receipts
+    assert receipt.failure.code == "user_canceled"
+    assert receipt.call is None
+    assert cut, "the delivery was never cut"
+    # Left alone past the 0.2 s seal bound, cut at the delivery bound, well before the runner would have finished.
+    assert 1.0 < cut[0] - started < 4.0
+
+
+def test_a_duplicate_commit_fails_the_scenario(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    duplicated = replace(
+        _call_outcome(turns=2),
+        duplicates=({"action": "orders.issue_refund", "name": "issue_refund", "arguments": {"order": 7}},),
+    )
+    passing = [FakeSubGoal("refunded", lambda w, c: None)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=duplicated)
+    # Failed, with why in its reason: a graded receipt carrying a failure is refused by the platform.
+    assert receipt.status == "failed" and receipt.failure is None
+    assert receipt.reason == (
+        "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
+    )
+    clean, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=_call_outcome(turns=2))
+    assert clean.status == "passed" and clean.failure is None
+
+
+def test_a_check_reading_an_unreadable_log_is_unmeasured_not_passed(monkeypatch) -> None:
+    from fi.alk.harness.world_door import EvidenceUnavailable
+
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    def reads_the_log(world, calls):
+        raise EvidenceUnavailable("the world's action log could not be read")
+
+    goals = [FakeSubGoal("no_refund_committed", reads_the_log), FakeSubGoal("greeted", lambda w, c: None)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=goals, outcome=_call_outcome(turns=2))
+    unmeasured, settled = receipt.sub_goals
+    assert unmeasured.held is None and unmeasured.reason.startswith(hs.UNMEASURED)
+    assert "action log could not be read" in unmeasured.reason
+    assert settled.held is True
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+
+
+def test_a_check_that_never_reads_the_log_still_settles(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    receipt, _ = _two_judged(
+        monkeypatch, _all, goals=[FakeSubGoal("greeted", lambda w, c: None)], outcome=_call_outcome(turns=2)
+    )
+    assert receipt.status == "passed"
+
+
+def _graded_on(rows: dict[str, list[dict[str, Any]]], goals: list[FakeSubGoal], outcome: hs.CallOutcome | None = None):
+    """One scenario graded by the scheduler against a world holding `rows` after its call."""
+
+    class _World(InMemoryWorld):
+        def read_only(self) -> "InMemoryWorld":
+            view = InMemoryWorld(self.world_index, self.rng, read_only=True)
+            view.rows = self.rows
+            return view
+
+    class _Factory:
+        async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> InMemoryWorld:
+            world = _World(runtime.world_index, rng)
+            world.rows = {name: list(records) for name, records in rows.items()}
+            return world
+
+    class _Runner:
+        async def run(self, scenario, runtime):
+            return outcome or _call_outcome(turns=2)
+
+    out: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=_Factory(), call_runner=_Runner(), outbound=outbound, job_seed=1
+        )
+        result = await scheduler.run([FakeScenario("two", "id-2", sub_goals=goals, requires_tool_evidence=False)])
+        out["receipt"] = result.receipts[0]
+        await pool.close()
+
+    asyncio.run(scenario())
+    return out["receipt"]
+
+
+def _both_systems(world, calls):
+    """A scenario's check over two systems: the record in each, by the same reference."""
+    state = world.state()
+    first = [one for one in state.get("system_a_records", []) if one.get("ref") == "R-1"]
+    second = [one for one in state.get("system_b_records", []) if one.get("ref") == "R-1"]
+    if not first:
+        return "not done: system_a_records holds no record R-1"
+    if not second:
+        return "not done: system_b_records holds no record R-1"
+    if first[0].get("status") != second[0].get("status"):
+        return f"done wrong: system_b_records status expected {first[0].get('status')}, got {second[0].get('status')}"
+    return None
+
+
+def test_a_workflow_over_two_systems_passes_only_when_both_were_updated() -> None:
+    both = {"system_a_records": [{"ref": "R-1", "status": "closed"}], "system_b_records": [{"ref": "R-1", "status": "closed"}]}
+    receipt = _graded_on(both, [FakeSubGoal("both_systems_updated", _both_systems)])
+    assert receipt.status == "passed" and receipt.sub_goals[0].held is True
+    # The negative control: only the first system changed.
+    one = {"system_a_records": [{"ref": "R-1", "status": "closed"}], "system_b_records": []}
+    receipt = _graded_on(one, [FakeSubGoal("both_systems_updated", _both_systems)])
+    assert receipt.status == "failed" and receipt.sub_goals[0].held is False
+    assert "system_b_records" in receipt.sub_goals[0].reason
+    stale = {"system_a_records": [{"ref": "R-1", "status": "closed"}], "system_b_records": [{"ref": "R-1", "status": "open"}]}
+    receipt = _graded_on(stale, [FakeSubGoal("both_systems_updated", _both_systems)])
+    assert receipt.status == "failed" and "system_b_records status expected closed, got open" in receipt.sub_goals[0].reason
+
+
+def test_a_trial_whose_condition_never_applied_is_unmeasured_whatever_its_checks_say() -> None:
+    from fi.alk.harness.call_runner import fault_notices, unmeasured_reasons
+
+    contract = {"tool_entrypoints": [{"tool": "update_record", "endpoint": "/service_a/update"}]}
+    notices = fault_notices([{"action": "service_a.missing", "mode": "unavailable"}], [], (), contract=contract)
+    unmeasured = replace(_call_outcome(turns=2), unmeasured=unmeasured_reasons(notices))
+    holds = [FakeSubGoal("done", lambda w, c: None)]
+    receipt = _graded_on({}, holds, unmeasured)
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+    assert "no tool or world action by that name" in receipt.failure.message
+    fails = [FakeSubGoal("done", lambda w, c: "not done")]
+    assert _graded_on({}, fails, unmeasured).failure.code == "evidence_unmeasured"
+    # With every fault applied, the same trial is graded.
+    assert _graded_on({}, holds).status == "passed"
+
+
+def _compiled(source: str):
+    namespace: dict[str, Any] = {}
+    exec(compile(source, "<check>", "exec"), namespace)  # noqa: S102 - the test's own source
+    check = namespace["check"]
+    check._alk_source = source
+    return check
+
+
+WORLD_CHECK = "def check(world, calls):\n    if not world.state().get('system_a_records'):\n        return 'not done'\n"
+CALLS_CHECK = "def check(world, calls):\n    if not calls:\n        return 'no call'\n"
+LOG_CHECK = "def check(world, calls):\n    if world.events(outcome='committed'):\n        return 'a write committed'\n"
+
+
+def test_a_check_s_evidence_is_read_from_its_own_code() -> None:
+    from fi.alk.harness.checks import check_reads
+
+    assert check_reads(_compiled(WORLD_CHECK)) == ("world_state",)
+    assert check_reads(_compiled(CALLS_CHECK)) == ("tool_calls",)
+    assert check_reads(_compiled(LOG_CHECK)) == ("tool_calls",)
+    assert check_reads(lambda world, calls: None) == ("world_state", "tool_calls")
+    # A world handed to a helper, or under another name, may be read for either.
+    helper = "def check(world, calls):\n    return _committed(world)\n\ndef _committed(w):\n    return w.events()\n"
+    alias = "def check(world, calls):\n    w = world\n    return w.events()\n"
+    assert check_reads(_compiled(helper)) == check_reads(_compiled(alias)) == ("world_state", "tool_calls")
+
+
+def test_a_world_state_check_with_no_world_state_is_unmeasured_with_that_reason() -> None:
+    goal = SimpleNamespace(name="recorded", check=_compiled(WORLD_CHECK), judged="", both=False, actor="")
+    missing = replace(_call_outcome(turns=2), missing_evidence={"world_state": "The world's records could not be read."})
+    receipt = _graded_on({}, [goal], missing)
+    [result] = receipt.sub_goals
+    assert result.held is None and result.reason == f"{hs.UNMEASURED}The world's records could not be read."
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+    # The receipt carries the verdict itself, so the platform never reads it from the reason's wording.
+    from fi.alk.harness.hosted_entrypoint import sub_goal_wire
+
+    assert [sub_goal_wire(one)["verdict"] for one in receipt.sub_goals] == ["unmeasured"]
+    inconclusive = hs.SubGoalResult(name="asked", held=None, reason=f"{INCONCLUSIVE}never reached", judged=True)
+    assert sub_goal_wire(inconclusive)["verdict"] == "inconclusive"
+    # The same check with its evidence there is graded: here it fails on the empty world.
+    assert _graded_on({}, [goal]).status == "failed"
+
+
+def test_an_unreadable_action_log_leaves_a_check_on_it_unmeasured_never_passed() -> None:
+    from fi.alk.harness.call_runner import DUPLICATES_UNREADABLE, missing_evidence
+
+    goal = SimpleNamespace(name="nothing_committed", check=_compiled(LOG_CHECK), judged="", both=False, actor="")
+    lost = replace(_call_outcome(turns=2), missing_evidence=missing_evidence([dict(DUPLICATES_UNREADABLE)], {}))
+    receipt = _graded_on({}, [goal], lost)
+    assert receipt.sub_goals[0].held is None and "action log could not be read" in receipt.sub_goals[0].reason
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+
+
+def test_a_transcript_only_check_is_still_graded_when_the_world_s_evidence_is_missing(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {"greeted": (True, "it greeted")}
+
+    missing = replace(
+        _call_outcome(turns=2),
+        missing_evidence={"world_state": "The world's records could not be read.", "tool_calls": "The log is gone."},
+    )
+    receipt, _ = _two_judged(
+        monkeypatch, _all, goals=[FakeSubGoal("greeted", lambda w, c: None, judged="judge")], outcome=missing
+    )
+    assert receipt.status == "passed" and receipt.sub_goals[0].held is True
+
+
+def test_a_call_runner_reads_a_trial_s_start_before_the_scenario_s_setup_writes() -> None:
+    worlds: dict[int, InMemoryWorld] = {}
+    read: dict[str, Any] = {}
+
+    class _Factory:
+        async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> InMemoryWorld:
+            worlds[runtime.world_index] = InMemoryWorld(runtime.world_index, rng)
+            return worlds[runtime.world_index]
+
+    class _Runner:
+        async def before_setup(self, runtime: EnvironmentRuntime) -> None:
+            read["start"] = worlds[runtime.world_index].state()
+
+        async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            read["call"] = worlds[runtime.world_index].state()
+            return _call_outcome(turns=2)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=_Factory(), call_runner=_Runner(), outbound=outbound, job_seed=1
+        )
+        declined = {"id": 1, "status": "declined"}
+        await scheduler.run(
+            [FakeScenario("declines", "id-1", setup_fn=lambda world: world.put("approvals", declined),
+                          requires_tool_evidence=False)]
+        )
+        await pool.close()
+
+    asyncio.run(scenario())
+    assert read == {"start": {}, "call": {"approvals": [{"id": 1, "status": "declined"}]}}
+
+
+def test_an_actor_who_waited_and_never_spoke_says_why_it_waited_in_the_verdict() -> None:
+    waited = {"actor": "jordan", "name": "Jordan", "triggered": True, "delivered": 0, "dropped": [],
+              "waited": ["already handled"]}
+    scenario = SimpleNamespace(sub_goals=[], speaking_actors=("jordan",))
+
+    missing = hs._call_actors_missing(scenario, replace(_call_outcome(), call_actors=(waited,)))
+
+    assert missing == "Jordan (not_delivered: waited (already handled))"

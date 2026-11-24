@@ -12,6 +12,7 @@ import re
 import subprocess
 from typing import Callable, Protocol
 
+from .failure_file import FAILURE_FILE
 from .job import (
     FailureDomain,
     HarnessFailure,
@@ -188,6 +189,8 @@ class HarnessExecutor:
         understanding_kind = str(job.metadata.get("source_kind") or "repo")
         if understanding_kind not in {"repo", "spec"}:
             understanding_kind = "repo"
+        from .local_certified_runtime import check_local_runtime_readiness
+
         args = argparse.Namespace(
             path=str(source),
             name=str(job.metadata.get("agent_name") or source.name),
@@ -203,10 +206,19 @@ class HarnessExecutor:
             # legacy call stage here bypasses generated adapters and makes unfamiliar frameworks
             # fail merely because they do not expose a handwritten HTTP endpoint.
             authoring_only=job.metadata.get("generic_harness_v1") is True,
+            runtime_readiness=check_local_runtime_readiness,
         )
-        status = await _auto(args)
-        completed_scenarios = _scenario_count(output) if status in (0, 2) else 0
+        from .authoring_runtime_validation import RuntimeValidationError
+
         generic_failure: HarnessFailure | None = None
+        try:
+            status = await _auto(args)
+        except RuntimeValidationError as exc:
+            generic_failure = _runtime_validation_failure(exc)
+            status = 1
+        completed_scenarios = (
+            _scenario_count(output) if status in (0, 2) and not args.authoring_only else 0
+        )
         if status == 0 and job.metadata.get("generic_harness_v1") is True:
             from .authoring_runtime_validation import RuntimeValidationError
             from .local_certified_runtime import (
@@ -219,22 +231,7 @@ class HarnessExecutor:
                     job, source=source, authoring=output
                 )
             except RuntimeValidationError as exc:
-                domain = (
-                    FailureDomain.SIMULATOR
-                    if exc.phase == "scenarios"
-                    else FailureDomain.ENVIRONMENT
-                )
-                generic_failure = HarnessFailure(
-                    domain=domain,
-                    stage=(
-                        HarnessStage.VALIDATING_SCENARIOS
-                        if exc.phase == "scenarios"
-                        else HarnessStage.VALIDATING_ENVIRONMENT
-                    ),
-                    code=f"generic_{exc.phase}_validation_failed",
-                    message=str(exc),
-                    retryable=False,
-                )
+                generic_failure = _runtime_validation_failure(exc)
                 status = 1
             except LocalCertifiedRunError as exc:
                 try:
@@ -273,7 +270,11 @@ class HarnessExecutor:
                     retryable=False,
                 )
                 status = 1
-        failure = _failure_from_events(output) if status not in (0, 2) else None
+        failure = (
+            _failure_from_file(output) or _failure_from_events(output)
+            if status not in (0, 2)
+            else None
+        )
         if generic_failure is not None:
             failure = generic_failure
         return HarnessJobStatus(
@@ -318,12 +319,37 @@ def run_sync(job: HarnessJob, *, source: Path, output: Path) -> HarnessJobStatus
     return asyncio.run(HarnessExecutor().run(job, source=source, output=output))
 
 
+def _runtime_validation_failure(exc) -> HarnessFailure:
+    scenarios = exc.phase == "scenarios"
+    return HarnessFailure(
+        domain=FailureDomain.SIMULATOR if scenarios else FailureDomain.ENVIRONMENT,
+        stage=(
+            HarnessStage.VALIDATING_SCENARIOS
+            if scenarios
+            else HarnessStage.VALIDATING_ENVIRONMENT
+        ),
+        code=f"generic_{exc.phase}_validation_failed",
+        message=str(exc),
+        retryable=False,
+    )
+
+
 def _scenario_count(output: Path) -> int:
     try:
         value = json.loads((output / "scenarios.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return 0
     return len(value) if isinstance(value, list) else 0
+
+
+def _failure_from_file(output: Path) -> HarnessFailure | None:
+    """The failure a build left for the platform, which says more than its stage event can."""
+    try:
+        return HarnessFailure.model_validate_json(
+            (output / FAILURE_FILE).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
 
 
 def _failure_from_events(output: Path) -> HarnessFailure:

@@ -70,6 +70,7 @@ from pydantic import (
 )
 from fi.simulate.results.futureagi import MAX_TARGET_LATENCY_TURNS
 
+from ..providers.agent import _log_redacted, _redact_text
 from .job import FailureDomain, HarnessStage
 
 logger = logging.getLogger(__name__)
@@ -277,28 +278,37 @@ _SHORTEST_REDACTABLE_SECRET = 8
 def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) -> str:
     """Scrubs a single free-text field before it can leave the sandbox on any of the three
     channels (outbound-channels.md v1.3 "Redaction (enforced before emit)"; hosted-execution-
-    seams.md v1.11 §3 "any outbound projection ... redacts userinfo"). Two things, applied in
-    order:
+    seams.md v1.11 §3 "any outbound projection ... redacts userinfo"). Three things, applied in
+    order (TH-9500):
 
-    1. URL userinfo (`_USERINFO_PATTERN`/`_mask_userinfo`, above) -- a password is masked and the
-       username kept (matching the contract's own `postgresql://harness:***@...` example); a bare
-       token/username-only userinfo (no `:`) is masked outright, since that shape is how a bearer
-       token appears, not a username.
-    2. `extra_secret_values` -- exact-substring replacement for a caller-supplied list of secret
-       values. Always `()` today: the adapter (P10) is what will know the job's declared secrets
-       and pass them in -- this parameter exists now so `build_event_record`/`build_result_receipt`
-       never need to change shape when that wiring lands.
+    1. `extra_secret_values` -- exact-substring replacement for a caller-supplied list of secret
+       values. First, so a declared secret is matched whole before the cleaner below can mask
+       part of it and leave the rest unmatched. Always `()` today: the adapter (P10) is what will
+       know the job's declared secrets and pass them in -- this parameter exists now so
+       `build_event_record`/`build_result_receipt` never need to change shape when that wiring
+       lands.
+    2. The kit's one cleaner, `providers.agent._redact_text`, all three of its steps: a URL loses
+       its userinfo, query and fragment, and keys, key blocks and named values are masked by
+       their shape. It logs nothing itself; one line names what it removed, on the cleaner's
+       own logger (not one of the loggers `MaskSecrets` filters, so the filter never re-enters),
+       and only when it changed the text.
+    3. URL userinfo (`_USERINFO_PATTERN`/`_mask_userinfo`, above), for whatever step 2 left: a
+       password is masked and the username kept; a bare token/username-only userinfo (no `:`)
+       is masked outright, since that shape is how a bearer token appears, not a username.
 
-    NOT a general secret-content scanner -- the contract's "same secret-content scan as the
-    artifact sealer" is a separate, sealer-side obligation. This is the narrow subset this module
-    can enforce on every string field it controls without false-positiving on ordinary diagnostic
-    text.
+    Step 2 removes a URL's userinfo outright, so `https://user:pw@host` now comes out as
+    `https://host`, not `https://user:***@host`.
     """
-    redacted = _USERINFO_PATTERN.sub(_mask_userinfo, value)
+    redacted = value
     for secret in extra_secret_values:
         if len(secret) >= _SHORTEST_REDACTABLE_SECRET:
             redacted = redacted.replace(secret, "***")
-    return redacted
+    refused: list[str] = []
+    hits: list[str] = []
+    cleaned = _redact_text(redacted, refused, hits)
+    if (refused or hits) and cleaned != redacted:
+        _log_redacted(refused, hits)
+    return _USERINFO_PATTERN.sub(_mask_userinfo, cleaned)
 
 
 # =================================================================================================
@@ -753,6 +763,16 @@ class TerminalFailure(BaseModel):
     message: str
 
 
+class TerminalEventFailure(TerminalFailure):
+    """The terminal *event's* failure: ``TerminalFailure``, plus ``retryable`` and ``details`` when
+    the failure names them. This only checks the payload: the wire body is the dict the
+    entrypoint's ``_fail`` builds, which leaves out a key it wasn't given, so every failure that
+    never carried them is byte-for-byte what it was."""
+
+    retryable: bool | None = None
+    details: dict[str, Any] | None = None
+
+
 class ScenarioCounts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -767,7 +787,7 @@ class TerminalPayload(BaseModel):
 
     stage: HarnessStage
     reason: TerminalReason | None
-    failure: TerminalFailure | None
+    failure: TerminalEventFailure | None
     scenario_counts: ScenarioCounts
 
     @model_validator(mode="after")
@@ -2462,6 +2482,11 @@ class SubGoalResult(BaseModel):
     held: bool | None
     reason: str | None
     judged: bool
+    verdict: Literal["pass", "fail", "not_applicable", "inconclusive", "unmeasured"] | None = None
+    # What the sub-goal was decided from: `world_state`, `transcript`, `recording`, `tool_calls`.
+    evidence: list[str] | None = None
+    # Whose result: `worker:<id>`, or absent for the task.
+    subject: str | None = None
 
 
 class MetricEvaluation(BaseModel):
@@ -2576,6 +2601,20 @@ def _unset_default_fields(model: BaseModel, prefix: str = "") -> list[str]:
 _LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
 
 
+def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") -> None:
+    """Drop fields added after the first receipt protocol that the caller did not send, so a receipt
+    without them is unchanged byte for byte."""
+    if draft.call is not None:
+        for name in _LATER_CALL_FIELDS - draft.call.model_fields_set:
+            body["call"].pop(name, None)
+    for goal, model in zip(body["sub_goals"], draft.sub_goals):
+        for name in ("verdict", "evidence", "subject"):
+            if name not in model.model_fields_set:
+                goal.pop(name, None)
+    if "reason" not in draft.model_fields_set:
+        body.pop("reason", None)
+
+
 class ResultReceiptDraft(BaseModel):
     """Channel 2's wire shape. Mirrors `HostedEventDraft`'s pattern: the caller supplies `digest`
     (via `build_result_receipt`, computed with `whole_object_digest`), the model re-derives and
@@ -2598,6 +2637,7 @@ class ResultReceiptDraft(BaseModel):
     evaluations: list[EvaluationResult]
     call: CallSummary | None
     failure: TerminalFailure | None
+    reason: str | None = None
     digest: str
 
     @model_validator(mode="after")
@@ -2610,9 +2650,7 @@ class ResultReceiptDraft(BaseModel):
         # ``stop_reason`` and ``target_metrics`` were added after the initial receipt
         # protocol. Preserve byte-for-byte compatibility for callers that omit them,
         # while including each in both the digest and wire body whenever supplied.
-        if self.call is not None:
-            for name in _LATER_CALL_FIELDS - self.call.model_fields_set:
-                expected_body["call"].pop(name, None)
+        _without_unsent_fields(expected_body, self)
         expected = whole_object_digest(expected_body)
         if self.digest != expected:
             unset = _unset_default_fields(self)
@@ -2635,6 +2673,9 @@ class ResultReceiptDraft(BaseModel):
                 raise ValueError("skipped_receipt_shape_invalid")
         elif self.status is ScenarioStatus.ERRORED and self.failure is None:
             raise ValueError("errored_receipt_requires_failure")
+        elif self.status in (ScenarioStatus.PASSED, ScenarioStatus.FAILED) and self.failure is not None:
+            # The platform refuses a graded receipt that carries a failure; refused, the result would be lost.
+            raise ValueError("graded_receipt_must_not_include_failure")
         return self
 
 
@@ -2653,6 +2694,7 @@ def build_result_receipt(
     call: dict[str, Any] | None,
     failure: dict[str, Any] | None,
     extra_secret_values: tuple[str, ...] = (),
+    reason: str | None = None,
 ) -> dict[str, Any]:
     """Validate one receipt's shape and compute its digest, returning a plain wire-ready dict.
     Mirrors `build_event_record`'s contract exactly: callers must pass already wire-typed values
@@ -2707,13 +2749,12 @@ def build_result_receipt(
         "evaluations": evaluations,
         "call": call,
         "failure": failure,
+        **({"reason": _redact(reason)} if reason is not None else {}),
     }
     digest = whole_object_digest(core)
     draft = ResultReceiptDraft.model_validate({**core, "digest": digest})
     wire = draft.model_dump(mode="json")
-    if call is not None:
-        for name in _LATER_CALL_FIELDS - call.keys():
-            wire["call"].pop(name, None)
+    _without_unsent_fields(wire, draft)
     return wire
 
 
@@ -2828,6 +2869,8 @@ class ArtifactKind(str, Enum):
     RECORDING_ASSISTANT = "recording_assistant"
     TRANSCRIPT = "transcript"
     TOOL_TRACE = "tool_trace"
+    # The world's records at a trial's end, with its action log: kept so a fixed check can grade the trial again.
+    WORLD_STATE = "world_state"
     RESULT = "result"
     BUILD = "build"
     TRACE = "trace"
@@ -2840,6 +2883,7 @@ _RESERVED_ARTIFACT_KINDS = frozenset(
         ArtifactKind.BUILD,
         ArtifactKind.TRANSCRIPT,
         ArtifactKind.TOOL_TRACE,
+        ArtifactKind.WORLD_STATE,
         ArtifactKind.RESULT,
         # Complete manifests require build, result, and log. A recording-heavy run must not be
         # allowed to consume the budget and strand terminalization after all scenarios finish.
@@ -3285,6 +3329,7 @@ __all__ = [
     "SpooledRecord",
     "StageChangedPayload",
     "SubGoalResult",
+    "TerminalEventFailure",
     "TerminalFailure",
     "TerminalPayload",
     "TerminalReason",

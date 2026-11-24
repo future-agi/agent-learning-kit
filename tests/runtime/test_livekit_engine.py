@@ -9,9 +9,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from livekit.agents.llm import ChatMessage
 
+# Before the first livekit import, so an environment without LiveKit skips this file.
 pytest.importorskip("livekit")
+
+from livekit.agents.llm import ChatMessage  # noqa: E402
 
 from fi.simulate.agent.definition import AgentDefinition, TelephonyTransport
 from fi.simulate.recording.room_recorder import (
@@ -3975,6 +3977,63 @@ def test_room_disconnect_ends_conversation() -> None:
     assert failed.failure.retryable is True
 
 
+def test_a_person_s_stop_ends_the_live_conversation_and_keeps_what_was_said() -> None:
+    # Nothing else ends this call: without the stop it would run to its 5 s deadline.
+    room = _FakeEventRoom(participants={"t": SimpleNamespace(identity="target-agent")})
+    stopped = {"now": False}
+
+    class FakeSession:
+        history = SimpleNamespace(items=[])
+
+        def on(self, _event, _callback):
+            return None
+
+    async def run() -> tuple[str, float]:
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.1, stopped.update, {"now": True})
+        token = livekit.STOP_CHECK.set(lambda: stopped["now"])
+        started = loop.time()
+        try:
+            reason = await livekit._wait_for_conversation_end(
+                room,
+                FakeSession(),
+                customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+                target_identity="target-agent",
+                timeout=5,
+                conversation_direction="simulator_first",
+                agent_first_silence_timeout_seconds=30,
+            )
+        finally:
+            livekit.STOP_CHECK.reset(token)
+        return reason, loop.time() - started
+
+    reason, took = asyncio.run(run())
+
+    assert (reason, took < 2) == ("user_canceled", True)
+    messages = [
+        {"role": "user", "content": "I need my atorvastatin refill."},
+        {"role": "assistant", "content": "Can I have your date of birth?"},
+    ]
+    outcome = livekit._conversation_outcome(reason, messages, min_turn_messages=8)
+    # A short stopped call is kept as said, never failed for its few turns.
+    assert (outcome.status, outcome.failure, outcome.messages) == (CaseStatus.COMPLETED, None, messages)
+    assert outcome.metadata == {"stop_reason": "user_canceled"}
+
+
+def test_a_stopped_call_s_teardown_is_cut_short_so_it_seals_inside_the_stop_bound() -> None:
+    stopped = {"now": False}
+    token = livekit.STOP_CHECK.set(lambda: stopped["now"])
+    try:
+        assert livekit._cleanup_limit(30.0) == 30.0
+        stopped["now"] = True
+        # A LiveKit teardown that hangs takes at most this bound once the person stopped the call.
+        assert livekit._cleanup_limit(30.0) == livekit._STOPPED_CLEANUP_SECONDS < 15
+        assert livekit._cleanup_limit(3.0) == 3.0
+    finally:
+        livekit.STOP_CHECK.reset(token)
+    assert livekit._cleanup_limit(30.0) == 30.0
+
+
 def test_short_explicit_farewell_disconnect_is_completed_for_eval() -> None:
     messages = [
         {"role": "assistant", "content": "Hello, what can I help with?"},
@@ -4436,6 +4495,86 @@ def test_terminal_transcript_preserves_evidence_and_reports_incomplete_capture(
             assert result.metadata["status"] == CaseStatus.COMPLETED.value
 
 
+def test_caller_who_speaks_first_answers_every_target_turn(monkeypatch) -> None:
+    engine = _order_probe_engine(monkeypatch, [])
+    handlers = {}
+    room = livekit.rtc.Room()
+    room.register_text_stream_handler = lambda topic, handler: handlers.update(
+        {topic: handler}
+    )
+    monkeypatch.setattr(livekit.rtc, "Room", lambda: room)
+    replies: list[str] = []
+
+    class Session:
+        def __init__(self):
+            self.history = SimpleNamespace(items=[], add_message=lambda **kwargs: None)
+            self.current_speech = None
+            self.input = SimpleNamespace(set_audio_enabled=lambda enabled: None)
+
+        def on(self, event, callback):
+            pass
+
+        def clear_user_turn(self):
+            pass
+
+        def generate_reply(self, *, user_input):
+            replies.append(user_input)
+
+        async def aclose(self):
+            pass
+
+    class Caller:
+        def end_of_call(self):
+            pass
+
+        def open_conversation(self):
+            pass
+
+        async def start_session(self, room, **kwargs):
+            return Session()
+
+        async def _stop_background_audio(self):
+            pass
+
+    async def create_caller(*args, **kwargs):
+        return Caller(), None
+
+    target_turns = [
+        "Hello, who am I speaking with?",
+        "Thanks. What can I help you with today?",
+    ]
+
+    async def target_speaks_twice(*args, **kwargs):
+        for text in target_turns:
+            handlers[livekit.TOPIC_TRANSCRIPTION](
+                _FakeTranscriptionReader(text), "target-agent"
+            )
+            for _ in range(20):
+                await asyncio.sleep(0)
+        room.remote_participants.clear()
+        return "target_disconnected"
+
+    monkeypatch.setattr(engine, "_create_customer_agent", create_caller)
+    monkeypatch.setattr(livekit, "_wait_for_conversation_end", target_speaks_twice)
+    monkeypatch.setattr(livekit, "_TARGET_TURN_SETTLE_SECONDS", 0.0)
+    monkeypatch.setattr(livekit, "_SESSION_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    asyncio.run(
+        engine.run(
+            agent_definition=_agent(
+                room_mode="managed",
+                agent_name="registered-agent",
+                target_participant_identity="target-agent",
+            ),
+            scenario=_scenario(),
+            run_id="run_simulator_first_two_turns",
+            conversation_direction="simulator_first",
+            min_turn_messages=2,
+        )
+    )
+
+    assert replies == target_turns
+
+
 def test_the_caller_uses_audio_turn_detection_and_speculative_tts():
     """Audio EOU avoids fixed-delay interruptions while preemptive TTS removes response startup."""
     from fi.simulate.simulation.engines.livekit import _simulator_turn_handling
@@ -4669,3 +4808,223 @@ def test_caller_mood_rises_on_refusals_and_repeats_and_eases_on_progress() -> No
     assert "edge goes out" in mood.brief(_Ctx(turns)).messages()[-1].text_content
     turns += [("assistant", "Thanks."), ("user", "Anything else?")]
     assert mood.brief(_Ctx(turns)).messages()[-1].text_content == "Anything else?"
+
+
+def test_a_target_turn_a_call_actor_answered_is_kept_and_never_answered_by_the_person() -> (
+    None
+):
+    async def answered(_text: str) -> bool:
+        return True
+
+    session = _FakeReplySession()
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("Which date?"),
+            session,
+            conversation_ended=asyncio.Event(),
+            captured_target_turns=[],
+            call_actor_turn=answered,
+        )
+    )
+    assert session.reply_inputs == []
+    assert session.history_adds == [("user", "Which date?")]
+
+
+def test_a_target_turn_after_the_call_ended_never_reaches_a_call_actor() -> None:
+    told: list[str] = []
+
+    async def answered(text: str) -> bool:
+        told.append(text)
+        return True
+
+    ended = asyncio.Event()
+    ended.set()
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("Goodbye."),
+            _FakeReplySession(),
+            conversation_ended=ended,
+            captured_target_turns=[],
+            call_actor_turn=answered,
+        )
+    )
+    assert told == []
+
+
+def test_the_person_stays_silent_on_a_turn_a_call_actor_holds() -> None:
+    async def exercise():
+        agent = livekit._TestRunnerAgent(
+            persona=_scenario().dataset[0], instructions="Be a customer."
+        )
+        kept: list[ChatMessage] = []
+        agent._session = SimpleNamespace(history=SimpleNamespace(insert=kept.append))
+        holding = [True]
+
+        async def call_actor_turn(_text: str) -> bool:
+            return holding[0]
+
+        agent._call_actor_turn = call_actor_turn
+        turn = ChatMessage(role="user", content=["Which date?"])
+        with pytest.raises(livekit.StopResponse):
+            await agent.on_user_turn_completed(None, turn)
+        holding[0] = False
+        await agent.on_user_turn_completed(
+            None, ChatMessage(role="user", content=["And the time?"])
+        )
+        return kept, [item.id for item in agent.chat_ctx.items]
+
+    kept, context = asyncio.run(exercise())
+    assert [one.text_content for one in kept] == ["Which date?"]
+    assert kept[0].id in context
+
+
+def test_the_person_s_level_counts_speech_and_never_pauses() -> None:
+    import array
+
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer."
+    )
+    assert agent.voice_rms() is None
+    agent._hear_own_voice(SimpleNamespace(data=array.array("h", [0] * 160).tobytes()))
+    assert agent.voice_rms() is None
+    agent._hear_own_voice(
+        SimpleNamespace(data=array.array("h", [3000, -3000] * 80).tobytes())
+    )
+    assert agent.voice_rms() == pytest.approx(3000.0)
+
+
+class _CallActorTTS:
+    def __init__(self) -> None:
+        self.listeners: dict[str, list] = {}
+
+    def prewarm(self) -> None:
+        pass
+
+    def on(self, event: str, listener) -> None:
+        self.listeners.setdefault(event, []).append(listener)
+
+    def emit(self, event: str, payload) -> None:
+        for listener in self.listeners.get(event, []):
+            listener(payload)
+
+
+class _NeverDone:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    async def wait_for_playout(self) -> None:
+        await asyncio.Event().wait()
+
+    def interrupt(self, *, force: bool = False) -> None:
+        self.stopped = force
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def _call_actors_on_a_call(monkeypatch):
+    voice = _CallActorTTS()
+    monkeypatch.setattr(
+        livekit,
+        "_bound_call_actor_voices",
+        lambda: [{"id": "near", "name": "Near", "voice": "v", "channel": "audio_mix"}],
+    )
+    monkeypatch.setattr(livekit, "_with_voice", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(livekit, "build_livekit_tts", lambda *_args: voice)
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer."
+    )
+    spoken, played = _NeverDone(), _NeverDone()
+    agent._background_player = SimpleNamespace(play=lambda _config: played)
+    session = SimpleNamespace(say=lambda *_args, **_kwargs: spoken)
+    models = SimpleNamespace(llm=None, http_session=None)
+    call = livekit.LiveKitEngine._call_actors_on_call(
+        SimpleNamespace(), agent, models, session, seed="run"
+    )
+    return call, agent, voice, spoken, played
+
+
+def test_a_call_actor_s_voice_counts_in_the_call_s_model_usage(monkeypatch) -> None:
+    from livekit.agents.metrics import TTSMetrics
+    from livekit.agents.metrics.base import Metadata
+
+    _call, agent, voice, _spoken, _played = _call_actors_on_a_call(monkeypatch)
+    voice.emit(
+        "metrics_collected",
+        TTSMetrics(
+            label="tts",
+            request_id="r",
+            timestamp=0.0,
+            ttfb=0.1,
+            duration=1.0,
+            audio_duration=1.0,
+            cancelled=False,
+            characters_count=12,
+            streamed=True,
+            metadata=Metadata(model_name="voice-model", model_provider="voice-co"),
+        ),
+    )
+    assert [
+        (one["provider"], one["model"], one["characters_count"])
+        for one in agent.model_usage
+        if one["type"] == "tts_usage"
+    ] == [("voice-co", "voice-model", 12)]
+
+
+def test_a_call_actor_line_cut_short_stops_its_audio(monkeypatch) -> None:
+    call, agent, _voice, spoken, played = _call_actors_on_a_call(monkeypatch)
+    monkeypatch.setattr(livekit, "at_level", lambda frames, *_args: frames)
+    monkeypatch.setattr(agent, "voice_rms", lambda: None)
+
+    async def cut(line) -> None:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(line, 0.05)
+
+    async def frames():
+        if False:
+            yield None
+
+    asyncio.run(cut(call.say(frames(), "a line", "Near")))
+    asyncio.run(cut(call.play(frames(), 1.0, "a line", "Near")))
+    assert spoken.stopped and played.stopped
+
+
+def test_a_tool_call_the_world_holds_is_not_silence_and_the_wait_restarts_once_it_is_answered() -> None:
+    """As in the payment-timeout trials: the caller asked for the refund, then the target went quiet while the world
+    held its refund call. The backstop waits through the hold, and counts its quiet from the hold's end."""
+    import time as clock
+
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="assistant", text_content="Yes, go ahead and submit it.")]
+        )
+    )
+    held_until = clock.time() + 0.3
+
+    async def run() -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(lambda: held_until)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.1), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    waited = asyncio.run(run())
+    assert waited >= 0.3 + 0.1
+
+    # A check that fails, or none at all, leaves the backstop as it always was.
+    def failing() -> float:
+        raise RuntimeError("log unreadable")
+
+    async def unchanged(check) -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(check)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.05), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    assert asyncio.run(unchanged(failing)) < 0.3
+    assert asyncio.run(unchanged(None)) < 0.3

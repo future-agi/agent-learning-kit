@@ -218,6 +218,55 @@ def test_a_solution_step_must_match_the_agents_contract(tmp_path):
     assert problems(Step(tool="hand_over", arguments={"line": "claims"}))
 
 
+def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_path):
+    import json
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_the_agent_cannot_see
+
+    adds = "def setup(world):\n    world.put('orders', {'order_id': '9', 'amount': 5})\n"
+    changes = "def setup(world):\n    world.change('orders', {'order_id': '1'}, {'amount': 5})\n"
+
+    def problems(store: dict, setup: str) -> list[str]:
+        (tmp_path / "contract.json").write_text(json.dumps({"data_store": store}))
+        return _records_the_agent_cannot_see(Scenario(name="s", instruction="Help.", setup_code=setup), tmp_path)
+
+    in_process = {"kind": "in_process", "configured_by": "hardcoded", "database": "in_memory"}
+    assert problems(in_process, adds)
+    assert not problems(in_process, "")
+    assert problems(in_process, changes)
+    assert not problems({**in_process, "loader_module": "agent.data"}, adds)
+    assert not problems({"kind": "postgres", "configured_by": "env"}, adds)
+
+    # An actor's record change is just as invisible to it; a part spoken on the conversation is not.
+    def with_actor(store: dict, actor: dict) -> list[str]:
+        (tmp_path / "contract.json").write_text(json.dumps({"data_store": store}))
+        scenario = Scenario(name="s", instruction="Help.", actors=[actor])
+        return _records_the_agent_cannot_see(scenario, tmp_path)
+
+    approves = {"id": "manager", "actions": [{"action": "approvals.put", "arguments": {"status": "approved"}}]}
+    assert with_actor(in_process, approves)
+    assert not with_actor(in_process, {"id": "partner", "instruction": "Ask whether it can go to my card."})
+    assert not with_actor({"kind": "postgres", "configured_by": "env"}, approves)
+    # An agent recorded as loading the world's records once, at start, never sees a later change; one that reads
+    # them on every call does, and one whose loader timing is not recorded gets a note instead of a refusal.
+    from fi.alk.harness.scenario_tools import late_changes_note
+
+    later = {"id": "manager", "actions": [{"action": "approvals.put", "trigger": {"kind": "on_tool", "tool": "ask"}}]}
+    once = {**in_process, "loaded_by": "load_profile", "loads": "start"}
+    assert not with_actor(once, approves)
+    assert with_actor(once, later)
+    assert not with_actor({**once, "loads": "each_call"}, later)
+    unknown = {**in_process, "loaded_by": "load_profile"}
+    assert not with_actor(unknown, later)
+    (tmp_path / "contract.json").write_text(json.dumps({"data_store": unknown}))
+    noted = Scenario(name="s", instruction="Help.", actors=[later])
+    assert "If this agent's loader runs only when it starts" in late_changes_note(noted, tmp_path)
+    (tmp_path / "contract.json").write_text(json.dumps({"data_store": once}))
+    assert late_changes_note(noted, tmp_path) == ""
+    assert with_actor(in_process, later)
+
+
 def test_the_proof_varies_every_argument_nothing_fixes_and_keeps_chained_values():
     from fi.alk.harness.prove import _other_choices
     from fi.alk.harness.scenario import Scenario, Step
@@ -352,3 +401,259 @@ def test_the_agents_prompt_is_copied_from_the_lines_named_and_nothing_outside_th
     for where in (PromptSource(path="../outside.py", start_line=1, end_line=1), PromptSource(path="prompt.py", start_line=2, end_line=9)):
         kept = AgentContract(agent="a", system_prompt_excerpt="quoted", system_prompt_from=[where])
         assert _copy_prompt(kept, tmp_path) and kept.system_prompt_excerpt == "quoted"
+
+
+def _booking_world(tmp_path, handle: str):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "bookings"
+        tools = [{"name": "book"}]
+        handlers = {"book": handle}
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE bookings(time TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+_NORMALISES = (
+    "import datetime\n"
+    "def handle(args, db):\n"
+    "    for form in ('%Y-%m-%d', '%d %B %Y'):\n"
+    "        try:\n"
+    "            day = datetime.datetime.strptime(args['time'], form).date().isoformat()\n"
+    "            break\n"
+    "        except ValueError:\n"
+    "            day = None\n"
+    "    db.execute('INSERT INTO bookings (time) VALUES (?)', [day])\n"
+    "    return {'ok': 1}\n"
+)
+_AS_GIVEN = "def handle(args, db):\n    db.execute('INSERT INTO bookings (time) VALUES (?)', [args['time']])\n    return {'ok': 1}\n"
+_ISO_ONLY = (
+    "import datetime\n"
+    "def handle(args, db):\n"
+    "    datetime.date.fromisoformat(args['time'])\n"
+    "    db.execute('INSERT INTO bookings (time) VALUES (?)', [args['time']])\n"
+    "    return {'ok': 1}\n"
+)
+
+
+def _date_proof(root, compare: str):
+    from fi.alk.harness.scenario import Step
+
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments'].get('time') for s in reference if s['tool'] == 'book'][-1]\n"
+        "    sent = [c.arguments.get('time') for c in calls if c.name == 'book' and c.ok]\n"
+        "    made = [r['time'] for r in world.state()['bookings']]\n"
+        f"    return None if made and {compare} else f'done wrong: time expected {{want!r}}'\n"
+    )
+    solution = [Step(tool="book", arguments={"time": "1984-06-25"}, fixed={"time": "caller: their birthday"})]
+    return _proof(root, solution, check)
+
+
+def test_a_check_that_compares_a_date_as_text_fails_the_date_said_another_way(tmp_path):
+    # The world stores both forms as the same day, so a check on the call's text holds the agent to a form.
+    root = _booking_world(tmp_path, _NORMALISES)
+    assert _date_proof(root, "sent[-1] == want").too_strict == ["right (the same date said another way: book.time)"]
+    assert _date_proof(root, "made[-1] == want").too_strict == []
+
+
+def test_a_date_the_world_stores_as_given_or_refuses_leaves_the_check_free_to_want_its_form(tmp_path):
+    as_given = _booking_world(tmp_path / "given", _AS_GIVEN)
+    assert _date_proof(as_given, "made[-1] == want").too_strict == []
+    iso_only = _booking_world(tmp_path / "iso", _ISO_ONLY)
+    assert _date_proof(iso_only, "sent[-1] == want").too_strict == []
+
+
+def test_a_check_that_wants_the_prefixed_id_the_world_resolves_the_same_is_too_strict(tmp_path):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+    from fi.alk.harness.scenario import Step
+
+    class W(GeneratedWorld):
+        name = "rides"
+        tools = [{"name": "pay"}]
+        handlers = {
+            "pay": (
+                "def handle(args, db):\n"
+                "    method = str(args['method']).split(':')[-1]\n"
+                "    db.execute('INSERT INTO charges (method) VALUES (?)', [method])\n"
+                "    return {'ok': 1}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE charges(method TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+
+    def proof_of(compare: str):
+        check = (
+            "def check(world, calls, reference):\n"
+            "    want = [s['arguments'].get('method') for s in reference if s['tool'] == 'pay'][-1]\n"
+            "    paid = [c.arguments.get('method') for c in calls if c.name == 'pay' and c.ok]\n"
+            "    made = [r['method'] for r in world.state()['charges']]\n"
+            f"    return None if paid and {compare} else 'done wrong: method expected ' + repr(want)\n"
+        )
+        solution = [Step(tool="pay", arguments={"method": "saved_card:pm_1"}, fixed={"method": "their record"})]
+        return _proof(tmp_path, solution, check)
+
+    assert proof_of("paid[-1] == want").too_strict == ["right (the same record named without its prefix: pay.method)"]
+    assert proof_of("made[-1] == want.split(':')[-1]").too_strict == []
+
+
+def test_a_prefixed_id_the_world_stores_as_given_leaves_the_check_free_to_want_its_form(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    root = _booking_world(tmp_path, _AS_GIVEN)
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments'].get('time') for s in reference if s['tool'] == 'book'][-1]\n"
+        "    made = [r['time'] for r in world.state()['bookings']]\n"
+        "    return None if made and made[-1] == want else 'done wrong'\n"
+    )
+    solution = [Step(tool="book", arguments={"time": "slot:9am"}, fixed={"time": "their record"})]
+    assert _proof(root, solution, check).too_strict == []
+
+
+def _claims_world(tmp_path):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "claims"
+        tools = [{"name": "check_status"}]
+        handlers = {
+            "check_status": (
+                "def handle(args, db):\n"
+                "    claim = str(args['claim']).replace('-', '').upper()\n"
+                "    db.execute('INSERT INTO lookups (claim) VALUES (?)', [claim])\n"
+                "    return {'status': 'open'}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE lookups(claim TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+def test_a_check_that_compares_a_claim_id_as_text_fails_the_id_typed_without_separators(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    root = _claims_world(tmp_path)
+
+    def proof_of(compare: str):
+        check = (
+            "def check(world, calls, reference):\n"
+            "    want = [s['arguments'].get('claim') for s in reference if s['tool'] == 'check_status'][-1]\n"
+            "    sent = [c.arguments.get('claim') for c in calls if c.name == 'check_status' and c.ok]\n"
+            f"    return None if sent and {compare} else 'wrong claim: expected ' + repr(want)\n"
+        )
+        solution = [Step(tool="check_status", arguments={"claim": "CLM-88213"}, fixed={"claim": "their claim"})]
+        return _proof(root, solution, check)
+
+    assert proof_of("sent[-1] == want").too_strict == [
+        "right (the same id typed without separators: check_status.claim; compare ids with same_id)"
+    ]
+    assert proof_of("same_id(sent[-1], want)").too_strict == []
+
+
+def test_same_id_ignores_separators_and_case_but_not_the_number():
+    from fi.alk.harness.checks import same_id
+
+    assert same_id("CLM-88213", "CLM88213")
+    assert same_id("clm 88213", "CLM-88213")
+    assert same_id("ord_1043", "ORD-1043")
+    assert not same_id("CLM-88213", "CLM-88214")
+    assert not same_id(None, "CLM-88213")
+
+
+def test_same_id_still_tells_apart_identifiers_that_name_different_records():
+    from fi.alk.harness.checks import same_id
+
+    assert not same_id("CLM-88213", "CLA-88213")
+    assert not same_id("CLM-88213", "CLM-882130")
+    assert not same_id("ORD-01", "ORD-1")
+    assert not same_id("INV 1043", "1043")
+    assert not same_id("", "")
+    assert not same_id("--", " ")
+    assert not same_id("CLM-88213", "")
+
+
+def _raw_claims_world(tmp_path):
+    """A world that stores the claim exactly as sent, so an id typed differently is a different record."""
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "raw_claims"
+        tools = [{"name": "check_status"}]
+        handlers = {
+            "check_status": (
+                "def handle(args, db):\n"
+                "    db.execute('INSERT INTO lookups (claim) VALUES (?)', [str(args['claim'])])\n"
+                "    return {'status': 'open'}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE lookups(claim TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+def test_an_exact_comparison_is_kept_when_the_world_treats_the_id_typed_differently_as_another_record(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    root = _raw_claims_world(tmp_path)
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments'].get('claim') for s in reference if s['tool'] == 'check_status'][-1]\n"
+        "    sent = [c.arguments.get('claim') for c in calls if c.name == 'check_status' and c.ok]\n"
+        "    return None if sent and sent[-1] == want else 'wrong claim: expected ' + repr(want)\n"
+    )
+    solution = [Step(tool="check_status", arguments={"claim": "CLM-88213"}, fixed={"claim": "their claim"})]
+    # The world stores what it was given, so "CLM88213" ends in a different state: the strict check is right.
+    assert _proof(root, solution, check).too_strict == []
+
+
+def test_a_fixed_value_that_is_not_an_identifier_is_never_replayed_without_separators(tmp_path):
+    from fi.alk.harness.prove import _unseparated_ids
+    from fi.alk.harness.scenario import Step
+
+    scenario = type("S", (), {"solution": [
+        Step(tool="note", arguments={"text": "call back after lunch", "date": "2026-07-21", "claim": "CLM-88213"},
+             fixed={"text": "x", "date": "y", "claim": "z"}),
+    ]})()
+    labels = [label for label, _ in _unseparated_ids(scenario)]
+    assert labels == ["note.claim"]
+
+
+def test_the_spoken_date_replay_runs_only_for_a_language_it_can_write():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.prove import _said_another_way
+
+    class _Step(SimpleNamespace):
+        def model_copy(self, update):
+            return _Step(**{**vars(self), **update})
+
+    step = _Step(tool="book", arguments={"date": "1984-06-25"}, fixed=["date"], environment_arguments=None)
+
+    def scenario(languages):
+        return SimpleNamespace(solution=[step], persona={"languages": languages})
+
+    # A language whose spoken form the proof does not write: nothing is said another way, so nothing is called
+    # too strict on the strength of an English month name.
+    assert _said_another_way(scenario(["Hindi"])) == ([step], set())
+    _, changed = _said_another_way(scenario(["English"]))
+    assert changed == {"book.date"}
+    _, changed = _said_another_way(scenario([]))
+    assert changed == {"book.date"}

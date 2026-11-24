@@ -639,6 +639,44 @@ What is being tested is the recovery, and that is what the checks have to say:
 A check that only asserts the tool was called proves nothing here: the tool was always going to be
 called. Assert on what the world looks like afterwards and on what the caller was told.
 
+### When the agent hands work to workers
+
+Only when the contract lists `workers`. The task's sub-goals stay as they are: they grade what the
+person got. Add, for each worker whose work the world can show, a sub-goal with `subject:
+worker:<id>`; its check is handed only that worker's calls, and is inconclusive when the worker made
+none. Where a separate worker may use fewer tools than its code holds (`allowed_tools`), write at least one
+scenario in which the natural request leads the agent toward a tool that worker may not use. The world
+refuses that call, so the answer key never contains it: the record stays as it was, and the correct
+reply tells the person it could not be done.
+
+A worker sub-goal judges what that worker itself did, never an outcome the world already guarantees.
+The world refuses a tool a worker may not use and stops a worker at its deadline, so "no forbidden
+write reached the world" or "the worker stopped in time" holds for every agent and grades nothing.
+Judge the worker's own behaviour instead: whether it tried a tool it may not use (a refused call is in
+`calls` with `.refused`), whether it called the tools its job needs with the right arguments, and
+whether it kept to the work it was handed. A check that a worker did not do something holds only when
+that worker made calls in this trial; with none it is inconclusive, never a pass. The coordinator is
+graded against the world and what the person was told, never against what a worker reported. A worker
+budget (`worker_budget_seconds`) names only separate workers; in a scenario that gives one, no task
+sub-goal may require a call of the worker the deadline cuts off, since the world refuses those calls.
+
+## File prerequisites must exist in the target workspace
+
+Read the workspace bindings in the world summary before writing file tasks. A repository used
+to implement the agent is not the project that its tools see. Never ask it to modify a named
+file, run an existing test or search for an existing symbol unless setup creates that prerequisite
+in a declared target workspace and ready reads it back and checks the contents. Use
+`world.write_file("binding", "relative/path", "content")` and `world.read_file` with declared
+binding names and relative paths. Read `references/world-api.md` for the full example. A fixture manifest,
+a database table named files, `setup: pass` or `ready: return None` does not establish a file.
+
+Without a declared workspace, choose a self-contained task. Give the entire input content in the
+conversation and ask the agent to create the file before using it, or choose a task that needs no
+existing files. Do not invent a directory binding or assume files from the uploaded source exist
+in the target's task directory. Keep tasks bounded; do not request broad filesystem searches.
+File setup and readiness are deferred until the actual private runtime is available. Saving a
+scenario or assuming a reference tool result does not prove the agent completed it.
+
 ## The tools, and the order to use them
 
 | Tool | What it does |
@@ -687,7 +725,7 @@ conversation is the only evidence there will be. Everything else in this skill s
 - **Take the difficulty from the agent's instructions.** Its policies, required questions,
   disclosures, refusals, escalation rules and limits are the cells. A tool that fails or an account
   state are not available here.
-- `setup`/`ready` only if the caller needs a private fixture; usually both stay empty.
+- `setup_code`/`ready_code` only if the caller needs a private fixture; usually both stay empty.
 
 ## Before you submit: read it the way a reviewer will
 
