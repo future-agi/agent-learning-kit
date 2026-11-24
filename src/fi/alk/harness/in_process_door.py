@@ -16,6 +16,7 @@ from typing import Any
 try:  # Beside the server in a bundle; the harness package when run from source.
     import tool_trace_proxy as _proxy
     from world_door import (
+        DOOR_FAILED,
         DOOR_OUT_OF_REACH,
         EVIDENCE_INCOMPLETE,
         DictRoster,
@@ -36,6 +37,7 @@ try:  # Beside the server in a bundle; the harness package when run from source.
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness import tool_trace_proxy as _proxy  # type: ignore[no-redef]
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
+        DOOR_FAILED,
         DOOR_OUT_OF_REACH,
         EVIDENCE_INCOMPLETE,
         DictRoster,
@@ -223,9 +225,12 @@ def _int_or_zero(value: Any) -> int:
 
 
 def _decided(outcome: Outcome | None) -> bool:
-    """Whether the door held the call on purpose, as opposed to failing to decide anything."""
-    return outcome is not None and (
-        outcome.fault is not None or outcome.outcome == "refused" or outcome.refusal_code is not None
+    """Whether the door held the call on purpose, as opposed to failing to decide anything: its own failure, coded
+    `DOOR_FAILED` for grading, decides nothing."""
+    return (
+        outcome is not None
+        and outcome.refusal_code != DOOR_FAILED
+        and (outcome.fault is not None or outcome.outcome == "refused" or outcome.refusal_code is not None)
     )
 
 
