@@ -48,15 +48,17 @@ SUBMIT_REMINDER = (
 
 
 def _named_provider_profile() -> dict[str, Any] | None:
-    """The sanitized external-provider definition the control process named, if it named one."""
+    """The sanitized external-provider definition the control process named, if it named one.
+    One named but unreadable is still in force, as an empty definition: the build said the
+    agent has one, so repository lines are not its prompt either way."""
     configured = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV, "").strip()
     if not configured:
         return None
     try:
         profile = json.loads(Path(configured).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
-    return profile if isinstance(profile, dict) else None
+        return {}
+    return profile if isinstance(profile, dict) else {}
 
 
 def profile_in_force(source: AgentSource) -> dict[str, Any] | None:
@@ -70,7 +72,7 @@ def profile_in_force(source: AgentSource) -> dict[str, Any] | None:
 def _provider_import_briefing() -> str:
     """Load the sanitized external-provider definition prepared by the control process."""
     profile = _named_provider_profile()
-    if profile is None:
+    if not profile:
         return ""
     return (
         "\n\n## Imported provider target (authoritative, read-only)\n\n"

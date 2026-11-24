@@ -2107,7 +2107,9 @@ def contract_tools(
                 and not payload.get("hard_constraints")
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
-                and not payload.get("system_prompt_from"),
+                and not payload.get("system_prompt_from")
+                # With a provider's definition in force, its prompt is the one; lines aren't.
+                and provider_profile is None,
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
