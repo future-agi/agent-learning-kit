@@ -52,6 +52,7 @@ from .job import FailureDomain, HarnessStage
 from .checks import check_reads, reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
+from .terminal_verdict import decide as decide_terminal
 from .world_door import LIMITS_UNREADABLE, EvidenceUnavailable, claim_worker_stop, worker_due
 from .judge import judge_sub_goal as _judge
 from .outbound import (
@@ -2954,50 +2955,34 @@ class HostedScheduler:
             replace(result, evidence=_evidence_of(goal, call_outcome))
             for goal, result in zip(scenario.sub_goals, sub_goal_results)
         ]
-        if call_outcome.unmeasured:
-            # The scenario's condition never applied, or the trial's evidence is missing: whatever its sub-goals say,
-            # it was not the trial the scenario describes.
+        # One decision, shared with the external trainer driver, so a reward cannot come to mean
+        # something other than this verdict (T32). The rules live in `terminal_verdict.decide`;
+        # assembling the receipt and choosing retries stay here, because they are not the decision.
+        decision = decide_terminal(
+            sub_goal_results,
+            unmeasured=call_outcome.unmeasured,
+            duplicates=call_outcome.duplicates,
+            off_script=None,  # already returned above, before per-actor evidence was attached
+            lacking_evidence=frozenset(
+                goal.name for goal in scenario.sub_goals if _missing_evidence(goal, call_outcome)
+            ),
+        )
+        if not decision.graded:
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
-                _failure("evidence_unmeasured", "unmeasured: " + "; ".join(call_outcome.unmeasured)),
+                _failure(decision.failure_code or "judge_undecided", decision.failure_detail or ""),
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
                 reason=note,
             )
-        # A task sub-goal's `False` fails the scenario, an unsettled one leaves it undecided. Worker sub-goals sit beside
-        # the verdict, never in it: the product plan's hand-off journey asks for both, aggregate and per worker.
-        if any(result.held is False and result.subject == "task" for result in sub_goal_results):
-            status = "failed"
-        elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
-            undecided = [result for result in sub_goal_results if result.held is None and result.subject == "task"]
-            lacking = {goal.name for goal in scenario.sub_goals if _missing_evidence(goal, call_outcome)}
-            unmeasured = all(
-                (not result.judged or result.name in lacking) and (result.reason or "").startswith(UNMEASURED)
-                for result in undecided
-            )
-            return self._fault(
-                scenario,
-                world_index,
-                attempt,
-                _failure("evidence_unmeasured", "a sub-goal's evidence could not be read: "
-                         + ", ".join(result.name for result in undecided))
-                if unmeasured
-                else _failure("judge_undecided", "a judged sub-goal was not decided"),
-                sub_goals=tuple(sub_goal_results),
-                call=self._call_summary(call_outcome),
-                retry=False,
-                reason=note,
-            )
-        else:
-            status = "passed"
+        status = decision.status.value
         if call_outcome.duplicates:
-            # The world applied a write twice after the agent's answer was lost: a failure of the agent's, whatever
-            # the sub-goals say. A graded receipt carries no `failure` (that is an errored run's), so why is its reason,
+            # `decide_terminal` already failed the trial for this; the note is what a reader needs.
+            # A graded receipt carries no `failure` (that is an errored run's), so why is its reason,
             # beside any note on the trial.
-            status = "failed"
             note = "; ".join(one for one in (note, duplicate_reason(call_outcome.duplicates)) if one)
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
