@@ -48,7 +48,8 @@ did about it, read from the world's final state:
   with the decision already made: a decision in place before the run is seed data and tests nothing. Across
   scenarios: approves, refuses with a reason, approves only part or with a condition, answers after a
   delay, never answers (a timeout and its fallback). The check reads whether the agent acted only on what
-  was actually decided.
+  was actually decided. The agent learns the decision through one of its own tools; when none can see it, the
+  case is not written this way (see the write-scenarios check rules).
 - **A fact that conflicts.** Someone nearby or in the channel says something that contradicts the person or
   the record (a different date, amount or name). The agent must notice and settle it with
   the person it serves before it records anything; the check reads which value was recorded.
