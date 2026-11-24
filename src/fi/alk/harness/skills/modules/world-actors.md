@@ -45,7 +45,9 @@ decoration. Each actor scenario gives the actor one of these parts, and its sub-
 did about it, read from the world's final state:
 - **A decision the agent must wait for and act on.** The approver is brought in by the agent's own request
   (`contacted`, `on_tool` on the request, or `conditional` on the pending request record), never `always`
-  with the decision already made: a decision in place before the run is seed data and tests nothing. Across
+  with the decision already made: a decision in place before the run is seed data and tests nothing. A
+  decision is either in the starting records or made by an actor during the run, never both, and an actor's
+  action carries every field its record needs. Across
   scenarios: approves, refuses with a reason, approves only part or with a condition, answers after a
   delay, never answers (a timeout and its fallback). The check reads whether the agent acted only on what
   was actually decided. The agent learns the decision through one of its own tools; when none can see it, the
