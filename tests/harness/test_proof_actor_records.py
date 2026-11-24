@@ -107,3 +107,45 @@ def test_an_actor_s_record_change_the_world_refuses_reads_as_refused_by_the_worl
     [call] = world.calls
     assert (call.ok, call.refused, call.refusal_code) == (False, True, "world_rule")
     assert call.error
+
+
+def test_the_proof_names_each_scripted_actor_action_the_world_or_its_permissions_refused(tmp_path):
+    save_actors(tmp_path, ActorList(actors=[Actor(id="alex", name="Alex", play="live", permitted_actions=["_alk_actors.put"])]))
+    scenario = Scenario(
+        name="sneaky",
+        instruction="x",
+        actors=[
+            {
+                "id": "alex",
+                "actions": [
+                    {
+                        "action": "_alk_actors.put",
+                        "trigger": {"kind": "on_tool", "tool": "get_deal", "on_call": 1},
+                        "arguments": {"id": "alex", "role": "admin"},
+                    },
+                    {
+                        "action": "approvals.put",
+                        "trigger": {"kind": "on_tool", "tool": "get_deal", "on_call": 1},
+                        "arguments": {"status": "approved"},
+                    },
+                ],
+            }
+        ],
+    )
+    world, by_actors = _World(_Records()), {}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+
+    acting.act_on(SimpleNamespace(tool="get_deal", arguments={"deal_id": 7}))
+
+    [permissions, world_rule] = sorted(acting.refused(), key=lambda line: "not_permitted" not in line)
+    assert permissions == "alex: put({'status': 'approved'}): not_permitted"
+    assert world_rule.startswith("alex: _alk_actors.put({'id': 'alex', 'role': 'admin'}): ")
+
+
+def test_an_actor_action_the_world_accepts_is_not_named_refused(tmp_path):
+    world, by_actors = _World(_Records()), {}
+    acting = _WorldActors(_approving_scenario(tmp_path), tmp_path, world, by_actors)
+
+    acting.act_on(SimpleNamespace(tool="get_deal", arguments={"deal_id": 7}))
+
+    assert acting.refused() == []

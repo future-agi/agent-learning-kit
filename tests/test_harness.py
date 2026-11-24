@@ -2789,6 +2789,26 @@ def test_a_check_that_fails_a_corrected_try_is_named_when_the_case_is_kept(tmp_p
     assert [one.name for one in kept] == ["adds-a-big-mac"]
 
 
+def test_a_scripted_actor_action_the_world_refused_is_named_when_the_case_is_kept(tmp_path):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
+    kept = []
+    said = accept_scenario(
+        {**_delta(), "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]},
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    text = said["content"][0]["text"]
+    assert not said.get("is_error"), said
+    assert "NOTE: the world refused these scripted actor actions" in text
+    assert "reviewer: approve({}): not_permitted" in text
+    assert [one.name for one in kept] == ["adds-a-big-mac"]
+
+
 def _removed_case(tmp_path):
     """An environment that had `adds-a-big-mac` and lost it: its key is used, no case holds it."""
     from fi.alk.harness.scenario_tools import accept_scenario
