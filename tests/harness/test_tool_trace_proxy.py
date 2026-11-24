@@ -671,10 +671,10 @@ def test_the_proxy_reads_its_sealed_routes_strictly(tmp_path, monkeypatch):
           "refusal_code": "approval_unknown"}, 503, "tool_world_failed"),
         # The agent's own tools server not answering: its world, told why.
         ({"outcome": "faulted", "status": 502, "reason": "ConnectionRefusedError: unavailable",
-          "refusal_code": "upstream_unreachable"}, 502, "ConnectionRefusedError: unavailable"),
+          "refusal_code": "upstream_unreachable"}, 502, "tool_upstream_unavailable"),
         # A keyed retry after a lost answer: the agent's to handle, told why.
         ({"outcome": "faulted", "status": 503, "reason": "first try unknown", "refusal_code": "key_outcome_unknown"},
-         503, "first try unknown"),
+         503, "tool_key_outcome_unknown"),
     ],
 )
 def test_the_proxy_tells_a_test_condition_from_its_own_failure(monkeypatch, outcome, status, detail):
