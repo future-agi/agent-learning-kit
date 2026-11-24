@@ -166,7 +166,17 @@ def set_modality(
             f"{named!r} is not a modality. It is one of: {', '.join(known_modalities())}",
         )
     if named == "browser":
-        return False, "browser agents aren't supported, so the type stays " + contract.modality + "."
+        # The kind is set where the agent is read, after its second look; a correction here
+        # would skip that look and the build's own check of the environment.
+        return False, (
+            "whether an agent drives a browser is settled when it is read, not during a build, "
+            f"so the type stays {contract.modality}. Read the agent again to change it."
+        )
+    if "browser" in contract.environment_needs and named != "chat":
+        return False, (
+            "this agent drives a browser and runs as a chat agent does, so the type stays "
+            f"{contract.modality}."
+        )
     if not why.strip():
         return False, "say why: modality decides how every scenario is run"
     if named == contract.modality:

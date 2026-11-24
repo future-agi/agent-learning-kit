@@ -1538,6 +1538,8 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _TRACE),
     ("fi.alk.harness.chat_call_runner", "handler_child_for", "start_handler_child"): (
         1, "makes the handler child's own scratch folder and log, not the contract"),
+    ("fi.alk.harness.cli", "_auto", "refuse_saved_contract"): (
+        1, "writes the build's failure file when the agent needs an environment the job lacks"),
     ("fi.alk.harness.cli", "_auto", "save_session"): (
         1, "sessions.save writes the session's own record (META)"),
     ("fi.alk.harness.compose_integration", "compile_bundle", "select_runtime"): (
