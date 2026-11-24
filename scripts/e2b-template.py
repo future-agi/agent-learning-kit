@@ -385,9 +385,13 @@ PY""",
             # The kit's browser for browser agents (Dockerfile.hosted): any service user can run it,
             # and it starts headless, runs a page's script and writes a screenshot with no network.
             # The marker is one only the page's script writes, never text on the command line.
+            # Root owns the binary and its folder and neither is writable, so no service user can
+            # change the binary or move another file over it.
             "browser-chromium",
             (
-                "test \"$(stat -L -c '%a' \"$(command -v alk-chromium)\")\" = 555 && "
+                "b=\"$(command -v alk-chromium)\" && "
+                "test \"$(stat -L -c '%a:%U' \"$b\")\" = 555:root && "
+                "test \"$(stat -c '%a:%U' \"$(dirname \"$(readlink -f \"$b\")\")\")\" = 555:root && "
                 "profile=\"$(mktemp -d)\" && "
                 "alk-chromium --headless=new --no-sandbox --disable-gpu --no-first-run "
                 "--user-data-dir=\"$profile\" --dump-dom "

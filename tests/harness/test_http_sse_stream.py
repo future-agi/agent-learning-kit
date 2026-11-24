@@ -679,6 +679,8 @@ def test_completed_response_tools_are_retained_only_after_success():
                 "arguments": {"city": "Pune"},
                 "result": {"temperature": 20},
                 "ok": True,
+                # The id the agent gave the call.
+                "id": "tool-1",
             }
         ]
         again = asyncio.run(wrapper.call(_input("tools")))
@@ -714,6 +716,8 @@ def test_stream_preserves_endpoint_completed_tool_correlation():
                 "arguments": {"city": "Pune"},
                 "result": {"temperature": 20},
                 "ok": True,
+                # The id the agent gave the call.
+                "id": "tool-2",
             }
         ]
         assert state["requests"] == [
