@@ -131,16 +131,23 @@ class VoiceEnvironmentPlugin:
                 self._attach_goal_to_case(scenario, case)
                 await on_case_complete(index, case)
 
-        report = await voice_api.run_voice_simulation(
-            agent_definition=agent_definition,
-            livekit_runtime=livekit_runtime,
-            scenario=spec.scenario,
-            simulator=simulator,
-            simulation_run_id=spec.run_id,
-            on_case_complete=streamed_callback,
-            on_case_start=on_case_start,
-            **params,
-        )
+        from fi.simulate.simulation.engines.livekit import STOP_CHECK
+
+        # A person's Stop (the harness asks through stop_when) ends the live call at once, not at its next turn.
+        stop_token = STOP_CHECK.set((lambda: bool(stop_when([], None))) if stop_when is not None else None)
+        try:
+            report = await voice_api.run_voice_simulation(
+                agent_definition=agent_definition,
+                livekit_runtime=livekit_runtime,
+                scenario=spec.scenario,
+                simulator=simulator,
+                simulation_run_id=spec.run_id,
+                on_case_complete=streamed_callback,
+                on_case_start=on_case_start,
+                **params,
+            )
+        finally:
+            STOP_CHECK.reset(stop_token)
         self._attach_goal_machine(spec.scenario, report)
         return report
 

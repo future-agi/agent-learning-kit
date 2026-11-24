@@ -60,8 +60,16 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
-   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
-   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+   If the agent hands work to other agents (a sub-agent called as a tool, a hand-off, graph nodes,
+   a crew), record each one in `workers`: an `id`, the `name` the app gives it, the contract tools
+   it holds, and `binding: separate` when its tools are reached through code of their own rather
+   than code the agents share, with `address_env` naming the environment variable that code reads
+   for its tools' base address. When the repository says a separate worker may use fewer tools than
+   its code holds, list those in `allowed_tools`; a shared worker gets none, because the world cannot
+   tell its calls apart. Every worker tool is also in `tools`. When the app runs a worker as a
+   service of its own (its own process, which the coordinator reaches over the network), set
+   `process` to the name of that process in the environment; leave it empty for a worker that runs
+   inside the app's one process.
 
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
@@ -235,6 +243,16 @@ Find, in roughly this order:
    sees the dependency path; without this mapping ALK cannot normalize it back to the semantic
    tool the agent actually chose.
 
+   Write `module` as the dotted name the agent's own process imports, from the folder it runs
+   in: for `agent.py` in the folder the agent starts from, `agent`, not the name counted from the
+   repository root. A module-level tool the kit can call is `import`, and a method on a class is
+   `construct`, decorated or not: a plain `def`, Pydantic AI's `@agent.tool_plain`, a LangChain
+   `@tool`, and a LiveKit `@function_tool` method on an `Agent` class all keep those modes. The
+   one exception is a tool whose module attribute is an object the kit can't call: the OpenAI
+   Agents SDK's `@function_tool` (imported from `agents`) turns the def into a `FunctionTool`.
+   Record that one as `unreachable`, but still fill in `module` and `callable` with the def's own
+   name: the kit can't call it, but watches it when it knows where it is, and records its calls.
+
    Record each entry's effect: "read" when the code only reads (a lookup, a search, a list),
    "write" when it creates, changes or deletes anything. Leave it empty only when you cannot tell;
    an empty one counts as a write unless the endpoint is called with GET.
@@ -262,7 +280,20 @@ Find, in roughly this order:
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
-   startable but the simulator cannot honestly claim to have exercised it.
+   startable but the simulator cannot honestly claim to have exercised it. When the ingress is
+   HTTP, the runtime command must start the long-running web or API server the source documents
+   for it, never a terminal REPL that reads a console.
+
+   **A LangGraph app comes first.** Before choosing a command or an HTTP interface, look for a
+   `langgraph.json` that names a graph. When the requirements the app installs have no
+   `langgraph-cli` (and no Compose file or Dockerfile of the app installs it), `langgraph dev` and
+   `langgraph up` can't run there: leave `runtime.command`
+   empty, set `execution` to `auto`, and declare the interface as `callable` with protocol
+   `fi.alk`; the kit serves the graph itself through it.
+   In that no-CLI shape, don't map the LangGraph server's `/runs/wait` with a JSON template.
+   An app that installs `langgraph-cli`, or whose `langgraph.json` has an `http` or `auth` key
+   or declares more than one graph, keeps its command and its HTTP interface, and may map
+   `/runs/wait`.
 
    If an HTTP ingress uses neither the ALK nor OpenAI envelope, do not stop and do not label it as
    one of those protocols. Read the route models, OpenAPI setup, client examples and tests, then use

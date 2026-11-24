@@ -550,7 +550,7 @@ def test_a_crash_writes_its_code_with_no_secret_and_a_capped_message(tmp_path, v
         "retryable": True,
     }
     assert failure["message"].startswith(
-        "RuntimeError: could not fetch https://user:***@host/repo.git "
+        "RuntimeError: could not fetch https://host/repo.git "
     )
     assert "pw" not in failure["message"]
     assert MESSAGE_LIMIT == 2000

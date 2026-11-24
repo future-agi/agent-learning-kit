@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..providers.agent import _redact
 from . import spend
 from .live import Channel, carrying, folded_in
 from .backends import (
@@ -426,7 +427,7 @@ class Stage:
             events = [
                 Event(
                     RESULT,
-                    text=_shown(received.text),
+                    text=_shown(_redact(received.text)),
                     detail={
                         "is_error": received.is_error,
                         "call_id": received.id,
@@ -462,6 +463,8 @@ class Stage:
                 received.tokens_cached,
                 dict(self.tool_calls),
                 dict(self.tool_refusals),
+                calls=received.calls,
+                call_limit=self._spec.call_budget,
             )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
