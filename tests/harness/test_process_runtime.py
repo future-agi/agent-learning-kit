@@ -2329,14 +2329,15 @@ def _control(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
 
 
 # Only the control service is the agent. The crashing process here is `tools-api`: as the control
-# service its failure is the agent's named cause; as a helper beside the agent it names none.
+# service its failure is the agent's named cause. Beside the agent, a helper that crashes names
+# none, and one that stalls names the dependency's cause, never its own name.
 _EXITED = [
     pytest.param("tools-api", FailureCause.AGENT_EXITED_BEFORE_READY, id="the agent"),
     pytest.param("agent", None, id="a helper service"),
 ]
 _STALLED = [
     pytest.param("tools-api", FailureCause.AGENT_NOT_READY_IN_TIME, id="the agent"),
-    pytest.param("agent", None, id="a helper service"),
+    pytest.param("agent", FailureCause.DEPENDENCY_NOT_READY_IN_TIME, id="a helper service"),
 ]
 
 
@@ -4630,6 +4631,8 @@ def test_freeze_baseline_readiness_timeout_is_a_typed_depends_on_timeout(
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
         pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
     assert excinfo.value.code == "depends_on_timeout"
+    # The store is not the agent: the failure names the dependency's cause, not the agent's.
+    assert excinfo.value.cause is FailureCause.DEPENDENCY_NOT_READY_IN_TIME
 
 
 def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(
@@ -11332,6 +11335,47 @@ def test_native_config_resource_path_rejects_escape_at_model_boundary(path):
         _source_process(config_files={path: {"values": {"MODE": "test"}}})
 
 
+def test_each_worker_gets_its_own_channel_token_per_world_written_where_the_tool_proxy_reads_it(tmp_path: Path) -> None:
+    import json
+
+    plan = pr.plan_ports(_manifest(), instances=2)
+
+    def render(world: int, value: str) -> str:
+        return pr.render_template(
+            value,
+            process_name="agent",
+            world_index=world,
+            world_dir=tmp_path / "worlds" / f"w{world}" / "agent",
+            port_plan=plan,
+            configuration_addresses={"TOOLS_API_URL": "http://proxy"},
+        )
+
+    lookup = render(0, "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_order_lookup}}")
+    refund = render(0, "{{WORKER_CHANNEL_refund}}")
+    # A second render of the same world (a restart) keeps the channel; another world gets its own.
+    assert render(0, "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_order_lookup}}") == lookup
+    other = render(1, "{{WORKER_CHANNEL_refund}}")
+    token = lookup.rsplit("/", 1)[-1]
+    assert lookup.startswith("http://proxy/w/") and len(token) == 32 and len({token, refund, other}) == 3
+    channels = json.loads((tmp_path / "worlds" / "w0" / "tool-proxy" / "worker-channels.json").read_text())
+    assert channels == {token: "order_lookup", refund: "refund"}
+
+
+def test_worker_channel_tokens_are_readable_by_their_owner_alone(tmp_path: Path) -> None:
+    import stat
+
+    pr.render_template(
+        "{{WORKER_CHANNEL_refund}}",
+        process_name="agent",
+        world_index=0,
+        world_dir=tmp_path / "worlds" / "w0" / "agent",
+        port_plan=pr.plan_ports(_manifest(), instances=1),
+        configuration_addresses={},
+    )
+    channels = tmp_path / "worlds" / "w0" / "tool-proxy" / "worker-channels.json"
+    assert stat.S_IMODE(channels.stat().st_mode) == 0o600
+
+
 # --- A repository's own `sitecustomize` runs once, whichever hook file the kit placed first ----
 
 _GATEWAY_MARK = {"ALK_OPENAI_AGENTS_CHAT_COMPLETIONS": "1"}
@@ -11556,3 +11600,20 @@ def test_the_tool_trace_is_read_from_the_process_that_writes_it(tmp_path: Path, 
     metadata = provider._control_metadata(0)
 
     assert metadata["tool_trace_path"] == str(tmp_path / "worlds" / "w0" / traced_by / "agent-tool-calls.jsonl")
+    # Spans not switched on with the callback rule: the reader joins them as kit dev does.
+    assert "tool_spans_join" not in metadata
+
+
+def test_a_span_source_note_from_an_earlier_start_is_removed_before_the_process_starts(tmp_path: Path) -> None:
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+    world_dir.mkdir(parents=True)
+    stale = world_dir / "agent-tool-calls.jsonl.observing"
+    stale.write_text('{"framework": "agents", "state": "on"}\n', encoding="utf-8")
+
+    captured = _spawn(
+        tmp_path,
+        _source_process(environment={"HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl"}),
+    )
+
+    assert captured["env"]["HARNESS_TOOL_TRACE"] + ".observing" == str(stale)
+    assert not stale.exists()

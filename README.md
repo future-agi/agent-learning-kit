@@ -71,6 +71,10 @@ Install from PyPI:
 pip install agent-learning-kit
 ```
 
+The kit works with openai 2 and 3. openai 3 checks TLS certificates against the operating
+system's store, not a bundled one, so a minimal image needs its system CA certificates (or
+`SSL_CERT_FILE` pointing at a bundle), as does a network behind a TLS-inspecting proxy.
+
 To develop against source (contributors):
 
 ```bash

@@ -259,42 +259,113 @@ def _argument_path(name: str) -> str:
     return json.dumps(name)
 
 
+# Keywords that say nothing about which values a schema accepts.
+_ANNOTATIONS = frozenset(
+    {
+        "description",
+        "title",
+        "examples",
+        "default",
+        "$comment",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+    }
+)
+# Keywords `_implied` reads itself; any other the environment sets must be the agent's too.
+_COMPARED = frozenset({"type", "enum", "const", "required", "properties", "items"})
+_ABSENT = object()
+
+
+def _types(schema: Mapping[str, Any]) -> set[str]:
+    declared = schema.get("type")
+    return set(
+        declared if isinstance(declared, list) else [declared] if declared else []
+    )
+
+
+def _implied(agent: Any, environment: Any, where: str) -> list[str]:
+    """Why a value the agent's schema allows at `where` could be one the environment's refuses.
+
+    Sound, not complete: it reads types, enums, constants, required names, properties and items,
+    at every depth, and asks that any other rule the environment sets (a pattern, a bound, a
+    union) be set the same in the agent's schema. A schema it cannot show compatible is a
+    mismatch, and the agent's tool is then mapped rather than called as-is."""
+    if not isinstance(environment, Mapping) or not environment:
+        return []
+    if not isinstance(agent, Mapping):
+        return [f"{where} has no schema, the environment constrains it"]
+    problems: list[str] = []
+    if taken := _types(environment):
+        sent = _types(agent)
+        # Every integer is a number.
+        wider = {
+            "number" if one == "integer" and "number" in taken else one for one in sent
+        }
+        if not sent:
+            problems.append(
+                f"{where} has no type, the environment takes {', '.join(sorted(taken))}"
+            )
+        elif wider - taken:
+            problems.append(
+                f"{where} is {', '.join(sorted(sent))}, the environment takes {', '.join(sorted(taken))}"
+            )
+    if "const" in environment and agent.get("const", _ABSENT) != environment["const"]:
+        problems.append(f"{where} may carry values the environment does not accept")
+    if "enum" in environment:
+        allowed = list(environment["enum"] or [])
+        offered = [agent["const"]] if "const" in agent else agent.get("enum")
+        if not offered or any(value not in allowed for value in offered):
+            problems.append(f"{where} may carry values the environment does not accept")
+    sent_properties = agent.get("properties") or {}
+    taken_properties = environment.get("properties") or {}
+    inside = "" if where == "arguments" else f"{where}."
+    problems += [
+        f"{inside}{name} is not an environment argument"
+        for name in sent_properties
+        if name not in taken_properties
+        and (
+            "properties" in environment
+            or environment.get("additionalProperties") is False
+        )
+    ]
+    always = set(agent.get("required") or [])
+    for name in environment.get("required") or []:
+        if name not in sent_properties:
+            problems.append(f"{inside}{name} is required but the agent never sends it")
+        elif name not in always:
+            problems.append(
+                f"{inside}{name} is required but the agent may leave it out"
+            )
+    for name, schema in sent_properties.items():
+        if name in taken_properties:
+            problems += _implied(schema, taken_properties[name], f"{inside}{name}")
+    if "items" in environment:
+        problems += _implied(agent.get("items"), environment["items"], f"{where}[]")
+    for keyword, rule in environment.items():
+        if keyword in _COMPARED or keyword in _ANNOTATIONS:
+            continue
+        if keyword == "additionalProperties" and not isinstance(rule, Mapping):
+            # True allows anything; false is held above, where the agent may declare no
+            # property the environment lacks.
+            continue
+        if agent.get(keyword, _ABSENT) != rule:
+            problems.append(
+                f"{where}: the environment sets {keyword}, which the agent's schema does not match"
+            )
+    return problems
+
+
 def argument_mismatches(
     agent: Mapping[str, Any], environment: Mapping[str, Any]
 ) -> list[str]:
     """Why calls the agent makes with this schema would not be valid environment calls.
 
-    Every argument the agent sends must be one the environment takes, with the same JSON type,
-    and only values the environment accepts; every argument the environment requires must be
-    one the agent can send.
+    The whole schema is compared, nested objects and array items included (`_implied`): every
+    argument the agent sends must be one the environment takes, of a type and with only values
+    it accepts; every argument the environment requires must be one the agent always sends.
     """
-    sent = agent.get("properties") or {}
-    taken = environment.get("properties") or {}
-    problems = [
-        f"{name} is not an environment argument" for name in sent if name not in taken
-    ]
-    problems += [
-        f"{name} is required but the agent never sends it"
-        for name in environment.get("required") or []
-        if name not in sent
-    ]
-    for name, schema in sent.items():
-        target = taken.get(name)
-        if not isinstance(target, Mapping) or not isinstance(schema, Mapping):
-            continue
-        if (
-            schema.get("type")
-            and target.get("type")
-            and schema["type"] != target["type"]
-        ):
-            problems.append(
-                f"{name} is {schema['type']}, the environment takes {target['type']}"
-            )
-        allowed = target.get("enum")
-        offered = schema.get("enum")
-        if allowed and (not offered or set(map(str, offered)) - set(map(str, allowed))):
-            problems.append(f"{name} may carry values the environment does not accept")
-    return problems
+    return _implied(agent, environment, "arguments")
 
 
 def binding_fields(

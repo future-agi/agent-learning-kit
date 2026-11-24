@@ -39,7 +39,7 @@ class ProviderConnector(ABC):
 
 @dataclass(frozen=True)
 class ConnectorConfig:
-    api_key: str
+    api_key: str = field(repr=False)
     assistant_id: str
     api_url: str
     livekit_url: str = ""

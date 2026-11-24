@@ -772,6 +772,26 @@ def agent_call_problems(
     )
 
 
+def operation_problems(tool: ToolDefinition, arguments: Mapping[str, Any]) -> list[str]:
+    """Why `arguments` is not a call the environment's `tool` takes, under its whole JSON Schema;
+    empty when it is. Every operation is held to it before its handler runs, whichever mode
+    produced it: a schema the agent's own allows is no evidence the environment's does."""
+    errors = Draft202012Validator(tool.parameters).iter_errors(dict(arguments))
+    return sorted(
+        f"{'.'.join(map(str, error.absolute_path)) or 'arguments'}: {error.message}"
+        for error in errors
+    )
+
+
+def _refused_by_schema(tool: ToolDefinition, arguments: Mapping[str, Any]) -> str:
+    problems = operation_problems(tool, arguments)
+    return (
+        f"{tool.name} does not take these arguments: {'; '.join(problems)}"
+        if problems
+        else ""
+    )
+
+
 def _returned(operations: list[OperationRecord], value: Any) -> None:
     """Record what the agent was given back: `value` on the last operation, which is where the
     response came from, and nothing on the earlier ones, whose results the agent never saw."""
@@ -813,7 +833,16 @@ def run_bound_call(
             )
         if not isinstance(arguments, dict):
             return _failed("invalid", "arguments must be a JSON object")
-        record = OperationRecord(agent_tool, agent_tool, dict(arguments))
+        # A null optional argument is one left out, as a routed binding leaves it (`_resolve`).
+        required = set(environment[agent_tool].parameters.get("required") or [])
+        sent = {
+            name: value
+            for name, value in arguments.items()
+            if value is not None or name in required
+        }
+        if refused := _refused_by_schema(environment[agent_tool], sent):
+            return _failed("invalid", refused)
+        record = OperationRecord(agent_tool, agent_tool, sent)
         operations: list[OperationRecord] = []
         if not _operate(run_operation, record, operations):
             return _failed(record.status, record.error, operations)
@@ -854,6 +883,8 @@ def run_bound_call(
                 produced = _step_arguments(step, tool, context)
             except _Invalid as exc:
                 return _failed("invalid", str(exc), operations)
+            if refused := _refused_by_schema(tool, produced):
+                return _failed("invalid", refused, operations)
             record = OperationRecord(step.id, step.tool, produced)
             if not _operate(run_operation, record, operations):
                 return _failed(record.status, record.error, operations)

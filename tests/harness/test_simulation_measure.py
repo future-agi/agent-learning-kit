@@ -16,6 +16,7 @@ not depend on. Run them with::
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import importlib
 import json
@@ -157,6 +158,9 @@ httpx.Client(transport=httpx.MockTransport(raw_answer)).post(
     "https://api.anthropic.com/v1/messages", json={"messages": []}
 )
 """
+
+# openai 3 and the OpenAI Agents SDK from 0.24 send through httpx2.
+RAW_HTTPX2_REQUEST = RAW_MODEL_REQUEST.replace("httpx", "httpx2")
 
 # A model API's name resolves to the stand-in on this machine, so a standard-library client
 # really sends to it and nothing leaves the machine.
@@ -820,13 +824,13 @@ def test_a_sigterm_right_after_a_reply_keeps_its_span(
 
 @pytest.mark.parametrize(
     "raw",
-    [RAW_MODEL_REQUEST, RAW_URLLIB_REQUEST, RAW_REQUESTS_REQUEST],
-    ids=["httpx", "urllib.request", "requests"],
+    [RAW_MODEL_REQUEST, RAW_HTTPX2_REQUEST, RAW_URLLIB_REQUEST, RAW_REQUESTS_REQUEST],
+    ids=["httpx", "httpx2", "urllib.request", "requests"],
 )
 def test_a_raw_model_request_marks_its_call_partial(
     tmp_path: Path, collector: Collector, raw: str
 ) -> None:
-    _needs("traceai_openai")
+    _needs("traceai_openai", *(["httpx2"] if raw is RAW_HTTPX2_REQUEST else []))
     result = _run(
         OPENAI_CALL + "ask()\n" + raw + "ask()\n",
         _environment(tmp_path, collector),
@@ -1074,6 +1078,73 @@ def test_an_http_client_request_to_a_model_api_marks_partial(measuring) -> None:
     assert marked == ["partial"] * 5
 
 
+def test_an_httpx2_request_to_a_model_api_marks_partial(measuring) -> None:
+    """openai 3 and the OpenAI Agents SDK from 0.24 send through httpx2, not httpx, so a raw
+    model call there must be seen too. This proves only the registration and the wrapper, on
+    stand-in classes; it would not notice httpx2 renaming or moving `send`. The real httpx2 is
+    checked by the test below where httpx2 is installed, and with a real openai 3 call beside it
+    by `test_a_raw_model_request_marks_its_call_partial[httpx2]` in sdk-smoke's clean-install
+    (minimum-livekit) step "Run the raw-request measuring tests and the OpenAI instrumentor on
+    openai 3"."""
+    module, marked = measuring
+    patches: dict = {}
+    assert module.register(patches, lambda _line: None, _MARK) is True
+
+    class Client:
+        def send(self, request, **_options):
+            return "sent"
+
+    class AsyncClient:
+        async def send(self, request, **_options):
+            return "sent"
+
+    patches["httpx2"](types.SimpleNamespace(Client=Client, AsyncClient=AsyncClient))
+
+    def request(host: str, path: str):
+        return types.SimpleNamespace(url=types.SimpleNamespace(host=host, path=path))
+
+    # Our own export is never a model call.
+    assert Client().send(request("127.0.0.1", "/v1/traces")) == "sent"
+    assert marked == []
+    assert Client().send(request("api.openai.com", "/v1/chat/completions")) == "sent"
+    model_call = request("api.openai.com", "/v1/responses")
+    assert asyncio.run(AsyncClient().send(model_call)) == "sent"
+    assert marked == ["partial"] * 2
+
+
+def test_a_request_through_the_real_httpx2_marks_partial(
+    measuring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same on the real httpx2, offline through its MockTransport. Runs wherever httpx2 is
+    installed, which openai 3 brings. sdk-smoke's clean-install (minimum-livekit) runs it by node
+    id after installing openai 3, and that step fails if it skips."""
+    httpx2 = pytest.importorskip("httpx2")
+    module, marked = measuring
+    patches: dict = {}
+    assert module.register(patches, lambda _line: None, _MARK) is True
+    # Put the real send back after the test.
+    monkeypatch.setattr(httpx2.Client, "send", httpx2.Client.send)
+    monkeypatch.setattr(httpx2.AsyncClient, "send", httpx2.AsyncClient.send)
+    patches["httpx2"](httpx2)
+
+    def answer(request):
+        return httpx2.Response(200, json={"ok": True})
+
+    with httpx2.Client(transport=httpx2.MockTransport(answer)) as client:
+        assert client.post("http://127.0.0.1:9/v1/traces", json={}).status_code == 200
+        assert marked == []
+        client.post("https://api.openai.com/v1/chat/completions", json={})
+
+    async def ask_async() -> int:
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as client:
+            return (
+                await client.post("https://api.openai.com/v1/responses", json={})
+            ).status_code
+
+    assert asyncio.run(ask_async()) == 200
+    assert marked == ["partial"] * 2
+
+
 _MARK = {"project_name": "hidden-simulation", "fi.simulation.origin": "simulation"}
 
 
@@ -1114,7 +1185,9 @@ def test_register_needs_the_switch_the_destination_and_the_mark(
     patches: dict = {}
 
     assert module.register(patches, lines.append, _MARK) is True
-    assert {"openai", "anthropic", "httpx", "http.client", "vertexai"} <= set(patches)
+    assert {"openai", "anthropic", "httpx", "httpx2", "http.client", "vertexai"} <= set(
+        patches
+    )
 
     # Without the mark its spans would read as production traces: nothing is measured.
     patches = {}
