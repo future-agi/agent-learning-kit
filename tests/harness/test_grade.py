@@ -446,6 +446,19 @@ def test_a_judged_reason_needs_its_labelled_criteria():
         ),
     )
     assert validate_sub_goal(about_words) == []
+    # A situation only the caller's path kept away has nothing to grade: not applicable, never a free pass.
+    nothing_declined = SubGoal(
+        name="refusal_explained",
+        what="the agent said why it could not do it",
+        judged=about_words.judged.replace("Pass, because nothing was declined", "Not applicable, nothing was declined"),
+    )
+    assert validate_sub_goal(nothing_declined) == []
+    unsaid = SubGoal(
+        name="refusal_explained",
+        what="the agent said why it could not do it",
+        judged=about_words.judged.replace("Pass, because nothing was declined", "nothing was declined"),
+    )
+    assert "Not applicable, Pass or Fail" in validate_sub_goal(unsaid)[0]
 
     settled = SubGoal(
         name="fare_not_zeroed",

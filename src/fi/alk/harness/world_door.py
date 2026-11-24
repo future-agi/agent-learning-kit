@@ -42,6 +42,38 @@ IDENTITY_HEADER = "X-ALK-Actor-Identity"
 # HTTP methods that only read: a call made with one changes nothing in the world.
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+# What the tool proxy answers when the door held a call before the world saw it, or the world did not answer: never a
+# result. An agent's tool may hand that answer back as its value instead of failing (`door_failure`).
+UPSTREAM_UNAVAILABLE = "tool_upstream_unavailable"
+UPSTREAM_TIMEOUT = "tool_upstream_timeout"
+# What the proxy answers when the world or its door failed on a call no test condition held: ours, never the agent's.
+WORLD_FAILED = "tool_world_failed"
+# A keyed retry whose first try a test condition lost the answer to: held so it never runs twice, the agent's to handle.
+KEY_UNKNOWN = "key_outcome_unknown"
+# The door's own failures, on the row of the call they held: the door itself, the world it calls (unreachable), the
+# action log (a key it could not check), a keyed retry whose first try one of these lost. Never an answer the world
+# gave: a tools server answering 5xx is the agent's world, graded as it is.
+DOOR_FAILED = "door_failed"
+WORLD_UNREACHABLE = "world_unreachable"
+LOG_UNKNOWN = "log_unknown"
+
+
+def world_failed(row: Mapping[str, Any]) -> bool:
+    """Whether a row of the action log is the door failing on the agent's call by its own fault: ours, never the
+    agent's. Read from the row's refusal code, which every log keeps."""
+    return (row.get("actor_id") or AGENT) == AGENT and row.get("outcome") == "faulted" and row.get(
+        "refusal_code"
+    ) in (DOOR_FAILED, WORLD_UNREACHABLE, LOG_UNKNOWN, FAULTS_UNKNOWN, APPROVAL_UNKNOWN)
+
+
+def door_failure(result: Any) -> str | None:
+    """The proxy's own failure answer when `result` is it (`{"detail": <code>}`, with anything the agent's tool kept
+    beside it), else None."""
+    if isinstance(result, Mapping) and result.get("detail") in (UPSTREAM_UNAVAILABLE, UPSTREAM_TIMEOUT, WORLD_FAILED):
+        return str(result["detail"])
+    return None
+
+
 # The code of a row that marks a call of the agent's which ran without the door deciding or recording it: the trial's
 # evidence is incomplete. Never a call or a change itself.
 EVIDENCE_INCOMPLETE = "evidence_incomplete"
@@ -791,7 +823,7 @@ class WorldDoor:
             return self._enter(call)
         except Exception as exc:  # noqa: BLE001 - the door adds no error of its own to any caller
             outcome = Outcome(
-                "faulted", 502, reason=f"{type(exc).__name__}: the world's door failed"
+                "faulted", 502, reason=f"{type(exc).__name__}: the world's door failed", refusal_code=DOOR_FAILED
             )
             self._write(call, outcome)
             return outcome
@@ -899,11 +931,12 @@ class WorldDoor:
                     # failed after the world applied it) leaves the key claimed for any door after it.
                     claimed = self.log.claim(key, call.actor) if earlier is None else None
                 except Exception:  # noqa: BLE001 - the log cannot say: running again could apply the action twice
-                    return self._key_unknown(call, key, on_behalf_of)
+                    return self._key_unknown(call, key, on_behalf_of, LOG_UNKNOWN)
                 if earlier is not None:
                     known = ("committed", *earlier)
                 elif claimed is not None:
-                    return self._key_unknown(call, key, on_behalf_of)
+                    # Claimed by a door that never recorded its answer: our log failed, not the agent.
+                    return self._key_unknown(call, key, on_behalf_of, LOG_UNKNOWN)
             if known is None:
                 self._keyed[slot] = ("pending", call.action, call.arguments, None, None)
                 outcome = self._attempt(call, key, on_behalf_of)
@@ -921,7 +954,9 @@ class WorldDoor:
                 ):
                     # The world failed mid-action, or the call ran and its answer was lost: whether it applied it is
                     # unknown, so the key is never run again.
-                    self._keyed[slot] = ("unknown", call.action, call.arguments, None, None)
+                    # Lost to the test condition, or to the world failing mid-action (ours): a retry is held for it.
+                    lost_to = KEY_UNKNOWN if outcome.fault is not None else LOG_UNKNOWN
+                    self._keyed[slot] = ("unknown", call.action, call.arguments, None, lost_to)
                     self._settle(key, call.actor, "unknown", logged)
                 else:
                     # Refused, or held by the scenario's fault before the world saw it: nothing took effect, and a
@@ -931,7 +966,7 @@ class WorldDoor:
                 return outcome
             state, action, arguments, result, answered = known
             if state != "committed":
-                return self._key_unknown(call, key, on_behalf_of)
+                return self._key_unknown(call, key, on_behalf_of, answered if state == "unknown" else KEY_UNKNOWN)
             if (action is not None and action != call.action) or not same_json(arguments, call.arguments):
                 outcome = Outcome(
                     "refused",
@@ -1052,12 +1087,13 @@ class WorldDoor:
         except Exception:  # noqa: BLE001 - a key left pending is never run again: the safe side
             pass
 
-    def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None) -> Outcome:
+    def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None, code: str = KEY_UNKNOWN) -> Outcome:
         """A keyed action whose first attempt may have taken effect without a recorded answer: never run again."""
         outcome = Outcome(
             "faulted",
             503,
             reason="whether this idempotency key's first action took effect is unknown; it is not run again",
+            refusal_code=code,
         )
         self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
         return outcome
@@ -1168,7 +1204,7 @@ class WorldDoor:
         try:
             ran = self.executor.run(call)
         except Exception as exc:  # noqa: BLE001 - the world failing is a fault of its own
-            return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable")
+            return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable", refusal_code=WORLD_UNREACHABLE)
         if ran.status < 400:
             return Outcome(
                 "committed", ran.status, ran.result, ran.body, ran.content_type

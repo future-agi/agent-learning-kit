@@ -1596,3 +1596,30 @@ def test_the_tables_columns_are_read_from_the_statements_that_make_them():
     assert ddl_columns(
         "CREATE TABLE IF NOT EXISTS t (a TEXT NOT NULL, b TEXT, PRIMARY KEY (a, b));ALTER TABLE t ADD COLUMN IF NOT EXISTS c JSONB"
     ) == {"t": ("a", "b", "c")}
+
+
+def test_a_key_the_log_cannot_check_is_our_failure_and_one_a_test_condition_lost_is_the_agent_s():
+    from fi.alk.harness.world_door import KEY_UNKNOWN, LOG_UNKNOWN, WORLD_UNREACHABLE, world_failed
+
+    class _LogDown(MemoryLog):
+        def committed(self, key, actor):
+            raise RuntimeError("log down")
+
+    door = _door(log=_LogDown())
+    held = door.enter(ToolCall(action="orders.refund", name="refund", key="k-1"))
+    assert (held.outcome, held.refusal_code) == ("faulted", LOG_UNKNOWN)
+    assert world_failed(door.events()[-1])
+
+    # The world unreachable mid-action: ours, and the keyed retry it leaves unknown is ours too.
+    down = _door(_Executor(fail=True))
+    first = down.enter(ToolCall(action="orders.refund", name="refund", key="k-2"))
+    again = down.enter(ToolCall(action="orders.refund", name="refund", key="k-2"))
+    assert (first.refusal_code, again.refusal_code) == (WORLD_UNREACHABLE, LOG_UNKNOWN)
+    assert all(world_failed(row) for row in down.events())
+
+    # A test condition lost the first answer after the world applied it: the retry is the agent's to handle.
+    lost = _door(faults=[{"action": "orders.refund", "mode": "timeout_after_commit", "on_call": 1}])
+    lost.enter(ToolCall(action="orders.refund", name="refund", key="k-3"))
+    retry = lost.enter(ToolCall(action="orders.refund", name="refund", key="k-3"))
+    assert retry.refusal_code != LOG_UNKNOWN and not any(world_failed(row) for row in lost.events())
+    assert KEY_UNKNOWN  # the code a lost retry carries when one is held

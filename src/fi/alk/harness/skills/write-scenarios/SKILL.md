@@ -289,7 +289,8 @@ against it, so it is written for the checks as much as for the proof.
 
 **1. Write the call as this caller's call should go under the agent's rules.** First find the rule
 that governs this situation in the agent's instructions, then write only the steps that rule asks for,
-complete to the outcome, with this caller's values as they last corrected them, exactly as the agent's
+every one of them (a check the rule requires, such as verifying an approval, is a step with the agent's own tool,
+even where the world would let the outcome through without it), complete to the outcome, with this caller's values as they last corrected them, exactly as the agent's
 tools take them.
 
 - When the caller states something a rule says to hand over, stop or refuse on, the solution is that
@@ -555,7 +556,10 @@ that did the right thing:
   the request, or leave it to the judge.
 - **An actor's decision.** Write the case for every outcome the actor can produce: it agrees, refuses,
   grants part, asks back, answers late or never answers, and a live actor may decide differently from one
-  trial to the next. The person's rules say what the agent does in each; a branch they say nothing about is
+  trial to the next. A decision the agent's rules tell it to verify reaches it through its own tools (a lookup,
+  or its own request's result showing the decision); when none of its tools can see it, the case is not written
+  that way, or the actor tells the agent through a channel its rules accept. The person's rules say what the
+  agent does in each; a branch they say nothing about is
   pinned (the actor's action scripted) or the case is not written. The check holds the agent to the branch that
   happened, read from the world: nothing done after a refusal, only the part granted, the fallback when no
   answer came. Ask of every such check: if the actor had decided differently, would it still judge the agent

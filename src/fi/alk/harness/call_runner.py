@@ -72,6 +72,8 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_ac
 from .actor_meter import ActorMeter
 from .world_door import (
     NOT_STOPPED,
+    door_failure,
+    world_failed,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     DOOR_FILE,
@@ -2234,6 +2236,24 @@ def _names_action(entry: Mapping[str, Any], action: str) -> bool:
 UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
 
 
+def world_failure_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Why the door failed on the agent's calls by its own fault, one reason per `world_failed` notice."""
+    return tuple(str(one.get("message")) for one in notices if one.get("code") == "world_failed")
+
+
+def world_failure_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
+    """One notice for each of the agent's calls the action log shows the world or its door failed on with no test
+    condition holding it: the trial cannot say what the agent would have done with an answer, so it is unmeasured,
+    never the agent's. Read from the log, so every runner and every route sees it."""
+    return [
+        {"code": "world_failed",
+         "message": f"The world failed on the agent's {row.get('name') or row.get('action')} call, so this trial "
+                    "cannot be graded."}
+        for row in log or ()
+        if isinstance(row, Mapping) and world_failed(row)
+    ]
+
+
 def missing_evidence(notices: Sequence[Mapping[str, Any]], records: Mapping[str, Any] | None) -> dict[str, str]:
     """Each kind of evidence a trial is missing or could not read, with why: the action log (`tool_calls`) when it
     could not be read or a call ran without the door recording it, and the records before and after (`world_state`)
@@ -3068,15 +3088,17 @@ def _read_file_tool_calls(
                 arguments = {"raw": arguments}
         if not isinstance(arguments, dict):
             arguments = {}
-        is_error = bool(record.get("is_error", False))
         output = record.get("output")
+        # The proxy's failure answer the agent's tool handed back as its value is a failed call, never a result.
+        failed = door_failure(_structured(output))
+        is_error = bool(record.get("is_error", False)) or failed is not None
         raw_at = record.get("at")
         call = Call(
             name=name,
             arguments=arguments,
             result=None if is_error else _structured(output),
             ok=not is_error,
-            error=str(output) if is_error and output is not None else None,
+            error=failed or (str(output) if is_error and output is not None else None),
             **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
             handoff=record.get("kind") == "handoff",
@@ -4847,7 +4869,12 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime) + tool_span_notices(runtime, calls, silent=False)
+        trial_notices += (
+            repeated_untimed_notices(calls)
+            + hand_off_notices(runtime)
+            + tool_span_notices(runtime, calls, silent=False)
+            + world_failure_notices(action_log)
+        )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -5009,6 +5036,7 @@ class CallRunnerImpl:
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(trial_notices),
+            world_failures=world_failure_reasons(trial_notices),
             missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},

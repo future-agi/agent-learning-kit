@@ -1355,6 +1355,7 @@ class HostedChatCallRunner:
             sealed_without_door,
             unenforced_deadline_notices,
             unmeasured_reasons,
+            world_failure_reasons,
             worker_stop_outcomes,
         )
 
@@ -1436,6 +1437,7 @@ class HostedChatCallRunner:
             in_process_tools,
             repeated_untimed_notices,
             tool_span_notices,
+            world_failure_notices,
         )
 
         said = list(deadline_notices)
@@ -1464,7 +1466,7 @@ class HostedChatCallRunner:
         # Such a worker's own checks are not graded; the rest of the trial is.
         said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
-        said += tool_span_notices(runtime, transcript.calls)
+        said += tool_span_notices(runtime, transcript.calls) + world_failure_notices(trial_log)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)
@@ -1499,6 +1501,7 @@ class HostedChatCallRunner:
             world_actions=tuple((world_record or {}).get("actions") or ()),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(transcript.notices or ()),
+            world_failures=world_failure_reasons(transcript.notices or ()),
             missing_evidence=missing_evidence(transcript.notices or (), world_record),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},

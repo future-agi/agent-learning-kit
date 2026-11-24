@@ -21,6 +21,10 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         Routed,
         SHARED_ADDRESS,
         ToolCall,
+        KEY_UNKNOWN,
+        UPSTREAM_TIMEOUT,
+        UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -40,6 +44,10 @@ except ImportError:  # pragma: no cover - imported as part of the package
         Routed,
         SHARED_ADDRESS,
         ToolCall,
+        KEY_UNKNOWN,
+        UPSTREAM_TIMEOUT,
+        UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -264,17 +272,22 @@ class Handler(BaseHTTPRequestHandler):
         if outcome.fault is not None and is_timeout(outcome.fault):
             # The agent waits, then hears its call timed out, and may retry.
             time.sleep(outcome.delay_seconds)
-            self._reply(504, {"detail": "tool_upstream_timeout"})
+            self._reply(504, {"detail": UPSTREAM_TIMEOUT})
             return
         if outcome.fault is not None:
             # Unavailable or the scenario's error: answered at once, the world never saw the call.
             if outcome.body is not None:
                 self._reply_raw(outcome.status, outcome.body)
             else:
-                self._reply(outcome.status, {"detail": "tool_upstream_unavailable"})
+                self._reply(outcome.status, {"detail": UPSTREAM_UNAVAILABLE})
             return
         if outcome.outcome == "faulted" and outcome.body is None:
-            self._reply(outcome.status, {"detail": "tool_upstream_unavailable" if outcome.status == 502 else outcome.detail})
+            if outcome.refusal_code == KEY_UNKNOWN:
+                # A keyed retry after a lost answer: the agent's to handle, told in plain words.
+                self._reply(outcome.status, {"detail": outcome.detail})
+            else:
+                # No test condition held it: the world or the door failed, which is ours.
+                self._reply(outcome.status, {"detail": WORLD_FAILED})
             return
         content = outcome.answer()
         self.send_response(outcome.status)

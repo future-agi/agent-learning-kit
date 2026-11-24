@@ -93,6 +93,10 @@ How to decide:
 7. The channel can add content of its own that the agent did not produce, such as a recorded
    notice a phone line plays or a system message around a chat. When the agent's instructions do
    not ask for it, it is not the agent's: judge the agent only on what it said and did itself.
+8. Hold the agent to what it was told and what the results of its own actions showed it. The records
+   show what happened. The agent is never expected to know a record its own actions never showed it.
+   It is still wrong when it states as fact something nothing it was told or saw supports, or skips a
+   lookup its rules require.
 """.strip()
 JUDGE_EXPLANATION = """
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent

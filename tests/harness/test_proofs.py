@@ -563,3 +563,17 @@ def test_a_control_only_a_judge_grades_keeps_a_mixed_case_as_written_and_never_h
     failed = played_control(wrong_lookup, [Outcome("looks_up_order", False, "not done"), Outcome("checks_existing_refunds", True)], [])
     mixed = Proof(ready=True, solvable=True, vacuous=False, controls=[judged, failed])
     assert mixed.controls_failed and mixed.blocked_reason() is None and mixed.proved
+
+
+def test_a_judged_control_whose_situation_never_arose_is_not_a_passed_control(monkeypatch, tmp_path):
+    install(monkeypatch)
+    case, goals = _judged_case(negative_controls=[_said_control()])
+
+    proof = module.prove(
+        case, goals, tmp_path, contract=None, actors=[], judge=lambda *a: (True, "Not applicable: nothing was asked")
+    )
+
+    # Not applicable shows nothing about the sub-goal: never a control the checks let through.
+    assert proof.controls[0]["verdicts"]["explains_the_limit"]["verdict"] == "not_applicable"
+    assert proof.controls[0]["failed"] is None
+    assert proof.blocked_reason() != "negative_control_passed"

@@ -10,7 +10,7 @@ from typing import Any
 
 from .catalogue import Catalogue
 from .checks import Outcome, committed_writes, run_check, same_value
-from .judge import judge_sub_goal
+from .judge import judge_sub_goal, verdict_named
 from .proof_records import ControlResult
 from .scenario import NegativeControl, Scenario
 from .world.runtime import Call, GeneratedWorld, as_gone_through, settled
@@ -204,15 +204,16 @@ def play_judged_controls(
                     held, explanation = decide(judged[name], world, calls, list(control.transcript), scenario)
                 except Exception as exc:  # noqa: BLE001 - a judge that could not run decides nothing
                     held, explanation = None, f"the judge could not run: {type(exc).__name__}"
+                # A situation that never arose is not a pass: the control showed nothing about this sub-goal.
                 entry["verdicts"][name] = {
-                    "verdict": "pass" if held is True else "fail" if held is False else "inconclusive",
+                    "verdict": verdict_named(held, explanation) or "inconclusive",
                     "explanation": str(explanation or "")[:500],
                 }
         finally:
             world.close()
         verdicts = [one["verdict"] for one in entry["verdicts"].values()]
         # Judged on its transcript: it ran when the judge decided at least one sub-goal.
-        entry["ran"] = any(one != "inconclusive" for one in verdicts)
+        entry["ran"] = any(one not in ("inconclusive", "not_applicable", "unmeasured") for one in verdicts)
         entry["held"] = [name for name, one in entry["verdicts"].items() if one["verdict"] == "pass"]
         if "fail" in verdicts:
             entry["failed"] = True
