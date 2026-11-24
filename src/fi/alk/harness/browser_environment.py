@@ -31,10 +31,11 @@ BROWSER_SITE_NOT_IN_EGRESS = "browser_site_not_in_egress"
 # A host name: dot-separated labels of letters, digits and inner hyphens, with an optional `*.`
 # for every name under it, as the egress list writes it. No scheme, port, path or address.
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-_HOST = re.compile(rf"(?:\*\.)?{_LABEL}(?:\.{_LABEL})*", re.IGNORECASE)
+# ASCII only: with IGNORECASE alone, [a-z] also takes letters a browser reads as others ("ſ" as "s").
+_HOST = re.compile(rf"(?:\*\.)?{_LABEL}(?:\.{_LABEL})*", re.IGNORECASE | re.ASCII)
 # A browser reads a host as an IPv4 address when its last label is a number (decimal, octal or
 # `0x` hex), as the URL standard does: `0x7f000001` is 127.0.0.1. Such a host is never a site.
-_NUMBER_LABEL = re.compile(r"[0-9]+|0x[0-9a-f]*", re.IGNORECASE)
+_NUMBER_LABEL = re.compile(r"[0-9]+|0x[0-9a-f]*", re.IGNORECASE | re.ASCII)
 
 
 class SitesProblem(ValueError):
@@ -66,6 +67,17 @@ def _is_host(site: str) -> bool:
         and name not in LOOPBACK
         and not name.endswith(".localhost")
     )
+
+
+# The sites a message names before it counts the rest: the platform reads a message of at most
+# 2000 characters, and the whole list is in the failure's details.
+_NAMED_IN_A_MESSAGE = 5
+
+
+def _some(sites: list[str]) -> str:
+    named = ", ".join(sites[:_NAMED_IN_A_MESSAGE])
+    rest = len(sites) - _NAMED_IN_A_MESSAGE
+    return f"{named}, and {rest} more" if rest > 0 else named
 
 
 def allowed_sites(metadata: Mapping[str, Any] | None) -> tuple[str, ...] | None:
@@ -104,7 +116,7 @@ def allowed_sites(metadata: Mapping[str, Any] | None) -> tuple[str, ...] | None:
             raise SitesProblem(
                 _failure(
                     BROWSER_SITE_NOT_IN_EGRESS,
-                    "The run's egress doesn't allow these browser sites: " + ", ".join(outside) + ".",
+                    "The run's egress doesn't allow these browser sites: " + _some(outside) + ".",
                     sites=outside,
                 )
             )

@@ -98,7 +98,10 @@ each kind leads to. When calls in one message run one after another, or together
 scan is done, a later call is taken as the answer before the model has read the look. Once an
 answer with the value has come back, a later answer of another kind without it gets a look again,
 so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic
-job read unattended), never a refusal without a look.
+job read unattended), never a refusal without a look. Once a browser answer stands, in this
+reading or in the contract it starts over, a later chat or voice answer would quietly take the
+browser away, so it gets a look of its own even when nothing was found; only the value of a look
+given after the browser answer counts, and the need goes only with that look's answer.
 
 A reading never refuses a browser agent for want of a browser: a reading knows no job. A build
 does, with `browser_environment_required` (exit 78), when the contract needs a browser and the

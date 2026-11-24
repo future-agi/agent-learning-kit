@@ -2870,6 +2870,79 @@ def test_a_browser_reading_is_stored_as_chat_that_needs_a_browser(tmp_path, brow
     assert not (output / FAILURE_FILE).exists()
 
 
+def _saved_as_browser(submit) -> None:
+    submit(_reading("browser"))
+    assert not submit(_reading("browser", second_look_read=_READ)).get("is_error")
+
+
+def _kept_need(output: Path) -> None:
+    contract = load(output)
+    assert (contract.modality, contract.environment_needs) == ("chat", ["browser"])
+
+
+def test_a_chat_answer_after_a_browser_answer_gets_a_look_before_the_need_goes(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    _saved_as_browser(submit)
+    # Nothing was found and chat would otherwise stand at once.
+    look = _text(submit(_reading("chat")))
+    assert "second-look: you recorded modality chat" in look
+    assert "An earlier answer of this reading recorded browser" in look
+    _kept_need(output)
+    # The look's answer stands: the need goes only now.
+    assert not submit(_reading("chat", second_look_read=_READ)).get("is_error")
+    assert load(output).environment_needs == []
+
+
+def test_a_chat_answer_beside_the_browser_answer_gets_a_look_of_its_own(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    asyncio.run(tool.handler(_reading("browser")))
+
+    async def together():
+        return await asyncio.gather(
+            tool.handler(_reading("browser", second_look_read=_READ)), tool.handler(_reading("chat"))
+        )
+
+    browser, chat = asyncio.run(together())
+    assert not browser.get("is_error"), browser
+    assert "second-look: you recorded modality chat" in _text(chat)
+    _kept_need(output)
+
+
+def test_a_chat_answer_carrying_the_browser_looks_value_gets_a_look_of_its_own(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    _saved_as_browser(submit)
+    # The value it sends back is the one the browser answer already used.
+    assert "second-look: you recorded modality chat" in _text(submit(_reading("chat", second_look_read=_READ)))
+    _kept_need(output)
+
+
+def test_on_a_browser_repo_a_chat_answer_after_an_unanswered_look_keeps_the_need_until_its_own_look(
+    tmp_path, browser_repo
+):
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    submit(_reading("browser"))
+    # No value came back: the next answer stands, and it reads browser.
+    assert not submit(_reading("browser")).get("is_error")
+    _kept_need(output)
+    assert "second-look: you recorded modality chat" in _text(submit(_reading("chat")))
+    _kept_need(output)
+
+
+def test_a_new_reading_over_a_browser_contract_on_disk_gives_a_chat_answer_a_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    _saved_as_browser(_submitter(output, plain_repo))
+    again = _submitter(output, plain_repo)
+    assert "second-look: you recorded modality chat" in _text(again(_reading("chat")))
+    _kept_need(output)
+    # A browser answer in the new reading gets its own look as any reading's does.
+    fresh = _submitter(output, plain_repo)
+    assert "second-look: you recorded modality browser" in _text(fresh(_reading("browser")))
+
+
 @pytest.mark.parametrize("needs", [["browser"], ["database"], "browser"])
 def test_a_need_the_reading_writes_itself_is_never_saved(tmp_path, plain_repo, needs):
     output = tmp_path / "out"

@@ -1047,7 +1047,7 @@ class SecondLook:
     known to have read it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, browser_stood: bool = False) -> None:
         self._receipts: set[str] = set()
         # Whether the latest look has had no value back yet. A model that never sends one back
         # must still be able to answer, or every submission earns another look until the turns run
@@ -1055,6 +1055,12 @@ class SecondLook:
         self._unanswered = False
         # The kind of the answer a value came back on ("" for a conversation), once one has.
         self._answered: str | None = None
+        # Whether a browser answer stands (in this reading, or in the contract it starts over). It
+        # is saved as chat that needs a browser, so a later chat answer would quietly take the
+        # browser away: that answer gets a look of its own first, and only the values of looks
+        # given since count (``_since_browser``).
+        self._browser_stood = browser_stood
+        self._since_browser: set[str] | None = set() if browser_stood else None
 
     @property
     def given(self) -> bool:
@@ -1077,17 +1083,26 @@ class SecondLook:
         # beside that answer unread, so it gets a look of its own. A value that came back on a
         # refused kind stopped every later call.
         kind = reading_kind(claimed)
-        read_it = isinstance(receipt, str) and receipt in self._receipts
+        current = self._receipts if self._since_browser is None else self._since_browser
+        read_it = isinstance(receipt, str) and receipt in current
         if read_it:
             self._unanswered = False
             self._answered = kind
         same_answer = self._answered == kind
-        return decide(
-            claimed,
-            found,
-            looked_again=read_it or (given_before and (self._unanswered or same_answer)),
-            cut=cut,
-        )
+        looked_again = read_it or (given_before and (self._unanswered or same_answer))
+        if self._browser_stood and not kind and not looked_again:
+            return "second_look"
+        decision = decide(claimed, found, looked_again=looked_again, cut=cut)
+        if decision == "keep" and kind == BROWSER:
+            # The browser answer stands. The looks before it are answered and their values spent,
+            # so a later answer of another kind needs a look given after this one.
+            self._browser_stood = True
+            self._answered = BROWSER
+            self._unanswered = False
+            self._since_browser = set()
+        elif decision == "keep" and not kind:
+            self._browser_stood = False
+        return decision
 
     def issue(
         self,
@@ -1098,10 +1113,18 @@ class SecondLook:
         cut: frozenset[str] = frozenset(),
     ) -> str:
         """The look's text, with ``receipt`` as the value to send back."""
+        earlier = (
+            " An earlier answer of this reading recorded browser, saved as a chat agent that needs "
+            "a browser; this answer takes the browser away."
+            if self._browser_stood and not reading_kind(claimed)
+            else ""
+        )
         self._receipts.add(receipt)
+        if self._since_browser is not None:
+            self._since_browser.add(receipt)
         self._unanswered = True
         return (
-            f"{self.prompt(claimed, found, cut=cut)} When you submit again, set "
+            f"{self.prompt(claimed, found, cut=cut)}{earlier} When you submit again, set "
             f'{SECOND_LOOK_READ} to "{receipt}", which shows you read this.'
         )
 

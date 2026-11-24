@@ -832,6 +832,18 @@ def _tools_in_agent_folder(
         return [], frozenset()
 
 
+def _needs_a_browser(destination: Path) -> bool:
+    """Whether the contract this reading starts over is a browser agent's. One that can't be read
+    is for the steps that read it."""
+    from .understand import load
+
+    try:
+        contract = load(destination)
+    except (OSError, ValueError):
+        return False
+    return contract is not None and "browser" in contract.environment_needs
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
@@ -897,7 +909,7 @@ def contract_tools(
     # What was quoted for the prompt when the lines named for it were refused.
     held: dict[str, str] = {}
     refused = False
-    second_look = SecondLook()
+    second_look = SecondLook(browser_stood=_needs_a_browser(destination))
     found: list[str] | None = None
     # Set with found, from the same scan: a later call skips the scan and must still see its cut.
     cut: frozenset[str] = frozenset()

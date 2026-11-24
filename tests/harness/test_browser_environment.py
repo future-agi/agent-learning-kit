@@ -89,6 +89,11 @@ def test_a_list_present_and_empty_or_not_a_list_fails(value, reason):
         "2130706433",
         "shop.0x1",
         "*.10",
+        # Letters a browser reads as other ASCII letters, or that aren't ASCII at all.
+        "\u017fhop.example.com",
+        "\u0131o.com",
+        "\u0130stanbul.com",
+        "\u212aexample.com",
         "",
         " shop.example.com",
         "-bad.example.com",
@@ -124,6 +129,20 @@ def test_each_site_must_be_one_the_egress_allows():
     assert failure.message == "The run's egress doesn't allow these browser sites: pay.other.com."
     metadata["browser_allowed_sites"] = ["shop.example.com", "example.com", "*.docs.example.com"]
     assert allowed_sites(metadata) == ("shop.example.com", "example.com", "*.docs.example.com")
+
+
+def test_a_long_list_outside_the_egress_keeps_the_message_short_and_the_details_whole():
+    sites = [f"shop-{n:02}.example-store.com" for n in range(80)]
+    failure = _problem({"browser_allowed_sites": sites, "egress_allowed_hosts": []}).failure
+    assert failure.code == BROWSER_SITE_NOT_IN_EGRESS
+    assert failure.details == {"sites": sites}
+    # The platform reads a message of at most 2000 characters, or none at all.
+    assert len(failure.message) <= 2000
+    assert failure.message == (
+        "The run's egress doesn't allow these browser sites: shop-00.example-store.com, "
+        "shop-01.example-store.com, shop-02.example-store.com, shop-03.example-store.com, "
+        "shop-04.example-store.com, and 75 more."
+    )
 
 
 def test_loopback_in_the_egress_does_not_admit_a_site():
