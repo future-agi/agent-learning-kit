@@ -159,7 +159,8 @@ def grade(scenario: Scenario, world: GeneratedWorld, world_root: Path) -> LiveRu
         sub_goal = catalogue.named(name)
         if sub_goal is None:
             run.problems.append(f"{name} is not in the catalogue")
-        elif sub_goal.deterministic():
+            continue
+        if sub_goal.deterministic():
             run.settled.append(
                 run_check(
                     sub_goal.check,
@@ -169,7 +170,9 @@ def grade(scenario: Scenario, world: GeneratedWorld, world_root: Path) -> LiveRu
                     reference=reference_of(scenario.solution),
                 )
             )
-        else:
+        # A `both` goal has a judged half as well as its check: the check sees the records, the
+        # judge what the agent said, and the goal holds only when both do.
+        if sub_goal.judged.strip() or not sub_goal.deterministic():
             run.judged.append(name)
     run.calls = [
         f"{call.name}({call.arguments}) -> "

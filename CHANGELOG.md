@@ -30,6 +30,29 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Adaptation on the Wave A verticals (TH-7951, TH-8751): a customer's agent that is an MCP client is
+  **declared** (name, instructions, tool schemas; connector `mcp_client`, `adaptation/declared.py`)
+  instead of inspected at a provider, and adapted exactly as a Vapi or Retell agent is: every
+  declared tool is routed, the mode is chosen on the schemas, the builder maps and proves the
+  binding, and the declaration's digest is the agent's identity, so a run with another declaration
+  is refused. The harness now **derives trajectories** from the reference solutions wherever the
+  binding inverts them (`binding_trajectories.py`: one step per agent tool, arguments renamed,
+  converted, mapped or aliased); `submit_binding` takes a draft without trajectories and says which
+  scenarios still need one, with the reason, so a hundred-scenario suite is proved without a model
+  writing a hundred trajectories. The world's MCP endpoint (`world_mcp`) loads the bundle's
+  binding: under a `tool_routed` binding `tools/list` is the agent's own tools and every
+  `tools/call` is routed through the binding, so a customer's agent, or its Gmail, Drive or Slack
+  MCP tools under their official names, reaches the world's records in its own vocabulary;
+  `compose` composes `canonical` and `tool_routed` bindings on `mcp_client` over `world-mcp`.
+  Proved on PostgreSQL: a renamed agent (no name in common with the environment) on every scenario
+  of all nine verticals, and Banking's hand-written customer CardGuard (own names for the bank's
+  tools, the official Gmail and Drive tools mapped onto themselves, one unsupported tool, two
+  instructions against the agent rules), with every trajectory derived
+  (`tests/harness/test_adaptation_verticals.py`, `tests/harness/adaptation_fixtures.py`).
+- The local graders (`alk run`, `run/live.py`, `run/grade.py`) judge the judged half of a `both`
+  goal as well as running its check, as the hosted scheduler already did: a goal with both halves
+  holds only when both do, so a draft that falsely claims a refund no longer passes on its code
+  half alone.
 - Wave A increments 7 to 10 (TH-8750): four new vertical packages, each with 100 scenarios over
   linked business and MCP records: `clinic_scheduling` (V02; Calendar as the availability source,
   Gmail), `service_scheduling` (V12; Calendar across two time zones and a clock change, Gmail),

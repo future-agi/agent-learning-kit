@@ -22,6 +22,7 @@ import jmespath
 from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from jmespath.exceptions import JMESPathError
+from jsonschema import Draft202012Validator
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -618,7 +619,12 @@ class OperationRecord:
     step_id: str
     tool: str
     arguments: dict[str, Any]
+    # Under a `tool_routed` binding, what the agent was given back: the mapped response on the
+    # call's last operation, nothing on the ones before it. The trace and the checks read this, so
+    # they judge what the customer received, never the richer result the world returned.
     result: Any = None
+    # What the environment's handler returned.
+    world_result: Any = None
     status: str = "ok"
     error: str = ""
     # A refusal the world simulates on purpose keeps its writes: the caller commits it although
@@ -741,6 +747,60 @@ def _operate(
     return True
 
 
+def agent_call_problems(
+    agent_tools: Sequence[AgentTool], agent_tool: str, arguments: Any
+) -> list[str]:
+    """Why `arguments` is not a call the agent can make to `agent_tool`, under the JSON Schema the
+    binding sealed for it; empty when it is. Every agent call is held to it: one a run receives,
+    one a builder writes and one derived from a reference solution."""
+    tool = next((one for one in agent_tools if one.name == agent_tool), None)
+    if tool is None:
+        return [f"the agent has no tool {agent_tool!r}"]
+    if not isinstance(arguments, Mapping):
+        return ["arguments must be a JSON object"]
+    # A null optional argument is one left out: the binding never sends a null on (`_resolve`).
+    required = set(tool.parameters.get("required") or [])  # type: ignore[arg-type]
+    sent = {
+        name: value
+        for name, value in arguments.items()
+        if value is not None or name in required
+    }
+    errors = Draft202012Validator(tool.parameters).iter_errors(sent)
+    return sorted(
+        f"{'.'.join(map(str, error.absolute_path)) or 'arguments'}: {error.message}"
+        for error in errors
+    )
+
+
+def operation_problems(tool: ToolDefinition, arguments: Mapping[str, Any]) -> list[str]:
+    """Why `arguments` is not a call the environment's `tool` takes, under its whole JSON Schema;
+    empty when it is. Every operation is held to it before its handler runs, whichever mode
+    produced it: a schema the agent's own allows is no evidence the environment's does."""
+    errors = Draft202012Validator(tool.parameters).iter_errors(dict(arguments))
+    return sorted(
+        f"{'.'.join(map(str, error.absolute_path)) or 'arguments'}: {error.message}"
+        for error in errors
+    )
+
+
+def _refused_by_schema(tool: ToolDefinition, arguments: Mapping[str, Any]) -> str:
+    problems = operation_problems(tool, arguments)
+    return (
+        f"{tool.name} does not take these arguments: {'; '.join(problems)}"
+        if problems
+        else ""
+    )
+
+
+def _returned(operations: list[OperationRecord], value: Any) -> None:
+    """Record what the agent was given back: `value` on the last operation, which is where the
+    response came from, and nothing on the earlier ones, whose results the agent never saw."""
+    for record in operations:
+        record.world_result, record.result = record.result, None
+    if operations:
+        operations[-1].result = value
+
+
 def _mode(binding: AgentBindingV1 | None) -> str:
     return (
         "canonical"
@@ -773,10 +833,20 @@ def run_bound_call(
             )
         if not isinstance(arguments, dict):
             return _failed("invalid", "arguments must be a JSON object")
-        record = OperationRecord(agent_tool, agent_tool, dict(arguments))
+        # A null optional argument is one left out, as a routed binding leaves it (`_resolve`).
+        required = set(environment[agent_tool].parameters.get("required") or [])
+        sent = {
+            name: value
+            for name, value in arguments.items()
+            if value is not None or name in required
+        }
+        if refused := _refused_by_schema(environment[agent_tool], sent):
+            return _failed("invalid", refused)
+        record = OperationRecord(agent_tool, agent_tool, sent)
         operations: list[OperationRecord] = []
         if not _operate(run_operation, record, operations):
             return _failed(record.status, record.error, operations)
+        record.world_result = record.result
         return BoundResult("ok", _content(record.result), record.result, "", operations)
     assert binding is not None
     if mode != "tool_routed":
@@ -794,6 +864,11 @@ def run_bound_call(
         return _failed("unsupported", entry.unsupported)
     if not isinstance(arguments, dict):
         return _failed("invalid", "arguments must be a JSON object")
+    if problems := agent_call_problems(binding.agent_tools, agent_tool, arguments):
+        return _failed(
+            "invalid",
+            f"{agent_tool} does not take these arguments: {'; '.join(problems)}",
+        )
     context = _Context(dict(arguments), {}, binding.fixtures, binding.aliases)
     operations = []
     try:
@@ -808,12 +883,15 @@ def run_bound_call(
                 produced = _step_arguments(step, tool, context)
             except _Invalid as exc:
                 return _failed("invalid", str(exc), operations)
+            if refused := _refused_by_schema(tool, produced):
+                return _failed("invalid", refused, operations)
             record = OperationRecord(step.id, step.tool, produced)
             if not _operate(run_operation, record, operations):
                 return _failed(record.status, record.error, operations)
             last = context.steps[step.id] = record.result
         response = entry.response
         if response is None:
+            _returned(operations, last)
             return BoundResult("ok", _content(last), last, "", operations)
         if response.template is not None:
             content = (
@@ -825,13 +903,15 @@ def run_bound_call(
                     fixtures=dict(context.fixtures),
                 )
             )
-            return BoundResult("ok", content, last, "", operations)
+            _returned(operations, content)
+            return BoundResult("ok", content, content, "", operations)
         try:
             value = _resolve(response.value, context)  # type: ignore[arg-type]
         except _Invalid as exc:
             return _failed("invalid", f"response: {exc}", operations)
         if value is _MISSING:
             return _failed("invalid", "response: no value", operations)
+        _returned(operations, value)
         return BoundResult("ok", _content(value), value, "", operations)
     except Exception as exc:  # noqa: BLE001 - the binding itself broke: roll back, report
         return _failed("fault", f"binding: {type(exc).__name__}: {exc}", operations)

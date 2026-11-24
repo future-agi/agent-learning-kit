@@ -1,13 +1,15 @@
 """The MCP endpoint a composed release bundle serves once per world (`environment-releases.md` §6.4).
 
-`/mcp` is stateless Streamable HTTP with JSON responses: `tools/list` is the release's tools plus
-its attached servers' (`world_tools.WorldTools.tools`), and `tools/call` runs one canonical call
-through `WorldTools.call`, so an MCP agent reaches exactly the tools, transactions and trace rows a
-webhook agent does. `GET /healthz` answers once the process serves.
+`/mcp` is stateless Streamable HTTP with JSON responses: `tools/list` is what the bundle's binding
+lets the agent call (the release's tools plus its attached servers' for a canonical agent; the
+agent's own tools under a `tool_routed` binding, `world_tools.WorldTools.tools`), and `tools/call`
+runs one call through `WorldTools.call` and the binding, so an MCP agent, ours or a customer's,
+reaches exactly the tools, transactions and trace rows a webhook agent does. `GET /healthz`
+answers once the process serves.
 
-It runs from the bundle's tool-server directory (`tools.json`, `servers.json`, `handlers/`) on
-the ALK interpreter, and restarts on every lease, so attached servers never carry state into the
-next scenario.
+It runs from the bundle's tool-server directory (`tools.json`, `servers.json`, `handlers/`,
+`binding.json`) on the ALK interpreter, and restarts on every lease, so attached servers never
+carry state into the next scenario.
 
     PORT=8090 DATABASE_URL=postgresql://... python -m fi.alk.harness.world_mcp
 """
@@ -30,6 +32,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
+from fi.alk.harness.release_tool_server import BINDING_FILE
 from fi.alk.harness.world_tools import WorldTools, attach_servers, load_handlers
 
 MCP_PATH = "/mcp"
@@ -101,14 +104,16 @@ def build_app(world: WorldTools) -> Starlette:
 def main() -> None:
     import uvicorn
 
-    from fi.alk.harness.releases import load_servers, load_tools
+    from fi.alk.harness.releases import load_agent_binding, load_servers, load_tools
 
     here = Path.cwd()
+    binding_file = here / BINDING_FILE
     database_url = os.environ["DATABASE_URL"]
     world = WorldTools(
         load_handlers(here / "tools.json", here / "handlers"),
         load_tools(here),
         database_url,
+        binding=load_agent_binding(binding_file) if binding_file.is_file() else None,
         attached=attach_servers(load_servers(here), database_url, cwd=here),
     )
     uvicorn.run(

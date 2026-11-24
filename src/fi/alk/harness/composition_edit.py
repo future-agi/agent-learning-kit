@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .binding_proof import BindingProofV1, prove_binding
+from .binding_proof import BindingProofV1, proof_digest, prove_binding
 from .bindings import MappedToolBinding
 from .contract import AgentContract
 from .folder import document_for, read_folder, write_index
@@ -213,8 +213,9 @@ class Composition:
                         "for every scenario you add or rewrite. `save_changes` proves each one through "
                         "the binding on PostgreSQL and saves nothing until every reachable scenario "
                         "holds and every adversarial variant fails. A scenario whose solution needs a "
-                        "tool no mapped step reaches is unscorable for this agent: it stays in the "
-                        "suite, is not scored, and needs no trajectory."
+                        "tool no mapped step reaches is unscorable for this agent unless a trajectory "
+                        "you write solves it another way: it stays in the suite, is not scored, and "
+                        "runs cannot select it."
                     ),
                 ]
             )
@@ -250,7 +251,10 @@ class Composition:
         return sorted(
             scenario.scenario_key
             for scenario in load_scenarios(self.workspace)
-            if {step.tool for step in scenario.solution} <= reached
+            if any(
+                {step.tool for step in route} <= reached
+                for route in [scenario.solution, *scenario.alternatives]
+            )
             and scenario.scenario_key not in stored
         )
 
@@ -529,6 +533,8 @@ def seal_change(plan: ChangePlan, *, postgres_dsn: str) -> dict[str, Any]:
         "schema_version": CHANGE_SCHEMA,
         "parent": composition.suite.digest,
         "suite": suite.digest,
+        # The edited suite's proof, for the manifests of the runs that follow (`proof_digest`).
+        "binding_proof": {"digest": proof_digest(proof)} if proof else None,
         "added": plan.added,
         "changed": plan.changed,
         "removed": plan.removed,

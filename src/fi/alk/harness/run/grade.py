@@ -150,11 +150,15 @@ class Result:
 
 
 def _claims(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
-    """The sub-goals of this scenario that nothing observable can settle."""
+    """The sub-goals of this scenario with a judged half: the ones nothing observable can settle,
+    and the judged half of every `both` goal, whose check settles the records and whose judge
+    settles what the agent said. A goal with both halves holds only when both do."""
     judged: list[tuple[str, str]] = []
     for name in scenario.sub_goals:
         sub_goal = catalogue.named(name)
-        if sub_goal is not None and not sub_goal.deterministic():
+        if sub_goal is None:
+            continue
+        if not sub_goal.deterministic() or sub_goal.judged.strip():
             judged.append((criteria_text(sub_goal.judged or sub_goal.what), name))
     return judged
 

@@ -2056,6 +2056,8 @@ class _FakeConnection:
 
     def execute(self, statement: str, params: Any = None) -> _FakeCursor:
         self.executed.append(statement)
+        if "_alk_trace_failures" in statement:  # no call ran untraced
+            return _FakeCursor([(False,)], ["present"])
         if "to_regclass" in statement:
             # A world without the trial tables yet: the presence read finds none of them.
             return _FakeCursor([(False, [])], ["present", "columns"])
@@ -4152,6 +4154,7 @@ def test_a_shared_worker_never_bypasses() -> None:
 def test_a_door_row_from_before_channels_is_not_a_bypass(monkeypatch) -> None:
     rows = [{"name": "issue_refund", "arguments": {}, "ok": True, "at": 1.0}]
     monkeypatch.setattr(cr, "read_tool_trace", lambda _address: rows)
+    monkeypatch.setattr(cr, "_trace_failures", lambda _address: 0)  # no call ran untraced
     monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda _runtime: type("E", (), {"address": "x"})())
     (call,) = cr._collect_tool_trace_calls(object())
     assert call.channel is None

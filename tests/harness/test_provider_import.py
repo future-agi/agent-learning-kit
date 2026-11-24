@@ -349,6 +349,7 @@ def test_retell_import_clones_llm_rewires_custom_tools_then_agent() -> None:
                         "type": "custom",
                         "name": "lookup",
                         "url": "https://prod.example/provider/tools/lookup",
+                        "max_retry": 3,
                     },
                     {"type": "end_call", "name": "end_call"},
                 ],
@@ -378,6 +379,8 @@ def test_retell_import_clones_llm_rewires_custom_tools_then_agent() -> None:
         llm_body["general_tools"][0]["url"]
         == "https://world.example/provider/tools/lookup"
     )
+    # Retell retries repeat the request; the world's tool server cannot always tell one apart.
+    assert llm_body["general_tools"][0]["max_retry"] == 0
     assert "url" not in llm_body["general_tools"][1]
     agent_body = next(
         body

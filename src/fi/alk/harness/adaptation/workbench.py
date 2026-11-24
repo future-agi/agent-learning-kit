@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..binding_trajectories import derive_trajectories
+from ..bindings import agent_call_problems
 from ..catalogue import load_catalogue
 from ..folder import read_folder
 from ..releases import (
@@ -24,6 +26,7 @@ from ..releases import (
     ScenarioOrigin,
     load_environment_release,
     load_policy,
+    load_servers,
     load_suite_release,
     load_tools,
     seal_suite_release,
@@ -33,6 +36,7 @@ from .profile import (
     AgentProfile,
     argument_mismatches,
     build_profile,
+    identity_mapping,
     seal_binding,
     select_mode,
 )
@@ -71,6 +75,7 @@ def failed_result(code: str, message: str) -> dict[str, Any]:
         "environment": [],
         "suite": None,
         "binding": None,
+        "binding_proof": None,
         "alignment": None,
     }
 
@@ -92,11 +97,17 @@ class BindingDraft:
 
 
 def parse_binding_draft(body: Mapping[str, Any]) -> BindingDraft:
+    """`trajectories` may be left out or partial: code derives one for every scenario whose
+    reference solution the binding inverts (`binding_trajectories`), and the builder writes the rest."""
     mapping = body.get("binding")
     trajectories = body.get("trajectories")
+    if trajectories is None:
+        trajectories = {}
     candidates = body.get("extension_candidates") or []
     if not isinstance(mapping, Mapping) or not isinstance(trajectories, Mapping):
-        raise TypeError("a draft needs a `binding` object and a `trajectories` object")
+        raise TypeError(
+            "a draft needs a `binding` object and, if given, a `trajectories` object"
+        )
     if not isinstance(candidates, list) or not all(
         isinstance(one, Mapping) and {"agent_tool", "reason"} <= set(one)
         for one in candidates
@@ -156,7 +167,11 @@ class Workbench:
         }
         if self.mode is not BindingMode.TOOL_ROUTED:
             self.binding = seal_binding(
-                profile, self.mode, None, environment_root=self.target_root
+                profile,
+                self.mode,
+                None,
+                environment_root=self.target_root,
+                environment_tools=self.environment_tools,
             )
             if self.mode is BindingMode.CANONICAL:
                 admitted = {one.name for one in profile.admitted}
@@ -186,6 +201,15 @@ class Workbench:
                     for entry in self.base_suite.scenarios
                 ]
         self._restore()
+        # An agent with some of the environment's tools, each called as-is, needs no mapping
+        # written: its own tools onto themselves, so only those are served.
+        self.identity = (
+            identity_mapping(profile, self.environment_tools)
+            if self.mode is BindingMode.TOOL_ROUTED
+            else None
+        )
+        if self.identity is not None and self.draft is None:
+            self.submit_binding({"binding": self.identity})
 
     # --- releases -------------------------------------------------------------------------
 
@@ -206,9 +230,32 @@ class Workbench:
         self.releases = [{"digest": one.digest, "name": one.name} for one in releases]
         self.target_root = self.environments[-1]
         self.target_digest = releases[-1].digest
-        self.environment_tools = load_tools(self.target_root)
+        self.environment_tools = [
+            *load_tools(self.target_root),
+            *self._attached_tools(),
+        ]
         self.policy = load_policy(self.target_root)
         self.catalogue = load_catalogue(self.suite_root)
+
+    def _attached_tools(self) -> list[Any]:
+        """The attached servers' tools as a world offers them, `<id>__<tool>` with the schema the
+        server itself lists: the agent may be mapped onto them as onto the release's own."""
+        if not load_servers(self.target_root):
+            return []
+        from ..releases import PostgresProof
+
+        try:
+            with PostgresProof(
+                self.suite_root,
+                self.target_root,
+                self.base_suite.policy_profile,
+                self.postgres_dsn,
+            ) as proof:
+                return proof.attached_definitions()
+        except Exception as exc:  # a server that will not start fails the job
+            raise AdaptationFailure(
+                "release_invalid", f"attached servers: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def _suite_for_target(self) -> tuple[Path, Any, bool]:
         """The base suite on the target environment: as it is, or (on an extension) the same
@@ -308,6 +355,12 @@ class Workbench:
                 )
             )
         }
+        if self.identity is not None:
+            lines.append(
+                "\nThe agent's tools are some of the environment's, each called as-is: the "
+                "harness submitted the binding that maps each onto itself, so the agent is served "
+                "its own tools and no others. Resubmit only to change it; run_proof next."
+            )
         if mismatched:
             lines.append(
                 "\nSAME NAME, DIFFERENT ARGUMENTS (these need a mapping like any other tool):\n"
@@ -336,13 +389,28 @@ class Workbench:
                 BindingMode.TOOL_ROUTED,
                 draft.mapping,
                 environment_root=self.target_root,
+                environment_tools=self.environment_tools,
             )
         except ReleaseError as exc:
             return False, "\n".join(exc.detail.splitlines() or [exc.code])
+        # The harness writes every trajectory the binding determines; the builder's own, where it
+        # wrote one, wins.
+        derived = derive_trajectories(
+            binding,
+            (
+                (entry.key, scenario.solution, scenario.alternatives)
+                for entry in self.base_suite.scenarios
+                if (scenario := read_folder(self.suite_root, Path(entry.path).name))
+                is not None
+            ),
+            self.environment_tools,
+        )
+        written = dict(draft.trajectories)
+        draft.trajectories = {**derived.trajectories, **written}
         problems: list[str] = []
         keys = {entry.key for entry in self.base_suite.scenarios}
         agent_tools = sorted(one["name"] for one in self.profile.agent_tools)
-        for key, calls in draft.trajectories.items():
+        for key, calls in written.items():
             if key not in keys:
                 problems.append(f"trajectory {key}: the suite has no such scenario")
                 continue
@@ -356,6 +424,15 @@ class Workbench:
                         f"trajectory {key} call {index} must be "
                         f"{{tool: one of {agent_tools}, arguments: object}}"
                     )
+                # A call the agent's own schema refuses is not one it can make, so it proves
+                # nothing about the agent.
+                elif refused := agent_call_problems(
+                    binding.agent_tools, call["tool"], call["arguments"]
+                ):
+                    problems.append(
+                        f"trajectory {key} call {index}: the agent's {call['tool']} schema "
+                        f"refuses it: {'; '.join(refused)}"
+                    )
         problems.extend(
             f"extension candidate {one['agent_tool']}: not an admitted agent tool"
             for one in draft.extension_candidates
@@ -365,7 +442,32 @@ class Workbench:
             return False, "\n".join(problems)
         self.draft, self.binding, self.proof, self.verdicts = draft, binding, None, {}
         self._save_state(raw=dict(body))
-        return True, f"accepted as {binding.digest}; run_proof next"
+        still = {
+            key: reason
+            for key, reason in derived.undecided.items()
+            if key not in written
+        }
+        # A scenario none of whose routes the binding reaches is unscorable unless a trajectory
+        # written in the agent's own tools solves it; run_proof proves that one like any other.
+        closed = sorted(key for key in derived.unreached if key not in written)
+        lines = [
+            f"accepted as {binding.digest}: {len(derived.trajectories)} trajectories derived "
+            f"from the reference solutions, {len(written)} written by you"
+            + (
+                f", {len(closed)} scenarios use a tool no entry reaches (unscorable unless "
+                f"you write a trajectory that solves them another way: {', '.join(closed)})"
+                if closed
+                else ""
+            )
+            + "."
+        ]
+        if still:
+            lines.append(
+                f"{len(still)} scenarios still need a trajectory from you (resubmit with them):"
+            )
+            lines.extend(f"- {key}: {reason}" for key, reason in sorted(still.items()))
+        lines.append("run_proof next")
+        return True, "\n".join(lines)
 
     def run_proof(self) -> tuple[bool, str]:
         if self.mode is not BindingMode.TOOL_ROUTED:
@@ -579,9 +681,18 @@ class Workbench:
                     "derived": derived,
                 },
                 "binding": {"digest": self.binding.digest, "mode": self.mode.value},
+                # What a run's manifest freezes, so compose reads only this proof's statuses.
+                "binding_proof": self._proof_ref(),
                 "alignment": self.alignment,
             }
         )
+
+    def _proof_ref(self) -> dict[str, str] | None:
+        if self.mode is not BindingMode.TOOL_ROUTED:
+            return None
+        from ..binding_proof import BindingProofV1, proof_digest
+
+        return {"digest": proof_digest(BindingProofV1.model_validate(self.proof))}
 
     def fail(self, code: str, message: str) -> None:
         result = failed_result(code, message)
@@ -660,8 +771,9 @@ def binding_server(workbench: Workbench, approve: Approve) -> Any:
 
     @tool(
         "submit_binding",
-        "Submit the complete binding and a trajectory for every reachable scenario. Each "
-        "argument is JSON text.",
+        "Submit the complete binding. Trajectories are optional: the harness derives one for "
+        "every scenario the binding inverts and says which still need yours. Each argument is "
+        "JSON text.",
         {
             "type": "object",
             "properties": {
@@ -671,7 +783,8 @@ def binding_server(workbench: Workbench, approve: Approve) -> Any:
                 },
                 "trajectories": {
                     "type": "string",
-                    "description": "JSON object {scenario_key: [{tool, arguments}]}",
+                    "description": "JSON object {scenario_key: [{tool, arguments}]}, only for "
+                    "scenarios the harness could not derive (yours win where both exist)",
                 },
                 "extension_candidates": {
                     "type": "string",
@@ -679,7 +792,7 @@ def binding_server(workbench: Workbench, approve: Approve) -> Any:
                     "that act on business state this environment lacks",
                 },
             },
-            "required": ["binding", "trajectories"],
+            "required": ["binding"],
         },
     )
     async def submit_binding(args: dict[str, Any]) -> dict[str, Any]:
@@ -831,6 +944,7 @@ def _agent_summary(agent: Mapping[str, Any], limit: int = 8000) -> str:
             "name",
             "begin_message",
             "general_prompt",
+            "instructions",
             "first_message",
             "model",
             "states",

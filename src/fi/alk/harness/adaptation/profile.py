@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -17,9 +19,17 @@ from ..provider_import import (
 )
 from ..provider_lifecycle import ProviderType
 from ..releases import AgentRef, BindingMode, ToolDefinition, seal_agent_binding
+from .declared import (
+    DECLARED,
+    MCP_CLIENT,
+    declared_admission,
+    declared_profile,
+    declared_tool_definitions,
+)
 from .errors import AdaptationFailure
 
-ADAPTABLE_CONNECTORS = ("retell_chat", "retell", "vapi")
+# Provider agents are inspected at their provider; an `mcp_client` agent is declared (`declared.py`).
+ADAPTABLE_CONNECTORS = ("retell_chat", "retell", "vapi", MCP_CLIENT)
 _TARGET_CREDENTIALS = {
     ProviderType.RETELL: "RETELL_API_KEY",
     ProviderType.VAPI: "VAPI_API_KEY",
@@ -29,7 +39,7 @@ _TARGET_CREDENTIALS = {
 @dataclass(frozen=True)
 class AgentProfile:
     connector: str
-    provider: ProviderType
+    provider: ProviderType | None  # None: a declared agent, with no provider to clone
     target: dict[str, Any]
     admission: list[ToolAdmission]
     agent_tools: list[dict[str, Any]]
@@ -49,12 +59,14 @@ class AgentProfile:
         return [one for one in self.admission if one.action in {"routed", "replaced"}]
 
 
-def provider_of(connector: str) -> ProviderType:
+def provider_of(connector: str) -> ProviderType | None:
     if connector not in ADAPTABLE_CONNECTORS:
         raise AdaptationFailure(
             "compose_unsupported",
             f"adaptation supports {', '.join(ADAPTABLE_CONNECTORS)} agents, not {connector}",
         )
+    if connector == MCP_CLIENT:
+        return None
     return ProviderType.VAPI if connector == "vapi" else ProviderType.RETELL
 
 
@@ -67,13 +79,23 @@ def build_profile(
     its configuration digest is the canonical digest of the redacted profile.
     """
     provider = provider_of(connector)
-    redacted = _safe_profile_value(dict(target))
-    try:
-        admission = admit_provider_tools(provider, redacted)
-        definitions = admitted_tool_definitions(provider, redacted)
-    except ProviderImportError as exc:
-        code = str(exc).split(":", 1)[0]
-        raise AdaptationFailure(code or "provider_import_failed", str(exc)) from exc
+    if provider is None:
+        # A declaration holds only what the customer wrote down: nothing to redact, and every
+        # tool is routed, so its argument names stay exactly as the agent sends them.
+        try:
+            redacted = declared_profile(target)
+        except ValueError as exc:
+            raise AdaptationFailure("adaptation_profile_invalid", str(exc)) from exc
+        admission = declared_admission(redacted)
+        definitions = declared_tool_definitions(redacted)
+    else:
+        redacted = _safe_profile_value(dict(target))
+        try:
+            admission = admit_provider_tools(provider, redacted)
+            definitions = admitted_tool_definitions(provider, redacted)
+        except ProviderImportError as exc:
+            code = str(exc).split(":", 1)[0]
+            raise AdaptationFailure(code or "provider_import_failed", str(exc)) from exc
     target_id = str(redacted.get("source_target_id") or "").strip()
     if agent is None:
         local = f"local:{target_id or 'agent'}"
@@ -121,10 +143,12 @@ def profile_from_file(body: Mapping[str, Any]) -> AgentProfile:
         connector = "vapi"
     elif provider == "retell":
         connector = "retell_chat" if target.get("modality") == "chat" else "retell"
+    elif provider == DECLARED:
+        connector = MCP_CLIENT
     else:
         raise AdaptationFailure(
             "adaptation_profile_invalid",
-            f"profile provider {provider!r} is not retell or vapi",
+            f"profile provider {provider!r} is not retell, vapi or {DECLARED}",
         )
     return build_profile(target, connector=connector, agent=agent)
 
@@ -132,7 +156,8 @@ def profile_from_file(body: Mapping[str, Any]) -> AgentProfile:
 def profile_from_job(
     job: Any, *, credentials: Mapping[str, str], request: Any = None
 ) -> AgentProfile:
-    """Inspect the job's provider target read-only, with the target's own API key."""
+    """Inspect the job's provider target read-only, with the target's own API key; a declared
+    agent (`mcp_client`) is read from the job's agent config, and no key is needed."""
     connector = job.agent.connector.strip().lower()
     provider = provider_of(connector)
     adaptation = (job.metadata or {}).get("adaptation") or {}
@@ -141,6 +166,14 @@ def profile_from_job(
         raise AdaptationFailure(
             "adaptation_job_invalid", "job metadata.adaptation.agent is missing"
         )
+    if provider is None:
+        try:
+            target = declared_profile(job.agent.config)
+        except ValueError as exc:
+            raise AdaptationFailure(
+                "adaptation_job_invalid", f"agent.config is not a declared agent: {exc}"
+            ) from exc
+        return build_profile(target, connector=connector, agent=agent)
     target_key = "assistant_id" if provider is ProviderType.VAPI else "agent_id"
     target_id = str(job.agent.config.get(target_key) or "").strip()
     try:
@@ -159,22 +192,177 @@ def profile_from_job(
 def select_mode(
     profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
 ) -> BindingMode:
-    """§7.5 step 2: canonical when every admitted tool is an environment tool the agent can call
-    as-is, same name and compatible arguments; anything else needs a routed binding."""
+    """§7.5 step 2: canonical when the admitted tools are exactly the environment's, each called
+    as-is, same name and compatible arguments; anything else needs a routed binding.
+
+    A canonical binding serves every environment tool, so an agent with fewer tools than the
+    environment, even ones it calls as-is, is routed: its binding serves only its own tools
+    (`identity_mapping`), and a call to any other is refused."""
     admitted = {one.name for one in profile.admitted}
     if not admitted:
         return BindingMode.CONVERSATION_ONLY
-    environment = {tool.name: tool.parameters for tool in environment_tools}
-    schemas = {
-        str(one.get("name")): one.get("parameters") or {} for one in profile.agent_tools
-    }
-    if all(
-        name in environment
-        and not argument_mismatches(schemas.get(name) or {}, environment[name])
-        for name in admitted
+    if admitted == {tool.name for tool in environment_tools} and admitted <= _as_is(
+        profile, environment_tools
     ):
         return BindingMode.CANONICAL
     return BindingMode.TOOL_ROUTED
+
+
+def _as_is(
+    profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
+) -> set[str]:
+    """The agent's tools it can call as the environment's own: same name, compatible arguments."""
+    environment = {tool.name: tool.parameters for tool in environment_tools}
+    return {
+        name
+        for one in profile.agent_tools
+        if (name := str(one.get("name"))) in environment
+        and not argument_mismatches(one.get("parameters") or {}, environment[name])
+    }
+
+
+def identity_mapping(
+    profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
+) -> dict[str, Any] | None:
+    """The routed mapping of an agent whose every tool is an environment tool it calls as-is: each
+    one onto itself, every argument passed through. None when a tool needs a mapping written."""
+    names = [str(one.get("name")) for one in profile.agent_tools]
+    if not names or set(names) - _as_is(profile, environment_tools):
+        return None
+    return {
+        "tools": [
+            {
+                "agent_tool": str(one["name"]),
+                "steps": [
+                    {
+                        "id": "call",
+                        "tool": str(one["name"]),
+                        "arguments": {
+                            argument: {"arg": _argument_path(argument)}
+                            for argument in (one.get("parameters") or {}).get(
+                                "properties"
+                            )
+                            or {}
+                        },
+                    }
+                ],
+            }
+            for one in profile.agent_tools
+        ]
+    }
+
+
+def _argument_path(name: str) -> str:
+    """The JMESPath of one top-level argument: quoted unless it is a plain identifier."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return name
+    return json.dumps(name)
+
+
+# Keywords that say nothing about which values a schema accepts.
+_ANNOTATIONS = frozenset(
+    {
+        "description",
+        "title",
+        "examples",
+        "default",
+        "$comment",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+    }
+)
+# Keywords `_implied` reads itself; any other the environment sets must be the agent's too.
+_COMPARED = frozenset({"type", "enum", "const", "required", "properties", "items"})
+_ABSENT = object()
+
+
+def _types(schema: Mapping[str, Any]) -> set[str]:
+    declared = schema.get("type")
+    return set(
+        declared if isinstance(declared, list) else [declared] if declared else []
+    )
+
+
+def _implied(agent: Any, environment: Any, where: str) -> list[str]:
+    """Why a value the agent's schema allows at `where` could be one the environment's refuses.
+
+    Sound, not complete: it reads types, enums, constants, required names, properties and items,
+    at every depth, and asks that any other rule the environment sets (a pattern, a bound, a
+    union) be set the same in the agent's schema. A schema it cannot show compatible is a
+    mismatch, and the agent's tool is then mapped rather than called as-is."""
+    if not isinstance(environment, Mapping) or not environment:
+        return []
+    if not isinstance(agent, Mapping):
+        return [f"{where} has no schema, the environment constrains it"]
+    problems: list[str] = []
+    if taken := _types(environment):
+        sent = _types(agent)
+        # Every integer is a number.
+        wider = {
+            "number" if one == "integer" and "number" in taken else one for one in sent
+        }
+        if not sent:
+            problems.append(
+                f"{where} has no type, the environment takes {', '.join(sorted(taken))}"
+            )
+        elif wider - taken:
+            problems.append(
+                f"{where} is {', '.join(sorted(sent))}, the environment takes {', '.join(sorted(taken))}"
+            )
+    if "const" in environment and agent.get("const", _ABSENT) != environment["const"]:
+        problems.append(f"{where} may carry values the environment does not accept")
+    if "enum" in environment:
+        allowed = list(environment["enum"] or [])
+        offered = [agent["const"]] if "const" in agent else agent.get("enum")
+        if not offered or any(value not in allowed for value in offered):
+            problems.append(f"{where} may carry values the environment does not accept")
+    sent_properties = agent.get("properties") or {}
+    taken_properties = environment.get("properties") or {}
+    inside = "" if where == "arguments" else f"{where}."
+    problems += [
+        f"{inside}{name} is not an environment argument"
+        for name in sent_properties
+        if name not in taken_properties
+        and (
+            "properties" in environment
+            or environment.get("additionalProperties") is False
+        )
+    ]
+    # An object schema that does not forbid other properties allows any: where the environment
+    # forbids them, the agent's schema has to forbid them too, or it is the wider one.
+    if (
+        environment.get("additionalProperties") is False
+        and agent.get("additionalProperties") is not False
+    ):
+        problems.append(
+            f"{where} may carry properties the environment forbids "
+            "(additionalProperties is false there, not here)"
+        )
+    always = set(agent.get("required") or [])
+    for name in environment.get("required") or []:
+        if name not in sent_properties:
+            problems.append(f"{inside}{name} is required but the agent never sends it")
+        elif name not in always:
+            problems.append(
+                f"{inside}{name} is required but the agent may leave it out"
+            )
+    for name, schema in sent_properties.items():
+        if name in taken_properties:
+            problems += _implied(schema, taken_properties[name], f"{inside}{name}")
+    if "items" in environment:
+        problems += _implied(agent.get("items"), environment["items"], f"{where}[]")
+    for keyword, rule in environment.items():
+        if keyword in _COMPARED or keyword in _ANNOTATIONS:
+            continue
+        if keyword == "additionalProperties" and not isinstance(rule, Mapping):
+            # True allows anything; false is held above.
+            continue
+        if agent.get(keyword, _ABSENT) != rule:
+            problems.append(
+                f"{where}: the environment sets {keyword}, which the agent's schema does not match"
+            )
+    return problems
 
 
 def argument_mismatches(
@@ -182,37 +370,11 @@ def argument_mismatches(
 ) -> list[str]:
     """Why calls the agent makes with this schema would not be valid environment calls.
 
-    Every argument the agent sends must be one the environment takes, with the same JSON type,
-    and only values the environment accepts; every argument the environment requires must be
-    one the agent can send.
+    The whole schema is compared, nested objects and array items included (`_implied`): every
+    argument the agent sends must be one the environment takes, of a type and with only values
+    it accepts; every argument the environment requires must be one the agent always sends.
     """
-    sent = agent.get("properties") or {}
-    taken = environment.get("properties") or {}
-    problems = [
-        f"{name} is not an environment argument" for name in sent if name not in taken
-    ]
-    problems += [
-        f"{name} is required but the agent never sends it"
-        for name in environment.get("required") or []
-        if name not in sent
-    ]
-    for name, schema in sent.items():
-        target = taken.get(name)
-        if not isinstance(target, Mapping) or not isinstance(schema, Mapping):
-            continue
-        if (
-            schema.get("type")
-            and target.get("type")
-            and schema["type"] != target["type"]
-        ):
-            problems.append(
-                f"{name} is {schema['type']}, the environment takes {target['type']}"
-            )
-        allowed = target.get("enum")
-        offered = schema.get("enum")
-        if allowed and (not offered or set(map(str, offered)) - set(map(str, allowed))):
-            problems.append(f"{name} may carry values the environment does not accept")
-    return problems
+    return _implied(agent, environment, "arguments")
 
 
 def binding_fields(
@@ -239,9 +401,11 @@ def seal_binding(
     mapping: Mapping[str, Any] | None,
     *,
     environment_root: Any,
+    environment_tools: Sequence[ToolDefinition] | None = None,
 ) -> Any:
     return seal_agent_binding(
         binding_fields(profile, mode, mapping),
         environment_root=environment_root,
         agent_tools=[one.name for one in profile.admitted],
+        environment_tools=environment_tools,
     )

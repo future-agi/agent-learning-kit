@@ -478,7 +478,9 @@ class SuiteReleaseV1(_Strict):
 # --- bindings and run manifests --------------------------------------------------------------------
 
 
-Connector = Literal["livekit", "vapi", "retell", "retell_chat", "phone", "hosted_agent"]
+Connector = Literal[
+    "livekit", "vapi", "retell", "retell_chat", "phone", "hosted_agent", "mcp_client"
+]
 
 
 class AgentRef(_Strict):
@@ -593,6 +595,10 @@ class RunManifestV1(_Strict):
     environment: list[ReleaseRef] = Field(min_length=1, max_length=2)
     suite: DigestRef
     binding: DigestRef
+    # The digest of the binding's proof against the suite (`binding_proof.proof_digest`), frozen
+    # by whoever sealed this manifest from its own record of the adaptation. Compose reads
+    # scenario statuses only from a proof with this digest; a tool_routed run has no other.
+    binding_proof: DigestRef | None = None
     agent: AgentRef
     selection: Selection
     simulator: SimulatorSettings
@@ -608,6 +614,9 @@ def object_digest(model: BaseModel) -> str:
     core = model.model_dump(mode="json", by_alias=True)
     core.pop("digest", None)
     core.pop("files", None)
+    if core.get("binding_proof", ...) is None:
+        # A manifest that anchors no proof has the digest it had before the field existed.
+        del core["binding_proof"]
     digest = hashlib.sha256(_canonical_json(core))
     for record in getattr(model, "files", None) or []:
         encoded = _canonical_json(record.model_dump(mode="json"))
@@ -1801,12 +1810,16 @@ def seal_agent_binding(
     *,
     environment_root: str | Path,
     agent_tools: Sequence[str] = (),
+    environment_tools: Sequence[ToolDefinition] | None = None,
 ) -> AgentBindingV1:
     """Seal a binding after checking it against the release it targets.
 
     `agent_tools` are the tool names the agent version declares. A canonical agent calls the
-    environment's tools by their own names, so every one of them must exist there. A
-    `tool_routed` binding is checked statically (§2.4.2); every reason is listed.
+    environment's tools by their own names and is served all of them, so its tools must be
+    exactly the environment's, attached servers' included. A `tool_routed` binding is checked
+    statically (§2.4.2); every reason is listed. `environment_tools` are what it is checked
+    against when the caller has read the attached servers' tools from the servers themselves; by
+    default the release's own tools.
     """
     environment = load_environment_release(environment_root)
     binding = _validated(
@@ -1820,11 +1833,25 @@ def seal_agent_binding(
         "binding_invalid",
     )
     if binding.mode is BindingMode.CANONICAL:
-        known = {tool.name for tool in load_tools(Path(environment_root))}
+        known = {
+            tool.name for tool in load_tools(Path(environment_root))
+        } | attached_tool_names(Path(environment_root))
         if unknown := sorted(set(agent_tools) - known):
             raise ReleaseError("binding_tool_unknown", ", ".join(unknown))
+        # A canonical binding serves every environment tool: an agent declaring fewer would be
+        # granted the rest. It is bound tool_routed, onto its own tools only.
+        if missing := sorted(known - set(agent_tools)):
+            raise ReleaseError(
+                "binding_tools_differ",
+                f"a canonical agent has every environment tool; this one lacks {', '.join(missing)}",
+            )
     if binding.mode is BindingMode.TOOL_ROUTED:
-        check_tool_routed(binding, load_tools(Path(environment_root)))
+        check_tool_routed(
+            binding,
+            load_tools(Path(environment_root))
+            if environment_tools is None
+            else environment_tools,
+        )
     return _sealed(binding)  # type: ignore[return-value]
 
 
@@ -1934,11 +1961,13 @@ TOOL_SERVER_DIRECTORY = "generated/tool-server"
 TOOLS_CAPABILITY = "tools"
 PROVIDER_TOOL_PATH = "/provider/tools"
 PROVIDER_EVENT_PATH = "/provider/events"
-# Our own agent (`hosted_agent.py`) reaches the world through its MCP endpoint (`world_mcp.py`).
+# Our own agent (`hosted_agent.py`) reaches the world through its MCP endpoint (`world_mcp.py`),
+# and so does a customer's declared agent (`adaptation/declared.py`), under its own tool names.
 HOSTED_AGENT = "hosted_agent"
+MCP_CLIENT = "mcp_client"
 WORLD_MCP = "world-mcp"
 WORLD_MCP_CAPABILITY = "world_mcp"
-_COMPOSABLE_CONNECTORS = {"retell_chat", "retell", "vapi", HOSTED_AGENT}
+_COMPOSABLE_CONNECTORS = {"retell_chat", "retell", "vapi", HOSTED_AGENT, MCP_CLIENT}
 _COMPOSABLE_MODES = {BindingMode.CANONICAL, BindingMode.TOOL_ROUTED}
 _ARG_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
 
@@ -2045,8 +2074,14 @@ def compose_bundle(
     job_path: str | Path,
     output: str | Path,
     interpreter: str = sys.executable,
+    binding_proof_path: str | Path | None = None,
 ) -> Any:
     """Verify a run's delivered releases and write the sealed v2 bundle the guest runs.
+
+    A `tool_routed` binding is scored only on the scenarios its binding proof against this suite
+    proved: compose needs that proof, refuses a selection naming any other scenario
+    (`scenario_unscorable`), and the bundle carries only the proved scenarios, listed in its
+    `metadata.release.scenarios`.
 
     The world becomes the managed PostgreSQL `world_db` (seeded from the release's world with the
     suite's policy profile applied), the release's handlers run in a per-world tool server that
@@ -2096,6 +2131,24 @@ def compose_bundle(
     suite = load_suite_release(suite_root)
     check_run_inputs(manifest, environments=environments, suite=suite, binding=binding)
     _require_runtime_proof(suite_root, suite)
+    from .binding_proof import load_binding_proof, unscored
+
+    excluded = unscored(
+        binding,
+        suite,
+        environments[-1].digest,
+        load_binding_proof(binding_proof_path) if binding_proof_path else None,
+        anchored=manifest.binding_proof.digest if manifest.binding_proof else None,
+    )
+    if refused := [key for key in manifest.selection.scenario_keys if key in excluded]:
+        raise ReleaseError(
+            "scenario_unscorable",
+            "not scored under this binding: "
+            + "; ".join(f"{key} ({excluded[key]})" for key in refused),
+        )
+    left_out = {
+        Path(entry.path).name for entry in suite.scenarios if entry.key in excluded
+    }
     try:
         job = HarnessJob.model_validate_json(Path(job_path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -2107,6 +2160,8 @@ def compose_bundle(
             f"job connector {connector} differs from the binding's {binding.agent.connector}",
         )
     hosted = connector == HOSTED_AGENT
+    declared = connector == MCP_CLIENT
+    over_mcp = hosted or declared
     if (
         binding.mode not in _COMPOSABLE_MODES
         or connector not in _COMPOSABLE_CONNECTORS
@@ -2115,7 +2170,8 @@ def compose_bundle(
         raise ReleaseError(
             "compose_unsupported",
             f"{binding.mode.value} bindings on {connector} are not composed; canonical on "
-            f"{', '.join(sorted(_COMPOSABLE_CONNECTORS))} and tool_routed on provider agents are",
+            f"{', '.join(sorted(_COMPOSABLE_CONNECTORS))}, tool_routed on provider agents and "
+            f"on {MCP_CLIENT} are",
         )
     target_id = ""
     if hosted:
@@ -2128,6 +2184,17 @@ def compose_bundle(
         if spec.digest() != binding.agent.provider_digest:
             raise ReleaseError(
                 "run_inputs_mismatch", "the run's agent spec is not the one bound"
+            )
+    elif declared:
+        from .adaptation.declared import declared_digest
+
+        try:
+            digest = declared_digest(job.agent.config)
+        except ValueError as exc:
+            raise ReleaseError("compose_job_invalid", str(exc)) from exc
+        if digest != binding.agent.provider_digest:
+            raise ReleaseError(
+                "run_inputs_mismatch", "the run's declared agent is not the one bound"
             )
     else:
         target_key = "assistant_id" if connector == "vapi" else "agent_id"
@@ -2151,10 +2218,13 @@ def compose_bundle(
         list(binding.agent_tools) if binding.mode is BindingMode.TOOL_ROUTED else tools
     )
     agent_tool_names = sorted(tool.name for tool in agent_tools)
-    modality = "chat" if connector in ("retell_chat", HOSTED_AGENT) else "voice"
-    # Provider agents reach the world's tools through the webhook tool server; our agent reaches
-    # the same tools over MCP. Both run from the same directory through WorldTools.
-    if hosted:
+    modality = (
+        "chat" if connector in ("retell_chat", HOSTED_AGENT, MCP_CLIENT) else "voice"
+    )
+    # Provider agents reach the world's tools through the webhook tool server; our agent and a
+    # declared agent reach the same tools over MCP (a declared agent under its own tool names,
+    # through the binding). All run from the same directory through WorldTools.
+    if over_mcp:
         server_name, capability, health = WORLD_MCP, WORLD_MCP_CAPABILITY, "/healthz"
         run_command = [interpreter, "-m", "fi.alk.harness.world_mcp"]
         server_environment: dict[str, str] = {}
@@ -2168,7 +2238,15 @@ def compose_bundle(
         }
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
-        shutil.copytree(suite_root / SCENARIOS, staging / SCENARIOS)
+        shutil.copytree(
+            suite_root / SCENARIOS,
+            staging / SCENARIOS,
+            ignore=lambda directory, names: [
+                name
+                for name in names
+                if name in left_out and Path(directory) == suite_root / SCENARIOS
+            ],
+        )
         for name in (SUB_GOALS, "simulator_prompt.md"):
             if (suite_root / name).is_file():
                 shutil.copyfile(suite_root / name, staging / name)
@@ -2278,7 +2356,7 @@ def compose_bundle(
             metadata={
                 **(
                     {}
-                    if hosted
+                    if over_mcp
                     else {
                         "provider_import": ProviderImportSpec(
                             type=ProviderType.VAPI
@@ -2302,6 +2380,12 @@ def compose_bundle(
                     "suite": suite.digest,
                     "binding": binding.digest,
                     "binding_mode": binding.mode.value,
+                    # The scenarios this binding is scored on; a run selects only these.
+                    "scenarios": sorted(
+                        entry.key
+                        for entry in suite.scenarios
+                        if entry.key not in excluded
+                    ),
                 },
             },
         )
@@ -2354,6 +2438,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     composition = commands.add_parser("compose")
     composition.add_argument("--releases", required=True)
     composition.add_argument("--binding", required=True)
+    composition.add_argument(
+        "--binding-proof",
+        help="the binding's proof against the suite; required for a tool_routed binding",
+    )
     composition.add_argument("--manifest", required=True)
     composition.add_argument("--job", required=True)
     composition.add_argument("--output", required=True)
@@ -2404,6 +2492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest_path=args.manifest,
                 job_path=args.job,
                 output=args.output,
+                binding_proof_path=args.binding_proof,
             )
             print(json.dumps({"bundle": bundle.digest}))
         else:

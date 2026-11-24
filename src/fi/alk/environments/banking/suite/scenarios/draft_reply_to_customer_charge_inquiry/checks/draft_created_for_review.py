@@ -108,8 +108,8 @@ def _evidence_missing(world, calls, reference):
                     seen = True
             elif kind == "file" and c.name == "read_file_content" and c.arguments.get("fileId") == target and not c.arguments.get("revisionId"):
                 seen = True
-            elif kind == "descriptor" and c.name == "lookup_merchant_descriptor" and target in (
-                c.arguments.get("descriptor"), c.arguments.get("transaction_id")
+            elif kind == "descriptor" and c.name == "lookup_merchant_descriptor" and any(
+                same_id(target, given) for given in (c.arguments.get("descriptor"), c.arguments.get("transaction_id"))
             ):
                 seen = True
             if seen:
