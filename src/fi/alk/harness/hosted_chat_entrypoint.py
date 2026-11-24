@@ -1877,6 +1877,9 @@ class HostedChatRuntime:
                 + "\nCarry on, and call finish_adaptation, or stop_adaptation with the reason.]"
             )
         else:
+            if exists[0] and not exists[1] and self._environment_refused():
+                # Written for the build, which stops on it; nothing more is built here.
+                return False
             await asyncio.to_thread(self._after_saved)
             if self._opened_with is not None and exists != self._opened_with:
                 await self.conversation.close()
@@ -1978,6 +1981,16 @@ class HostedChatRuntime:
             after_contract(self.workspace, self.source, job)
         if has_world and (world_changed or not (self.workspace / "environment-bundle" / "manifest.json").is_file()):
             after_world(self.source if self.source.is_dir() else None, self.workspace, load_contract(self.workspace))
+
+    def _environment_refused(self) -> bool:
+        """Refuse a saved contract whose agent needs an environment the job doesn't give, before
+        its world is built. True once refused: the failure is written for the build."""
+        from .browser_environment import refuse_saved_contract
+
+        # Only the metadata is read, never the whole job: a job this process can't validate must
+        # not pass for one with nothing to check.
+        metadata = self.job.get("metadata") if isinstance(self.job, dict) else None
+        return refuse_saved_contract(self.workspace, metadata if isinstance(metadata, dict) else {}) is not None
 
     def _take_seed(self) -> None:
         """Use the reading the platform handed this build, at the first opening only, and leave
