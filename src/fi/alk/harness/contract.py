@@ -1466,6 +1466,13 @@ class AgentContract(BaseModel):
                 "REAL USE CASES (what this agent is actually for):\n  - "
                 + "\n  - ".join(self.real_use_cases)
             )
+        if self.amendments:
+            parts.append(
+                "CHANGED SINCE THE AGENT WAS READ (these win over THE AGENT'S OWN PROMPT: a use "
+                "case or rule removed here is not tested, and a rule reworded here is tested as "
+                "reworded, even where the prompt still says otherwise):\n  - "
+                + "\n  - ".join(self.amendments)
+            )
         if self.tool_entrypoints:
             parts.append(
                 "THE AGENT'S OWN TOOL CODE. Run these rather than writing replacements:\n  - "
