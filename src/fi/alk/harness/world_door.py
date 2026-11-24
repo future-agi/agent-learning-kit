@@ -56,14 +56,26 @@ KEY_UNKNOWN = "key_outcome_unknown"
 DOOR_FAILED = "door_failed"
 WORLD_UNREACHABLE = "world_unreachable"
 LOG_UNKNOWN = "log_unknown"
+# The agent's own tools server not answering (a timeout, a refused or reset connection): its world, graded like a 5xx.
+UPSTREAM_UNREACHABLE = "upstream_unreachable"
+
+
+# The refusal codes of the door's own failures, on the row of the call they held.
+OUR_FAILURES = frozenset({DOOR_FAILED, WORLD_UNREACHABLE, LOG_UNKNOWN, FAULTS_UNKNOWN, APPROVAL_UNKNOWN})
+
+
+class UpstreamUnreachable(Exception):
+    """The agent's own tools server did not answer: its world failing, never the door's."""
 
 
 def world_failed(row: Mapping[str, Any]) -> bool:
     """Whether a row of the action log is the door failing on the agent's call by its own fault: ours, never the
     agent's. Read from the row's refusal code, which every log keeps."""
-    return (row.get("actor_id") or AGENT) == AGENT and row.get("outcome") == "faulted" and row.get(
-        "refusal_code"
-    ) in (DOOR_FAILED, WORLD_UNREACHABLE, LOG_UNKNOWN, FAULTS_UNKNOWN, APPROVAL_UNKNOWN)
+    return (
+        (row.get("actor_id") or AGENT) == AGENT
+        and row.get("outcome") == "faulted"
+        and row.get("refusal_code") in OUR_FAILURES
+    )
 
 
 def door_failure(result: Any) -> str | None:
@@ -935,8 +947,9 @@ class WorldDoor:
                 if earlier is not None:
                     known = ("committed", *earlier)
                 elif claimed is not None:
-                    # Claimed by a door that never recorded its answer: our log failed, not the agent.
-                    return self._key_unknown(call, key, on_behalf_of, LOG_UNKNOWN)
+                    # Left `unknown` after a test condition lost its answer: the agent's to handle. Left `pending` by a
+                    # door that never recorded its answer, or `failed` by our own failure: ours.
+                    return self._key_unknown(call, key, on_behalf_of, KEY_UNKNOWN if claimed == "unknown" else LOG_UNKNOWN)
             if known is None:
                 self._keyed[slot] = ("pending", call.action, call.arguments, None, None)
                 outcome = self._attempt(call, key, on_behalf_of)
@@ -954,10 +967,11 @@ class WorldDoor:
                 ):
                     # The world failed mid-action, or the call ran and its answer was lost: whether it applied it is
                     # unknown, so the key is never run again.
-                    # Lost to the test condition, or to the world failing mid-action (ours): a retry is held for it.
-                    lost_to = KEY_UNKNOWN if outcome.fault is not None else LOG_UNKNOWN
+                    # Lost to our own failure (the first try's code says), else to the agent's world or the test
+                    # condition: a retry is held either way, and is ours only in the first case.
+                    lost_to = LOG_UNKNOWN if outcome.refusal_code in OUR_FAILURES else KEY_UNKNOWN
                     self._keyed[slot] = ("unknown", call.action, call.arguments, None, lost_to)
-                    self._settle(key, call.actor, "unknown", logged)
+                    self._settle(key, call.actor, "failed" if lost_to == LOG_UNKNOWN else "unknown", logged)
                 else:
                     # Refused, or held by the scenario's fault before the world saw it: nothing took effect, and a
                     # retry is a new attempt.
@@ -1203,7 +1217,10 @@ class WorldDoor:
     def _execute(self, call: ToolCall) -> Outcome:
         try:
             ran = self.executor.run(call)
-        except Exception as exc:  # noqa: BLE001 - the world failing is a fault of its own
+        except UpstreamUnreachable as exc:
+            # The agent's own tools server did not answer: its world, graded like a 5xx it answered.
+            return Outcome("faulted", 502, reason=f"{exc}: unavailable", refusal_code=UPSTREAM_UNREACHABLE)
+        except Exception as exc:  # noqa: BLE001 - our own executor failing is a fault of ours
             return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable", refusal_code=WORLD_UNREACHABLE)
         if ran.status < 400:
             return Outcome(
@@ -1352,6 +1369,9 @@ class HttpExecutor:
                 None,
                 content.decode("utf-8", errors="replace")[:2000],
             )
+        except (OSError, error.URLError) as exc:
+            # A timeout, a refused or reset connection: the agent's tools server, never the door.
+            raise UpstreamUnreachable(type(exc).__name__) from exc
         try:
             result = json.loads(content) if content else None
         except ValueError:

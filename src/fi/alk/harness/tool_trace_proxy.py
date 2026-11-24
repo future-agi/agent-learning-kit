@@ -21,7 +21,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         Routed,
         SHARED_ADDRESS,
         ToolCall,
-        KEY_UNKNOWN,
+        OUR_FAILURES,
         UPSTREAM_TIMEOUT,
         UPSTREAM_UNAVAILABLE,
         WORLD_FAILED,
@@ -44,7 +44,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         Routed,
         SHARED_ADDRESS,
         ToolCall,
-        KEY_UNKNOWN,
+        OUR_FAILURES,
         UPSTREAM_TIMEOUT,
         UPSTREAM_UNAVAILABLE,
         WORLD_FAILED,
@@ -282,12 +282,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(outcome.status, {"detail": UPSTREAM_UNAVAILABLE})
             return
         if outcome.outcome == "faulted" and outcome.body is None:
-            if outcome.refusal_code == KEY_UNKNOWN:
-                # A keyed retry after a lost answer: the agent's to handle, told in plain words.
-                self._reply(outcome.status, {"detail": outcome.detail})
-            else:
-                # No test condition held it: the world or the door failed, which is ours.
+            if outcome.refusal_code in OUR_FAILURES:
+                # The door failed by its own fault: ours.
                 self._reply(outcome.status, {"detail": WORLD_FAILED})
+            else:
+                # The agent's world (its tools server not answering) or a keyed retry after a lost answer, in plain words.
+                self._reply(outcome.status, {"detail": outcome.detail})
             return
         content = outcome.answer()
         self.send_response(outcome.status)

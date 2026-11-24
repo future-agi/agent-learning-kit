@@ -272,7 +272,7 @@ class CallOutcome:
     # never written), one reason each, as its notices say: the trial reads unmeasured, never passed or failed.
     unmeasured: tuple[str, ...] = ()
     # Calls of the agent's the world's door failed on by its own fault, one reason each: the trial is unmeasured
-    # unless the agent failed a verified check or the world committed one of its writes twice.
+    # unless the world committed one of its writes twice.
     world_failures: tuple[str, ...] = ()
     # Each kind of evidence this trial is missing or could not read (`world_state`, `tool_calls`, `transcript`,
     # `recording`), with why: a sub-goal that reads one is unmeasured, never passed or failed.
@@ -2973,8 +2973,9 @@ class HostedScheduler:
                 reason=note,
             )
         failed = any(result.held is False and result.subject == "task" for result in sub_goal_results)
-        if call_outcome.world_failures and not failed and not call_outcome.duplicates:
-            # Our door failed on one of the agent's calls: nothing the agent did fails it here, so it is not graded.
+        if call_outcome.world_failures and not call_outcome.duplicates:
+            # Our door failed on one of the agent's calls: a check may fail for it, so only a write the world committed
+            # twice still fails the agent; otherwise the trial is not graded.
             return self._fault(
                 scenario,
                 world_index,
