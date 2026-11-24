@@ -4214,7 +4214,7 @@ async def _wait_for_conversation_end(
             )
         # A bridge task error is still a real provider-side disconnect.
         if "provider_disconnected" in monitor_failures:
-            completed.add("provider_disconnected")
+            completed.add("provider_bridge_failed")
         for reason in (
             # The person's Stop outranks every other ending.
             "user_canceled",
@@ -4228,6 +4228,7 @@ async def _wait_for_conversation_end(
             "conversation_silence_timeout",
             "conversation_stalled",
             "provider_disconnected",
+            "provider_bridge_failed",
             "closed",
         ):
             if reason in completed:
@@ -5110,6 +5111,19 @@ def _caller_never_spoke(messages: list[dict[str, Any]]) -> bool:
     )
 
 
+_AGENT_ENDED_REASONS = frozenset(
+    {
+        "assistant-ended-call",
+        "assistant-ended-call-after-message-spoken",
+        "assistant-ended-call-with-hangup-task",
+        "assistant-forwarded-call",
+        "assistant-said-end-call-phrase",
+        "agent_hangup",
+    }
+)
+_AGENT_ENDING_TOOLS = frozenset({"endcall", "transfercall"})
+
+
 def _recover_successful_provider_end_call(
     outcome: _CaseOutcome,
     provider_summary: EvidenceSourceSummary,
@@ -5131,20 +5145,34 @@ def _recover_successful_provider_end_call(
         return
     if not _has_role_alternation(outcome.messages):
         return
-    calls = provider_summary.metadata.get("tool_calls")
-    if not isinstance(calls, list):
-        return
-    ended_cleanly = any(
-        isinstance(call, dict)
-        and str(call.get("name") or "").strip().lower() == "end_call"
-        and call.get("ok") is not False
-        for call in calls
-    )
-    if not ended_cleanly:
+    if not _provider_reports_agent_ending(provider_summary.metadata):
         return
     outcome.status = TestCaseStatus.COMPLETED
     outcome.failure = None
     outcome.metadata["provider_end_call_recovered"] = True
+
+
+def _provider_reports_agent_ending(metadata: dict[str, Any]) -> bool:
+    reason = (
+        str(metadata.get("ended_reason") or metadata.get("end_reason") or "")
+        .strip()
+        .lower()
+    )
+    if reason in _AGENT_ENDED_REASONS or "transfer" in reason:
+        return True
+    calls = metadata.get("tool_calls")
+    if not isinstance(calls, list):
+        return False
+    return any(
+        isinstance(call, dict)
+        and call.get("ok") is not False
+        and any(
+            str(call.get(field) or "").strip().lower().replace("_", "")
+            in _AGENT_ENDING_TOOLS
+            for field in ("name", "type")
+        )
+        for call in calls
+    )
 
 
 def _reconcile_provider_observation(
@@ -5261,6 +5289,11 @@ def _target_has_gone_quiet(messages: list[dict[str, Any]]) -> bool:
     return trailing >= _QUIET_AFTER_UNANSWERED_TURNS
 
 
+_TARGET_ENDED_STOP_REASONS = frozenset(
+    {"target_disconnected", "room_disconnected", "provider_disconnected"}
+)
+
+
 def _conversation_outcome(
     stop_reason: str,
     messages: list[dict[str, str]],
@@ -5279,9 +5312,9 @@ def _conversation_outcome(
             metadata={"stop_reason": stop_reason},
         )
     if (
-        stop_reason in {"target_disconnected", "room_disconnected"}
+        stop_reason in _TARGET_ENDED_STOP_REASONS
         and _has_role_alternation(messages)
-        and _has_natural_terminal_exchange(messages)
+        and _has_natural_terminal_exchange(messages, target_ended=True)
     ):
         # A provider target can deliberately end a short call before the generated
         # minimum-turn budget (for example, by accepting a caller's request to hang
@@ -5414,7 +5447,24 @@ def _conversation_outcome(
     )
 
 
-def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
+_TRANSFER_HANDOFF_PHRASE = re.compile(
+    r"\b(?:transfer|transferring|connect|connecting)\s+(?:you|your\s+call)\b"
+)
+_TRANSFER_HANDOFF_MARKER = re.compile(r"\b(?:now|connect|connecting|please\s+wait)\b")
+
+
+def _is_transfer_handoff(role: str, text: str) -> bool:
+    return (
+        role == "assistant"
+        and re.search(r"\btransfer(?:ring)?\b", text) is not None
+        and _TRANSFER_HANDOFF_PHRASE.search(text) is not None
+        and _TRANSFER_HANDOFF_MARKER.search(text) is not None
+    )
+
+
+def _has_natural_terminal_exchange(
+    messages: list[dict[str, str]], *, target_ended: bool = False
+) -> bool:
     """Recognize only explicit terminal language near the end of a call.
 
     This deliberately avoids broad sentiment or short-answer heuristics.  A
@@ -5454,10 +5504,10 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
     if any(marker in text for _role, text in tail for marker in farewell_markers):
         return True
 
+    if target_ended and _is_transfer_handoff(*tail[-1]):
+        return True
     for index, (role, text) in enumerate(tail[:-1]):
-        if role != "assistant" or "transfer" not in text:
-            continue
-        if not any(marker in text for marker in ("now", "connect", "please wait")):
+        if not _is_transfer_handoff(role, text):
             continue
         next_role, acknowledgement = tail[index + 1]
         if next_role == "user" and acknowledgement.rstrip(".! ") in {
