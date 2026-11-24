@@ -9,6 +9,10 @@ FROM ghcr.io/astral-sh/uv:latest AS uvbin
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+# The Playwright release that pins the kit's browser for browser agents. That browser loads real
+# sites, so keep it current: bump this to the newest release when a template is next built, and
+# at once for a Chromium security fix.
+ARG PLAYWRIGHT_VERSION=1.65.2
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -75,6 +79,19 @@ RUN python3.11 -m venv /tmp/python311-smoke \
 # resolution regresses.
 RUN rabbitmqctl version | grep -Eq '^3\.13\.' \
     && rabbitmq-plugins list -m | grep -qx rabbitmq_management
+
+# A browser for browser agents, at /usr/local/bin/alk-chromium. Playwright pins the build and
+# installs its system libraries and fonts; only the full browser is installed, not the separate
+# headless shell. The browser stays in a fixed, read-only folder that every service user can run,
+# and is not put on any agent's path for its own Playwright.
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+      uvx --from "playwright==${PLAYWRIGHT_VERSION}" playwright install --with-deps --no-shell chromium \
+    && chrome="$(find /opt/ms-playwright -path '*/chrome-linux*/chrome' -type f | head -n 1)" \
+    && test -n "$chrome" \
+    && ln -s "$chrome" /usr/local/bin/alk-chromium \
+    && chmod -R a+rX,a-w /opt/ms-playwright \
+    && rm -rf /var/lib/apt/lists/* /root/.cache/uv \
+    && alk-chromium --version
 
 RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \
