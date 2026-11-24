@@ -3,9 +3,9 @@
 A `tool_routed` binding is used for runs only once it is shown, on PostgreSQL and through the tool
 server's own execution path, that the agent's own reference trajectory reaches every scenario's
 expected world, and that the binding does not reach it for the agent: doing nothing, skipping a
-state-changing call, or sending nonsense in one must each fail the scenario's checks, unless the
-same change made to the environment's own calls holds too (the profile does not need that call:
-the variant is `exempt`).
+state-changing call, or sending another valid call in its place must each fail the scenario's
+checks, unless the same change made to the environment's own calls holds too (the profile does not
+need what changed: the variant is `exempt`).
 
 Any trajectory that solves a scenario will do, not only one that follows its reference: a
 scenario whose authored routes use a tool the binding does not reach is still proved when the
@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,7 +40,14 @@ from pydantic import (
     ValidationError,
 )
 
-from .bindings import AgentTool, MappedToolBinding
+from .bindings import (
+    AgentTool,
+    MappedToolBinding,
+    Step,
+    _nodes,
+    run_bound_call,
+)
+from .json_schemas import value_problems
 from .releases import (
     AgentBindingV1,
     BindingMode,
@@ -87,19 +94,147 @@ class BindingProofV1(_Strict):
     passed: bool
 
 
-def perturb(value: Any, index: int) -> Any:
-    """Every string leaf replaced, numbers increased by 7, booleans negated."""
-    if isinstance(value, bool):
-        return not value
-    if isinstance(value, str):
-        return f"zz-perturbed-{index}"
-    if isinstance(value, int | float):
-        return value + 7
+# --- another valid call in a call's place ---------------------------------------------------------
+
+_Path = tuple[Any, ...]  # into JSON: keys and indexes
+_MISSING: Any = object()
+# How far into a value that only takes a certain form (a date, a reference number) it is changed.
+_CHARACTERS = 32
+
+
+def _same(one: Any, other: Any) -> bool:
+    """The same JSON: 1 is not true."""
+    return json.dumps(one, sort_keys=True, default=str) == json.dumps(
+        other, sort_keys=True, default=str
+    )
+
+
+def _leaves(value: Any, path: _Path = ()) -> Iterator[tuple[_Path, Any]]:
     if isinstance(value, Mapping):
-        return {key: perturb(item, index) for key, item in value.items()}
-    if isinstance(value, list):
-        return [perturb(item, index) for item in value]
+        for key, item in value.items():
+            yield from _leaves(item, (*path, key))
+    elif isinstance(value, list):
+        for at, item in enumerate(value):
+            yield from _leaves(item, (*path, at))
+    elif value is not None:
+        yield path, value
+
+
+def _at(value: Any, path: _Path) -> Any:
+    for step in path:
+        try:
+            value = value[step]
+        except (KeyError, IndexError, TypeError):
+            return _MISSING
     return value
+
+
+def _put(value: Any, path: _Path, leaf: Any) -> Any:
+    if not path:
+        return leaf
+    copied = list(value) if isinstance(value, list) else dict(value)
+    copied[path[0]] = _put(value[path[0]], path[1:], leaf)
+    return copied
+
+
+_NAMING = frozenset(
+    {
+        "enum",
+        "examples",
+        "const",
+        "default",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+    }
+)
+
+
+def _named(schema: Any) -> Iterator[Any]:
+    """The values a schema names anywhere in it: what an argument it constrains may be."""
+    if isinstance(schema, Mapping):
+        for keyword, inner in schema.items():
+            if keyword in _NAMING:
+                yield from inner if isinstance(inner, list) else [inner]
+            yield from _named(inner)
+    elif isinstance(schema, list):
+        for inner in schema:
+            yield from _named(inner)
+
+
+def _shifted(character: str, by: int) -> str:
+    for first, size in (("0", 10), ("a", 26), ("A", 26)):
+        if 0 <= (at := ord(character) - ord(first)) < size:
+            return chr(ord(first) + (at + by) % size)
+    return character
+
+
+def _others(leaf: Any, index: int, named: Sequence[Any]) -> Iterator[Any]:
+    """Values to try in a leaf's place, the furthest from it first: a string nobody sent, a number
+    7 away, one the schemas or the mapping name, and the same value a character or a step off."""
+    if isinstance(leaf, bool):
+        yield not leaf
+    elif isinstance(leaf, int | float):
+        numbers = [
+            one
+            for one in named
+            if isinstance(one, int | float) and not isinstance(one, bool)
+        ]
+        for by in (7, 1, *numbers):
+            yield leaf + by
+            yield leaf - by
+        yield from numbers
+        yield leaf * 2
+        yield leaf // 2 if isinstance(leaf, int) else leaf / 2
+    elif isinstance(leaf, str):
+        yield f"zz-perturbed-{index}"
+        yield "".join(_shifted(one, 1) for one in leaf)
+        yield from (one for one in named if isinstance(one, str))
+        yield from ("true", "false")
+        for at in reversed(range(max(0, len(leaf) - _CHARACTERS), len(leaf))):
+            for by in (1, -1):
+                yield leaf[:at] + _shifted(leaf[at], by) + leaf[at + 1 :]
+
+
+def perturb(
+    value: Any,
+    leaves: Iterable[tuple[_Path, Any]],
+    index: int,
+    named: Sequence[Any],
+    comes_to: Callable[[Any], Any],
+) -> tuple[Any, list[_Path], list[_Path]]:
+    """`value` with every one of `leaves` changed that can be, and the paths of the two kinds that
+    did not count: those with no other value at all, and those whose other values change nothing.
+
+    `comes_to` is what a candidate would come to, None when it is refused. A refused candidate is
+    never used: a call turned away before anything runs says nothing about what the binding does
+    with the arguments of one that is not. Every leaf that can be is changed, so a leaf no
+    other value is valid for keeps its own and does not hide the rest."""
+    current = comes_to(value)
+    kept: list[_Path] = []
+    ignored: list[_Path] = []
+    for path, leaf in leaves:
+        same_effect = _MISSING
+        for other in _others(leaf, index, named):
+            if _same(other, leaf):
+                continue
+            candidate = _put(value, path, other)
+            if (result := comes_to(candidate)) is None:
+                continue
+            if not _same(result, current):
+                value, current = candidate, result
+                break
+            if same_effect is _MISSING:
+                same_effect = candidate
+        else:
+            if same_effect is _MISSING:
+                kept.append(path)
+            else:
+                value = same_effect
+                ignored.append(path)
+    return value, kept, ignored
 
 
 Counterpart = tuple[AgentBindingV1, list[tuple[str, Any]]]
@@ -110,11 +245,11 @@ def _replay(
     binding: AgentBindingV1,
     outcomes: Sequence[Any],
     position: int,
-    perturbed: int | None,
+    arguments: Sequence[Mapping[str, Any]] | None,
 ) -> Counterpart:
     """The proved trajectory's committed agent calls, replayed in the environment's own
-    vocabulary, with call `position` left out (`perturbed` None) or its operations' arguments
-    perturbed.
+    vocabulary, with call `position` left out (`arguments` None) or its operations sent
+    `arguments`.
 
     Each committed agent call becomes one replay call whose steps are its recorded environment
     operations with constant arguments, so it runs through `WorldTools.call` in one
@@ -124,23 +259,21 @@ def _replay(
     entries: list[MappedToolBinding] = []
     calls: list[tuple[str, Any]] = []
     for at, outcome in enumerate(outcomes):
-        if outcome.status != "ok" or (at == position and perturbed is None):
+        if outcome.status != "ok" or (at == position and arguments is None):
             continue
         name = f"call_{at + 1}"
+        sent = [operation.arguments for operation in outcome.operations]
+        if at == position:
+            sent = list(arguments or ())
         steps = [
             {
                 "id": f"op_{number}",
                 "tool": operation.tool,
-                "arguments": {
-                    key: {"const": value}
-                    for key, value in (
-                        perturb(operation.arguments, perturbed)
-                        if at == position
-                        else operation.arguments
-                    ).items()
-                },
+                "arguments": {key: {"const": value} for key, value in one.items()},
             }
-            for number, operation in enumerate(outcome.operations, start=1)
+            for number, (operation, one) in enumerate(
+                zip(outcome.operations, sent, strict=True), start=1
+            )
         ]
         agent_tools.append(
             AgentTool(
@@ -165,40 +298,158 @@ def _replay(
     return replay, calls
 
 
+def _perturbed(
+    binding: AgentBindingV1,
+    agent_tool: str,
+    sent: Mapping[str, Any],
+    operations: Sequence[Any],
+    definitions: Sequence[Any],
+    index: int,
+) -> Iterator[tuple[str, Any, list[Mapping[str, Any]]]]:
+    """`perturb:i`, and the call's operations changed the same way in the environment's own
+    vocabulary: as the changed call makes them, and whatever it left as it was changed too, which
+    is what the binding settled rather than the agent. An argument read off one of the agent's
+    that has no other valid value stays: there was nothing else for the agent to send.
+
+    Then `perturb:i:argument` for an argument the mapping ignores although the operations hold
+    that very value, from the binding: another argument may matter and hide it from `perturb:i`.
+
+    Both sides stay within their schemas. What the environment's refuses, it refuses before the
+    handler and whoever chose the target, so there too it would be no evidence."""
+    entry = next(
+        one
+        for one in binding.tools
+        if isinstance(one, MappedToolBinding) and one.agent_tool == agent_tool
+    )
+    schema = next(
+        one.parameters for one in binding.agent_tools if one.name == agent_tool
+    )
+    environment = {one.name: one.parameters for one in definitions}
+    made_of = list(zip(operations, entry.steps, strict=True))
+    sent = {name: value for name, value in sent.items() if value is not None}
+    named = [*_named(schema)]
+    for step in entry.steps:
+        named += _named(environment[step.tool])
+        for value in step.arguments.values():
+            for node in _nodes(value):
+                named += node.map_ or ()
+                named += binding.aliases.get(node.alias or "", ())
+
+    def comes_to(arguments: Any) -> list[dict[str, Any]] | None:
+        """The operations the mapping makes of `arguments`, from the results the world gave."""
+        if value_problems(schema, arguments, formats=True):
+            return None
+        results = iter([one.world_result for one in operations])
+        outcome = run_bound_call(
+            binding,
+            agent_tool,
+            arguments,
+            run_operation=lambda _tool, _arguments: next(results),
+            environment_tools=definitions,
+        )
+        if outcome.status != "ok":
+            return None
+        return [one.arguments for one in outcome.operations]
+
+    def operation(
+        tool: str, arguments: Any, leaves: Iterable[tuple[_Path, Any]]
+    ) -> Any:
+        rules = environment[tool]
+
+        def accepted(one: Any) -> Any:
+            return None if value_problems(rules, one, formats=True) else one
+
+        return perturb(arguments, leaves, index, [*_named(rules)], accepted)[0]
+
+    changed, kept, ignored = perturb(sent, _leaves(sent), index, named, comes_to)
+
+    def settled(step: Step, path: _Path) -> bool:
+        value = step.arguments[path[0]]
+        return value.form == "arg" and (value.arg, *path[1:]) in kept
+
+    after = comes_to(changed) or [one.arguments for one in operations]
+    yield (
+        f"perturb:{index}",
+        changed,
+        [
+            operation(
+                step.tool,
+                made,
+                [
+                    (path, leaf)
+                    for path, leaf in _leaves(made)
+                    if _same(_at(one.arguments, path), leaf) and not settled(step, path)
+                ],
+            )
+            for made, (one, step) in zip(after, made_of, strict=True)
+        ],
+    )
+    for path in ignored:
+        name = str(_at(sent, path)).casefold()
+        others = [
+            operation(
+                step.tool,
+                one.arguments,
+                [
+                    (at, leaf)
+                    for at, leaf in _leaves(one.arguments)
+                    if str(leaf).casefold() == name
+                    and not isinstance(leaf, bool)
+                    and (
+                        settled(step, at)
+                        or {part.form for part in step.arguments[at[0]].leaves()}
+                        <= {"fixture", "const"}
+                    )
+                ],
+            )
+            for one, step in made_of
+        ]
+        if not _same(others, [one.arguments for one in operations]):
+            yield (
+                f"perturb:{index}:{'.'.join(map(str, path))}",
+                _put(sent, path, _at(changed, path)),
+                others,
+            )
+
+
 def _variants(
     binding: AgentBindingV1,
     calls: Sequence[tuple[str, Any]],
     outcomes: Sequence[Any],
     mutates: set[str],
-) -> list[Variant]:
+    definitions: Sequence[Any],
+) -> Iterator[Variant]:
     """`nothing`, then `skip:i` and `perturb:i` (1-based) for every call that can change state,
     each with its canonical counterpart: the same change made to the environment operations the
     proved trajectory committed (none for `nothing`; the suite proof already shows an untouched
     world fails).
 
-    A call the reference trajectory itself saw refused changed nothing, so removing or garbling
+    A call the reference trajectory itself saw refused changed nothing, so removing or changing
     it cannot fail the scenario whatever the binding does; it gets no variants.
     """
-    variants: list[Variant] = [("nothing", [], None)]
+    yield "nothing", [], None
     for position, (tool, arguments) in enumerate(calls):
         if tool not in mutates or outcomes[position].status != "ok":
             continue
         index = position + 1
-        variants.append(
-            (
-                f"skip:{index}",
-                [*calls[:position], *calls[index:]],
-                _replay(binding, outcomes, position, None),
-            )
+        yield (
+            f"skip:{index}",
+            [*calls[:position], *calls[index:]],
+            _replay(binding, outcomes, position, None),
         )
-        variants.append(
-            (
-                f"perturb:{index}",
-                [*calls[:position], (tool, perturb(arguments, index)), *calls[index:]],
-                _replay(binding, outcomes, position, index),
+        for name, changed, operations in _perturbed(
+            binding,
+            tool,
+            arguments,
+            outcomes[position].operations,
+            definitions,
+            index,
+        ):
+            yield (
+                name,
+                [*calls[:position], (tool, changed), *calls[index:]],
+                _replay(binding, outcomes, position, operations),
             )
-        )
-    return variants
 
 
 def _closed(scenario: Any, reached: set[str]) -> str:
@@ -322,13 +573,13 @@ def prove_binding(
                 continue
             adversarial: dict[str, Any] = {}
             for name, variant, counterpart in _variants(
-                binding, calls, solved.outcomes, mutates
+                binding, calls, solved.outcomes, mutates, definitions
             ):
                 if not proof.attempt(scenario, variant, binding).checks_hold:
                     adversarial[name] = "failed"
                 # A variant that holds shows the binding helps only if the same change, made in
                 # the environment's own vocabulary, would fail; otherwise the policy profile
-                # simply does not need the call.
+                # simply does not need what changed.
                 elif (
                     counterpart is not None
                     and proof.attempt(
@@ -348,8 +599,8 @@ def prove_binding(
                 status="failed" if held else "proved",
                 reason=f"adversarial variants held: {', '.join(held)}"
                 if held
-                else f"exempt: {', '.join(exempt)} (the call is not needed under this "
-                "profile: the canonical calls hold without it)"
+                else f"exempt: {', '.join(exempt)} (not needed under this profile: the "
+                "canonical calls hold with the same change)"
                 if exempt
                 else "",
                 adversarial=adversarial,
