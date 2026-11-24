@@ -4938,6 +4938,28 @@ def test_a_langchain_span_whose_input_is_the_arguments_text_pairs_with_the_agent
     assert evidence_notices(log, calls, {"get_order_status", "cancel_order"}) == []
 
 
+def test_a_langchain_span_that_wraps_a_plain_answer_is_the_agent_s_own_call_once():
+    import tempfile
+
+    from fi.alk.harness.call_runner import _with_span_calls, evidence_notices
+
+    arguments = {"booking_id": "HB-5002"}
+    answer = {"found": True, "booking_id": "HB-5002"}
+    span = {"name": "lookup_booking", "arguments": {"input": repr(arguments)},
+            "output": json.dumps({"output": repr(answer)}), "is_error": False, "source": "otel",
+            "at": 10.0, "ended_at": 10.1, "event_id": "e1"}
+    reported = [Call(name="lookup_booking", arguments=dict(arguments), ok=True, at=11.0, result=dict(answer))]
+    with tempfile.TemporaryDirectory() as folder:
+        trace = Path(folder) / "agent-tool-calls.jsonl"
+        trace.write_text(json.dumps(span) + "\n")
+        calls = _with_span_calls(reported, _runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert [call.name for call in calls] == ["lookup_booking"]
+    assert calls[0].arguments == arguments and calls[0].result == answer
+    log = [{"name": "lookup_booking", "actor_id": "agent", "outcome": "committed"}]
+    assert evidence_notices(log, calls, {"lookup_booking"}) == []
+
+
 def _ride_contract():
     """The ride voice agent's tools as its contract binds them: each a method of the agent, most calling the world over
     a route (one under another name), some agent-only steps that never reach the world."""

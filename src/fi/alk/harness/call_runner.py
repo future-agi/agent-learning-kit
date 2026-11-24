@@ -3022,10 +3022,14 @@ def _read_file_tool_calls(
         is_error = bool(record.get("is_error", False))
         output = record.get("output")
         raw_at = record.get("at")
+        result = None if is_error else _structured(output)
+        if record.get("source") == _SPAN_SOURCE:
+            arguments = _unwrapped_arguments(arguments)
+            result = _unwrapped_result(result)
         call = Call(
             name=name,
             arguments=arguments,
-            result=None if is_error else _structured(output),
+            result=result,
             ok=not is_error,
             error=str(output) if is_error and output is not None else None,
             **tool_call_attribution(record),
@@ -3678,6 +3682,24 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 )
             )
     return tuple(calls)
+
+
+def _unwrapped_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    if set(arguments) != {"input"} or not isinstance(arguments["input"], str):
+        return arguments
+    inner = _structured(arguments["input"])
+    return inner if isinstance(inner, dict) else arguments
+
+
+def _unwrapped_result(result: Any) -> Any:
+    if (
+        isinstance(result, dict)
+        and set(result) == {"output"}
+        and isinstance(result["output"], str)
+        and not _framework_message(result)
+    ):
+        return _structured(result["output"])
+    return result
 
 
 def _framework_message(result: Any) -> bool:
