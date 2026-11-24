@@ -2162,7 +2162,6 @@ def test_a_readings_saves_hold_only_the_record_the_reading_put_in(tmp_path):
     assert _made_from(json.loads(saved.read_bytes())) == record_for(job)
 
 
-<<<<<<< ours
 HOSTED_SOURCE = {"kind": "provider", "visibility": "public"}
 HOSTED_CONTRACT = {
     "agent": "support",
@@ -2328,7 +2327,8 @@ def test_a_phone_seed_is_checked_against_the_jobs_prompt(tmp_path):
     runtime = _hosted_builder(tmp_path, job)
 
     assert runtime._use_seed(seed) == ("used", [])
-=======
+
+
 # -- a seed whose agent needs a browser ----------------------------------------------------------
 
 
@@ -2436,4 +2436,3 @@ def test_a_seed_that_doesnt_match_the_job_is_left_to_be_read_again(tmp_path, mon
 
     assert not (tmp_path / "authoring" / "failure.json").exists()
     assert calls == ["compose", "await"]
->>>>>>> theirs
