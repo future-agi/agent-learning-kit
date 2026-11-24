@@ -20,10 +20,12 @@ cleaner.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import logging
 import os
+import shutil
 import socket
 import struct
 import threading
@@ -41,6 +43,10 @@ from .outbound import redact_outbound_text
 logger = logging.getLogger(__name__)
 
 RECORD_ROWS = 500
+# Screenshots for one trial, in number and in bytes; the end's is always kept.
+SHOTS = 20
+SHOT_BYTES = 8 * 1024 * 1024
+_SHOT = {"format": "jpeg", "quality": 60}
 _TEXT = 200
 _SAME_ATTEMPT_SECONDS = 2.0
 _ACTIONS = frozenset({"click", "typing"})
@@ -127,6 +133,34 @@ class BrowserRecord:
         self._last_refused: dict[tuple[str, str], float] = {}
         self._truncated = False
         self._why_incomplete: str | None = None
+        self._shots: list[dict[str, Any]] = []
+        self._shots_capped = False
+
+    def keep_shot(self, when: str, size: int, *, shots: int, shot_bytes: int) -> tuple[bool, list[str]]:
+        """Whether a screenshot of ``size`` bytes is kept, and the files of earlier ones it displaces. A page's is
+        kept while one place stays free for the end's; the end's is always kept, displacing the latest pages' to
+        stay within the bytes."""
+        with self._lock:
+            used = sum(one["bytes"] for one in self._shots)
+            if when != "end":
+                if len(self._shots) + 1 < shots and used + size <= shot_bytes:
+                    return True, []
+                self._shots_capped = True
+                return False, []
+            dropped: list[str] = []
+            while self._shots and (len(self._shots) >= shots or used + size > shot_bytes):
+                gone = self._shots.pop()
+                used -= gone["bytes"]
+                dropped.append(gone["file"])
+                self._shots_capped = True
+            return True, dropped
+
+    def photographed(self, tab: str, *, when: str, url: str, file: str, size: int) -> None:
+        with self._lock:
+            self._shots.append(
+                {"file": file, "when": when, "url": _clean(url, 2048), "tab": self._tab(tab), "at": self.clock(),
+                 "bytes": size}
+            )
 
     def allowed(self, url: str) -> bool:
         return host_allowed(_host(url), self.sites, loopback=False)
@@ -207,6 +241,8 @@ class BrowserRecord:
                 "blocked_page_requests": [
                     {"host": host, "count": count} for host, count in sorted(self._page_requests.items())
                 ],
+                "screenshots": [dict(one) for one in self._shots],
+                "screenshots_capped": self._shots_capped,
             }
             if self._why_incomplete is not None:
                 body["why_incomplete"] = self._why_incomplete
@@ -368,9 +404,17 @@ class BrowserRecorder:
         *,
         connect: Callable[..., CdpSocket] = CdpSocket.connect,
         clock: Callable[[], float] = time.time,
+        shots: int = SHOTS,
+        shot_bytes: int = SHOT_BYTES,
     ) -> None:
         self.sites = tuple(sites)
         self.record_path = record_path
+        stem = record_path.name.removesuffix(".json").removesuffix("-record")
+        self.shots_dir = record_path.with_name(f"{stem}-shots")
+        self._shot_limits = {"shots": shots, "shot_bytes": shot_bytes}
+        self._shot_count = 0
+        self._urls: dict[str, str] = {}  # session -> its tab's page now
+        self._last_session: str | None = None
         self._connect = connect
         self._clock = clock
         self.record = BrowserRecord(self.sites, clock=clock)
@@ -379,9 +423,10 @@ class BrowserRecorder:
         self._ids_lock = threading.Lock()
         self._tabs: dict[str, tuple[str, str]] = {}  # session -> (tab, its main frame)
         self._leaving = False
-        # A seal asked for at the trial's end: answered once the browser has answered a command sent after it, so
-        # every event before the ask is in the record.
-        self._seals: dict[int, str] = {}
+        # What to do with the browser's answer to a command: a screenshot's picture, or a seal asked for at the
+        # trial's end, written once the browser has answered a command sent after it, so every event before the ask
+        # is in the record.
+        self._waiting: dict[int, Callable[[dict[str, Any]], None]] = {}
         self._closed = threading.Event()
         threading.Thread(target=self._watch_seals, daemon=True).start()
 
@@ -390,7 +435,15 @@ class BrowserRecorder:
         self.detach()
         self.record = BrowserRecord(self.sites, clock=self._clock)
         self._tabs = {}
+        self._urls = {}
+        self._last_session = None
         self._leaving = False
+        try:
+            if self.shots_dir.exists():
+                shutil.rmtree(self.shots_dir)
+            self.shots_dir.mkdir(parents=True)
+        except OSError:
+            logger.warning("browser record: the screenshots folder %s could not be made new", self.shots_dir)
         try:
             opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
             with opener.open(f"http://127.0.0.1:{port}/json/version", timeout=10) as answer:
@@ -418,12 +471,27 @@ class BrowserRecorder:
 
     def seal(self, nonce: str) -> None:
         """Write the record marked with ``nonce`` once every event the browser sent before now is in it."""
-        try:
-            self._command("Browser.getVersion", seal=nonce)
-        except Exception:  # noqa: BLE001 - no connection: nothing more can arrive, the record is as it is
-            with self._ids_lock:
-                self._seals = {}
+
+        def sealed(_answer: dict[str, Any]) -> None:
             self.write(sealed=nonce)
+
+        def then_seal(_answer: dict[str, Any] | None = None) -> None:
+            try:
+                self._command("Browser.getVersion", then=sealed)
+            except Exception:  # noqa: BLE001 - no connection: nothing more can arrive, the record is as it is
+                self.write(sealed=nonce)
+
+        session = self._last_session
+        if session is None:
+            then_seal()
+            return
+        try:
+            self._command(
+                "Page.captureScreenshot", dict(_SHOT), session,
+                then=lambda answer: (self._photographed(answer, "end", session, self._urls.get(session, "")), then_seal()),
+            )
+        except Exception:  # noqa: BLE001 - no end screenshot; the seal still answers
+            then_seal()
 
     def _watch_seals(self) -> None:
         asked = seal_request_path(self.record_path)
@@ -448,7 +516,12 @@ class BrowserRecorder:
             current.close()
 
     def _command(
-        self, method: str, params: dict[str, Any] | None = None, session: str | None = None, *, seal: str = ""
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        session: str | None = None,
+        *,
+        then: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         current = self._socket
         if current is None:
@@ -456,8 +529,8 @@ class BrowserRecorder:
         with self._ids_lock:
             self._ids += 1
             message: dict[str, Any] = {"id": self._ids, "method": method, "params": params or {}}
-            if seal:
-                self._seals[self._ids] = seal
+            if then is not None:
+                self._waiting[self._ids] = then
         if session is not None:
             message["sessionId"] = session
         current.send(message)
@@ -477,9 +550,12 @@ class BrowserRecorder:
     def handle(self, message: dict[str, Any]) -> None:
         if "id" in message:
             with self._ids_lock:
-                nonce = self._seals.pop(message["id"], None)
-            if nonce is not None:
-                self.write(sealed=nonce)
+                then = self._waiting.pop(message["id"], None)
+            if then is not None:
+                try:
+                    then(message)
+                except Exception:  # noqa: BLE001 - one answer handled badly never ends the record
+                    logger.warning("browser record: an answer from the browser was not handled", exc_info=True)
             return
         method = message.get("method")
         params = message.get("params") or {}
@@ -490,7 +566,18 @@ class BrowserRecorder:
             frame = params.get("frame") or {}
             tab = self._tabs.get(session or "")
             if tab is not None and not frame.get("parentId") and frame.get("id") == tab[1]:
-                self.record.navigated(tab[0], str(frame.get("url") or ""))
+                url = str(frame.get("url") or "")
+                self._urls[session or ""] = url
+                self._last_session = session
+                self.record.navigated(tab[0], url)
+        elif method == "Page.loadEventFired":
+            tab = self._tabs.get(session or "")
+            if tab is not None and tab[1] and self._urls.get(session or "", "") not in ("", "about:blank"):
+                url = self._urls[session or ""]
+                self._command(
+                    "Page.captureScreenshot", dict(_SHOT), session,
+                    then=lambda answer: self._photographed(answer, "load", session, url),
+                )
         elif method == "Network.requestWillBeSent":
             tab = self._tabs.get(session or "")
             if tab is not None:
@@ -504,6 +591,32 @@ class BrowserRecorder:
             tab = self._tabs.get(session or "")
             if tab is not None:
                 self.record.acted(tab[0], str(params.get("payload") or ""))
+
+    def _photographed(self, answer: dict[str, Any], when: str, session: str | None, url: str) -> None:
+        """Keep a screenshot the browser took, within the trial's cap. One it could not take is skipped."""
+        try:
+            data = base64.b64decode(str((answer.get("result") or {}).get("data") or ""), validate=True)
+        except ValueError:
+            return
+        if not data:
+            return
+        keep, dropped = self.record.keep_shot(when, len(data), **self._shot_limits)
+        for name in dropped:
+            with contextlib.suppress(OSError):
+                (self.shots_dir / name).unlink()
+        if not keep:
+            return
+        self._shot_count += 1
+        name = f"shot-{self._shot_count:03d}-{when}.jpg"
+        try:
+            (self.shots_dir / name).write_bytes(data)
+        except OSError:
+            logger.warning("browser record: a screenshot could not be written to %s", self.shots_dir)
+            return
+        tab = self._tabs.get(session or "")
+        self.record.photographed(
+            tab[0] if tab else "", when=when, url=url, file=name, size=len(data)
+        )
 
     def _attached(self, params: dict[str, Any], parent: str | None) -> None:
         session = str(params.get("sessionId") or "")

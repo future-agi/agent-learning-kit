@@ -3,6 +3,7 @@ split into the pages it tried to open and the requests the pages made."""
 
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import struct
@@ -286,10 +287,21 @@ class _FakeCdp:
         self.ready = threading.Condition()
         self.closed = False
 
+    shot = b"\xff\xd8\xff" + b"j" * 97
+    fail_shots = False
+
     def send(self, message: dict) -> None:
         with self.ready:
             self.sent.append(message)
-            self.inbox.append({"id": message["id"], "result": {}})
+            if message["method"] == "Page.captureScreenshot":
+                answer = (
+                    {"id": message["id"], "error": {"message": "no"}}
+                    if self.fail_shots
+                    else {"id": message["id"], "result": {"data": base64.b64encode(self.shot).decode()}}
+                )
+            else:
+                answer = {"id": message["id"], "result": {}}
+            self.inbox.append(answer)
             self.ready.notify_all()
 
     def queue(self, message: dict) -> None:
@@ -389,3 +401,99 @@ def test_a_connection_that_ends_while_the_browser_runs_leaves_an_incomplete_reco
     finally:
         recorder.close()
     assert json.loads((tmp_path / "w0-record.json").read_text())["complete"] is False
+
+
+
+# Screenshots
+
+
+def _loaded(url: str) -> list[dict]:
+    return [
+        {"method": "Page.frameNavigated", "sessionId": "S1", "params": {"frame": {"id": "T1", "url": url}}},
+        {"method": "Page.loadEventFired", "sessionId": "S1", "params": {}},
+    ]
+
+
+def _recording(tmp_path, devtools_port, **kwargs):
+    fake = _FakeCdp()
+    recorder = browser_record.BrowserRecorder(
+        ["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake, **kwargs
+    )
+    recorder.attach(devtools_port)
+    fake.queue(_attached())
+    return fake, recorder
+
+
+def test_each_page_and_the_trial_s_end_are_photographed(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    try:
+        for message in _loaded("http://shop.test/") + _loaded("http://shop.test/cart"):
+            fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    shots = body["screenshots"]
+    assert [(one["when"], one["url"]) for one in shots] == [
+        ("load", "http://shop.test/"),
+        ("load", "http://shop.test/cart"),
+        ("end", "http://shop.test/cart"),
+    ]
+    for one in shots:
+        assert (tmp_path / "w0-shots" / one["file"]).read_bytes() == fake.shot
+    assert body["screenshots_capped"] is False
+
+
+def test_screenshots_stop_at_their_cap_and_the_last_is_always_kept(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port, shots=2)
+    try:
+        for index in range(4):
+            for message in _loaded(f"http://shop.test/{index}"):
+                fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [one["when"] for one in body["screenshots"]] == ["load", "end"]
+    assert body["screenshots_capped"] is True
+    assert sorted(path.name for path in (tmp_path / "w0-shots").iterdir()) == sorted(
+        one["file"] for one in body["screenshots"]
+    )
+
+
+def test_screenshots_stop_at_their_bytes_too(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port, shot_bytes=250)
+    try:
+        for index in range(4):
+            for message in _loaded(f"http://shop.test/{index}"):
+                fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert sum(len(fake.shot) for _ in body["screenshots"]) <= 250
+    assert body["screenshots"][-1]["when"] == "end" and body["screenshots_capped"] is True
+
+
+def test_a_screenshot_the_browser_could_not_take_is_skipped_and_the_seal_still_answers(
+    tmp_path, devtools_port
+) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    fake.fail_shots = True
+    try:
+        for message in _loaded("http://shop.test/"):
+            fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert body["complete"] is True and body["screenshots"] == []
+
+
+def test_a_new_record_starts_with_no_screenshots_of_the_last_trial(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    try:
+        for message in _loaded("http://shop.test/"):
+            fake.queue(message)
+        browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+        recorder.attach(devtools_port)
+        assert recorder.record.body()["screenshots"] == []
+        assert not any((tmp_path / "w0-shots").iterdir())
+    finally:
+        recorder.close()

@@ -315,6 +315,9 @@ def test_what_the_agent_clicked_and_typed_is_kept_and_a_password_never_is(browse
     assert "hunter2" not in json.dumps(body)
     sealed = sealed_record(kit.recorder.record_path, timeout=5)
     assert sealed["complete"] is True and len(sealed["rows"]) == len(body["rows"])
+    end = sealed["screenshots"][-1]
+    assert (end["when"], end["url"]) == ("end", "http://shop.test/form")
+    assert (kit.recorder.shots_dir / end["file"]).read_bytes()[:2] == b"\xff\xd8"
     assert any(row["kind"] == "navigation" and row["url"] == "http://shop.test/form" for row in body["rows"])
 
 
