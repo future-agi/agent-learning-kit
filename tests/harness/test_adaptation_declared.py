@@ -3,6 +3,7 @@ trajectories; the world's MCP endpoint serves its own tool names; a `both` goal 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -26,7 +27,7 @@ from fi.alk.harness.adaptation.workbench import (
     parse_binding_draft,
     profile_from_document,
 )
-from fi.alk.harness.binding_proof import BindingProofV1, unscored
+from fi.alk.harness.binding_proof import BindingProofV1, proof_digest, unscored
 from fi.alk.harness.binding_trajectories import derive_trajectories
 from fi.alk.harness.bindings import agent_call_problems, run_bound_call
 from fi.alk.harness.catalogue import Catalogue, SubGoal
@@ -703,10 +704,31 @@ def test_a_routed_binding_is_scored_only_on_the_scenarios_its_proof_proved():
         book=("proved", ""),
         late=("unscorable", "the reference solution uses escalate_to_staff"),
     )
-    assert unscored(CLINIC_BINDING, SUITE, SHA, proof) == {
+    assert unscored(
+        CLINIC_BINDING, SUITE, SHA, proof, anchored=proof_digest(proof)
+    ) == {
         "late": "the reference solution uses escalate_to_staff",
         "added": "the binding proof does not cover it",
     }
+
+
+def test_a_proof_that_is_not_the_one_the_manifest_froze_is_not_read():
+    """The proof names the binding, suite and environment it is of, and all three can be left
+    intact while a status is edited: only the digest the run's manifest froze tells them apart."""
+    proof = _proof(
+        CLINIC_BINDING,
+        book=("proved", ""),
+        late=("unscorable", "the reference solution uses escalate_to_staff"),
+    )
+    anchored = proof_digest(proof)
+    edited = _proof(CLINIC_BINDING, book=("proved", ""), late=("proved", ""))
+    with pytest.raises(ReleaseError) as caught:
+        unscored(CLINIC_BINDING, SUITE, SHA, edited, anchored=anchored)
+    assert caught.value.code == "binding_proof_digest_mismatch"
+    with pytest.raises(ReleaseError) as caught:
+        unscored(CLINIC_BINDING, SUITE, SHA, proof, anchored=None)
+    assert caught.value.code == "binding_unproved"
+    assert "names no binding proof digest" in caught.value.detail
 
 
 @pytest.mark.parametrize(
@@ -728,9 +750,37 @@ def test_a_routed_binding_without_its_proof_against_the_suite_is_not_run(
         document = document.model_copy(update={"passed": False})
     with pytest.raises(ReleaseError) as caught:
         unscored(
-            CLINIC_BINDING, SUITE, environment, None if proof is None else document
+            CLINIC_BINDING,
+            SUITE,
+            environment,
+            None if proof is None else document,
+            anchored=proof_digest(document),
         )
     assert caught.value.code == "binding_unproved" and said in caught.value.detail
+
+
+def test_a_manifest_that_freezes_no_proof_keeps_the_digest_it_always_had():
+    from fi.alk.harness.releases import seal_run_manifest
+
+    fields = {
+        "environment": [{"digest": SHA, "name": "clinic"}],
+        "suite": {"digest": SUITE_SHA},
+        "binding": {"digest": SHA},
+        "agent": CLINIC_BINDING.agent.model_dump(mode="json"),
+        "selection": {"scenario_keys": ["book"], "trials": 1},
+        "simulator": {"llm": {"provider": "openai", "model": "gpt-test"}},
+        "scorer": {"alk_version": "test"},
+        "runtime": {"provider": "test", "image_name": "alk", "image_digest": SHA},
+    }
+    bare = seal_run_manifest(fields)
+    document = bare.model_dump(mode="json", by_alias=True)
+    document.pop("digest"), document.pop("binding_proof")
+    canonical = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    assert bare.digest == "sha256:" + hashlib.sha256(canonical).hexdigest()
+    anchored = seal_run_manifest({**fields, "binding_proof": {"digest": SUITE_SHA}})
+    assert anchored.digest != bare.digest
 
 
 def test_a_canonical_binding_is_scored_on_the_whole_suite():
@@ -741,7 +791,7 @@ def test_a_canonical_binding_is_scored_on_the_whole_suite():
             "tools": [],
         }
     )
-    assert unscored(canonical, SUITE, SHA, None) == {}
+    assert unscored(canonical, SUITE, SHA, None, anchored=None) == {}
 
 
 def test_the_submit_binding_tool_may_leave_the_trajectories_out():

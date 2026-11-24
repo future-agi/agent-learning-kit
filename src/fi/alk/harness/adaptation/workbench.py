@@ -75,6 +75,7 @@ def failed_result(code: str, message: str) -> dict[str, Any]:
         "environment": [],
         "suite": None,
         "binding": None,
+        "binding_proof": None,
         "alignment": None,
     }
 
@@ -680,9 +681,18 @@ class Workbench:
                     "derived": derived,
                 },
                 "binding": {"digest": self.binding.digest, "mode": self.mode.value},
+                # What a run's manifest freezes, so compose reads only this proof's statuses.
+                "binding_proof": self._proof_ref(),
                 "alignment": self.alignment,
             }
         )
+
+    def _proof_ref(self) -> dict[str, str] | None:
+        if self.mode is not BindingMode.TOOL_ROUTED:
+            return None
+        from ..binding_proof import BindingProofV1, proof_digest
+
+        return {"digest": proof_digest(BindingProofV1.model_validate(self.proof))}
 
     def fail(self, code: str, message: str) -> None:
         result = failed_result(code, message)

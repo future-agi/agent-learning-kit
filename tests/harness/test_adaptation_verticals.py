@@ -176,7 +176,11 @@ def _mine(tool: str, **arguments: object) -> dict:
     }
 
 
-def _run_manifest(tmp_path: Path, binding: dict, keys: list[str]) -> Path:
+def _run_manifest(
+    tmp_path: Path, binding: dict, keys: list[str], proof: dict | None = None
+) -> Path:
+    """A sealed manifest for `keys`, freezing `proof` (the adaptation result's `binding_proof`)
+    as the platform does from its own record."""
     from fi.alk.harness.releases import RunManifestV1, object_digest
 
     release = Path(RELEASES) / "internal_knowledge"
@@ -190,6 +194,7 @@ def _run_manifest(tmp_path: Path, binding: dict, keys: list[str]) -> Path:
         "environment": [{"digest": environment["digest"], "name": environment["name"]}],
         "suite": {"digest": suite["digest"]},
         "binding": {"digest": binding["digest"]},
+        "binding_proof": proof,
         "agent": binding["agent"],
         "selection": {"scenario_keys": keys, "trials": 1},
         "simulator": {"llm": {"provider": "openai", "model": "gpt-test"}},
@@ -202,7 +207,10 @@ def _run_manifest(tmp_path: Path, binding: dict, keys: list[str]) -> Path:
     }
     manifest = RunManifestV1.model_validate(body)
     manifest = manifest.model_copy(update={"digest": object_digest(manifest)})
-    path = tmp_path / f"manifest-{len(keys)}-{keys[0]}.json"
+    path = (
+        tmp_path
+        / f"manifest-{len(keys)}-{keys[0]}-{'anchored' if proof else 'bare'}.json"
+    )
     path.write_text(json.dumps(manifest.model_dump(mode="json")), encoding="utf-8")
     return path
 
@@ -300,10 +308,11 @@ def test_an_agent_without_a_tool_is_proved_on_another_route_and_runs_only_its_su
         "binding_proof_path": out / "binding-proof.json",
     }
     picked = min(unscorable)
+    anchor = result["binding_proof"]
     with pytest.raises(ReleaseError) as caught:
         compose_bundle(
             releases,
-            manifest_path=_run_manifest(tmp_path, binding, [ROUTED, picked]),
+            manifest_path=_run_manifest(tmp_path, binding, [ROUTED, picked], anchor),
             output=tmp_path / "refused",
             **common,
         )
@@ -311,15 +320,47 @@ def test_an_agent_without_a_tool_is_proved_on_another_route_and_runs_only_its_su
     with pytest.raises(ReleaseError) as caught:
         compose_bundle(
             releases,
-            manifest_path=_run_manifest(tmp_path, binding, [ROUTED]),
+            manifest_path=_run_manifest(tmp_path, binding, [ROUTED], anchor),
             output=tmp_path / "unproved",
             **{**common, "binding_proof_path": None},
         )
     assert caught.value.code == "binding_unproved"
+    # A manifest that froze no proof digest gives compose nothing to hold the proof to.
+    with pytest.raises(ReleaseError) as caught:
+        compose_bundle(
+            releases,
+            manifest_path=_run_manifest(tmp_path, binding, [ROUTED]),
+            output=tmp_path / "unanchored",
+            **common,
+        )
+    assert caught.value.code == "binding_unproved"
+    # The proof edited after the adaptation, its references intact: the scenario the binding
+    # cannot reach marked proved. It is no longer the proof the manifest froze.
+    edited = tmp_path / "edited-proof.json"
+    edited.write_text(
+        json.dumps(
+            {
+                **proof,
+                "scenarios": {
+                    **proof["scenarios"],
+                    picked: {"status": "proved", "reason": "", "adversarial": {}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ReleaseError) as caught:
+        compose_bundle(
+            releases,
+            manifest_path=_run_manifest(tmp_path, binding, [ROUTED, picked], anchor),
+            output=tmp_path / "edited",
+            **{**common, "binding_proof_path": edited},
+        )
+    assert caught.value.code == "binding_proof_digest_mismatch"
 
     bundle = compose_bundle(
         releases,
-        manifest_path=_run_manifest(tmp_path, binding, [ROUTED]),
+        manifest_path=_run_manifest(tmp_path, binding, [ROUTED], anchor),
         output=tmp_path / "bundle",
         **common,
     )
@@ -343,7 +384,7 @@ def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
     sealed for `bank-support-42`, and compose accepts the run's own declaration as that agent."""
     from fi.alk.harness.adaptation.declared import MCP_CLIENT
     from fi.alk.harness.adaptation.profile import profile_from_job, seal_binding
-    from fi.alk.harness.binding_proof import BindingProofV1
+    from fi.alk.harness.binding_proof import BindingProofV1, proof_digest
     from fi.alk.harness.job import HarnessJob
     from fi.alk.harness.releases import (
         RELEASES_SUITE,
@@ -402,18 +443,6 @@ def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
     )
     (releases / RELEASES_SUITE).symlink_to(release / "suite")
     suite = load_suite_release(release / "suite")
-    manifest = seal_run_manifest(
-        {
-            "environment": [{"digest": environment.digest, "name": environment.name}],
-            "suite": {"digest": suite.digest},
-            "binding": {"digest": binding.digest},
-            "agent": binding.agent.model_dump(mode="json"),
-            "selection": {"scenario_keys": [suite.scenarios[0].key], "trials": 1},
-            "simulator": {"llm": {"provider": "openai", "model": "gpt-4.1-mini"}},
-            "scorer": {"alk_version": "test"},
-            "runtime": {"provider": "e2b", "image_name": "alk", "image_digest": digest},
-        }
-    )
     # A routed binding runs only on what its proof proved; this test is about identity, so the
     # proof covers the one scenario selected.
     proof = BindingProofV1(
@@ -422,6 +451,19 @@ def test_an_explicit_agent_id_is_the_one_compose_finds(tmp_path):
         environment={"digest": environment.digest},
         scenarios={suite.scenarios[0].key: {"status": "proved", "reason": ""}},
         passed=True,
+    )
+    manifest = seal_run_manifest(
+        {
+            "environment": [{"digest": environment.digest, "name": environment.name}],
+            "suite": {"digest": suite.digest},
+            "binding": {"digest": binding.digest},
+            "binding_proof": {"digest": proof_digest(proof)},
+            "agent": binding.agent.model_dump(mode="json"),
+            "selection": {"scenario_keys": [suite.scenarios[0].key], "trials": 1},
+            "simulator": {"llm": {"provider": "openai", "model": "gpt-4.1-mini"}},
+            "scorer": {"alk_version": "test"},
+            "runtime": {"provider": "e2b", "image_name": "alk", "image_digest": digest},
+        }
     )
     paths = {}
     for name, body in (
