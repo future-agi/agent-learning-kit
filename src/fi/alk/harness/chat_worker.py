@@ -165,9 +165,18 @@ class IsolatedChatCallRunner:
         outcome = None
         if raw_outcome is not None:
             raw_outcome["calls"] = tuple(Call(**call) for call in raw_outcome["calls"])
+            # A recording the platform did not keep has no id: never named in the outcome, and a screenshot's is said.
+            lost = sum(
+                1 for one in artifacts if one["kind"] == ArtifactKind.SCREENSHOT.value and not artifact_ids.get(one["id"])
+            )
+            if lost:
+                from .browser_record import not_kept_notice
+
+                raw_outcome["notices"] = (*(raw_outcome.get("notices") or ()), not_kept_notice(lost))
             raw_outcome["recording_artifacts"] = tuple(
                 artifact_ids[item]
                 for item in raw_outcome.get("recording_artifacts", [])
+                if artifact_ids.get(item)
             )
             raw_outcome["transcript_artifact"] = artifact_ids.get(
                 raw_outcome["transcript_artifact"]

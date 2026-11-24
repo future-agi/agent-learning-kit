@@ -2676,3 +2676,75 @@ def test_a_chat_trial_in_a_browser_environment_says_when_its_browser_was_not_use
         )
     )
     assert BROWSER_NOT_USED in [one["code"] for one in outcome.notices]
+
+
+def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import threading
+    import time as clock
+
+    from fi.alk.harness.browser_record import seal_request_path
+
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Found it on the shop's site.")
+
+    class Kinds(_Adapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.kinds: list[str] = []
+
+        async def upload_artifact(self, data: bytes, **kwargs: Any) -> str:
+            self.kinds.append(kwargs["kind"].value)
+            return f"artifact-{len(self.kinds)}"
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    state = tmp_path / "w0.json"
+    state.write_text(json.dumps({"attached": 1}), encoding="utf-8")
+    record = tmp_path / "w0-record.json"
+    (tmp_path / "w0-shots").mkdir()
+    (tmp_path / "w0-shots" / "shot-001-end.jpg").write_bytes(b"\xff\xd8end")
+
+    def kit_client() -> None:
+        for _ in range(250):
+            asked = seal_request_path(record)
+            if asked.exists():
+                record.write_text(
+                    json.dumps(
+                        {"complete": True, "rows": [], "screenshots": [{"file": "shot-001-end.jpg"}],
+                         "sealed": asked.read_text()}
+                    )
+                )
+                return
+            clock.sleep(0.02)
+
+    threading.Thread(target=kit_client, daemon=True).start()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http", protocol="http", address="http://localhost:18080"
+            )
+        },
+        metadata={"browser": {"state": "started", "state_path": str(state), "record_path": str(record)}},
+    )
+    adapter = Kinds()
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(adapter, _context(tmp_path)).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+    assert adapter.kinds[-1] == "screenshot"
+    assert adapter.kinds.index("transcript") < adapter.kinds.index("screenshot")
+    assert outcome.recording_artifacts == (f"artifact-{len(adapter.kinds)}",)

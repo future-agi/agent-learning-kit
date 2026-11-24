@@ -35,6 +35,7 @@ from .call_runner import (
 from .contract import AgentContract
 from .privilege import IsolationMode, isolation_mode
 from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, Scenario, World
+from .browser_record import browser_evidence, browser_shots_dir, upload_screenshots, with_browser
 from .kit_browser import browser_notices
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
@@ -1314,6 +1315,8 @@ class HostedChatCallRunner:
         # Calls returned over HTTP are recorded here as they run, so they are a full capture.
         capture_failed = capture_failed and not graded_calls(transcript.calls)
 
+        # The world's record of its browser, sealed now the agent is done: off the loop, it waits on the kit's client.
+        browser = await asyncio.to_thread(browser_evidence, runtime)
         world_record = _world_actors_record(
             door,
             listing,
@@ -1343,7 +1346,9 @@ class HostedChatCallRunner:
             from .call_runner import upload_end_state, worker_channels_held
 
             sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
-            kept = await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
+            kept = await upload_end_state(
+                self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started), browser=browser
+            )
             # `door` says a door stood for these counts, so a reader never takes a record from before it for one.
             world_record = {
                 **(world_record or {}),
@@ -1396,6 +1401,9 @@ class HostedChatCallRunner:
                     if key in world_record
                 },
             }
+        if world_record is not None and browser is not None and world_record.get("door"):
+            # Beside the world's counts, never in them; the agent's blocked list split by what the browser saw.
+            world_record = with_browser(world_record, browser)
         if world_record is not None:
             transcript.world_actors = world_record
         # Every actor that took part, the ones acting only through the world too, so the call is found by each.
@@ -1468,11 +1476,16 @@ class HostedChatCallRunner:
                 kind=ArtifactKind.TOOL_TRACE,
                 scenario_key=scenario.scenario_key,
             )
+        # Last, so they never crowd out the transcript and the end state.
+        shots, shot_notices = await upload_screenshots(
+            self._adapter, scenario.scenario_key, browser, browser_shots_dir(runtime)
+        )
         outcome = CallOutcome(
             calls=calls,
             tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
-            notices=tuple(said),
+            notices=tuple(said) + tuple(shot_notices),
+            recording_artifacts=shots,
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

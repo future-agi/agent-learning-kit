@@ -409,8 +409,7 @@ class BrowserRecorder:
     ) -> None:
         self.sites = tuple(sites)
         self.record_path = record_path
-        stem = record_path.name.removesuffix(".json").removesuffix("-record")
-        self.shots_dir = record_path.with_name(f"{stem}-shots")
+        self.shots_dir = shots_dir_for(record_path)
         self._shot_limits = {"shots": shots, "shot_bytes": shot_bytes}
         self._shot_count = 0
         self._urls: dict[str, str] = {}  # session -> its tab's page now
@@ -725,3 +724,107 @@ def split_blocked(blocked: list[dict[str, Any]], record: dict[str, Any] | None) 
         if host in requests:
             kept.append({"host": host, "via": "browser", "what": "page_request", "count": requests[host]})
     return kept
+
+
+SCREENSHOTS_CAPPED = "screenshots_capped"
+SCREENSHOTS_NOT_KEPT = "screenshots_not_kept"
+
+
+def _attached(state_path: Any) -> int:
+    path = Path(str(state_path or ""))
+    try:
+        if path.is_file():
+            with path.open("rb") as handle:
+                count = json.loads(handle.read(4096)).get("attached")
+            return count if isinstance(count, int) and count > 0 else 0
+    except (OSError, ValueError, AttributeError):
+        pass
+    return 0
+
+
+def browser_evidence(runtime: Any, *, timeout: float = 5.0) -> dict[str, Any] | None:
+    """What the trial keeps of its world's browser: None for a world without one; ``not_started`` or ``not_used``
+    said as such, never an empty record that reads as clean; otherwise the record, sealed at the trial's end."""
+    browser = (getattr(runtime, "metadata", None) or {}).get("browser")
+    if not isinstance(browser, dict):
+        return None
+    if browser.get("state") != "started":
+        return {"state": str(browser.get("state") or "unknown")}
+    if not _attached(browser.get("state_path")):
+        return {"state": "not_used"}
+    record = sealed_record(Path(str(browser.get("record_path") or "")), timeout=timeout) if browser.get(
+        "record_path"
+    ) else None
+    if record is None:
+        return {"state": "used", "complete": False, "why_incomplete": "the browser record could not be read"}
+    return {"state": "used", **record}
+
+
+def with_browser(world_record: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+    """The trial's world record with its browser's: the record beside the counts, never in them, and the agent's
+    blocked list with the browser's refusals split in two."""
+    changes = []
+    for entry in world_record.get("state_changes") or []:
+        if isinstance(entry, dict) and entry.get("who") == "agent" and entry.get("blocked"):
+            entry = {**entry, "blocked": split_blocked(entry["blocked"], evidence)}
+        changes.append(entry)
+    kept = {**world_record, "browser": evidence}
+    if "state_changes" in world_record:
+        kept["state_changes"] = changes
+    return kept
+
+
+async def upload_screenshots(
+    adapter: Any, scenario_key: str, evidence: dict[str, Any] | None, shots_dir: Path
+) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    """Upload the trial's screenshots, after its transcript and end state so they never crowd those out. A
+    screenshot the platform did not keep never fails the trial: it is said."""
+    from .outbound import ArtifactKind
+
+    notices: list[dict[str, str]] = []
+    if not isinstance(evidence, dict):
+        return (), notices
+    if evidence.get("screenshots_capped"):
+        notices.append(
+            {
+                "code": SCREENSHOTS_CAPPED,
+                "message": "The browser's screenshots reached their limit for one trial; the last one is kept.",
+            }
+        )
+    ids: list[str] = []
+    lost = 0
+    for one in evidence.get("screenshots") or []:
+        name = str((one or {}).get("file") or "")
+        path = shots_dir / name
+        if not name or Path(name).name != name or not path.is_file() or path.is_symlink():
+            continue
+        try:
+            data = path.read_bytes()[:SHOT_BYTES]
+            stored = await adapter.upload_artifact(data, kind=ArtifactKind.SCREENSHOT, scenario_key=scenario_key)
+        except Exception:  # noqa: BLE001 - a lost screenshot never fails the trial
+            stored = None
+        if stored:
+            ids.append(stored)
+        else:
+            lost += 1
+    if lost:
+        notices.append(not_kept_notice(lost))
+    return tuple(ids), notices
+
+
+def not_kept_notice(lost: int) -> dict[str, str]:
+    return {
+        "code": SCREENSHOTS_NOT_KEPT,
+        "message": f"The platform did not keep {lost} of the browser's screenshots; the trial is graded without them.",
+    }
+
+
+def shots_dir_for(record_path: Path) -> Path:
+    stem = record_path.name.removesuffix(".json").removesuffix("-record")
+    return record_path.with_name(f"{stem}-shots")
+
+
+def browser_shots_dir(runtime: Any) -> Path:
+    browser = (getattr(runtime, "metadata", None) or {}).get("browser")
+    record_path = browser.get("record_path") if isinstance(browser, dict) else None
+    return shots_dir_for(Path(str(record_path))) if record_path else Path("/nonexistent-browser-shots")

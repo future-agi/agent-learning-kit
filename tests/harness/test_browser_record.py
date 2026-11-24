@@ -530,3 +530,124 @@ def test_a_refusal_the_record_never_saw_stays_as_the_proxy_counted_it() -> None:
 def test_with_no_record_the_proxy_s_counts_stand() -> None:
     proxy = [{"host": "www.example.com", "method": "GET", "via": "browser", "count": 3}]
     assert browser_record.split_blocked(proxy, None) == proxy
+
+
+# What the trial keeps of its browser
+
+
+def _runtime(metadata):
+    from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
+
+    return EnvironmentRuntime(
+        runtime_id="r", world_index=0, bundle_digest="d", state=RuntimeState.READY, metadata=metadata
+    )
+
+
+def _started(tmp_path, attached: int, record: dict | None = None):
+    state = tmp_path / "w0.json"
+    state.write_text(json.dumps({"attached": attached}))
+    record_path = tmp_path / "w0-record.json"
+    if record is not None:
+        record_path.write_text(json.dumps(record))
+    return _runtime({"browser": {"state": "started", "state_path": str(state), "record_path": str(record_path)}})
+
+
+def test_a_browser_nobody_attached_to_reads_not_used_never_an_empty_record(tmp_path) -> None:
+    evidence = browser_record.browser_evidence(_started(tmp_path, 0, {"rows": []}), timeout=0.2)
+    assert evidence == {"state": "not_used"}
+
+
+def test_a_world_with_no_browser_has_no_browser_evidence(tmp_path) -> None:
+    assert browser_record.browser_evidence(_runtime({}), timeout=0.2) is None
+    assert browser_record.browser_evidence(_runtime({"browser": {"state": "not_started"}}), timeout=0.2) == {
+        "state": "not_started"
+    }
+
+
+def test_a_used_browser_s_record_is_sealed_and_kept(tmp_path) -> None:
+    path = tmp_path / "w0-record.json"
+    runtime = _started(tmp_path, 1)
+
+    def answer():
+        # The kit's client answers the seal the trial asks for.
+        asked = browser_record.seal_request_path(path)
+        for _ in range(100):
+            if asked.exists():
+                nonce = asked.read_text()
+                path.write_text(json.dumps({"complete": True, "rows": [{"kind": "click"}], "sealed": nonce}))
+                return
+            __import__("time").sleep(0.02)
+
+    threading.Thread(target=answer, daemon=True).start()
+    evidence = browser_record.browser_evidence(runtime, timeout=5)
+    assert evidence == {"state": "used", "complete": True, "rows": [{"kind": "click"}]}
+
+
+def test_browser_rows_never_count_as_tool_calls_or_world_actions() -> None:
+    # A trial with browser actions and no tool calls: zero attempted and zero committed, the record beside them.
+    world = {
+        "state_changes": [
+            {
+                "who": "agent",
+                "attempted": 0,
+                "committed": 0,
+                "blocked": [{"host": "www.example.com", "method": "GET", "via": "browser", "count": 2}],
+            }
+        ]
+    }
+    evidence = {
+        "state": "used",
+        "rows": [{"kind": "click"}, {"kind": "typing"}],
+        "blocked_navigations": [{"url": "http://www.example.com/", "at": 1.0}],
+        "blocked_page_requests": [],
+    }
+    kept = browser_record.with_browser(world, evidence)
+    [agent] = kept["state_changes"]
+    assert (agent["attempted"], agent["committed"]) == (0, 0)
+    assert agent["blocked"] == [
+        {"host": "www.example.com", "via": "browser", "what": "navigation", "url": "http://www.example.com/", "at": 1.0}
+    ]
+    assert kept["browser"]["rows"] == evidence["rows"]
+    assert world["state_changes"][0]["blocked"][0]["count"] == 2  # the world record it was given is not changed
+
+
+class _Uploads:
+    def __init__(self, refuse: bool = False) -> None:
+        self.refuse = refuse
+        self.kinds: list = []
+
+    async def upload_artifact(self, data, *, kind, scenario_key=None, deadline=None):
+        self.kinds.append((kind, data))
+        return None if self.refuse else f"artifact-{len(self.kinds)}"
+
+
+def test_screenshots_are_uploaded_as_their_own_kind(tmp_path) -> None:
+    import asyncio
+
+    from fi.alk.harness.outbound import ArtifactKind
+
+    shots = tmp_path / "w0-shots"
+    shots.mkdir()
+    (shots / "shot-001-load.jpg").write_bytes(b"\xff\xd8one")
+    (shots / "shot-002-end.jpg").write_bytes(b"\xff\xd8two")
+    evidence = {
+        "state": "used",
+        "screenshots": [{"file": "shot-001-load.jpg"}, {"file": "shot-002-end.jpg"}, {"file": "../escape.jpg"}],
+    }
+    adapter = _Uploads()
+    ids, notices = asyncio.run(browser_record.upload_screenshots(adapter, "one", evidence, shots))
+    assert ids == ("artifact-1", "artifact-2")
+    assert [kind for kind, _ in adapter.kinds] == [ArtifactKind.SCREENSHOT] * 2
+    assert notices == []
+
+
+def test_screenshots_the_platform_did_not_keep_are_said_and_never_fail_the_trial(tmp_path) -> None:
+    import asyncio
+
+    shots = tmp_path / "w0-shots"
+    shots.mkdir()
+    (shots / "shot-001-end.jpg").write_bytes(b"\xff\xd8")
+    evidence = {"state": "used", "screenshots": [{"file": "shot-001-end.jpg"}], "screenshots_capped": True}
+    ids, notices = asyncio.run(browser_record.upload_screenshots(_Uploads(refuse=True), "one", evidence, shots))
+    assert ids == ()
+    assert [one["code"] for one in notices] == ["screenshots_capped", "screenshots_not_kept"]
