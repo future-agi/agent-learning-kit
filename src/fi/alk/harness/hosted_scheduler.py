@@ -424,6 +424,8 @@ class CallSummary:
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
     target_metrics: dict[str, Any] | None = None
+    # Writes the world applied twice after the agent's answer was lost: the agent's failure, whatever the checks say.
+    duplicate_commits: int = 0
 
 
 @dataclass(frozen=True)
@@ -3025,6 +3027,7 @@ class HostedScheduler:
             recording_artifacts=outcome.recording_artifacts,
             stop_reason=outcome.stop_reason,
             target_metrics=outcome.target_metrics,
+            duplicate_commits=len(outcome.duplicates),
         )
 
     def _fault(

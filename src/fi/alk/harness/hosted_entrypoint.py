@@ -1662,6 +1662,9 @@ class OutboundAdapter:
             target_metrics = getattr(receipt.call, "target_metrics", None)
             if target_metrics:
                 call["target_metrics"] = target_metrics
+            duplicate_commits = getattr(receipt.call, "duplicate_commits", 0)
+            if duplicate_commits:
+                call["duplicate_commits"] = duplicate_commits
         elif receipt.call is not None:
             # `hosted_scheduler.CallSummary.started_at` is `str | None`, but
             # `outbound.CallSummary.started_at` requires a real timestamp -- per the contract a

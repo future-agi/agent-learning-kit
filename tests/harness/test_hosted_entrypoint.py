@@ -5993,3 +5993,27 @@ def test_a_receipt_retries_only_within_the_best_effort_window_and_skips_an_uploa
         return set(adapter._failed_uploads)
 
     assert asyncio.run(taken_meanwhile()) == set()
+
+
+def test_a_receipt_s_duplicate_commits_reach_the_platform_as_a_field() -> None:
+    from fi.alk.harness.hosted_scheduler import CallSummary
+
+    async def sent(duplicates: int) -> dict[str, Any]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        call = CallSummary(
+            started_at="2026-01-01T00:00:00.000Z",
+            ended_at="2026-01-01T00:00:01.000Z",
+            duration_ms=1000,
+            turns=1,
+            duplicate_commits=duplicates,
+        )
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="failed",
+            sub_goals=(), evaluations=(), call=call, failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")]
+
+    assert asyncio.run(sent(2))["call"]["duplicate_commits"] == 2
+    assert "duplicate_commits" not in asyncio.run(sent(0))["call"]

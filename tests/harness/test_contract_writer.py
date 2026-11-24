@@ -1419,6 +1419,8 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (the runtime workspace's job and secrets copy)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "play_this_attempt"): (
         1, _READS + " (the live proofs file)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_unplayed"): (
+        1, _READS + " (the unplayed cases file)"),
     ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "_prepare_runtime_work"): (
         1, _READS + " (the runtime workspace's job and secrets copy)"),
     ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "prove_live"): (

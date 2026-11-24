@@ -5397,8 +5397,11 @@ def test_a_duplicate_commit_fails_the_scenario(monkeypatch) -> None:
     assert receipt.reason == (
         "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
     )
+    # On the receipt as a field too, so the platform never reads it from the words.
+    assert receipt.call.duplicate_commits == 1
     clean, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=_call_outcome(turns=2))
     assert clean.status == "passed" and clean.failure is None
+    assert clean.call.duplicate_commits == 0
 
 
 def test_a_check_reading_an_unreadable_log_is_unmeasured_not_passed(monkeypatch) -> None:

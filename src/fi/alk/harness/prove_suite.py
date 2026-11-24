@@ -25,7 +25,7 @@ from typing import Any
 
 from .catalogue import load_catalogue
 from .json_file import write_json_atomic
-from .live_proof import apply_live, load_live, load_unplayed
+from .live_proof import apply_live, load_live, load_unplayed, outside_the_agent
 from .outbound import redact_outbound_text
 from .proof_records import ProofEntry
 from .proofs import proof_entry, proof_key, unprovable_entry
@@ -104,6 +104,8 @@ def prove_suite(
     actors = load_world_actors(authoring)
     live = load_live(authoring)
     unplayed = load_unplayed(authoring)
+    # The tools a live lane could play; a tool in the agent's own process is assumed live and offline alike.
+    served = None if contract is None else outside_the_agent(contract)
     tools = agent_tools(agent_document)
     started = time.monotonic()
     allowed = budget_seconds(suite_budget_seconds() if budget is None else budget, deadline_at, time.time())
@@ -132,7 +134,7 @@ def prove_suite(
             if key in live:
                 # The certification just played this case on the live runtime: its gates win.
                 proof = apply_live(proof, live[key])
-            elif key in unplayed and proof.assumed:
+            elif key in unplayed and proof.assumed and (served is None or served & set(proof.assumed)):
                 # The live pass was to run the steps this offline proof could only assume, and did not: nothing here
                 # shows the case can be solved, so it is not proved, never kept as written on steps that never ran.
                 proofs[key] = unprovable_entry(

@@ -1978,6 +1978,16 @@ def test_build_result_receipt_matches_the_contract_shaped_example() -> None:
     )  # round-trips through the model unchanged
 
 
+def test_a_receipt_carries_its_duplicate_commits_and_one_without_any_is_unchanged() -> None:
+    plain = _passed_receipt()
+    assert "duplicate_commits" not in plain["call"]
+    call = {**plain["call"], "duplicate_commits": 2}
+    receipt = _passed_receipt(status=ScenarioStatus.FAILED, call=call)
+    assert receipt["call"]["duplicate_commits"] == 2
+    assert receipt["digest"] == whole_object_digest({k: v for k, v in receipt.items() if k != "digest"})
+    ResultReceiptDraft.model_validate(receipt)
+
+
 def test_target_latency_normalization_matches_outbound_bounds() -> None:
     from fi.simulate.results.futureagi import (
         MAX_TARGET_LATENCY_TURNS,

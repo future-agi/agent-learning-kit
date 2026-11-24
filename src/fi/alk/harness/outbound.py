@@ -2553,6 +2553,8 @@ class CallSummary(BaseModel):
     # The agent under test's own provider-reported figures (`provider`, `usage`, `cost_cents`,
     # `latency`), never the simulator's.
     target_metrics: dict[str, Any] | None = None
+    # Writes the world applied twice after the agent's answer was lost; sent only when there were some.
+    duplicate_commits: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":
@@ -2598,7 +2600,7 @@ def _unset_default_fields(model: BaseModel, prefix: str = "") -> list[str]:
     return names
 
 
-_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
+_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics", "duplicate_commits"})
 
 
 def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") -> None:

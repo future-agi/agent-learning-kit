@@ -1731,6 +1731,23 @@ def _validate_with_stubs(tmp_path, monkeypatch, *, runtime=None, certified=None)
     return clones
 
 
+def test_a_build_whose_live_proof_crashes_leaves_its_cases_unplayed(tmp_path, monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation, live_proof, scenario_tools
+
+    async def crash(**kwargs):
+        raise RuntimeError("seed/seed_failed (world-db): Permission denied")
+
+    monkeypatch.setattr(authoring_runtime_validation, "play_this_attempt", crash)
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda root: [SimpleNamespace(scenario_key="a", name="a")])
+
+    _validate_with_stubs(tmp_path, monkeypatch)
+
+    # Not one case was played live: the offline proof reads each unplayed, never kept as written on assumed steps.
+    assert live_proof.load_unplayed(tmp_path / "authoring") == {
+        "a": "RuntimeError: seed/seed_failed (world-db): Permission denied"
+    }
+
+
 def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
     clones = _validate_with_stubs(tmp_path, monkeypatch)
 
