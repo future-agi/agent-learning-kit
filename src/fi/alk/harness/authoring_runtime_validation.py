@@ -1498,7 +1498,13 @@ async def validate_once(
                         seed=job.seed or 0,
                     )
                 except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
-                    print(f"runtime validation: live proofs not run: {outbound.redact_outbound_text(f'{type(exc).__name__}: {exc}')}", flush=True)
+                    why = outbound.redact_outbound_text(f"{type(exc).__name__}: {exc}").splitlines()[0][:300]
+                    print(f"runtime validation: live proofs not run: {why}", flush=True)
+                    # No case was played: those whose steps only the live runtime could run are not proved.
+                    from .proofs import proof_key
+                    from .scenario_tools import load_scenarios
+
+                    live_proof.write_unplayed(authoring, {proof_key(one): why for one in load_scenarios(authoring)})
             if generic:
                 await provider.reset(runtime, work_directory=work)
                 reset_world = await factory.create(
