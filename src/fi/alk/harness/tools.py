@@ -24,6 +24,8 @@ from fi.simulate.agent.wrappers.http_events import (
 from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from .agent_type_check import (
+    BROWSER,
+    REFUSED_KINDS,
     SECOND_LOOK_READ,
     SecondLook,
     agent_type_failure,
@@ -32,6 +34,7 @@ from .agent_type_check import (
     failure_message,
     is_browser,
     modality_text,
+    reading_kind,
 )
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
@@ -833,6 +836,18 @@ def _tools_in_agent_folder(
         return [], frozenset()
 
 
+def _needs_a_browser(destination: Path) -> bool:
+    """Whether the contract this reading starts over is a browser agent's. One that can't be read
+    is for the steps that read it."""
+    from .understand import load
+
+    try:
+        contract = load(destination)
+    except (OSError, ValueError):
+        return False
+    return contract is not None and "browser" in contract.environment_needs
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
@@ -898,7 +913,7 @@ def contract_tools(
     # What was quoted for the prompt when the lines named for it were refused.
     held: dict[str, str] = {}
     refused = False
-    second_look = SecondLook()
+    second_look = SecondLook(browser_stood=_needs_a_browser(destination))
     found: list[str] | None = None
     # Set with found, from the same scan: a later call skips the scan and must still see its cut.
     cut: frozenset[str] = frozenset()
@@ -951,11 +966,17 @@ def contract_tools(
                 },
                 "modality": {
                     "type": "string",
-                    "enum": list(known_modalities()),
+                    # The refused kinds are answers, never a contract's modality.
+                    "enum": [*known_modalities(), *REFUSED_KINDS],
                     "description": "How this agent is run, read from its runtime. A voice "
                     "session (LiveKit, telephony, TTS/STT) is voice; a text conversation is chat; "
-                    "an agent a person uses to carry out work on websites or a computer is "
-                    "browser. This decides how it is later run.",
+                    "an agent a person uses to carry out work by driving a web browser with a "
+                    "browser library is browser, and runs only in an environment that gives it a "
+                    "browser and a list of sites; it takes its task in words, so record how it is "
+                    "reached as for chat. One that acts through a screen (pixels, mouse "
+                    "and keyboard) is computer_use, and one that fetches pages by rule with no "
+                    "model choosing each step is crawler: both stop the build as not supported. "
+                    "This decides how it is later run.",
                 },
                 "call_direction": {
                     "type": "string",
@@ -1851,8 +1872,9 @@ def contract_tools(
         if claimed and not is_browser(claimed) and claimed not in known_modalities():
             return _problems(
                 [
-                    f"{claimed!r} is not a modality. Use voice or chat, or browser if its main "
-                    "job is work on websites or a computer."
+                    f"{claimed!r} is not a modality. Use voice or chat; browser if its main job "
+                    "is work done by driving a web browser; computer_use if it acts through a "
+                    "screen; crawler if it fetches pages by rule."
                 ]
             )
         verdict = second_look.verdict(
@@ -1866,10 +1888,18 @@ def contract_tools(
             try:
                 (destination / "contract.json").unlink(missing_ok=True)
             finally:
-                write_failure_file(agent_type_failure(found), destination)
+                write_failure_file(
+                    agent_type_failure(found, reading_kind(claimed)), destination
+                )
             return _ok(_stop_message(destination))
         if verdict == "second_look":
             return _problems([second_look.issue(claimed, found, _new_receipt(), cut=cut)])
+        # What the agent needs from its environment is set here, after the look, and nowhere
+        # else. A browser agent is reached as a chat agent is, so every chat check below runs.
+        payload.pop("environment_needs", None)
+        if reading_kind(claimed) == BROWSER:
+            payload["modality"] = "chat"
+            payload["environment_needs"] = [BROWSER]
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}

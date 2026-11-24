@@ -4043,6 +4043,8 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         "unconfirmed_prompt_from",
         "system_prompt_copied",
         "door_unreached",
+        # Set by the gate from the reading's answer: a browser agent needs a browser.
+        "environment_needs",
     }
 
     def named(model: type[BaseModel]) -> list[str]:
@@ -4591,7 +4593,8 @@ def test_submit_contract_schema_teaches_and_leaves_gating_to_the_gate(tmp_path):
         name for name, spec in schema["properties"].items() if spec.get("description")
     ]
     assert len(described) >= 10, "properties must describe themselves"
-    assert schema["properties"]["modality"]["enum"] == [*MODALITIES, None]
+    # The refused kinds are answers the reading may give, never a stored modality.
+    assert schema["properties"]["modality"]["enum"] == [*MODALITIES, "computer_use", "crawler", None]
     assert schema["properties"]["tools"]["items"]["properties"]["arg_values"]
 
 

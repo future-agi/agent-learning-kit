@@ -1256,9 +1256,6 @@ def _declared_runtime_environment(source: Path) -> dict[str, str]:
             raise BundleAuthorError(f"runtime_environment_name_invalid: {name}")
         if _SECRET_ENVIRONMENT_NAME.search(name):
             raise BundleAuthorError(f"runtime_environment_secret_forbidden: {name}")
-        if name == _SPANS_NEWLY_ON:
-            # The build's own marker: only the build sets it, from what it found (`_CALLBACK_SPAN_ENVIRONMENT`).
-            raise BundleAuthorError(f"runtime_environment_reserved_name: {name}")
         if not isinstance(raw_value, (str, int, float, bool)):
             raise BundleAuthorError(f"runtime_environment_value_invalid: {name}")
         value = str(raw_value)
