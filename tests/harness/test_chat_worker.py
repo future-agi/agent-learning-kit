@@ -50,7 +50,7 @@ class _EventReporter:
 def _in_process_worker(tmp_path, events):
     """Run the real worker entry point with only the environment the parent hands it."""
 
-    async def worker(module, payload, *, environ, work_directory, pass_fds=()):
+    async def worker(module, payload, *, environ, work_directory, pass_fds=(), stop_requested=None):
         assert module == "fi.alk.harness.chat_worker"
         events.append(("worker", payload["scenario_key"]))
         result_path = tmp_path / f"worker-result-{len(events)}.json"
@@ -216,7 +216,7 @@ def test_isolated_chat_worker_preserves_private_runtime_auth(tmp_path, monkeypat
             "role": "assistant", "content": f"Account active. {token}",
         }}]}
 
-    async def worker(_module, payload, *, environ, work_directory, pass_fds=()):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
         assert token not in json.dumps(payload["runtime"])
         assert token not in json.dumps(environ)
         result_path = tmp_path / "worker-result.json"
@@ -324,7 +324,7 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     async def run():
         both = asyncio.Event()
 
-        async def worker(module, payload, *, environ, work_directory, pass_fds=()):
+        async def worker(module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
             assert "HARNESS_PLATFORM_API_KEY" not in environ
             assert environ["AGENTCC_API_KEY"] == "simulator-model-key"
             assert environ["AGENTCC_BASE_URL"] == "https://gateway.example"
@@ -612,7 +612,7 @@ def test_a_text_call_run_in_the_worker_is_checked_and_recorded_with_its_tokens(
         transcript.simulator_input_tokens, transcript.simulator_output_tokens = 11, 7
         return transcript
 
-    async def worker(_module, payload, *, environ, work_directory, pass_fds=()):
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
         result_path = tmp_path / "worker-result.json"
         monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
         monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
@@ -671,6 +671,231 @@ def test_a_text_call_the_plan_does_not_allow_never_starts_its_worker(tmp_path, m
 
     assert reporter.checked == ["text_call"]
     assert denied.value.code == "usage_exhausted" and started == []
+
+
+def test_an_isolated_chat_call_keeps_the_bundle_s_evidence_seam(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+
+    class Stop(Exception):
+        pass
+
+    seen = {}
+
+    class Runner:
+        def __init__(self, _adapter, context):
+            seen["worker"] = context.evidence_seam
+            raise Stop
+
+    async def worker(_module, payload, *, environ, work_directory, stop_requested=None, pass_fds=()):
+        seen["payload"] = payload["evidence_seam"]
+        monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(tmp_path / "result.json")])
+        await chat_worker.main()
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    monkeypatch.setattr(chat_call_runner, "HostedChatCallRunner", Runner)
+    context = replace(_context(tmp_path), evidence_seam=EvidenceSeam.TOOL_TRACE)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://x")},
+    )
+    with pytest.raises(Exception):
+        asyncio.run(
+            chat_worker.IsolatedChatCallRunner(_Adapter(), context).run(
+                SimpleNamespace(scenario_key="one", source_scenario_key="one", scenario_id="id-1"), runtime
+            )
+        )
+    assert seen == {"payload": "tool_trace", "worker": EvidenceSeam.TOOL_TRACE}
+
+
+def _stop_payload(context) -> dict:
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY
+    )
+    return {
+        "job": context.job.model_dump(mode="json"),
+        "bundle_dir": str(context.bundle_dir),
+        "work_directory": str(context.work_directory),
+        "source_directory": None,
+        "target_secrets": {},
+        "attempt_number": 1,
+        "runtime": runtime.model_dump(mode="json"),
+        "scenario_key": "trial-key",
+        "source_scenario_key": "one",
+        "scenario_id": "trial-id",
+    }
+
+
+def test_a_stopped_chat_worker_hands_back_the_call_it_sealed(tmp_path, monkeypatch):
+    """Inside the worker the person's stop reads true, so the chat runner seals its partial call as a stop."""
+    from fi.alk.harness import isolated_process
+    from fi.alk.harness.hosted_scheduler import CallCancelled, CallOutcome
+    from fi.alk.harness.outbound import ArtifactKind
+
+    context = _context(tmp_path)
+    result_path = tmp_path / "stopped.json"
+
+    async def run(runner, *_args, **_kwargs):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            if not runner._context.stop_requested():
+                raise
+            identifier = await runner._adapter.upload_artifact(b"first two turns", kind=ArtifactKind.TRANSCRIPT)
+            partial = CallOutcome(
+                calls=(), turns=2, started_at="s", ended_at="e", duration_ms=1, transcript_artifact=identifier,
+                stop_reason="user_canceled",
+            )
+            raise CallCancelled(partial=partial) from None
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", run)
+    monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(_stop_payload(context))))
+    monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
+    monkeypatch.setattr(isolated_process, "_stop_requested", False)
+
+    async def stopped_mid_call():
+        task = asyncio.create_task(chat_worker.main())
+        await asyncio.sleep(0.2)
+        isolated_process._stop_requested = True
+        task.cancel()
+        await task
+
+    asyncio.run(stopped_mid_call())
+    result = json.loads(result_path.read_text())
+    assert result["error_code"] == "user_canceled"
+    assert result["partial"]["stop_reason"] == "user_canceled"
+    assert base64.b64decode(result["artifacts"][0]["data"]) == b"first two turns"
+
+
+def test_the_parent_raises_the_stop_with_the_worker_s_sealed_call(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    context = _context(tmp_path)
+    adapter = _Adapter()
+    seen = {}
+
+    async def worker(*_args, stop_requested=None, **_kwargs):
+        seen["stop_requested"] = stop_requested
+        return {
+            "error": "user_canceled",
+            "error_code": "user_canceled",
+            "partial": {
+                "calls": [], "turns": 2, "started_at": "s", "ended_at": "e", "duration_ms": 1,
+                "transcript_artifact": "0", "recording_artifacts": [], "stop_reason": "user_canceled",
+            },
+            "artifacts": [{"id": "0", "kind": "transcript", "data": base64.b64encode(b"two turns").decode()}],
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    runner = chat_worker.IsolatedChatCallRunner(adapter, context)
+    # The scheduler gives this runner the seal bound before it cuts the call.
+    assert runner.stops_at_turn_boundary is True
+    with pytest.raises(CallCancelled) as stopped:
+        asyncio.run(runner.run(SimpleNamespace(scenario_key="trial", scenario_id="id"), _ready_runtime()))
+    assert seen["stop_requested"] is context.stop_requested
+    assert adapter.uploads == [b"two turns"]
+    assert stopped.value.partial.transcript_artifact == "transcript-1"
+    assert stopped.value.partial.stop_reason == "user_canceled"
+
+
+@pytest.mark.parametrize("stop", [True, False])
+def test_a_worker_lost_on_the_stop_is_the_stop(tmp_path, monkeypatch, stop):
+    from dataclasses import replace
+
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+    from fi.alk.harness.isolated_process import IsolatedWorkerError
+
+    context = replace(_context(tmp_path), stop_requested=lambda: stop)
+
+    async def worker(*_args, **_kwargs):
+        raise IsolatedWorkerError("isolated worker exited with status 1")
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    runner = chat_worker.IsolatedChatCallRunner(_Adapter(), context)
+    expected = CallCancelled if stop else IsolatedWorkerError
+    with pytest.raises(expected):
+        asyncio.run(runner.run(SimpleNamespace(scenario_key="trial", scenario_id="id"), _ready_runtime()))
+
+
+def test_a_stop_keeps_the_sealed_call_when_delivering_it_outlasts_the_seal_bound(tmp_path, monkeypatch):
+    """The live path: the scheduler's stop reaches a real chat worker process as its stop signal, the worker seals the
+    call it cut, and the parent delivers it through a platform slower than the seal bound. The call is kept."""
+    from dataclasses import replace
+    from pathlib import Path
+
+    from test_hosted_scheduler import FakeOutbound, FakeScenario, FakeSubGoal, FakeWorldFactory, _pool
+
+    from fi.alk.harness import hosted_scheduler as hs
+    from fi.alk.harness import isolated_process
+
+    ready = tmp_path / "in-the-call"
+    (tmp_path / "stopped_chat_worker.py").write_text(
+        "import asyncio\n"
+        "from pathlib import Path\n"
+        "from fi.alk.harness import chat_call_runner, chat_worker, isolated_process\n"
+        "from fi.alk.harness.hosted_scheduler import CallCancelled, CallOutcome\n"
+        "from fi.alk.harness.outbound import ArtifactKind\n"
+        "async def run(runner, *_args, **_kwargs):\n"
+        f" Path({str(ready)!r}).touch()\n"
+        " try:\n"
+        "  await asyncio.sleep(60)\n"
+        " except asyncio.CancelledError:\n"
+        "  if not runner._context.stop_requested():\n"
+        "   raise\n"
+        "  kept = await runner._adapter.upload_artifact(b'the customer asked', kind=ArtifactKind.TRANSCRIPT)\n"
+        "  partial = CallOutcome(calls=(), turns=1, started_at='s', ended_at='e', duration_ms=1,\n"
+        "   transcript_artifact=kept, stop_reason='user_canceled')\n"
+        "  raise CallCancelled(partial=partial) from None\n"
+        "chat_call_runner.HostedChatCallRunner.run = run\n"
+        "isolated_process.run_worker(chat_worker.main, cancel_on_stop=True)\n"
+    )
+    src = str(Path(isolated_process.__file__).resolve().parents[3])
+    real_worker = isolated_process.run_json_worker
+
+    async def worker(_module, payload, *, environ, **kwargs):
+        environ = {**environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), src])}
+        return await real_worker("stopped_chat_worker", payload, environ=environ, **kwargs)
+
+    class _SlowPlatform(_Adapter):
+        async def upload_artifact(self, data: bytes, **kwargs):
+            # The platform is busy with the stop itself: delivering the sealed call outlasts the seal bound.
+            await asyncio.sleep(1.5)
+            return await super().upload_artifact(data, **kwargs)
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    monkeypatch.setenv(hs.CANCEL_SEAL_ENV, "0.5")
+    stopped = ready.exists
+    adapter = _SlowPlatform()
+    runner = chat_worker.IsolatedChatCallRunner(adapter, replace(_context(tmp_path), stop_requested=stopped))
+
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+            cancel_requested=stopped,
+            judge=lambda *_args, **_kwargs: (True, ""),
+        )
+        result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])])
+        await pool.close()
+        return result
+
+    (receipt,) = asyncio.run(scenario()).receipts
+    assert receipt.failure.code == "user_canceled"
+    assert receipt.call is not None
+    assert receipt.call.transcript_artifact == "transcript-1"
+    assert receipt.call.stop_reason == "user_canceled"
+    assert adapter.uploads == [b"the customer asked"]
 
 
 def test_the_transcript_names_the_end_state_by_the_id_it_was_stored_under():

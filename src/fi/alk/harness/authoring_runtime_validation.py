@@ -707,7 +707,7 @@ async def _probe_runtime_readiness(
     *, job, source, authoring, manifest, contract, provider, runtime, factory,
     work, values, redactions, compare_baseline=True,
 ):
-    from .chat_call_runner import _tools, _chat_target_timeout_seconds
+    from .chat_call_runner import _tools, _chat_target_timeout_seconds, agent_chat_timeout_seconds
     from .chat_readiness import probe_chat_ingress
     from .process_runtime import ProcessRuntimeError
 
@@ -738,7 +738,7 @@ async def _probe_runtime_readiness(
                 redaction_values=redactions,
                 local_auth_values=getattr(runtime, "_local_auth_values", None),
                 tools=_tools(contract) if interface.include_tools else (),
-                timeout=_chat_target_timeout_seconds(),
+                timeout=agent_chat_timeout_seconds(job) or _chat_target_timeout_seconds(),
             )
         finally:
             try:
@@ -1242,6 +1242,7 @@ async def validate_once(
                     _with_scenario_edits,
                     _tools,
                     _chat_target_timeout_seconds,
+                    agent_chat_timeout_seconds,
                 )
                 from .chat_readiness import probe_chat_ingress, probe_chat_workflow
 
@@ -1281,6 +1282,7 @@ async def validate_once(
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,
                             redaction_values=redaction_values,
+                            evidence_seam=manifest.runtime.evidence_seam,
                         )
                     else:
                         await probe_chat_ingress(
@@ -1296,7 +1298,7 @@ async def validate_once(
                             local_auth_values=getattr(runtime, "_local_auth_values", None),
                             tools=_tools(contract) if interface.include_tools else (),
                             scenario_id=representative.scenario_id,
-                            timeout=_chat_target_timeout_seconds(),
+                            timeout=agent_chat_timeout_seconds(job) or _chat_target_timeout_seconds(),
                         )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"

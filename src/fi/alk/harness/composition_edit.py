@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .binding_proof import BindingProofV1, prove_binding
+from .binding_proof import BindingProofV1, proof_digest, prove_binding
 from .bindings import MappedToolBinding
 from .contract import AgentContract
 from .folder import document_for, read_folder, write_index
@@ -533,6 +533,8 @@ def seal_change(plan: ChangePlan, *, postgres_dsn: str) -> dict[str, Any]:
         "schema_version": CHANGE_SCHEMA,
         "parent": composition.suite.digest,
         "suite": suite.digest,
+        # The edited suite's proof, for the manifests of the runs that follow (`proof_digest`).
+        "binding_proof": {"digest": proof_digest(proof)} if proof else None,
         "added": plan.added,
         "changed": plan.changed,
         "removed": plan.removed,

@@ -5,7 +5,12 @@ from __future__ import annotations
 
 import pytest
 
-from fi.alk.harness.adaptation.profile import AgentProfile, select_mode
+from fi.alk.harness.adaptation.profile import (
+    AgentProfile,
+    argument_mismatches,
+    select_mode,
+)
+from fi.alk.harness.bindings import run_bound_call
 from fi.alk.harness.provider_import import ToolAdmission
 from fi.alk.harness.provider_lifecycle import ProviderType
 from fi.alk.harness.releases import BindingMode, ToolDefinition
@@ -141,3 +146,122 @@ def test_an_agent_with_fewer_tools_than_the_environment_is_routed():
     )
     assert select_mode(agent, [BOOK, SEND]) is BindingMode.TOOL_ROUTED
     assert select_mode(agent, [BOOK]) is BindingMode.CANONICAL
+
+
+# An environment tool whose argument is an object: the agent's schema has to match inside it too.
+OPEN = ToolDefinition(
+    name="open_case",
+    description="Open a case on an account.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "account": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "tier": {"type": "string", "enum": ["basic", "plus"]},
+                },
+                "required": ["id"],
+            },
+            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+        },
+        "required": ["account"],
+    },
+    mutates_state=True,
+)
+
+
+def _open(account: dict, tags: dict | None = None) -> AgentProfile:
+    properties = {"account": account, **({"tags": tags} if tags else {})}
+    return _agent(_tool("open_case", properties, ["account"]))
+
+
+def _account(**properties: dict) -> dict:
+    return {"type": "object", "properties": properties, "required": ["id"]}
+
+
+def test_the_same_nested_schema_calls_the_environment_directly():
+    agent = _open(
+        _account(id={"type": "string", "description": "The account's id"}),
+        {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+    )
+    assert select_mode(agent, [OPEN]) is BindingMode.CANONICAL
+
+
+@pytest.mark.parametrize(
+    "account, tags, said",
+    [
+        # The reviewer's case: the same argument names, another type one level down.
+        (_account(id={"type": "integer"}), None, "account.id is integer"),
+        (
+            {"type": "object", "properties": {"id": {"type": "string"}}},
+            None,
+            "account.id is required but the agent may leave it out",
+        ),
+        (
+            _account(id={"type": "string"}, tier={"type": "string"}),
+            None,
+            "account.tier may carry values",
+        ),
+        (
+            _account(id={"type": "string"}, region={"type": "string"}),
+            None,
+            "account.region is not an environment argument",
+        ),
+        (
+            _account(id={"type": "string"}),
+            {"type": "array", "items": {"type": "integer"}, "maxItems": 3},
+            "tags[] is integer",
+        ),
+        # A rule this does not read (a bound) must be the agent's too, or it is a mismatch.
+        (
+            _account(id={"type": "string"}),
+            {"type": "array", "items": {"type": "string"}},
+            "the environment sets maxItems",
+        ),
+    ],
+    ids=[
+        "nested-type",
+        "nested-required",
+        "nested-enum",
+        "nested-unknown",
+        "item-type",
+        "unmatched-rule",
+    ],
+)
+def test_a_nested_schema_the_environment_would_refuse_needs_a_routed_binding(
+    account, tags, said
+):
+    agent = _open(account, tags)
+    problems = argument_mismatches(agent.agent_tools[0]["parameters"], OPEN.parameters)
+    assert any(said in one for one in problems), problems
+    assert select_mode(agent, [OPEN]) is BindingMode.TOOL_ROUTED
+
+
+def test_an_operation_the_environments_schema_refuses_runs_nothing():
+    """Whatever chose the mode, the environment's whole schema is held on every call before its
+    handler runs: here a canonical call with the nested id as a number."""
+    ran = []
+
+    def run(tool, arguments):
+        ran.append((tool, arguments))
+        return {"case": "C-1"}
+
+    refused = run_bound_call(
+        None,
+        "open_case",
+        {"account": {"id": 42}},
+        run_operation=run,
+        environment_tools=[OPEN],
+    )
+    assert refused.status == "invalid" and "account.id" in refused.error
+    assert ran == []
+    taken = run_bound_call(
+        None,
+        "open_case",
+        {"account": {"id": "A-42"}, "tags": None},
+        run_operation=run,
+        environment_tools=[OPEN],
+    )
+    assert taken.status == "ok"
+    assert ran == [("open_case", {"account": {"id": "A-42"}})]

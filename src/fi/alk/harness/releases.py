@@ -595,6 +595,10 @@ class RunManifestV1(_Strict):
     environment: list[ReleaseRef] = Field(min_length=1, max_length=2)
     suite: DigestRef
     binding: DigestRef
+    # The digest of the binding's proof against the suite (`binding_proof.proof_digest`), frozen
+    # by whoever sealed this manifest from its own record of the adaptation. Compose reads
+    # scenario statuses only from a proof with this digest; a tool_routed run has no other.
+    binding_proof: DigestRef | None = None
     agent: AgentRef
     selection: Selection
     simulator: SimulatorSettings
@@ -610,6 +614,9 @@ def object_digest(model: BaseModel) -> str:
     core = model.model_dump(mode="json", by_alias=True)
     core.pop("digest", None)
     core.pop("files", None)
+    if core.get("binding_proof", ...) is None:
+        # A manifest that anchors no proof has the digest it had before the field existed.
+        del core["binding_proof"]
     digest = hashlib.sha256(_canonical_json(core))
     for record in getattr(model, "files", None) or []:
         encoded = _canonical_json(record.model_dump(mode="json"))
@@ -2131,6 +2138,7 @@ def compose_bundle(
         suite,
         environments[-1].digest,
         load_binding_proof(binding_proof_path) if binding_proof_path else None,
+        anchored=manifest.binding_proof.digest if manifest.binding_proof else None,
     )
     if refused := [key for key in manifest.selection.scenario_keys if key in excluded]:
         raise ReleaseError(

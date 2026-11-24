@@ -52,6 +52,7 @@ from .releases import (
     load_agent_binding,
     load_environment_release,
     load_suite_release,
+    object_digest,
 )
 
 BINDING_PROOF_SCHEMA = "futureagi.binding-proof.v1"
@@ -267,10 +268,11 @@ def prove_binding(
         suite_root, environment_root, suite.policy_profile, postgres_dsn
     ) as proof:
         # A binding may map the agent onto an attached server's tool, as a run serves it.
-        check_tool_routed(
-            binding, [*proof.environment_tools, *proof.attached_definitions()]
-        )
-        changing = {tool.name for tool in proof.environment_tools if tool.mutates_state}
+        definitions = [*proof.environment_tools, *proof.attached_definitions()]
+        check_tool_routed(binding, definitions)
+        # An attached server's tool changes state unless its server marks it read-only, and a
+        # call routed onto it is skipped and perturbed like one onto the environment's own.
+        changing = {tool.name for tool in definitions if tool.mutates_state}
         mapped = [
             entry for entry in binding.tools if isinstance(entry, MappedToolBinding)
         ]
@@ -375,17 +377,28 @@ def load_binding_proof(path: str | Path) -> BindingProofV1:
         raise ReleaseError("binding_proof_invalid", f"{path}: {exc}") from exc
 
 
+def proof_digest(proof: BindingProofV1) -> str:
+    """The proof's content address: every status, reason and reference in it, in canonical JSON.
+    The proof names what it is of but nothing names it, so whoever keeps it records this beside
+    the adaptation, and a run's manifest freezes it (`RunManifestV1.binding_proof`)."""
+    return object_digest(proof)
+
+
 def unscored(
     binding: AgentBindingV1,
     suite: Any,
     environment_digest: str,
     proof: BindingProofV1 | None,
+    *,
+    anchored: str | None,
 ) -> dict[str, str]:
     """The scenarios of `suite` a run under `binding` must not select, with why.
 
     A `tool_routed` binding is scored only on the scenarios its proof against this very suite
     proved, so it needs that proof; any other binding calls the environment's tools by name and
-    is scored on the whole suite.
+    is scored on the whole suite. `anchored` is the proof digest the run's sealed manifest
+    froze: a proof is a file anyone holding it can edit, so its statuses are read only when it
+    is the proof the manifest names.
     """
     if binding.mode is not BindingMode.TOOL_ROUTED:
         return {}
@@ -393,6 +406,16 @@ def unscored(
         raise ReleaseError(
             "binding_unproved",
             "a tool_routed binding runs only with its binding proof against the suite",
+        )
+    if anchored is None:
+        raise ReleaseError(
+            "binding_unproved",
+            "the run manifest names no binding proof digest, so the proof cannot be trusted",
+        )
+    if (computed := proof_digest(proof)) != anchored:
+        raise ReleaseError(
+            "binding_proof_digest_mismatch",
+            f"the run manifest froze {anchored}, the proof delivered is {computed}",
         )
     problems = []
     if proof.binding.digest != binding.digest:

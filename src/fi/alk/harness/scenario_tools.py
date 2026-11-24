@@ -31,8 +31,9 @@ from fi.simulate.simulation.call_actors import (
 )
 
 from .backends import tool, tool_server
+from .job import actors_on, current_actors_switch
 
-from .amend import add_rule, drop_rule, fix_tool, widen
+from .amend import add_rule, drop_rule, fix_tool, set_worker_tools, widen
 from .background_noise import place_for, places
 from .call_actor import (
     CallActorList,
@@ -41,6 +42,7 @@ from .call_actor import (
     scenario_problems,
 )
 from .catalogue import (
+    worker_subjects_note,
     CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     NO_OVERLAY,
@@ -82,7 +84,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
+from .actors import ACTOR_SCENARIO_FIELDS, ACTORS_FILE, CALLER, Actor, ActorShare, cycles, load_actors, save_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -218,6 +220,19 @@ def _no_longer_hold(
             )
             failed.append((scenario.name, why))
     return failed
+
+
+def actors_off_fields(args: dict[str, Any]) -> list[str]:
+    """The actor-only fields (`ACTOR_SCENARIO_FIELDS`) a submission sends that carry anything."""
+    return [name for name in ACTOR_SCENARIO_FIELDS if args.get(name) not in (None, [], {}, "")]
+
+
+def actors_off_refusal(sent: list[str]) -> str:
+    return (
+        "Not kept. Actors and faults are off for this environment, so a scenario takes none of: "
+        + ", ".join(sent)
+        + ". Send it without them."
+    )
 
 
 def _actor_fields() -> dict[str, Any]:
@@ -1427,6 +1442,26 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[
     return out
 
 
+def _budgets_for_unknown_workers(scenario: Scenario, world_root: Path) -> str:
+    """A budget per worker names only the contract's workers, a reference that must resolve. Whether a worker's
+    deadline can be held (a shared worker, no separate one) is not refused here: the trial holds such a scenario."""
+    budgets = scenario.worker_budget_seconds
+    if not isinstance(budgets, dict) or not budgets:
+        return ""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    declared = {str(one.get("id")) for one in contract.get("workers") or [] if isinstance(one, dict)}
+    unknown = sorted(str(worker) for worker in budgets if str(worker) not in declared)
+    if not unknown:
+        return ""
+    return (
+        f"worker_budget_seconds: {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not one of the contract's "
+        f"workers ({', '.join(sorted(declared)) or 'none declared'}); name a declared worker or give one number for all"
+    )
+
+
 def _steps_the_contract_refuses(
     scenario: Scenario, world_root: Path, attached: frozenset[str] = frozenset()
 ) -> list[str]:
@@ -1705,6 +1740,8 @@ def accept_scenario(
         return _err(f"Not kept. {invalid}"[:600])
     if unlisted := _unlisted_actors(scenario, world_root):
         return _err("Not kept. " + " ".join(unlisted))
+    if unknown := _budgets_for_unknown_workers(scenario, world_root):
+        return _err("Not kept. " + unknown)
     if reading := [
         fault.action
         for fault in scenario.faults
@@ -2083,6 +2120,9 @@ def scenario_tools(
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    # The job's actors switch: off, no scenario takes actors, a pre-run, a first speaker or faults.
+    switch = current_actors_switch()
+    with_actors = actors_on(switch)
     # The share an earlier session recorded carries over; an environment without one draws the default.
     if (saved := load_actors(destination).actor_share) is not None:
         target["actor_share"] = saved.model_dump()
@@ -2100,9 +2140,14 @@ def scenario_tools(
     def call_actor_share() -> float:
         """The share of scenarios that include an actor: drawn within the range the person asked for
         through `aim_for`, else within this environment's default range."""
+        if not with_actors:
+            return 0.0
         seed = os.environ.get("ALK_HARNESS_JOB_ID") or str(destination)
         asked = target.get("actor_share")
-        return default_share(seed, (asked["min"], asked["max"])) if asked else default_share(seed)
+        if asked:
+            return default_share(seed, (asked["min"], asked["max"]))
+        # The platform's default range when it sent one, else the kit's own.
+        return default_share(seed, (switch.share[0], switch.share[1])) if switch is not None else default_share(seed)
 
     def usable_call_actors() -> list[str]:
         """The listed actors a run can deliver to this agent."""
@@ -2326,7 +2371,10 @@ def scenario_tools(
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal."
+        "is what makes one available. Leave it empty for an ordinary task sub-goal. "
+        "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
+        "given only that worker's calls, and is inconclusive when the worker made none."
+        + worker_subjects_note(contract)
         + (
             " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
             "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
@@ -2341,25 +2389,32 @@ def scenario_tools(
                 "output": str,
                 "overlay": str,
                 "actor": str,
+                "subject": str,
                 **CONTRACT_SCHEMA,
             },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        sub_goal = SubGoal(
-            name=str(args.get("name") or ""),
-            what=str(args.get("what") or ""),
-            check=str(args.get("check") or ""),
-            judged=str(args.get("judged") or ""),
-            output=str(args.get("output") or "pass_fail"),
-            overlay=str(args.get("overlay") or ""),
-            actor=str(args.get("actor") or ""),
-            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
-        )
+        try:
+            sub_goal = SubGoal(
+                name=str(args.get("name") or ""),
+                what=str(args.get("what") or ""),
+                check=str(args.get("check") or ""),
+                judged=str(args.get("judged") or ""),
+                output=str(args.get("output") or "pass_fail"),
+                overlay=str(args.get("overlay") or ""),
+                actor=str(args.get("actor") or ""),
+                subject=str(args.get("subject") or "task"),
+                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            )
+        except ValueError as invalid:
+            return _err(f"Not added: {invalid}")
         problems = validate_sub_goal(sub_goal)
         if sub_goal.actor and sub_goal.actor not in load_actors(world_root).by_id():
             problems.append(f"actor: {sub_goal.actor!r} is not an actor of this environment; add it with add_actor first")
+        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
+            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
         if native_runtime(world_root) and sub_goal.deterministic():
             if problem := native_source_problem(sub_goal.check, "check"):
                 problems.append(problem)
@@ -2473,7 +2528,7 @@ def scenario_tools(
                     "which the agent has to work hardest for.",
                 },
                 **_mailbox_fields(),
-                **_actor_fields(),
+                **(_actor_fields() if with_actors else {}),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
@@ -2625,6 +2680,24 @@ def scenario_tools(
                     "or hold, one to close. Set it above that count. A run cut off before its outcome fails for "
                     "a budget we chose, and it hits the hardest scenarios first.",
                 },
+                "worker_budget_seconds": {
+                    "anyOf": [
+                        {"type": "integer", "minimum": 1},
+                        {
+                            "type": "object",
+                            "additionalProperties": {"type": "integer", "minimum": 1},
+                            "minProperties": 1,
+                        },
+                    ],
+                    "description": "Only for an agent with workers: a worker-action deadline, seconds from the "
+                    "start of the trial after which a worker's call no longer reaches the world, counted from the "
+                    "trial's start, not from a hand-off. A number holds every worker to one deadline. An object of "
+                    "worker id to seconds holds only those workers, so one worker can pass its deadline while the "
+                    "others finish: to test one worker past its deadline, give only that worker a budget shorter "
+                    "than its work, and leave the workers it depends on out. A worker still acting then has its "
+                    "world calls refused as past its deadline, and a worker that runs as a process of its own is "
+                    "ended. Leave out to use the run's own limit.",
+                },
                 "coverage": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
@@ -2638,6 +2711,8 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent))
         if external_runtime_target and args.get("solution"):
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
@@ -2830,6 +2905,24 @@ def scenario_tools(
         return _ok(said) if done else _err(said)
 
     @tool(
+        "set_worker_tools",
+        "Change which of the agent's tools one participant (a contract worker, by id) may use; the test world "
+        "refuses the rest for it. Only when the person asks: it widens or narrows what is tested by their say, not by "
+        "what the source shows, and is recorded as an amendment. The only way to let a participant use a tool, or stop "
+        "it: amend_contract and fix_tool change what a tool accepts or does, never who may use it. Say why.",
+        schema({"worker": str, "allowed_tools": list, "why": str}, ["worker", "allowed_tools", "why"]),
+    )
+    async def set_worker_tools_tool(args: dict[str, Any]) -> dict[str, Any]:
+        done, said = set_worker_tools(
+            contract,
+            world_root,
+            worker=str(args.get("worker") or ""),
+            allowed_tools=[str(one) for one in (args.get("allowed_tools") or [])],
+            why=str(args.get("why") or ""),
+        )
+        return _ok(said) if done else _err(said)
+
+    @tool(
         "add_rule",
         "Give the agent a hard rule its source did not state, when asked for one. It is told to "
         "the agent under test and graded, so this changes what is being tested. Say why.",
@@ -3006,6 +3099,8 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
+        if args.get("actor_share") is not None and not with_actors:
+            return _err("actor_share is not taken: actors are off for this environment, so no scenario includes one.")
         if args.get("actor_share") is not None:
             given = args["actor_share"]
             try:
@@ -3088,7 +3183,7 @@ def scenario_tools(
                 f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
                 "because a writer that never sees the list cannot stay inside it"
             )
-        usable = usable_call_actors()
+        usable = usable_call_actors() if with_actors else []
         share = call_actor_share()
         if usable:
             said += (
@@ -3412,6 +3507,8 @@ def scenario_tools(
         edit_schema,
     )
     async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if not with_actors and (sent := actors_off_fields(args)):
+            return _err(actors_off_refusal(sent).replace("Not kept.", "Not changed."))
         key = str(args.get("scenario_key") or "").strip()
         held = next((one for one in kept if one.scenario_key == key), None)
         if held is None:
@@ -3471,6 +3568,7 @@ def scenario_tools(
             submit_scenario,
             edit_scenario,
             amend_contract,
+            set_worker_tools_tool,
             add_rule_tool,
             drop_rule_tool,
             fix_tool_tool,
@@ -3493,6 +3591,7 @@ _ALWAYS = (
     "submit_scenario",
     "edit_scenario",
     "amend_contract",
+    "set_worker_tools",
     "add_rule",
     "drop_rule",
     "fix_tool",

@@ -215,11 +215,13 @@ def build_control_service(
     tools: Sequence[str] = TOOLS,
     ignore: Sequence[str] = (),
     secret_aliases: Sequence[str] = ("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+    tool_entrypoints: Sequence[Mapping[str, str]] | None = None,
 ):
     """Build the example through the hosted path and return its control-service process.
 
     `contract_writer(authoring)` writes the contract (wrap `write_callable_contract` or
-    `write_chat_contract`); the tools are then declared as entrypoints of `module`.
+    `write_chat_contract`, or write a voice contract); the tools are then declared as
+    `tool_entrypoints`, by default an import of each tool from `module`.
     `secret_aliases` are the job's secret names, the ones the example reads.
     """
     source = tmp_path / "source"
@@ -229,10 +231,14 @@ def build_control_service(
     contract_writer(authoring)
     contract_path = authoring / "contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["tool_entrypoints"] = [
-        {"tool": name, "mode": "import", "module": module, "callable": name}
-        for name in tools
-    ]
+    contract["tool_entrypoints"] = (
+        [dict(entry) for entry in tool_entrypoints]
+        if tool_entrypoints is not None
+        else [
+            {"tool": name, "mode": "import", "module": module, "callable": name}
+            for name in tools
+        ]
+    )
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     bundle = author_bundle_v2(
         source=source,
