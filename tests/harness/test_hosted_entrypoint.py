@@ -5971,3 +5971,20 @@ def test_the_job_masks_every_value_in_spans_but_the_platform_settings(
     assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
     assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
     assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"
+
+
+@pytest.mark.parametrize(
+    ("level", "kept"),
+    [
+        (ArtifactLevel.METADATA_ONLY, False),
+        (ArtifactLevel.TRACES, False),
+        (ArtifactLevel.TRACES_AND_RECORDINGS, True),
+        (ArtifactLevel.FULL, True),
+    ],
+)
+def test_a_browser_screenshot_is_kept_where_a_recording_is(level, kept) -> None:
+    # A screenshot is a recording of the screen: it sits on the line audio sits on, and never takes a reserved place.
+    forbidden = he._ARTIFACT_LEVEL_FORBIDDEN_KINDS[level]
+    assert (ob.ArtifactKind.SCREENSHOT not in forbidden) is kept
+    assert (ob.ArtifactKind.RECORDING_COMBINED not in forbidden) is kept
+    assert not ob.is_reserved_artifact_kind(ob.ArtifactKind.SCREENSHOT)

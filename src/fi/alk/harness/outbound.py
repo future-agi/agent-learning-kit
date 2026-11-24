@@ -2872,6 +2872,8 @@ class ArtifactKind(str, Enum):
     RECORDING_STEREO = "recording_stereo"
     RECORDING_CUSTOMER = "recording_customer"
     RECORDING_ASSISTANT = "recording_assistant"
+    # A picture of the environment's browser: a recording of the screen, kept where audio is.
+    SCREENSHOT = "screenshot"
     TRANSCRIPT = "transcript"
     TOOL_TRACE = "tool_trace"
     # The world's records at a trial's end, with its action log: kept so a fixed check can grade the trial again.

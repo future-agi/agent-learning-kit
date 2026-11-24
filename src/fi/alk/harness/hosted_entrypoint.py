@@ -1154,6 +1154,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.RECORDING_STEREO,
             ob.ArtifactKind.RECORDING_CUSTOMER,
             ob.ArtifactKind.RECORDING_ASSISTANT,
+            ob.ArtifactKind.SCREENSHOT,
             ob.ArtifactKind.TRACE,
             ob.ArtifactKind.TOOL_TRACE,
             ob.ArtifactKind.TRANSCRIPT,
@@ -1167,6 +1168,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.RECORDING_STEREO,
             ob.ArtifactKind.RECORDING_CUSTOMER,
             ob.ArtifactKind.RECORDING_ASSISTANT,
+            ob.ArtifactKind.SCREENSHOT,
             ob.ArtifactKind.OTHER,
         }
     ),

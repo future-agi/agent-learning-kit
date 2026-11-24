@@ -497,3 +497,36 @@ def test_a_new_record_starts_with_no_screenshots_of_the_last_trial(tmp_path, dev
         assert not any((tmp_path / "w0-shots").iterdir())
     finally:
         recorder.close()
+
+
+# The trial's blocked list: the proxy's refusals, split by the record
+
+
+def test_the_browser_s_refusals_are_split_into_pages_tried_and_requests_counted() -> None:
+    proxy = [
+        {"host": "www.example.com", "method": "GET", "via": "browser", "count": 3},
+        {"host": "tracker.example.net", "method": "GET", "via": "browser", "count": 2},
+        {"host": "api.example.org", "method": "POST", "tool": "pay", "count": 1},
+    ]
+    record = {
+        "blocked_navigations": [{"url": "http://www.example.com/deals", "at": 1.0, "tab": 1}],
+        "blocked_page_requests": [{"host": "tracker.example.net", "count": 1}],
+    }
+    assert browser_record.split_blocked(proxy, record) == [
+        # The agent's own calls are untouched.
+        {"host": "api.example.org", "method": "POST", "tool": "pay", "count": 1},
+        {"host": "www.example.com", "via": "browser", "what": "navigation", "url": "http://www.example.com/deals", "at": 1.0},
+        {"host": "tracker.example.net", "via": "browser", "what": "page_request", "count": 1},
+    ]
+
+
+def test_a_refusal_the_record_never_saw_stays_as_the_proxy_counted_it() -> None:
+    # A worker's request, a tab watched late, or a name that resolved to loopback: the proxy is the record of refusal.
+    proxy = [{"host": "localhost", "method": "GET", "via": "browser", "count": 1}]
+    record = {"blocked_navigations": [], "blocked_page_requests": []}
+    assert browser_record.split_blocked(proxy, record) == proxy
+
+
+def test_with_no_record_the_proxy_s_counts_stand() -> None:
+    proxy = [{"host": "www.example.com", "method": "GET", "via": "browser", "count": 3}]
+    assert browser_record.split_blocked(proxy, None) == proxy

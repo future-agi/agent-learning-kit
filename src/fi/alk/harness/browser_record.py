@@ -693,3 +693,35 @@ def _write_text(path: Path, text: str) -> None:
     fresh = path.with_name(f"{path.name}.{uuid.uuid4().hex}.new")
     fresh.write_text(text, encoding="utf-8")
     os.replace(fresh, path)
+
+
+def split_blocked(blocked: list[dict[str, Any]], record: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The trial's blocked list with the browser's refusals split in two: each page the agent tried to open, whole,
+    and the requests pages made, counted for each host. The proxy is the record of what was refused, so a host it
+    refused that the record never saw stays as the proxy counted it; with no record its counts stand."""
+    if not isinstance(record, dict):
+        return list(blocked)
+    navigations: dict[str, list[dict[str, Any]]] = {}
+    for one in record.get("blocked_navigations") or []:
+        if isinstance(one, dict) and isinstance(one.get("url"), str):
+            navigations.setdefault(_host(one["url"]), []).append(one)
+    requests = {
+        str(one["host"]): int(one.get("count") or 0)
+        for one in record.get("blocked_page_requests") or []
+        if isinstance(one, dict) and one.get("host")
+    }
+    kept = [one for one in blocked if one.get("via") != "browser"]
+    browser_hosts = [str(one.get("host") or "") for one in blocked if one.get("via") == "browser"]
+    seen: set[str] = set()
+    for host in [*browser_hosts, *navigations, *requests]:
+        if host in seen:
+            continue
+        seen.add(host)
+        if host not in navigations and host not in requests:
+            kept.extend(one for one in blocked if one.get("via") == "browser" and one.get("host") == host)
+            continue
+        for one in navigations.get(host, []):
+            kept.append({"host": host, "via": "browser", "what": "navigation", "url": one["url"], "at": one.get("at")})
+        if host in requests:
+            kept.append({"host": host, "via": "browser", "what": "page_request", "count": requests[host]})
+    return kept
