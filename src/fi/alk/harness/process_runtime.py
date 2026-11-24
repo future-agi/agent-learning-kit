@@ -6324,6 +6324,7 @@ def _world_browser_environment(
 def _kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
     """Makes a world's `KitBrowser`: Chromium from the image, run as the agent's user through the context's runner,
     with its profile in the world's scratch and its state where only the kit writes."""
+    from .browser_record import BrowserRecorder
     from .kit_browser import KitBrowser, chromium_binary
 
     binary = chromium_binary()
@@ -6361,6 +6362,7 @@ def _kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
             launch=launch,
             stop=lambda handle: _terminate_and_wait(handle),
             prepare=prepare,
+            recorder=BrowserRecorder(context.browser_allowed_sites or (), state.with_name(f"w{world_index}-record.json")),
         )
 
     return make

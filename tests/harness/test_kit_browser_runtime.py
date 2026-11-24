@@ -239,6 +239,8 @@ def test_the_kit_runs_the_browser_as_the_agent_s_user_with_nothing_of_its_own(
     assert chowned == [(profile, 1234, 5678)]
     # Its state is where the kit writes and the agent's user does not.
     assert browser.metadata()["state_path"] == str(tmp_path / "browser-state" / "w0.json")
+    # The world's record of the browser is kept beside it, by the kit's own client to the browser.
+    assert browser.metadata()["record_path"] == str(tmp_path / "browser-state" / "w0-record.json")
 
 
 def test_a_hosted_world_with_no_agent_user_starts_no_browser(tmp_path, monkeypatch) -> None:

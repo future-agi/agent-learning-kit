@@ -16,6 +16,7 @@ from urllib import request
 
 import pytest
 
+from fi.alk.harness.browser_record import BrowserRecorder
 from fi.alk.harness.kit_browser import KitBrowser, chromium_binary
 from fi.alk.harness.world_door import MemoryLog
 
@@ -26,12 +27,27 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+_PAGES = {
+    "/form": """<html><body><h1>Shop</h1>
+<button id=buy>Buy now</button>
+<input id=q aria-label="Search" type=text>
+<input id=pw name=password type=password>
+</body></html>""",
+    "/tracked": """<html><body>tracked<img src="http://tracker.example.net/pixel.gif"></body></html>""",
+    "/forged": """<html><body>forged<script>
+for (const name of ['alkBrowserRecord', '__alkBrowserRecord']) {
+  try { globalThis[name](JSON.stringify({kind: 'click', url: 'http://forged.example/'})); } catch (e) {}
+}
+</script></body></html>""",
+}
+
+
 class _Page(BaseHTTPRequestHandler):
     def log_message(self, *_args: object) -> None:
         return
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        content = f"<html><body>page {self.path}</body></html>".encode()
+        content = _PAGES.get(self.path, f"<html><body>page {self.path}</body></html>").encode()
         self.send_response(200)
         self.send_header("content-type", "text/html")
         self.send_header("content-length", str(len(content)))
@@ -84,6 +100,7 @@ def browser(site, tmp_path_factory):
         launch=_launch,
         stop=_stop,
         connect=connect,
+        recorder=BrowserRecorder(["shop.test"], root / "w0-record.json"),
     )
     kit.start()
     try:
@@ -121,6 +138,27 @@ class _Tab:
             {"expression": "document.body ? document.body.innerText : ''"},
         )
         return str(found["result"]["result"].get("value"))
+
+    async def click(self, selector: str) -> None:
+        found = await self.call(
+            "Runtime.evaluate",
+            {
+                "expression": f"(() => {{ const box = document.querySelector('{selector}').getBoundingClientRect();"
+                " return [box.x + box.width / 2, box.y + box.height / 2]; })()",
+                "returnByValue": True,
+            },
+        )
+        x, y = found["result"]["result"]["value"]
+        for kind in ("mousePressed", "mouseReleased"):
+            await self.call(
+                "Input.dispatchMouseEvent",
+                {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1},
+            )
+
+    async def type(self, text: str) -> None:
+        for character in text:
+            await self.call("Input.dispatchKeyEvent", {"type": "keyDown", "text": character, "key": character})
+            await self.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": character})
 
 
 async def _drive(cdp_url: str, steps):
@@ -244,3 +282,93 @@ def test_the_browser_starts_through_the_kit_s_own_process_runner(tmp_path) -> No
     finally:
         kit.close()
     assert version["webSocketDebuggerUrl"].startswith(f"ws://127.0.0.1:{port}/")
+
+
+# The world's record of the browser
+
+
+def _settled(kit) -> dict:
+    asyncio.run(asyncio.sleep(0.5))
+    return kit.recorder.record.body()
+
+
+def test_what_the_agent_clicked_and_typed_is_kept_and_a_password_never_is(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/form")
+        await page.click("#buy")
+        await page.click("#q")
+        await page.type("red shoes")
+        await page.click("#pw")
+        await page.type("hunter2")
+
+    _run(kit, steps)
+    body = _settled(kit)
+    rows = [row for row in body["rows"] if row["url"] == "http://shop.test/form"]
+    assert [row["target"] for row in rows if row["kind"] == "click"][0] == {"tag": "button", "text": "Buy now"}
+    typed = [row for row in rows if row["kind"] == "typing"]
+    assert [(row["target"].get("label"), row["secret"], row["text"]) for row in typed] == [
+        ("Search", False, "red shoes"),
+        ("password", True, None),
+    ]
+    assert "hunter2" not in json.dumps(body)
+    assert any(row["kind"] == "navigation" and row["url"] == "http://shop.test/form" for row in body["rows"])
+
+
+def test_a_refused_page_is_kept_whole_and_a_page_s_refused_requests_are_counted(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/tracked")
+        await page.open("http://www.example.com/deals")
+
+    _run(kit, steps)
+    body = _settled(kit)
+    assert "http://www.example.com/deals" in [one["url"] for one in body["blocked_navigations"]]
+    assert "tracker.example.net" in [one["host"] for one in body["blocked_page_requests"]]
+    assert not any(one["url"].startswith("http://tracker.") for one in body["blocked_navigations"])
+
+
+def test_a_page_s_own_script_cannot_write_the_record(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/forged")
+
+    _run(kit, steps)
+    assert not any("forged.example" in row["url"] for row in _settled(kit)["rows"])
+
+
+def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, tmp_path) -> None:
+    class _Failing(BrowserRecorder):
+        def _command(self, method, params=None, session=None):
+            if method == "Page.addScriptToEvaluateOnNewDocument":
+                raise ConnectionError("lost")
+            super()._command(method, params, session)
+
+    def connect(host: str, port: int) -> socket.socket:
+        return socket.create_connection(("127.0.0.1", site.server_port), timeout=5)
+
+    kit = KitBrowser(
+        binary=BINARY,
+        sites=["shop.test"],
+        log=MemoryLog(),
+        directory=tmp_path / "w0",
+        state_path=tmp_path / "w0.json",
+        launch=_launch,
+        stop=_stop,
+        connect=connect,
+        recorder=_Failing(["shop.test"], tmp_path / "w0-record.json"),
+    )
+    kit.start()
+    try:
+
+        async def steps(page):
+            return await page.open("http://shop.test/cart")
+
+        assert "page /cart" in _run(kit, steps)
+        assert kit.recorder.record.body()["complete"] is False
+    finally:
+        kit.close()
+    assert json.loads((tmp_path / "w0-record.json").read_text())["complete"] is False

@@ -326,8 +326,11 @@ class KitBrowser:
         stop: Callable[[Any], None],
         prepare: Callable[[Path], None] = lambda path: None,
         connect: Callable[[str, int], socket.socket] | None = None,
+        recorder: Any = None,
     ) -> None:
         self.binary = binary
+        # The kit's own client to the browser: what the agent did there, kept as the world's record.
+        self.recorder = recorder
         self.directory = directory
         self.relay = DevToolsRelay(state_path)
         self.proxy = BrowserProxy(
@@ -342,7 +345,10 @@ class KitBrowser:
         return {BROWSER_CDP_URL_ENV: self.relay.url}
 
     def metadata(self) -> dict[str, str]:
-        return {"state": "started", "state_path": str(self.relay.state_path)}
+        found = {"state": "started", "state_path": str(self.relay.state_path)}
+        if self.recorder is not None:
+            found["record_path"] = str(self.recorder.record_path)
+        return found
 
     def start(self) -> None:
         """Stop any browser running now and start a new one that remembers nothing: a new, empty profile folder,
@@ -365,9 +371,15 @@ class KitBrowser:
             browser_environment(home=profile),
             self.directory / "browser.log",
         )
-        self.relay.target(self._devtools_port(profile))
+        port = self._devtools_port(profile)
+        if self.recorder is not None:
+            # Before the relay lets the agent in, so every tab it opens is watched from its first page.
+            self.recorder.attach(port)
+        self.relay.target(port)
 
     def stop(self) -> None:
+        if self.recorder is not None:
+            self.recorder.detach()
         handle, self._handle = self._handle, None
         if handle is not None:
             self._stop(handle)
