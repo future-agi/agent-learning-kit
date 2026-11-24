@@ -5683,23 +5683,26 @@ def test_a_tool_that_hands_back_the_proxy_s_failure_answer_made_a_failed_call_no
         (False, None),
         (True, {"detail": "pending"}),
     ]
-    # A test condition held them: failed calls, and the trial is still the agent's to be graded on.
-    assert cr.unmeasured_reasons(cr.world_failure_notices(written)) == ()
 
 
-def test_a_call_the_world_failed_on_with_no_test_condition_makes_the_trial_ours_not_the_agent_s(
-    tmp_path: Path,
-) -> None:
-    trace = _trace_lines(
-        tmp_path / "agent-tool-calls.jsonl",
-        {"name": "file_request", "arguments": {"id": 7}, "is_error": False,
-         "output": {"detail": "tool_world_failed", "reason": "ConnectionError: unavailable"}},
-    )
+def test_a_call_the_world_failed_on_with_no_test_condition_makes_the_trial_ours_not_the_agent_s() -> None:
+    from fi.alk.harness.world_door import KEY_UNKNOWN
 
-    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    def row(**fields):
+        return {"name": "file_request", "actor_id": "agent", "outcome": "faulted", "fault": None, **fields}
 
-    assert [(call.ok, call.error) for call in written] == [(False, "tool_world_failed")]
+    log = [
+        row(),  # the world's service failed (an exception, or a 5xx with a body): ours
+        row(fault={"mode": "unavailable"}),  # the scenario's test condition: the agent's to handle
+        row(refusal_code=KEY_UNKNOWN),  # a keyed retry after a lost answer: the agent's to handle
+        row(actor_id="approver"),  # an actor's own call
+        row(outcome="committed"),
+    ]
+
+    notices = cr.world_failure_notices(log)
+
     # Unmeasured: the scheduler ends it as ours (`evidence_unmeasured`), never passed or failed.
-    assert cr.unmeasured_reasons(cr.world_failure_notices(written)) == (
+    assert cr.unmeasured_reasons(notices) == (
         "The world failed on the agent's file_request call, so this trial cannot be graded.",
     )
+    assert cr.world_failure_notices(None) == []

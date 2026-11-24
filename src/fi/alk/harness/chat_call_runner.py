@@ -1436,6 +1436,7 @@ class HostedChatCallRunner:
             in_process_tools,
             repeated_untimed_notices,
             tool_span_notices,
+            world_failure_notices,
         )
 
         said = list(deadline_notices)
@@ -1464,7 +1465,7 @@ class HostedChatCallRunner:
         # Such a worker's own checks are not graded; the rest of the trial is.
         said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
-        said += tool_span_notices(runtime, transcript.calls)
+        said += tool_span_notices(runtime, transcript.calls) + world_failure_notices(trial_log)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)

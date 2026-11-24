@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib import error, request
 
 import pytest
+from types import SimpleNamespace
 
 from fi.alk.bench._docker import docker_available
 from fi.alk.harness.actors import Actor, ActorList, actors_seed
@@ -655,3 +656,35 @@ def test_the_proxy_reads_its_sealed_routes_strictly(tmp_path, monkeypatch):
     actions.write_text("{not json")
     with pytest.raises(ValueError):
         proxy._sealed_routes()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "status", "detail"),
+    [
+        # The scenario's test condition: the agent hears the upstream failure it is tested on.
+        ({"outcome": "faulted", "status": 503, "reason": "unavailable", "fault": {"mode": "unavailable"}}, 503,
+         "tool_upstream_unavailable"),
+        # The door or the world failed with no test condition: ours.
+        ({"outcome": "faulted", "status": 502, "reason": "OSError: the world's door failed"}, 502, "tool_world_failed"),
+        ({"outcome": "faulted", "status": 503, "reason": "whether this action was approved could not be read",
+          "refusal_code": "approval_unknown"}, 503, "tool_world_failed"),
+        # A keyed retry after a lost answer: the agent's to handle, told why.
+        ({"outcome": "faulted", "status": 503, "reason": "first try unknown", "refusal_code": "key_outcome_unknown"},
+         503, "first try unknown"),
+    ],
+)
+def test_the_proxy_tells_a_test_condition_from_its_own_failure(monkeypatch, outcome, status, detail):
+    from fi.alk.harness import tool_trace_proxy
+    from fi.alk.harness.world_door import Outcome
+
+    made = Outcome(outcome["outcome"], outcome["status"], reason=outcome["reason"],
+                   fault=outcome.get("fault"), refusal_code=outcome.get("refusal_code"))
+    monkeypatch.setattr(tool_trace_proxy, "_door", lambda: SimpleNamespace(enter=lambda call: made))
+    handler = object.__new__(tool_trace_proxy.Handler)
+    handler._call = lambda: None
+    replies = []
+    handler._reply = lambda code, payload: replies.append((code, payload["detail"]))
+
+    handler._enter()
+
+    assert replies == [(status, detail)]

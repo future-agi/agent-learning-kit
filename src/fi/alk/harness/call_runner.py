@@ -72,8 +72,8 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_ac
 from .actor_meter import ActorMeter
 from .world_door import (
     NOT_STOPPED,
-    WORLD_FAILED,
     door_failure,
+    world_failed,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     DOOR_FILE,
@@ -2236,14 +2236,16 @@ def _names_action(entry: Mapping[str, Any], action: str) -> bool:
 UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable", "world_failed")
 
 
-def world_failure_notices(calls: Sequence[Call]) -> list[dict[str, str]]:
-    """One notice for each of the agent's calls the world or its door failed on with no test condition holding it:
-    the trial cannot say what the agent would have done with an answer, so it is unmeasured, never the agent's."""
+def world_failure_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
+    """One notice for each of the agent's calls the action log shows the world or its door failed on with no test
+    condition holding it: the trial cannot say what the agent would have done with an answer, so it is unmeasured,
+    never the agent's. Read from the log, so every runner and every route sees it."""
     return [
         {"code": "world_failed",
-         "message": f"The world failed on the agent's {call.name} call, so this trial cannot be graded."}
-        for call in calls
-        if call.error == WORLD_FAILED
+         "message": f"The world failed on the agent's {row.get('name') or row.get('action')} call, so this trial "
+                    "cannot be graded."}
+        for row in log or ()
+        if isinstance(row, Mapping) and world_failed(row)
     ]
 
 
@@ -4866,7 +4868,7 @@ class CallRunnerImpl:
             repeated_untimed_notices(calls)
             + hand_off_notices(runtime)
             + tool_span_notices(runtime, calls, silent=False)
-            + world_failure_notices(calls)
+            + world_failure_notices(action_log)
         )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)

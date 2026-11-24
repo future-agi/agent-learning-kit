@@ -48,6 +48,19 @@ UPSTREAM_UNAVAILABLE = "tool_upstream_unavailable"
 UPSTREAM_TIMEOUT = "tool_upstream_timeout"
 # What the proxy answers when the world or its door failed on a call no test condition held: ours, never the agent's.
 WORLD_FAILED = "tool_world_failed"
+# A keyed retry whose first try may have taken effect unanswered: held so it never runs twice, and the agent's to handle.
+KEY_UNKNOWN = "key_outcome_unknown"
+
+
+def world_failed(row: Mapping[str, Any]) -> bool:
+    """Whether a row of the action log is the world or its door failing on the agent's call with no test condition
+    holding it: ours, never the agent's. A keyed retry held because its first try may have taken effect is not."""
+    return (
+        (row.get("actor_id") or AGENT) == AGENT
+        and row.get("outcome") == "faulted"
+        and not row.get("fault")
+        and row.get("refusal_code") != KEY_UNKNOWN
+    )
 
 
 def door_failure(result: Any) -> str | None:
@@ -1015,6 +1028,7 @@ class WorldDoor:
             "faulted",
             503,
             reason="whether this idempotency key's first action took effect is unknown; it is not run again",
+            refusal_code=KEY_UNKNOWN,
         )
         self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
         return outcome
