@@ -116,16 +116,19 @@ def test_a_duplicate_write_does_not_turn_a_fault_into_a_grade() -> None:
     assert decision.failure_code == "judge_undecided"
 
 
-def test_worker_only_sub_goals_pass_as_the_hosted_path_does() -> None:
-    """Pinned as-is, and flagged: nothing about the task was measured, yet it passes.
+def test_a_scenario_with_no_task_sub_goal_is_broken_not_a_pass() -> None:
+    """Nothing about the task was measured, so there is no verdict to report.
 
-    Both `held is False` and `held is None` are False over an empty task list, so the hosted
-    path falls through to a pass. A scenario with *no* sub-goals is refused upstream as
-    `check_broken`, but one whose sub-goals are all worker-subject is not. This test records
-    today's behaviour so the extraction is faithful; it is not an endorsement.
+    Worker checks are additive by contract -- the authoring guide says the task's sub-goals
+    stay as they are -- so a scenario holding only worker checks is malformed. Both emptiness
+    checks are False over an empty task list, which used to fall through to a pass.
     """
-    assert decide([_Result("worker check", held=True, subject="worker:w1")]).status is Status.PASSED
-    assert decide([]).status is Status.PASSED
+    worker_only = decide([_Result("worker check", held=True, subject="worker:w1")])
+    assert worker_only.status is Status.ERRORED
+    assert worker_only.failure_code == "check_broken"
+    assert reward_for(worker_only) is None
+
+    assert decide([]).failure_code == "check_broken"
 
 
 def test_reward_is_one_for_a_pass_and_zero_for_a_graded_failure() -> None:

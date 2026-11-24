@@ -144,14 +144,21 @@ def decide(
     elif undecided := [result for result in scoped if result.held is None]:
         # An unsettled sub-goal is a fault, so a duplicate write cannot turn it into a grade.
         return _undecided_fault(undecided, lacking_evidence)
+    elif not scoped:
+        # Nothing about the task was measured, so there is no verdict to report. The hosted path
+        # used to fall through to a pass here, because both checks above are False over an empty
+        # list. A scenario declaring *no* sub-goals was already refused upstream as
+        # `check_broken` ("zero sub-goals must not read as a silent pass"); this is the
+        # neighbouring hole, where every sub-goal is worker-subject. Worker checks are additive
+        # by contract -- write-scenarios: "The task's sub-goals stay as they are: they grade what
+        # the person got" -- so a scenario without one is malformed, not a shape to support.
+        # Safe to enforce: no sub-goal with a worker subject exists in any scenario on record.
+        return Decision(
+            status=Status.ERRORED,
+            failure_code="check_broken",
+            failure_detail="the scenario declared no task sub-goal, so nothing about the task was measured",
+        )
     else:
-        # No task sub-goal at all also lands here, and passes. That is the hosted path's
-        # behaviour, preserved deliberately: both `any()` calls above are False over an empty
-        # list. A scenario declaring *no* sub-goals is already refused upstream as
-        # `check_broken` ("zero sub-goals must not read as a silent pass"), but one whose
-        # sub-goals are all worker-subject reaches here and reads as passed with nothing about
-        # the task measured. Whether that should be a fault is a live question, recorded in the
-        # plan — changing it here would alter existing verdicts, so it is not changed.
         decision = Decision(status=Status.PASSED)
 
     if duplicates:
