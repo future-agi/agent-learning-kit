@@ -1550,3 +1550,33 @@ def test_a_key_the_log_cannot_check_is_our_failure_and_one_a_test_condition_lost
     retry = lost.enter(ToolCall(action="orders.refund", name="refund", key="k-3"))
     assert retry.refusal_code != LOG_UNKNOWN and not any(world_failed(row) for row in lost.events())
     assert KEY_UNKNOWN  # the code a lost retry carries when one is held
+
+
+def test_a_lost_key_is_ours_only_when_our_door_lost_it_across_doors_on_one_keys_table():
+    from fi.alk.harness.world_door import KEY_UNKNOWN, LOG_UNKNOWN, world_failed
+
+    def keyed(door, key):
+        return door.enter(ToolCall(action="orders.refund", name="refund", key=key))
+
+    log = MemoryLog()
+    # The agent's own tools server answered 5xx on the first try: its world. A retry, by this door or another, is the
+    # agent's to handle, graded.
+    keyed(_door(_Executor(status=500), log=log), "k-upstream")
+    assert keyed(_door(log=log), "k-upstream").refusal_code == KEY_UNKNOWN
+    # Our own executor failed on the first try: the retry is ours, by any door.
+    keyed(_door(_Executor(fail=True), log=log), "k-ours")
+    assert keyed(_door(log=log), "k-ours").refusal_code == LOG_UNKNOWN
+    # A door that claimed a key and never recorded its answer: ours.
+    log.claim("k-pending", "agent")
+    held = keyed(_door(log=log), "k-pending")
+    assert held.refusal_code == LOG_UNKNOWN and world_failed({**held.__dict__, "actor_id": "agent", "outcome": "faulted"})
+
+
+def test_the_agent_s_tools_server_not_answering_is_its_world_graded_never_our_failure():
+    from fi.alk.harness.world_door import UPSTREAM_UNREACHABLE, HttpExecutor, world_failed
+
+    door = _door(HttpExecutor("http://127.0.0.1:9", timeout=1))
+    outcome = door.enter(ToolCall(action="orders.refund", name="refund"))
+
+    assert (outcome.outcome, outcome.refusal_code) == ("faulted", UPSTREAM_UNREACHABLE)
+    assert not world_failed(door.events()[-1])
