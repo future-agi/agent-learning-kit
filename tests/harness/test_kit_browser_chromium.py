@@ -34,11 +34,17 @@ _PAGES = {
 <input id=pw name=password type=password>
 </body></html>""",
     "/tracked": """<html><body>tracked<img src="http://tracker.example.net/pixel.gif"></body></html>""",
-    "/forged": """<html><body>forged<script>
+    "/forged": """<html><body>forged<button id=f>forged-click</button><input id=i aria-label=forged-typing><script>
 for (const name of ['alkBrowserRecord', '__alkBrowserRecord']) {
   try { globalThis[name](JSON.stringify({kind: 'click', url: 'http://forged.example/'})); } catch (e) {}
 }
+setTimeout(() => {
+  document.getElementById('f').click();
+  document.getElementById('i').dispatchEvent(new InputEvent('input', {bubbles: true}));
+}, 200);
 </script></body></html>""",
+    "/switched": """<html><body><input id=pw name=secret type=password>
+<script>document.getElementById('pw').type = 'text';</script></body></html>""",
 }
 
 
@@ -342,7 +348,26 @@ def test_a_page_s_own_script_cannot_write_the_record(browser) -> None:
         await page.open("http://shop.test/forged")
 
     _run(kit, steps)
-    assert not any("forged.example" in row["url"] for row in _settled(kit)["rows"])
+    rows = _settled(kit)["rows"]
+    assert not any("forged.example" in row["url"] for row in rows)
+    # Only what the browser itself was made to do: a page's own click() or made-up event is not the agent's.
+    assert not any(row.get("target", {}).get("text") == "forged-click" for row in rows)
+    assert not any(row.get("target", {}).get("label") == "forged-typing" for row in rows)
+
+
+def test_a_password_field_the_page_turns_into_text_stays_a_password_field(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/switched")
+        await page.click("#pw")
+        await page.type("hunter2")
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == "http://shop.test/switched"]
+    assert typed and all(row["secret"] is True and row["text"] is None for row in typed)
+    assert "hunter2" not in json.dumps(body)
 
 
 def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, tmp_path) -> None:

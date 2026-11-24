@@ -73,6 +73,29 @@ LISTENER = r"""
     if (type === 'password' || auto.includes('password')) secret.add(el);
     return secret.has(el);
   };
+  // Marked as the page is built and as it changes, so a field the page turns from password to text stays one.
+  const mark = (node) => {
+    if (!node || node.nodeType !== 1) return;
+    isSecret(node);
+    if (node.querySelectorAll) node.querySelectorAll('input').forEach(isSecret);
+  };
+  new MutationObserver((changes) => {
+    for (const change of changes) {
+      if (change.type === 'attributes') {
+        const was = String(change.oldValue || '').toLowerCase();
+        if (was === 'password' || (change.attributeName === 'autocomplete' && was.includes('password'))) {
+          secret.add(change.target);
+        }
+        isSecret(change.target);
+      } else {
+        change.addedNodes.forEach(mark);
+      }
+    }
+  }).observe(document, {
+    subtree: true, childList: true, attributes: true, attributeOldValue: true,
+    attributeFilter: ['type', 'autocomplete'],
+  });
+  mark(document.documentElement);
   const cut = (text) => String(text || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   const field = (el) => /^(input|textarea|select)$/i.test(el.tagName) || el.isContentEditable;
   const describe = (el) => {
@@ -86,12 +109,15 @@ LISTENER = r"""
       text: field(el) || isSecret(el) ? '' : cut(el.innerText),
     };
   };
+  // Only what the browser itself was made to do: a page's own click() or made-up event is not the agent's.
   addEventListener('click', (event) => {
+    if (!event.isTrusted) return;
     const hit = event.target && event.target.closest
       ? event.target.closest('a,button,input,select,textarea,label,[role]') || event.target : event.target;
     say({kind: 'click', url: location.href, target: describe(hit)});
   }, true);
   addEventListener('input', (event) => {
+    if (!event.isTrusted) return;
     const el = event.target;
     const hidden = isSecret(el);
     const typed = hidden || !el || el.isContentEditable ? null : String(el.value || '').slice(0, %(text)d);
