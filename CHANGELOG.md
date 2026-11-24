@@ -4,6 +4,16 @@ All notable release changes for Agent Learning Kit are tracked here.
 
 ## Unreleased
 
+- A voice agent's built-in suite evals now send `agent_prompt` only when the contract save copied the
+  agent's instructions whole from its source (the new `system_prompt_copied`). Otherwise the eval that
+  needs them is reported as not measured, with the cause `only_an_excerpt` or `no_instructions`, instead
+  of being graded on a quote that may leave text out. A not-measured eval is neither a pass nor a fail:
+  it is no checkpoint, it is listed with its cause in the summary and the JSON output, and it reaches
+  the platform in the call's `harness_unmeasured`, never among `harness_evaluations`. Before, a missing input was skipped silently on a local run and failed the scenario as a
+  grading error on a hosted one. Contracts saved before this change, and those from GitHub, spec or
+  provider sources, have no copied instructions, so their task-completion eval now reads not measured
+  (TH-8376).
+
 - Under per-user isolation, the harness's own world tables (`_alk_trial_faults`, `_alk_action_keys`, and the
   action log's `method` and `fault` columns) are made on the baseline before the world role's grant. Before,
   a proxied trial's every write was refused as `faults_unknown`, and every keyed actor action as `key_unknown`,

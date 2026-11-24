@@ -3105,6 +3105,8 @@ def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
     assert saved(destination)["system_prompt_excerpt"] == ""
     assert saved(destination)["system_prompt_from"] == []
     assert saved(destination)["unconfirmed_prompt_from"] == imports
+    # The lines were copied before they were set aside, so the record of it goes with them.
+    assert "system_prompt_copied" not in saved(destination)
 
 
 @pytest.mark.parametrize(
@@ -4135,3 +4137,63 @@ def test_a_first_save_whose_command_runs_inline_code_is_refused(tmp_path, root):
     assert result.get("is_error"), result
     assert "program as an argument" in text_of(result)
     assert not (destination / "contract.json").exists()
+
+
+# Whether the prompt was copied whole is recorded by the save, and only by the save
+
+
+def test_prompt_copied_is_recorded_only_when_the_save_copied_the_lines(tmp_path, root):
+    lines = [{"path": "agent.py", "start_line": 1, "end_line": 2}]
+
+    copied = tmp_path / "copied"
+    first = submitter(copied, root)(
+        payload(
+            hard_constraints=["Never share a card number."],
+            system_prompt_excerpt='AGENT = "pair"',
+            system_prompt_from=lines,
+        )
+    )
+    assert not first.get("is_error"), first
+    assert saved(copied)["system_prompt_excerpt"] == 'AGENT = "pair"\nMODEL = "gpt-4o"'
+    assert saved(copied)["system_prompt_copied"] is True
+
+    # With no source the lines are kept as named and the quote stands, so nothing was copied,
+    # whatever the reading claims.
+    quoted = tmp_path / "quoted"
+    second = accept_contract(
+        payload(
+            system_prompt_excerpt="You take orders ... for the cafe.",
+            system_prompt_from=lines,
+            system_prompt_copied=True,
+        ),
+        quoted,
+    )
+    assert not second.get("is_error"), second
+    assert saved(quoted)["system_prompt_from"] == lines
+    assert saved(quoted)["system_prompt_excerpt"] == "You take orders ... for the cafe."
+    assert "system_prompt_copied" not in saved(quoted)
+
+
+def test_lines_set_aside_are_not_recorded_as_copied(tmp_path, root):
+    (root / "prompt.py").write_text('import os\nDB = "x"\n', encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        system_prompt_excerpt="You are pair, a helpful assistant.",
+        system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 2}],
+    )
+
+    assert submit(wrong).get("is_error")
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["system_prompt_excerpt"] == "You are pair, a helpful assistant."
+    assert "system_prompt_copied" not in saved(destination)
+
+
+def test_a_contract_not_copied_dumps_without_the_record():
+    assert "system_prompt_copied" not in AgentContract(agent="pair").model_dump()
+    assert AgentContract(agent="pair", system_prompt_copied=True).model_dump()[
+        "system_prompt_copied"
+    ] is True

@@ -237,8 +237,9 @@ def _checked_contract(
         if progress is not None:
             progress("contract", list(schema_problems))
         return _problems(schema_problems, arrived)
-    # Only the save records lines it couldn't confirm.
+    # Only the save records lines it couldn't confirm, or that it copied the prompt whole.
     contract.unconfirmed_prompt_from = []
+    contract.system_prompt_copied = False
 
     problems = validate_contract(contract)
     for entry in contract.tool_entrypoints:
@@ -433,6 +434,7 @@ def _checked_against_source(
                             # confirmed.
                             contract.system_prompt_excerpt = quote
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are left out and "
                                 "the quote is kept, since they don't hold it"
@@ -442,6 +444,7 @@ def _checked_against_source(
                             # lines nobody confirmed would be shown as it.
                             contract.system_prompt_excerpt = ""
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are recorded as "
                                 "unconfirmed and no prompt is saved, since they don't hold the "
@@ -741,6 +744,7 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
         parts.append(excerpt)
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
+        contract.system_prompt_copied = True
     return problems
 
 
