@@ -23,6 +23,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         ToolCall,
         UPSTREAM_TIMEOUT,
         UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -44,6 +45,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         ToolCall,
         UPSTREAM_TIMEOUT,
         UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -278,7 +280,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(outcome.status, {"detail": UPSTREAM_UNAVAILABLE})
             return
         if outcome.outcome == "faulted" and outcome.body is None:
-            self._reply(outcome.status, {"detail": UPSTREAM_UNAVAILABLE if outcome.status == 502 else outcome.reason})
+            # No test condition held it: the world or the door failed, which is ours.
+            self._reply(outcome.status, {"detail": WORLD_FAILED, "reason": outcome.reason})
             return
         content = outcome.answer()
         self.send_response(outcome.status)

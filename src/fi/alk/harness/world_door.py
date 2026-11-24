@@ -46,12 +46,14 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 # result. An agent's tool may hand that answer back as its value instead of failing (`door_failure`).
 UPSTREAM_UNAVAILABLE = "tool_upstream_unavailable"
 UPSTREAM_TIMEOUT = "tool_upstream_timeout"
+# What the proxy answers when the world or its door failed on a call no test condition held: ours, never the agent's.
+WORLD_FAILED = "tool_world_failed"
 
 
 def door_failure(result: Any) -> str | None:
-    """The proxy's own failure answer when `result` is it (`{"detail": <code>}`, with any status the agent's tool kept
+    """The proxy's own failure answer when `result` is it (`{"detail": <code>}`, with anything the agent's tool kept
     beside it), else None."""
-    if isinstance(result, Mapping) and result.get("detail") in (UPSTREAM_UNAVAILABLE, UPSTREAM_TIMEOUT):
+    if isinstance(result, Mapping) and result.get("detail") in (UPSTREAM_UNAVAILABLE, UPSTREAM_TIMEOUT, WORLD_FAILED):
         return str(result["detail"])
     return None
 

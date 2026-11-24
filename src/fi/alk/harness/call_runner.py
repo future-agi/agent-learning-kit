@@ -72,6 +72,7 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_ac
 from .actor_meter import ActorMeter
 from .world_door import (
     NOT_STOPPED,
+    WORLD_FAILED,
     door_failure,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
@@ -2232,7 +2233,18 @@ def _names_action(entry: Mapping[str, Any], action: str) -> bool:
 
 
 # Notices that make a trial unmeasured, never passed or failed on what it lacked.
-UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
+UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable", "world_failed")
+
+
+def world_failure_notices(calls: Sequence[Call]) -> list[dict[str, str]]:
+    """One notice for each of the agent's calls the world or its door failed on with no test condition holding it:
+    the trial cannot say what the agent would have done with an answer, so it is unmeasured, never the agent's."""
+    return [
+        {"code": "world_failed",
+         "message": f"The world failed on the agent's {call.name} call, so this trial cannot be graded."}
+        for call in calls
+        if call.error == WORLD_FAILED
+    ]
 
 
 def missing_evidence(notices: Sequence[Mapping[str, Any]], records: Mapping[str, Any] | None) -> dict[str, str]:
@@ -3071,14 +3083,15 @@ def _read_file_tool_calls(
             arguments = {}
         output = record.get("output")
         # The proxy's failure answer the agent's tool handed back as its value is a failed call, never a result.
-        is_error = bool(record.get("is_error", False)) or door_failure(_structured(output)) is not None
+        failed = door_failure(_structured(output))
+        is_error = bool(record.get("is_error", False)) or failed is not None
         raw_at = record.get("at")
         call = Call(
             name=name,
             arguments=arguments,
             result=None if is_error else _structured(output),
             ok=not is_error,
-            error=str(output) if is_error and output is not None else None,
+            error=failed or (str(output) if is_error and output is not None else None),
             **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
             handoff=record.get("kind") == "handoff",
@@ -4849,7 +4862,12 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime) + tool_span_notices(runtime, calls, silent=False)
+        trial_notices += (
+            repeated_untimed_notices(calls)
+            + hand_off_notices(runtime)
+            + tool_span_notices(runtime, calls, silent=False)
+            + world_failure_notices(calls)
+        )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
