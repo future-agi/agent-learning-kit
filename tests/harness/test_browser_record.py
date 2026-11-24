@@ -651,3 +651,41 @@ def test_screenshots_the_platform_did_not_keep_are_said_and_never_fail_the_trial
     ids, notices = asyncio.run(browser_record.upload_screenshots(_Uploads(refuse=True), "one", evidence, shots))
     assert ids == ()
     assert [one["code"] for one in notices] == ["screenshots_capped", "screenshots_not_kept"]
+
+
+def test_a_new_trial_s_record_never_shows_the_last_trial_s_rows(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    try:
+        for message in _loaded("http://shop.test/old"):
+            fake.queue(message)
+        assert browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)["rows"]
+        recorder.attach(devtools_port)
+        # Read from the file, as the trial reads it, before any seal is answered.
+        on_disk = json.loads((tmp_path / "w0-record.json").read_text())
+        assert on_disk["rows"] == [] and on_disk["screenshots"] == []
+    finally:
+        recorder.close()
+
+
+def test_an_end_screenshot_the_browser_never_answers_does_not_hold_the_seal(tmp_path, devtools_port) -> None:
+    class _Silent(_FakeCdp):
+        def send(self, message: dict) -> None:
+            if message["method"] == "Page.captureScreenshot":
+                with self.ready:
+                    self.sent.append(message)
+                return
+            super().send(message)
+
+    fake = _Silent()
+    recorder = browser_record.BrowserRecorder(
+        ["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake, shot_seconds=0.3
+    )
+    recorder.attach(devtools_port)
+    try:
+        fake.queue(_attached())
+        fake.queue({"method": "Page.frameNavigated", "sessionId": "S1", "params": {"frame": {"id": "T1", "url": "http://shop.test/"}}})
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=3)
+    finally:
+        recorder.close()
+    assert body["complete"] is True
+    assert [row["url"] for row in body["rows"]] == ["http://shop.test/"]

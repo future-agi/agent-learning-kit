@@ -432,7 +432,9 @@ class BrowserRecorder:
         clock: Callable[[], float] = time.time,
         shots: int = SHOTS,
         shot_bytes: int = SHOT_BYTES,
+        shot_seconds: float = 3.0,
     ) -> None:
+        self._shot_seconds = shot_seconds
         self.sites = tuple(sites)
         self.record_path = record_path
         self.shots_dir = shots_dir_for(record_path)
@@ -469,6 +471,8 @@ class BrowserRecorder:
             self.shots_dir.mkdir(parents=True)
         except OSError:
             logger.warning("browser record: the screenshots folder %s could not be made new", self.shots_dir)
+        # On disk at once: a trial that reads it before any seal never sees the last trial's rows.
+        self.write()
         try:
             opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
             with opener.open(f"http://127.0.0.1:{port}/json/version", timeout=10) as answer:
@@ -500,7 +504,12 @@ class BrowserRecorder:
         def sealed(_answer: dict[str, Any]) -> None:
             self.write(sealed=nonce)
 
+        once = threading.Lock()
+
         def then_seal(_answer: dict[str, Any] | None = None) -> None:
+            # Once: after the end screenshot, or when the browser has not answered for it in time.
+            if not once.acquire(blocking=False):
+                return
             try:
                 self._command("Browser.getVersion", then=sealed)
             except Exception:  # noqa: BLE001 - no connection: nothing more can arrive, the record is as it is
@@ -510,6 +519,9 @@ class BrowserRecorder:
         if session is None:
             then_seal()
             return
+        timer = threading.Timer(self._shot_seconds, then_seal)
+        timer.daemon = True
+        timer.start()
         try:
             self._command(
                 "Page.captureScreenshot", dict(_SHOT), session,
