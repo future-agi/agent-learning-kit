@@ -329,6 +329,16 @@ def _implied(agent: Any, environment: Any, where: str) -> list[str]:
             or environment.get("additionalProperties") is False
         )
     ]
+    # An object schema that does not forbid other properties allows any: where the environment
+    # forbids them, the agent's schema has to forbid them too, or it is the wider one.
+    if (
+        environment.get("additionalProperties") is False
+        and agent.get("additionalProperties") is not False
+    ):
+        problems.append(
+            f"{where} may carry properties the environment forbids "
+            "(additionalProperties is false there, not here)"
+        )
     always = set(agent.get("required") or [])
     for name in environment.get("required") or []:
         if name not in sent_properties:
@@ -346,8 +356,7 @@ def _implied(agent: Any, environment: Any, where: str) -> list[str]:
         if keyword in _COMPARED or keyword in _ANNOTATIONS:
             continue
         if keyword == "additionalProperties" and not isinstance(rule, Mapping):
-            # True allows anything; false is held above, where the agent may declare no
-            # property the environment lacks.
+            # True allows anything; false is held above.
             continue
         if agent.get(keyword, _ABSENT) != rule:
             problems.append(
