@@ -756,3 +756,33 @@ def test_a_blocked_list_that_could_not_be_read_is_said_to_be_unreadable(tmp_path
     asyncio.run(browser_record.upload_browser_state(adapter, "one", {"state": "used"}, None))
     body = json.loads(adapter.kinds[0][1])
     assert body["blocked_unreadable"] is True and "blocked" not in body
+
+
+def test_the_sealed_record_holds_the_browser_s_refusals_split_and_counted_never_their_addresses() -> None:
+    proxy = {"host": "www.example.com", "method": "GET", "via": "browser", "count": 5}
+    own = {"host": "api.other.test", "method": "POST", "tool": "lookup", "count": 1}
+    changes = [
+        {"who": "agent", "attempted": 0, "blocked": [proxy, own]},
+        {"who": "pat", "attempted": 1, "blocked": []},
+    ]
+    record = {
+        "blocked_navigations": [
+            {"url": "http://www.example.com/deals?id=1", "at": 1.0},
+            {"url": "http://www.example.com/cart", "at": 2.0},
+        ],
+        "blocked_page_requests": [{"host": "www.example.com", "count": 3}],
+    }
+    sealed = browser_record.sealed_browser_blocked(changes, record)
+    assert sealed[0]["blocked"] == [
+        own,
+        {"host": "www.example.com", "via": "browser", "what": "navigation", "count": 2},
+        {"host": "www.example.com", "via": "browser", "what": "page_request", "count": 3},
+    ]
+    assert sealed[1] == changes[1]
+    # The addresses stay in the world_state file; the input is left as it was.
+    assert "url" not in json.dumps(sealed) and changes[0]["blocked"] == [proxy, own]
+
+
+def test_with_no_record_the_sealed_record_keeps_the_proxy_s_counts() -> None:
+    changes = [{"who": "agent", "blocked": [{"host": "a.test", "method": "GET", "via": "browser", "count": 2}]}]
+    assert browser_record.sealed_browser_blocked(changes, None) == changes

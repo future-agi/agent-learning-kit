@@ -773,6 +773,34 @@ def split_blocked(blocked: list[dict[str, Any]], record: dict[str, Any] | None) 
     return kept
 
 
+def sealed_browser_blocked(state_changes: Any, record: dict[str, Any] | None) -> Any:
+    """The trial's sealed changes with the agent's browser refusals split as the record tells them apart, counted
+    for each host and kind: the sealed record carries counts, and every address stays in the world_state file. With
+    no record the proxy's counts stand. Never changes its input."""
+    if not isinstance(state_changes, list) or not isinstance(record, dict):
+        return state_changes
+    sealed: list[Any] = []
+    for entry in state_changes:
+        if not (isinstance(entry, dict) and entry.get("who") == "agent" and isinstance(entry.get("blocked"), list)):
+            sealed.append(entry)
+            continue
+        counted: list[dict[str, Any]] = []
+        for one in split_blocked(entry["blocked"], record):
+            if one.get("what") != "navigation":
+                counted.append(one)
+                continue
+            same = next(
+                (had for had in counted if had.get("what") == "navigation" and had.get("host") == one.get("host")),
+                None,
+            )
+            if same is None:
+                counted.append({"host": one["host"], "via": "browser", "what": "navigation", "count": 1})
+            else:
+                same["count"] += 1
+        sealed.append({**entry, "blocked": counted})
+    return sealed
+
+
 SCREENSHOTS_CAPPED = "screenshots_capped"
 SCREENSHOTS_NOT_KEPT = "screenshots_not_kept"
 

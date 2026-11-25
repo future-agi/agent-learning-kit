@@ -151,7 +151,10 @@ not against a client holding the DevTools address: such a client can do whatever
 so the record says what the browser did, never that nothing else touched it.
 
 The record is the world's, never the agent's tool calls: it lives in the trial's `world_state`
-file, apart from the action log, and the sealed world record carries its counts only. A world
+file, apart from the action log, and the sealed world record carries its counts only. There the
+agent's `blocked` list has the browser's refusals split by the record into navigations and page
+requests, counted for each host (`what: navigation` or `page_request`); their addresses are in the
+file. A world
 with a door adds it to the end state it stores; a world with no door still stores the file, under
 `futureagi.browser-world-state.v1`, saying the world's records were not recorded (`not_held`)
 rather than carrying empty tables. Where a door stood but the world's end could not be read, the

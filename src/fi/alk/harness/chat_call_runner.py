@@ -43,6 +43,7 @@ from .browser_record import (
     browser_evidence,
     browser_file_body,
     browser_shots_dir,
+    sealed_browser_blocked,
     upload_browser_state,
     upload_screenshots,
 )
@@ -1372,6 +1373,10 @@ class HostedChatCallRunner:
                     self._adapter, scenario.scenario_key, browser, refused, why=WORLD_END_UNREADABLE,
                     action_log=door_log,
                 )
+            if browser is not None and "state_changes" in sealed:
+                # The browser's refusals in the agent's blocked list, split into its navigations and its pages'
+                # requests and counted; the addresses are in the world_state file.
+                sealed = {**sealed, "state_changes": sealed_browser_blocked(sealed["state_changes"], browser)}
             # `door` says a door stood for these counts, so a reader never takes a record from before it for one.
             world_record = {
                 **(world_record or {}),

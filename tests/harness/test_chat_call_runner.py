@@ -2701,9 +2701,11 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
         def __init__(self) -> None:
             super().__init__()
             self.kinds: list[str] = []
+            self.bodies: dict[str, bytes] = {}
 
         async def upload_artifact(self, data: bytes, **kwargs: Any) -> str:
             self.kinds.append(kwargs["kind"].value)
+            self.bodies[kwargs["kind"].value] = data
             return f"artifact-{len(self.kinds)}"
 
     monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
@@ -2721,6 +2723,8 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
                     json.dumps(
                         {"complete": True, "rows": [{"kind": "click", "target": "button Buy"},
                                                     {"kind": "typing", "target": "textbox Search", "text": "red"}],
+                         "blocked_navigations": [{"url": "http://www.example.com/deals", "at": 1.0}],
+                         "blocked_page_requests": [{"host": "fonts.example.com", "count": 4}],
                          "screenshots": [{"file": "shot-001-end.jpg"}], "sealed": asked.read_text()}
                     )
                 )
@@ -2741,6 +2745,17 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
         metadata={"browser": {"state": "started", "state_path": str(state), "record_path": str(record)}},
     )
     adapter = Kinds()
+    # The door's log as the trial seals it: the proxy's per-host counts of the browser's refusals.
+    proxied = [
+        {"host": "www.example.com", "method": "GET", "via": "browser", "count": 3},
+        {"host": "fonts.example.com", "method": "CONNECT", "via": "browser", "count": 4},
+    ]
+    from fi.alk.harness.call_runner import TrialRecords
+
+    monkeypatch.setattr(
+        TrialRecords, "end",
+        lambda self, *_args, **_kwargs: {"state_changes": [{"who": "agent", "attempted": 0, "blocked": proxied}]},
+    )
     outcome = asyncio.run(
         chat.HostedChatCallRunner(adapter, _context(tmp_path)).run(
             SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
@@ -2752,6 +2767,12 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
     assert outcome.recording_artifacts == ()
     # The browser's clicks and typing are the world's record, never the agent's tool calls.
     assert outcome.calls == ()
+    # The sealed record has the browser's refusals split and counted; their addresses are in the world_state file.
+    [agent] = json.loads(adapter.bodies["transcript"])["world_actors"]["state_changes"]
+    assert agent["blocked"] == [
+        {"host": "www.example.com", "via": "browser", "what": "navigation", "count": 1},
+        {"host": "fonts.example.com", "via": "browser", "what": "page_request", "count": 4},
+    ]
 
 
 @pytest.mark.parametrize("include_tools", [False, True])
