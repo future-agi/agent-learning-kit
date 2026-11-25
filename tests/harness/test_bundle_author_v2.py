@@ -9163,3 +9163,42 @@ def test_subfolder_node_from_its_dockerfile_cmd_changes_folder_once(tmp_path):
         "server.js",
     ]
     assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+
+
+def test_node_workdir_under_a_python_root_starts_in_its_workdir(tmp_path):
+    """A Python marker above a Node workdir must not move the Node process to the Python root."""
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "apps/chat/package.json": '{"name":"chat"}',
+            "apps/chat/server.js": _NODE_CHAT_SERVER,
+        },
+    )
+    _node_package(source, workspaces=["apps/*"])
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "execution": "native",
+            "workdir": "apps/chat",
+            "command": ["node", "server.js"],
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "."
+    assert agent.run_command == [
+        "sh",
+        "-c",
+        'cd "./$1" && shift && exec "$@"',
+        "alk-source-process",
+        "apps/chat",
+        "node",
+        "server.js",
+    ]

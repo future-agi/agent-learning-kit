@@ -2019,8 +2019,13 @@ def _install_root_for(root: Path, run_folder: Path, found: Path) -> tuple[Path, 
     return run_folder, found.relative_to(run_folder).as_posix()
 
 
-def _runtime_component(root: Path, configured_workdir: str) -> Path:
-    """Resolve a source-declared workdir to its nearest installable project root."""
+def _runtime_component(
+    root: Path, configured_workdir: str, *, python_project: bool = True
+) -> Path:
+    """Resolve a source-declared workdir to its nearest installable project root.
+
+    A Node or Bun process finds its own package root, so it keeps the workdir itself.
+    """
 
     configured = configured_workdir.strip()
     component = (
@@ -2028,6 +2033,8 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     )
     if not component.is_relative_to(root) or not component.is_dir():
         raise BundleAuthorError(f"runtime_workdir_invalid: {configured_workdir or '.'}")
+    if not python_project:
+        return component
     for candidate in (component, *component.parents):
         if not candidate.is_relative_to(root):
             break
@@ -3356,7 +3363,11 @@ def resolve_environment_plan(
         )
         entry = "agent.py"
         if is_declared_runtime or is_graph:
-            component = server_start_folder(root, contract_runtime, _runtime_component(root, runtime_workdir))
+            component = server_start_folder(
+                root,
+                contract_runtime,
+                _runtime_component(root, runtime_workdir, python_project=not js_runtime),
+            )
             entry = next(
                 (
                     item
