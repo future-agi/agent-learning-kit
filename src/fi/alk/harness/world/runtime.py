@@ -656,6 +656,13 @@ class GeneratedWorld(EnvironmentAdapter):
     # -- execution -------------------------------------------------------------------
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+        """Execute one call and record it (`_call`). An environment's own world (``isolated``) runs
+        it as one transaction; a world bound to an agent's code runs it as that code does, where a
+        refused call may well keep what it wrote (a lockout counter, an audit row).
+        """
+        return self._transaction(name, arguments) if self.isolated else self._call(name, arguments)
+
+    def _transaction(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         """Execute one call as one transaction, one call at a time.
 
         A call that fails changes nothing: its writes are rolled back by the store, which needs

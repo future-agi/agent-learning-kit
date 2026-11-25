@@ -59,6 +59,8 @@ def _world() -> GeneratedWorld:
         handlers = {"book": BOOK, "rival": RIVAL}
 
     world = Clinic(":memory:")
+    # The environment's own world: one bound to an agent's code keeps that code's own behaviour.
+    world.isolated = True
     world.connection.executescript(SCHEMA)
     world.connection.commit()
     return world
@@ -127,7 +129,6 @@ def test_only_a_simulated_fault_keeps_what_it_wrote(isolation: str, monkeypatch)
     if isolation:
         monkeypatch.setenv("ALK_HANDLER_ISOLATION", isolation)
     world = _world()
-    world.isolated = bool(isolation)
     refused = world.call("rival", {"slot": "S1"})
     assert not refused.ok and _rows(world) == {"appointments": [], "events": []}
     kept = world.call("rival", {"slot": "S1", "kept": True})
@@ -152,6 +153,7 @@ def test_a_commit_that_fails_records_a_failed_call_and_keeps_nothing() -> None:
         }
 
     world = Ledger(":memory:")
+    world.isolated = True
     world.connection.executescript(
         "CREATE TABLE invoices (invoice_id TEXT PRIMARY KEY);"
         "CREATE TABLE lines (line_id TEXT PRIMARY KEY, invoice_id TEXT REFERENCES invoices(invoice_id) DEFERRABLE INITIALLY DEFERRED);"
@@ -164,6 +166,45 @@ def test_a_commit_that_fails_records_a_failed_call_and_keeps_nothing() -> None:
     assert world.state()["lines"] == []
     fine = world.call("add_line", {"line_id": "L2", "invoice_id": "INV1"})
     assert fine.ok and [row["line_id"] for row in world.state()["lines"]] == ["L2"]
+
+
+def test_a_world_bound_to_an_agents_code_keeps_what_a_refused_call_wrote() -> None:
+    world = GeneratedWorld(":memory:", kind="sqlite")
+    world.store.apply("CREATE TABLE logins (failed INTEGER); INSERT INTO logins VALUES (0);")
+    world.handlers = {
+        "login": (
+            "def handle(args, db):\n"
+            "    db.execute('UPDATE logins SET failed = failed + 1')\n"
+            "    raise ToolError('wrong pin')\n"
+        )
+    }
+    frozen = []
+    world.store.freeze = lambda: frozen.append(1)
+
+    assert world.call("login", {}).refused
+    assert world.state()["logins"] == [{"failed": 1}]
+    assert not frozen
+
+
+@pytest.mark.parametrize("copyable", [True, False])
+def test_a_failed_call_leaves_the_agents_own_state_object_alone(copyable: bool) -> None:
+    class Agent:
+        def __init__(self) -> None:
+            self.failed = 0
+            self.lock = None if copyable else threading.Lock()
+
+    world = GeneratedWorld(":memory:", kind="sqlite")
+    agent = world.state_object = Agent()
+    world.handlers = {
+        "login": (
+            "def handle(args, db):\n"
+            "    db.state.failed += 1\n"
+            "    raise ToolError('wrong pin')\n"
+        )
+    }
+
+    assert world.call("login", {}).refused
+    assert world.state_object is agent and agent.failed == 1
 
 
 # -- PostgreSQL: the path world_mcp and the release tool server take ---------------------------
