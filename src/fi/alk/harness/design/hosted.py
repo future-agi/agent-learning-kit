@@ -7,7 +7,8 @@ control process waits. The builder's `finish_design`, `stop_design` or a parked 
 `design-output/result.json` and the finished marker; this process turns that into the exit code.
 
 A resumed design (`resume_from`) starts from the checkpointed workspace the platform uploaded, so
-the design is already there and is kept.
+the design is already there and is kept. How the earlier attempt ended is not: a checkpoint holds
+its parked or failed result, which would end this attempt as soon as it starts.
 """
 
 from __future__ import annotations
@@ -81,9 +82,22 @@ def failed(output: Path, workspace: Path, code: str, message: str) -> int:
     return 2
 
 
+def _forget_unfinished(output: Path, workspace: Path) -> None:
+    """Drop the result of an earlier attempt that did not complete."""
+    try:
+        result = json.loads((output / RESULT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        result = {}
+    if result.get("status") != "completed":
+        (workspace / FINISHED_MARKER).unlink(missing_ok=True)
+        (output / RESULT).unlink(missing_ok=True)
+
+
 def run_hosted(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace)
     output = workspace / OUTPUT
+    # First, before the conversation's builder has had time to finish this attempt.
+    _forget_unfinished(output, workspace)
     try:
         job = design_job(json.loads(Path(args.job).read_text(encoding="utf-8")))
     except (OSError, ValueError, ValidationError) as exc:
