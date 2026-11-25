@@ -5211,11 +5211,12 @@ def _column_kind(definition: str) -> str | None:
 def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
     """Apply public-table column declarations in schema file and statement order."""
     declared: dict[tuple[str, str], str | None] = {}
-    column = r'"?([A-Za-z_]\w*)"?\s+'
+    created: set[str] = set()
+    column = r'"?(?P<column>[A-Za-z_]\w*)"?\s+'
     for path in paths:
         for statement in _sql_code(path.read_text(encoding="utf-8")).split(";"):
             found = re.search(
-                rf"(?:\b(?P<create>CREATE)\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|"
+                rf"(?:\b(?P<create>CREATE)\s+TABLE\s+(?P<conditional>IF\s+NOT\s+EXISTS\s+)?|"
                 rf"\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?){_SQL_TABLE}(?=\s|\()",
                 statement,
                 re.IGNORECASE,
@@ -5226,7 +5227,11 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
             if schema and schema != '"public"' and schema.lower() != "public":
                 continue
             body = statement[found.end() :].strip()
+            table = found["table"].lower()
             if found["create"]:
+                if found["conditional"] and table in created:
+                    continue
+                created.add(table)
                 if not body.startswith("("):
                     continue
                 depth, at = 1, 1
@@ -5236,24 +5241,33 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
                 body = body[1 : at - 1]
             for part in re.split(r",(?![^()]*\))", body):
                 definition = part.strip()
-                adding = False
                 if found["create"]:
-                    pattern = column + r"(.+)"
+                    pattern = column + r"(?P<type>.+)"
+                elif re.match(r"DROP\b", definition, re.I):
+                    drop = re.fullmatch(
+                        r'DROP\s+(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?'
+                        r'(?:\s+(?:CASCADE|RESTRICT))?', definition, re.I,
+                    )
+                    if drop:
+                        declared.pop((table, drop[1].lower()), None)
+                    continue
                 elif re.match(r"ALTER\b", definition, re.I):
                     pattern = (
-                        r"ALTER\s+(?:COLUMN\s+)?" + column + r"(?:SET\s+DATA\s+)?TYPE\s+(.+)"
+                        r"ALTER\s+(?:COLUMN\s+)?" + column + r"(?:SET\s+DATA\s+)?TYPE\s+(?P<type>.+)"
                     )
                 else:
-                    adding = True
-                    pattern = r"ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?" + column + r"(.+)"
+                    pattern = (
+                        r"ADD\s+(?:COLUMN\s+)?(?P<conditional>IF\s+NOT\s+EXISTS\s+)?"
+                        + column + r"(?P<type>.+)"
+                    )
                 match = re.match(pattern, definition, re.IGNORECASE | re.DOTALL)
-                if not match or match[1].upper() in _NOT_COLUMNS:
+                if not match or match["column"].upper() in _NOT_COLUMNS:
                     continue
-                key = found["table"].lower(), match[1].lower()
-                definition = re.split(r"\s+USING\b", match[2], maxsplit=1, flags=re.I)[0]
-                if not adding or key not in declared:
-                    # ADD IF NOT EXISTS leaves an existing column (even plain text) alone.
-                    declared[key] = _column_kind(definition)
+                key = table, match["column"].lower()
+                if match.groupdict().get("conditional") and key in declared:
+                    continue
+                definition = re.split(r"\s+USING\b", match["type"], maxsplit=1, flags=re.I)[0]
+                declared[key] = _column_kind(definition)
     return {key: kind for key, kind in declared.items() if kind is not None}
 
 

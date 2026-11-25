@@ -343,6 +343,22 @@ def test_save_world_refuses_a_literal_json_has_no_form_for(tmp_path):
             "ADD COLUMN IF NOT EXISTS other TEXT;",
             [("meta", "other")],
         ),
+        (
+            "CREATE TABLE meta (value JSONB); "
+            "CREATE TABLE IF NOT EXISTS public.meta (value TEXT, extra JSON);",
+            [("meta", "value")],
+        ),
+        (
+            "CREATE TABLE meta (value TEXT); "
+            "ALTER TABLE meta DROP COLUMN value, ADD COLUMN value JSONB;",
+            [("meta", "value")],
+        ),
+        (
+            "CREATE TABLE meta (value TEXT, old JSON); "
+            "ALTER TABLE meta DROP IF EXISTS value, ADD COLUMN IF NOT EXISTS value JSON, "
+            "DROP COLUMN old RESTRICT;",
+            [("meta", "value")],
+        ),
         ("CREATE TABLE audit.meta (value JSON); CREATE TABLE public.meta (value TEXT);", []),
         ("CREATE TABLE public.meta (value TEXT); CREATE TABLE audit.meta (value JSON);", []),
         (
