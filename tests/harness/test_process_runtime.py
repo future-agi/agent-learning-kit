@@ -10281,6 +10281,24 @@ def test_node_mark_hook_is_preloaded_first_for_every_exporting_process(tmp_path:
     assert "NODE_OPTIONS" not in captured["env"]
 
 
+def test_node_mark_hook_leaves_the_future_agi_keys_to_the_customer(tmp_path: Path) -> None:
+    # The ingest pair reaches the process only under its own names, as for the Python hook.
+    exporting = {
+        **_EXPORT,
+        "FI_SIMULATION_INGEST_API_KEY": "ingest-key",
+        "FI_SIMULATION_INGEST_SECRET_KEY": "ingest-secret",
+    }
+    captured = _spawn(tmp_path / "keyless", _source_process(name="agent"), exporting)
+    assert "NODE_OPTIONS" in captured["env"]
+    assert "FI_API_KEY" not in captured["env"]
+    assert "FI_SECRET_KEY" not in captured["env"]
+
+    own = _source_process(name="agent", environment={"FI_API_KEY": "customer-key"})
+    captured = _spawn(tmp_path / "own-key", own, exporting)
+    assert captured["env"]["FI_API_KEY"] == "customer-key"
+    assert "FI_SECRET_KEY" not in captured["env"]
+
+
 def test_node_option_quotes_a_path_as_node_reads_it() -> None:
     assert pr._node_require_option(Path("/work/worlds/w0/agent/hook.cjs")) == (
         '--require="/work/worlds/w0/agent/hook.cjs"'

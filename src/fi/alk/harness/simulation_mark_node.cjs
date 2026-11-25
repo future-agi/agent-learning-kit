@@ -25,10 +25,11 @@
  *
  * Every other request is untouched. Nothing runs without the ingest key and the collector
  * endpoint, or while the sandbox measures the agent itself (`FI_SIMULATION_INSTRUMENT`): that
- * endpoint is then the customer's own. A process with no key of its own is given the ingest key
- * as FI_API_KEY and FI_SECRET_KEY, and the collector as FI_BASE_URL (`exposeKey`). A failure of this
- * hook never fails the request: the request goes out as the caller wrote it, except that a
- * request to our collector never carries the customer's key, and one fixed line goes to stderr.
+ * endpoint is then the customer's own. As in the Python hook, the ingest key stays under its own
+ * names: the process's FI_* variables are never read, set or changed, so an SDK that reads
+ * FI_API_KEY finds only the customer's own key, or none. A failure of this hook never fails the
+ * request: the body goes out as the caller wrote it, except that a request to our collector never
+ * carries the customer's key, and one fixed line goes to stderr.
  */
 
 const fs = require("node:fs");
@@ -219,28 +220,6 @@ function markedBody(body, contentType, contentEncoding, pairs, calls) {
   return encoding === "gzip" ? zlib.gzipSync(out) : out;
 }
 
-/**
- * Give a process with no Future AGI key of its own the ingest key and the collector base, as the
- * names an SDK reads: some Node SDKs export only when FI_API_KEY and FI_SECRET_KEY are both set.
- * The Python hook never does this; the key is already in this process's environment under the
- * ingest names. A process with either half of its own key keeps its environment as it is.
- */
-function exposeKey(env, apiKey, secretKey) {
-  if (env.FI_API_KEY || env.FI_SECRET_KEY) return;
-  env.FI_API_KEY = apiKey;
-  env.FI_SECRET_KEY = secretKey;
-  if (env.FI_BASE_URL) return;
-  try {
-    const url = new URL(env[TRACES_ENDPOINT]);
-    const base = url.pathname.replace(/\/+$/, "");
-    if (base.endsWith(TRACES_PATH)) {
-      env.FI_BASE_URL = `${url.origin}${base.slice(0, -TRACES_PATH.length)}`;
-    }
-  } catch (_) {
-    write("failed");
-  }
-}
-
 function install() {
   const env = process.env;
   if (env[MEASURE]) return;
@@ -252,7 +231,6 @@ function install() {
     [AUTH_HEADERS[0], apiKey],
     [AUTH_HEADERS[1], secretKey],
   ];
-  exposeKey(env, apiKey, secretKey);
   const pairs = readPairs(env.OTEL_RESOURCE_ATTRIBUTES);
   const calls = env[CALL_FILE] ? new CallWindows(env[CALL_FILE]) : null;
   if (calls) {

@@ -323,7 +323,7 @@ test("a body the hook cannot read is sent as written, with our key, and fails on
   );
 });
 
-test("a process without its own key is given the ingest key and the collector as its base", async () => {
+test("the Future AGI keys in the environment are never set, read or changed", async () => {
   const script = `
     const { FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL } = process.env;
     console.log(JSON.stringify({ FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL }));
@@ -335,20 +335,20 @@ test("a process without its own key is given the ingest key and the collector as
   delete full.FI_API_KEY;
   delete full.FI_SECRET_KEY;
   const cases = [
-    [full, { FI_API_KEY: "ingest-key", FI_SECRET_KEY: "ingest-secret", FI_BASE_URL: "https://collector.example/prefix" }],
-    // The platform's own base for traceAI stays.
-    [
-      { ...full, FI_BASE_URL: "https://collector.example" },
-      { FI_API_KEY: "ingest-key", FI_SECRET_KEY: "ingest-secret", FI_BASE_URL: "https://collector.example" },
-    ],
-    // Either half of the customer's own key leaves the environment as it is.
+    // The ingest pair stays under its own names: an SDK that reads FI_API_KEY finds none.
+    [full, {}],
+    [{ ...full, FI_BASE_URL: "https://collector.example" }, { FI_BASE_URL: "https://collector.example" }],
+    // The customer's own key is left exactly as it is.
     [{ ...full, FI_API_KEY: "customer-key" }, { FI_API_KEY: "customer-key" }],
-    // Measuring: the hook does nothing at all.
-    [{ ...full, FI_SIMULATION_INSTRUMENT: "traceai" }, {}],
+    [
+      { ...full, FI_API_KEY: "customer-key", FI_SECRET_KEY: "customer-secret" },
+      { FI_API_KEY: "customer-key", FI_SECRET_KEY: "customer-secret" },
+    ],
   ];
   for (const [env, expected] of cases) {
     const result = await run(script, env);
     assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stderr, /simulation mark hook: applied/);
     assert.doesNotMatch(result.stderr, /failed/);
     assert.deepEqual(JSON.parse(result.stdout), expected);
   }
