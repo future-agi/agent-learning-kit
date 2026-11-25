@@ -4241,6 +4241,26 @@ def test_a_real_transfer_handoff_is_recognised(line: str) -> None:
     assert livekit._is_transfer_handoff("assistant", line)
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "I can't transfer you right now.",
+        "I cannot transfer your call now.",
+        "I'm unable to transfer you now.",
+        "I'm not able to connect you now.",
+        "I won't transfer you now.",
+        "I'll transfer to savings now.",
+        "Transferring now, please hold.",
+    ],
+)
+def test_an_unanswered_transfer_line_ends_a_call_only_as_a_direct_handoff(
+    line: str,
+) -> None:
+    messages = [*_TRANSFER_HANDOFF_CALL[:-1], {"role": "assistant", "content": line}]
+
+    assert not livekit._has_natural_terminal_exchange(messages, target_ended=True)
+
+
 def _short_call_failure() -> livekit._CaseOutcome:
     return livekit._failure_outcome(
         CaseStatus.FAILED,

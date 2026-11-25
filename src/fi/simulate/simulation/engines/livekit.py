@@ -5467,6 +5467,9 @@ _TRANSFER_HANDOFF_PHRASE = re.compile(
     r"|\b(?:be|being|get\s+you|have\s+you)\s+transferred\b"
 )
 _TRANSFER_HANDOFF_MARKER = re.compile(r"\b(?:now|connect|connecting|please\s+wait)\b")
+_TRANSFER_REFUSAL = re.compile(
+    r"\b(?:can['\u2019]?t|cannot|can\s+not|unable|not\s+able|won['\u2019]?t)\b"
+)
 
 
 def _is_transfer_handoff(role: str, text: str) -> bool:
@@ -5475,6 +5478,14 @@ def _is_transfer_handoff(role: str, text: str) -> bool:
         and _TRANSFER_WORD.search(text) is not None
         and _TRANSFER_HANDOFF_PHRASE.search(text) is not None
         and _TRANSFER_HANDOFF_MARKER.search(text) is not None
+    )
+
+
+def _is_direct_transfer_handoff(role: str, text: str) -> bool:
+    return (
+        _is_transfer_handoff(role, text)
+        and _TRANSFER_DIRECT_PHRASE.search(text) is not None
+        and _TRANSFER_REFUSAL.search(text) is None
     )
 
 
@@ -5520,7 +5531,7 @@ def _has_natural_terminal_exchange(
     if any(marker in text for _role, text in tail for marker in farewell_markers):
         return True
 
-    if target_ended and _is_transfer_handoff(*tail[-1]):
+    if target_ended and _is_direct_transfer_handoff(*tail[-1]):
         return True
     for index, (role, text) in enumerate(tail[:-1]):
         if not _is_transfer_handoff(role, text):
