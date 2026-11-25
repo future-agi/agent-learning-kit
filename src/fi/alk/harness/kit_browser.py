@@ -51,7 +51,7 @@ from .egress_proxy import (
     RefusedAddress,
     _max_clients,
     _tunnel_seconds,
-    host_allowed,
+    entry_admits,
 )
 from .world_door import ActionLog
 
@@ -196,7 +196,9 @@ class BrowserProxy(EgressProxy):
         super().__init__(sites, log)
 
     def allows(self, host: str) -> bool:
-        return host_allowed(host, self.allowed, loopback=False)
+        # Read as the sandbox firewall reads each entry, never wider: a host this let through and the firewall
+        # dropped would be in no blocked list. Loopback is never a site.
+        return any(entry_admits(site, host) for site in self.allowed)
 
     def open(self, host: str, port: int) -> socket.socket:
         if self._connect is not None:

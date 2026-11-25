@@ -105,6 +105,36 @@ def test_the_browser_reaches_its_sites_and_nothing_else(site) -> None:
 
 
 @pytest.mark.parametrize(
+    ("site", "host", "admitted"),
+    [
+        # A name is that host only.
+        ("shop.test", "shop.test", True),
+        ("shop.test", "SHOP.test.", True),
+        ("shop.test", "www.shop.test", False),
+        # A wildcard is every host under it, at any depth, never the name itself.
+        ("*.shop.test", "www.shop.test", True),
+        ("*.shop.test", "a.b.shop.test", True),
+        ("*.shop.test", "shop.test", False),
+        ("*.shop.test", "evilshop.test", False),
+    ],
+)
+def test_the_browser_s_proxy_reads_each_site_as_the_sandbox_firewall_does(site, host, admitted) -> None:
+    # A host the proxy let through and the firewall dropped would be in no blocked list.
+    proxy = BrowserProxy([site], MemoryLog(), attached=_Attached(True))
+    try:
+        assert proxy.allows(host) is admitted
+    finally:
+        proxy.close()
+
+
+def test_the_agent_s_proxy_still_reads_a_name_as_covering_the_hosts_under_it() -> None:
+    from fi.alk.harness.egress_proxy import host_allowed
+
+    assert host_allowed("www.shop.test", ["shop.test"], loopback=False)
+    assert host_allowed("shop.test", ["*.shop.test"], loopback=False)
+
+
+@pytest.mark.parametrize(
     "host", ["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "db.localhost"]
 )
 def test_the_browser_s_proxy_does_not_admit_loopback(host) -> None:

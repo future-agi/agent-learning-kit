@@ -3522,8 +3522,10 @@ def _door_manifest(*users_by_name):
         ("fixed_user", [("agent", "svc-agent")], None),
         # Door processes that disagree name no one user.
         ("per_user", [("tool-proxy", "svc-tools"), ("world-door", "svc-agent")], None),
+        # The MCP Toolbox is a door too.
+        ("per_user", [("agent", "svc-agent"), ("mcp-toolbox", "svc-door")], "svc-door"),
     ],
-    ids=["per-user-proxy", "fixed-user-in-process-door", "no-door", "door-users-disagree"],
+    ids=["per-user-proxy", "fixed-user-in-process-door", "no-door", "door-users-disagree", "mcp-toolbox-door"],
 )
 def test_runtime_evidence_records_how_processes_ran_and_the_door_user(
     tmp_path, monkeypatch, mode, processes, door_user
