@@ -40,7 +40,7 @@ from typing import Any, Callable, Collection, Mapping, Sequence
 
 from .actors import load_actors
 from .catalogue import Catalogue
-from .checks import CHECK_HELPERS, Outcome, reference_of, run_check
+from .checks import OUTCOME_HELPERS, Outcome, reference_of, run_check
 from .contract import AgentContract
 from .controls import (
     JUDGED_CONTROL_TEXT,
@@ -795,8 +795,7 @@ def record_unrun_step(world: Any, step: object) -> Call:
 
 # What a call came to, by the names a check reads it with: on a call, on a log row, or through a helper.
 _OUTCOME_FIELDS = frozenset({"result", "ok", "refused", "error", "refusal_code", "outcome"})
-# The helpers that read what a call came to, as each declares itself (`reads_outcomes`), so a new one is never missed.
-_OUTCOME_HELPERS = frozenset(name for name, helper in CHECK_HELPERS.items() if getattr(helper, "reads_outcomes", True))
+_OUTCOME_HELPERS = OUTCOME_HELPERS
 
 
 def _reads_results(source: str) -> bool:
