@@ -434,7 +434,7 @@ def test_a_world_with_a_handler_channel_never_imports_the_agent_code(
         def call(self, name, arguments):
             return Call(name=name, arguments=dict(arguments), result={"from": "child"})
 
-    world = chat._tool_world(
+    world = chat.tool_world(
         context.bundle_dir, contract, _runtime(), source, Channel()
     )
     call = world.call("lookup_account", {"account_id": "A-1"})

@@ -1411,6 +1411,14 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (the native validation record)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_bytes"): (
         1, _READS + " (a validation record)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "record_tool_routing"): (
+        1, _READS + " (the tool routing observations)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "request_uncovered_tools"): (
+        1, _READS + " (the tool requests ledger and the routing observations)"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "record"): (
+        2, _READS + " (the check's failure record, failure_record.record)"),
+    ("fi.alk.harness.hosted_agent_reading", "_read", "write_text"): (
+        1, _READS + " (the agent reading's document, agent.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_text"): (
         2, _READS + " (validation records)"),
     ("fi.alk.harness.bundle_author_v2", "_reuse_certified_bundle", "Path.rename"): (
@@ -1536,7 +1544,7 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "writes each scenario's sealed worker limits (call_runner.write_worker_limits), not the contract"),
     ("fi.alk.harness.chat_call_runner", "HostedChatCallRunner._run", "_drive_conversation"): (
         1, _TRACE),
-    ("fi.alk.harness.chat_call_runner", "handler_child_for", "start_handler_child"): (
+    ("fi.alk.harness.chat_call_runner", "handler_child_at", "start_handler_child"): (
         1, "makes the handler child's own scratch folder and log, not the contract"),
     ("fi.alk.harness.cli", "_auto", "refuse_saved_contract"): (
         1, "writes the build's failure file when the agent needs an environment the job lacks"),

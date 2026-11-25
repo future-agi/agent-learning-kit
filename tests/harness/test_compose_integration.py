@@ -238,7 +238,7 @@ def test_provider_native_runtime_records_completed_tools_without_sql(
     from types import SimpleNamespace
     from fi.alk.harness.certified_compose_runtime import CertifiedComposeRuntimeProvider
     from fi.alk.harness.bundle_v2 import RuntimeKindV2, CapabilityV2
-    from fi.alk.harness.chat_call_runner import _tool_world, _HostedChatTarget
+    from fi.alk.harness.chat_call_runner import tool_world, HostedChatTarget
     from fi.alk.harness.contract import AgentContract
 
     source, bundle_dir, work = (
@@ -302,9 +302,9 @@ def test_provider_native_runtime_records_completed_tools_without_sql(
             )
             (runtime,) = runtimes
             assert "world_db" not in runtime.endpoints
-            world = _tool_world(bundle_dir, contract, runtime, source)
+            world = tool_world(bundle_dir, contract, runtime, source)
             assert isinstance(world, ObservationWorld)
-            target = _HostedChatTarget(
+            target = HostedChatTarget(
                 wrapper=NativeAgent(),
                 contract=contract,
                 world=world,

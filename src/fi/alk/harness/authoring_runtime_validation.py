@@ -22,6 +22,14 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import fi.alk
+
+from . import call_runner, failure_record, judge, tool_routing
+from .catalogue import load_catalogue
+from .certification import CheckStatus
+from .generated_runtime import installed_frameworks
+from .privilege import isolation_mode
+
 if TYPE_CHECKING:
     from .job import FailureCause
     from .source_model import SourceModel
@@ -96,6 +104,17 @@ def _world_isolation_status(build_output: dict):
     ):
         return CheckStatus.NOT_APPLICABLE
     return CheckStatus.NOT_RUN
+
+
+# The processes that make up the world's door: the tool proxy in front of a tools service, or the in-process door.
+_DOOR_PROCESSES = ("tool-proxy", "world-door")
+
+
+def _door_user(manifest) -> str | None:
+    """The OS user the bundle's door processes are declared to run as; None when the bundle has no door or its door
+    processes do not agree on one user."""
+    users = {process.user.value for process in getattr(manifest, "processes", ()) if process.name in _DOOR_PROCESSES}
+    return users.pop() if len(users) == 1 else None
 
 
 def _write_runtime_evidence(
@@ -227,6 +246,8 @@ def _write_runtime_evidence(
             world_isolation=world_isolation,
         ),
         limitations=tuple(limitations),
+        process_isolation=isolation_mode().value,
+        door_user=_door_user(manifest),
     )
     store.write_runtime_evidence(evidence)
     store.write_tool_certification(tool_report)
@@ -348,7 +369,31 @@ def _make_local_seed_files_readable(bundle: Path) -> None:
         path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
 
 
-def _write_generic_certificate(job, authoring: Path, repairs) -> None:
+def _has_judged_sub_goals(authoring: Path) -> bool:
+    for root in (authoring, authoring / "environment-bundle"):
+        try:
+            catalogue = load_catalogue(root)
+        except (OSError, ValueError):
+            continue
+        if any(goal.judged.strip() for goal in catalogue.sub_goals):
+            return True
+    return False
+
+
+def _with_judge_check(checks, authoring: Path):
+    """``checks`` with whether the judge answered, only when a judged sub-goal needs it."""
+    if not _has_judged_sub_goals(authoring):
+        return checks
+    return checks.model_copy(update={"judge_reachable": CheckStatus(judge.judge_reachable())})
+
+
+def _harness_version() -> str | None:
+    return None if fi.alk.__version__.startswith("0.0.0+") else fi.alk.__version__
+
+
+def _write_generic_certificate(
+    job, authoring: Path, repairs, source: Path | None = None
+) -> None:
     from .certification import (
         CertificationAuthoring,
         CertificationCompiler,
@@ -361,12 +406,12 @@ def _write_generic_certificate(job, authoring: Path, repairs) -> None:
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     evidence = store.read_runtime_evidence()
-    source = getattr(job, "source", None)
+    origin = getattr(job, "source", None)
     certificate = HarnessCertification.create(
         status=CertificationStatus.CERTIFIED,
         source=CertificationSource(
-            repository=getattr(source, "repository", None),
-            commit=getattr(source, "commit_sha", None),
+            repository=getattr(origin, "repository", None),
+            commit=getattr(origin, "commit_sha", None),
             digest=evidence.source_digest,
             schema_hash=evidence.source_schema_hash,
         ),
@@ -382,8 +427,12 @@ def _write_generic_certificate(job, authoring: Path, repairs) -> None:
         runtime=CertificationRuntime(
             snapshot=_runtime_snapshot(job),
             validation_attempts=len(repairs.decisions),
+            harness_version=_harness_version(),
+            frameworks=installed_frameworks(source),
+            process_isolation=evidence.process_isolation,
+            door_user=evidence.door_user,
         ),
-        checks=evidence.checks,
+        checks=_with_judge_check(evidence.checks, authoring),
         repairs=repairs,
         limitations=evidence.limitations,
     )
@@ -1285,6 +1334,7 @@ async def validate_once(
                             evidence_seam=manifest.runtime.evidence_seam,
                         )
                     else:
+                        since = time.time()
                         await probe_chat_ingress(
                             interface=interface,
                             endpoint=endpoint.address,
@@ -1300,6 +1350,36 @@ async def validate_once(
                             scenario_id=representative.scenario_id,
                             timeout=agent_chat_timeout_seconds(job) or _chat_target_timeout_seconds(),
                         )
+                        # A test message can call tools too; then ask for the rest.
+                        try:
+                            called = call_runner.collect_file_tool_calls(runtime)
+                        except Exception as unread:  # noqa: BLE001 - no trace, nothing observed
+                            logger.warning("agent's tool trace not read: %s", type(unread).__name__)
+                            logger.debug("the failure in full", exc_info=True)
+                            called = ()
+                        tool_routing.record_tool_routing(
+                            authoring,
+                            representative.scenario_key,
+                            contract,
+                            runtime,
+                            received=tool_routing.world_call_log(runtime, since),
+                            reported=called,
+                            bundle=bundle,
+                        )
+                    # Whichever conversation qualified the agent, each tool it did not show is asked once.
+                    await tool_routing.request_uncovered_tools(
+                        interface=interface,
+                        endpoint=endpoint.address,
+                        runtime=runtime,
+                        contract=contract,
+                        authoring=authoring,
+                        bundle=bundle,
+                        source=source,
+                        secret_values=target_secret_values,
+                        candidate_hash=_generic_candidate_hash(source, authoring),
+                        local_auth_values=getattr(runtime, "_local_auth_values", None),
+                        work_directory=work,
+                    )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
@@ -1813,6 +1893,8 @@ async def _validate_and_repair(
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
         for _attempt in range(decision_bound):
+            # A record left by an earlier attempt must never speak for this one.
+            failure_record.clear()
             try:
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
@@ -1829,6 +1911,7 @@ async def _validate_and_repair(
                     f"runtime validation: {exc.phase}: {exc}",
                     flush=True,
                 )
+                failure_record.record(exc.phase, exc)
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
@@ -2067,7 +2150,7 @@ async def _validate_and_repair(
                 )
                 if evidence_path.is_file():
                     _write_generic_certificate(
-                        job, authoring, repair_controller.history
+                        job, authoring, repair_controller.history, source
                     )
                 else:
                     # Injected validators in unit/integration consumers may not implement the
@@ -2094,10 +2177,12 @@ async def _validate_and_repair(
     repairs = {"environment": 0, "scenarios": 0}
     for attempt in range(5):
         print(f"runtime validation: attempt {attempt + 1}/5", flush=True)
+        failure_record.clear()
         try:
             count = await validate(job, source, authoring)
         except RuntimeValidationError as exc:
             print(f"runtime validation: {exc.phase}: {exc}", flush=True)
+            failure_record.record(exc.phase, exc)
             if exc.phase not in repairs or repairs[exc.phase] >= 2:
                 raise
             repairs[exc.phase] += 1
