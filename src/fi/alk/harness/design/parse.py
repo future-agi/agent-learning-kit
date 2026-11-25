@@ -153,9 +153,15 @@ def _xlsx(path: Path) -> list[tuple[str, Any]]:
 
 
 def _delimited(path: Path, delimiter: str) -> list[tuple[str, Any]]:
-    rows = list(
-        csv.reader(io.StringIO(path.read_text(encoding="utf-8")), delimiter=delimiter)
-    )
+    csv.field_size_limit(MOST_CHARS)
+    try:
+        rows = list(
+            csv.reader(
+                io.StringIO(path.read_text(encoding="utf-8")), delimiter=delimiter
+            )
+        )
+    except csv.Error as exc:
+        raise DocumentError(f"{path.name}: {exc}") from exc
     table = _table(rows)
     return [("table", table)] if table is not None else []
 
@@ -210,14 +216,15 @@ def main(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 3
     out.mkdir(parents=True, exist_ok=True)
-    listed, total, taken = [], 0, set()
+    # `parts.json` is the index.
+    listed, total, taken = [], 0, {"parts"}
     for raw, content in parts:
         # Sheet titles such as "A B" and "A-B" read the same as a file name: each part gets a
         # name of its own, and its title is kept as written.
         base = part_name(raw)
         name = next(
             candidate
-            for candidate in (base, *(f"{base}-{n}" for n in range(2, len(parts) + 2)))
+            for candidate in (base, *(f"{base}-{n}" for n in range(2, len(parts) + 3)))
             if candidate.lower() not in taken
         )
         taken.add(name.lower())

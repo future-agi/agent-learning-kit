@@ -64,6 +64,32 @@ def _limits() -> None:
             continue
 
 
+def _parsed(path: Path, target: Path, cwd: Path) -> str:
+    """Parse one document into `target` in its child; why it could not be read, "" when it was."""
+    try:
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "fi.alk.harness.design.parse",
+                str(path),
+                str(target),
+            ],
+            env={name: os.environ[name] for name in _CHILD_ENV if name in os.environ},
+            preexec_fn=_limits,
+            capture_output=True,
+            text=True,
+            timeout=PARSE_SECONDS,
+            cwd=cwd,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"took more than {PARSE_SECONDS} seconds to read"
+    if done.returncode == 0:
+        return ""
+    return (done.stderr.strip().splitlines() or ["could not be read"])[-1][:300]
+
+
 def parse_documents(source: Path, out: Path) -> list[DocumentRecord]:
     """Parse every file in `source` into `out/<name>/`, one sandboxed child each. A document
     already parsed from the same bytes is kept as it is."""
@@ -88,30 +114,9 @@ def parse_documents(source: Path, out: Path) -> list[DocumentRecord]:
             and (target / _SHA).is_file()
             and (target / _SHA).read_text() == sha256
         ):
-            done = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "fi.alk.harness.design.parse",
-                    str(path),
-                    str(target),
-                ],
-                env={
-                    name: os.environ[name] for name in _CHILD_ENV if name in os.environ
-                },
-                preexec_fn=_limits,
-                capture_output=True,
-                text=True,
-                timeout=PARSE_SECONDS,
-                cwd=out,
-                check=False,
-            )
-            if done.returncode == 0:
+            error = _parsed(path, target, out)
+            if not error:
                 (target / _SHA).write_text(sha256)
-            else:
-                error = (done.stderr.strip().splitlines() or ["could not be read"])[-1][
-                    :300
-                ]
         parts = (
             json.loads((target / "parts.json").read_text(encoding="utf-8"))
             if not error
@@ -155,11 +160,17 @@ def _replaced(
     else:
         return value, 0
     count = 0
-    for original, made_up in replacements.items():
-        if original and original in text:
-            matched.add(original)
-            count += text.count(original)
-            text = text.replace(original, made_up)
+
+    def made_up(found: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        matched.add(found[0])
+        return replacements[found[0]]
+
+    # One pass, longest first: made-up text is never itself replaced, and "Ann" leaves "Anna".
+    originals = sorted(filter(None, replacements), key=len, reverse=True)
+    if originals:
+        text = re.sub("|".join(map(re.escape, originals)), made_up, text)
     # A number nothing replaced keeps its type; a replaced one is coerced again by its column.
     return (text, count) if count or isinstance(value, str) else (value, 0)
 
@@ -193,7 +204,14 @@ def _markdown_table(table: dict[str, Any], most: int) -> str:
     return "\n".join(lines)
 
 
-_NUMBER = re.compile(r"^[^\d\-+.]*([-+]?[\d,]*\.?\d+(?:[eE][-+]?\d+)?)\s*%?$")
+# A currency sign or code before the number, and thousands separators inside it (1,000 or
+# 1,00,000). Anything else in front of a number, and a decimal comma, makes it no number.
+_CURRENCY = r"(?:[A-Z]{0,3}[$€£¥₹₩₽₺₪฿₫₦]|USD|EUR|GBP|INR|JPY|CNY|AUD|CAD|CHF|SGD|AED|Rs\.?)"
+_NUMBER = re.compile(
+    rf"(?P<sign>[-+]?)\s*(?:{_CURRENCY}\s*)?(?P<inner>[-+]?)"
+    r"(?P<digits>(?:\d{1,3}(?:,\d{2,3})*,\d{3}|\d+)?(?:\.\d+)?)"
+    r"(?P<power>(?:[eE][-+]?\d+)?)\s*%?"
+)
 _TRUE = {"true", "yes", "y", "1", "t"}
 _FALSE = {"false", "no", "n", "0", "f"}
 
@@ -224,11 +242,11 @@ def coerce(value: Any, declared: str) -> Any:
     if isinstance(value, (int, float)):
         number = Decimal(str(value))
     else:
-        match = _NUMBER.match(str(value).strip())
+        match = _NUMBER.fullmatch(str(value).strip())
         if match is None:
             raise ValueError(f"{value!r} is not a number")
         try:
-            number = Decimal(match.group(1).replace(",", ""))
+            number = Decimal("".join(match.groups()).replace(",", ""))
         except InvalidOperation as exc:
             raise ValueError(f"{value!r} is not a number") from exc
     if "INT" in affinity:

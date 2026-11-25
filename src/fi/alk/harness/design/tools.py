@@ -53,7 +53,14 @@ from ..world.tools import DRAFT
 from .contract import write_contract
 from .handlers import ALLOWED_IMPORTS, behaviour_problems, source_problems
 from .proof import ViewProof
-from .workspace import Design, Proposal, load_design, save_design, seal_design
+from .workspace import (
+    RESULT,
+    Design,
+    Proposal,
+    load_design,
+    save_design,
+    seal_design,
+)
 
 DESIGN_SERVER = "design"
 FINISHED_MARKER = ".futureagi-build-finished.json"
@@ -64,7 +71,6 @@ PARKED = (
     "The person has not answered yet, so the design is parked until they do. End your turn now: "
     "say nothing more and call nothing else."
 )
-RESULT = "result.json"
 # Writers and the judge read only the first 14 hard constraints.
 MOST_AGENT_RULES = 14
 # A file the design writes under attached/: text an attached server reads, kept small.

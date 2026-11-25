@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -68,6 +69,8 @@ from .schema import unseeded_schema
 DESIGN = "design.json"
 DESIGN_SCHEMA = "futureagi.environment-design.v1"
 SIMULATOR_PROMPT = "simulator_prompt.md"
+# How a design ended, in its output folder.
+RESULT = "result.json"
 _IGNORED = shutil.ignore_patterns(".DS_Store", "__pycache__", "*.pyc", "*.pyo")
 
 
@@ -419,12 +422,25 @@ def _provenance(design: Design, environment_root: Path) -> dict[str, JsonValue] 
     return {"provenance": kept} if kept else None
 
 
+def output_problem(out: Path) -> str:
+    """Why a design cannot be sealed into `out`, "" when it can: a design writes into a new or an
+    empty folder, or one that holds only its own result, and never over anything else."""
+    if not out.exists():
+        return ""
+    if not out.is_dir():
+        return f"{out} is not a folder"
+    held = sorted(path.name for path in out.iterdir() if path.name != RESULT)
+    return f"{out} already holds {', '.join(held[:5])}" if held else ""
+
+
 def seal_design(
     workspace: str | Path, out: str | Path, *, postgres_dsn: str
 ) -> tuple[EnvironmentReleaseV1, SuiteReleaseV1]:
     """Seal the design into `out/environment` and `out/suite`, or raise `ReleaseError` and leave
-    no `out`. Every scenario is proved on PostgreSQL, which hosted runs require."""
+    `out` as it was. Every scenario is proved on PostgreSQL, which hosted runs require."""
     workspace, out = Path(workspace), Path(out)
+    if problem := output_problem(out):
+        raise ReleaseError("design_output_exists", problem)
     design = load_design(workspace)
     if not saved(workspace):
         raise ReleaseError("design_world_missing", "the design has no saved world yet")
@@ -439,9 +455,10 @@ def seal_design(
             + "; ".join(added)
             + ". Enforce these rules in the handlers instead.",
         )
-    shutil.rmtree(out, ignore_errors=True)
-    environment_root, suite_root = release_view(workspace, out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{out.name}.", dir=out.parent))
     try:
+        environment_root, suite_root = release_view(workspace, staging)
         environment = seal_environment_release(
             environment_root,
             name=design.name,
@@ -468,7 +485,9 @@ def seal_design(
             else None,
             postgres_dsn=postgres_dsn,
         )
-    except BaseException:
-        shutil.rmtree(out, ignore_errors=True)
-        raise
+        out.mkdir(exist_ok=True)
+        for sealed in (environment_root, suite_root):
+            sealed.rename(out / sealed.name)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return environment, suite

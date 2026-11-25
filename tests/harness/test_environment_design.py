@@ -7,7 +7,10 @@ import asyncio
 import importlib
 import io
 import json
+import os
 import shutil
+import sqlite3
+import subprocess
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,11 +20,15 @@ import pytest
 from fi.alk import environments
 from fi.alk.environments import designed
 from fi.alk.environments.appointment_booking import suite as appointment_suite
-from fi.alk.harness.design import hosted, workspace as design_workspace
+from fi.alk.harness.design import __main__ as design_command
+from fi.alk.harness.design import documents, hosted, parse
+from fi.alk.harness.design import workspace as design_workspace
 from fi.alk.harness import catalogue as design_catalogue
 from fi.alk.harness import folder as design_folder
 from fi.alk.harness.design.contract import design_contract
+from fi.alk.harness.design.documents import _replaced, coerce, parse_documents
 from fi.alk.harness.design.hosted import OUTPUT
+from fi.alk.harness.design.schema import unseeded_schema
 from fi.alk.harness.design.tools import (
     APPROVE,
     FINISHED_MARKER,
@@ -34,12 +41,14 @@ from fi.alk.harness.design.workspace import (
     load_design,
     open_design,
     save_design,
+    seal_design,
 )
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
 from fi.alk.harness.hosted_conversation import _workspace_archive
 from fi.alk.harness.releases import (
     WORLD_IMPLEMENTATION,
     PolicyProfile,
+    ReleaseError,
     ReleaseRef,
     load_environment_release,
 )
@@ -246,3 +255,219 @@ def test_a_customization_answers_for_what_it_changes(tmp_path, monkeypatch) -> N
 
     assert blind["is_error"]
     assert f"stayed green with the world emptied and every tool silenced, so they are not verifying anything: {name}." in _said(blind)
+
+
+# --- where a design is sealed --------------------------------------------------------------------
+
+
+def test_a_design_never_writes_over_a_folder_it_did_not_make(
+    tmp_path, monkeypatch
+) -> None:
+    workspace, out = tmp_path / "workspace", tmp_path / "project"
+    open_design(
+        workspace, name="desk", template=_template("banking", tmp_path, monkeypatch)
+    )
+    out.mkdir()
+    (out / "README.md").write_text("mine")
+
+    with pytest.raises(ReleaseError) as raised:
+        seal_design(workspace, out, postgres_dsn="postgresql://nowhere/x")
+
+    assert raised.value.code == "design_output_exists"
+    assert (out / "README.md").read_text() == "mine"
+
+
+def test_a_design_that_does_not_seal_leaves_its_output_as_it_was(
+    tmp_path, monkeypatch
+) -> None:
+    workspace, out = tmp_path / "workspace", tmp_path / "out"
+    open_design(
+        workspace, name="desk", template=_template("banking", tmp_path, monkeypatch)
+    )
+    out.mkdir()
+    (out / RESULT).write_text("{}")
+    check = next((workspace / "scenarios").glob("*/checks/*.py"))
+    check.write_text(check.read_text() + "\n# stale\n")
+
+    with pytest.raises(ReleaseError) as raised:
+        seal_design(workspace, out, postgres_dsn="postgresql://nowhere/x")
+
+    assert raised.value.code == "design_check_files_invalid"
+    assert [path.name for path in out.iterdir()] == [RESULT]
+    assert not list(tmp_path.glob(".out.*"))
+
+
+def test_a_sealed_design_lands_whole(tmp_path, monkeypatch) -> None:
+    workspace, out = tmp_path / "workspace", tmp_path / "new" / "out"
+    open_design(
+        workspace, name="desk", template=_template("banking", tmp_path, monkeypatch)
+    )
+    sealed = []
+
+    def seal_suite(root, **_options):
+        sealed.append(root)
+        assert not out.exists()
+
+    monkeypatch.setattr(design_workspace, "seal_suite_release", seal_suite)
+
+    seal_design(workspace, out, postgres_dsn="")
+
+    assert sorted(path.name for path in out.iterdir()) == ["environment", "suite"]
+    assert load_environment_release(out / "environment").name == "desk"
+    assert [path.name for path in out.parent.iterdir()] == ["out"]
+
+
+def _run_arguments(tmp_path: Path, output: Path) -> list[str]:
+    return [
+        "run",
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--name",
+        "desk",
+        "--output",
+        str(output),
+        "--postgres-dsn",
+        "postgresql://nowhere/x",
+    ]
+
+
+@pytest.mark.parametrize("output", ["held", "file"])
+def test_the_local_command_refuses_a_foreign_output_before_it_designs(
+    tmp_path, monkeypatch, output
+) -> None:
+    async def never(_args):
+        pytest.fail("the design started")
+
+    monkeypatch.setattr(design_command, "_design", never)
+    (tmp_path / "held").mkdir()
+    (tmp_path / "held" / "notes.txt").write_text("mine")
+    (tmp_path / "file").write_text("mine")
+
+    with pytest.raises(SystemExit):
+        design_command.main(_run_arguments(tmp_path, tmp_path / output))
+
+    assert (tmp_path / "held" / "notes.txt").read_text() == "mine"
+
+
+@pytest.mark.parametrize(
+    ("given", "used"), [(None, "process"), ("", "process"), ("namespace", "namespace")]
+)
+def test_the_local_command_isolates_the_code_it_designs(
+    tmp_path, monkeypatch, given, used
+) -> None:
+    seen = []
+
+    async def design(_args):
+        seen.append(os.environ["ALK_HANDLER_ISOLATION"])
+        return 0
+
+    monkeypatch.setattr(design_command, "_design", design)
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", given or "")
+    if given is None:
+        monkeypatch.delenv("ALK_HANDLER_ISOLATION")
+
+    assert design_command.main(_run_arguments(tmp_path, tmp_path / "out")) == 0
+    assert seen == [used]
+
+
+# --- documents -----------------------------------------------------------------------------------
+
+
+def test_a_document_that_takes_too_long_is_recorded_and_the_rest_are_read(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a-slow.txt").write_text("slow")
+    (source / "b-fine.txt").write_text("fine")
+    run = subprocess.run
+
+    def timed(argv, **options):
+        if "a-slow" in argv[3]:
+            raise subprocess.TimeoutExpired(argv, options["timeout"])
+        return run(argv, **options)
+
+    monkeypatch.setattr(documents.subprocess, "run", timed)
+
+    slow, fine = parse_documents(source, tmp_path / "out")
+
+    assert (slow.parts, slow.error) == ([], "took more than 120 seconds to read")
+    assert fine.error == "" and fine.parts
+
+
+def test_a_sheet_called_parts_does_not_replace_the_index(tmp_path, monkeypatch) -> None:
+    table = {"columns": ["sku"], "rows": [["A"]], "truncated": False}
+    monkeypatch.setattr(parse, "parse", lambda _source: ("xlsx", [("Parts", table)]))
+
+    assert parse.main(["stock.xlsx", str(tmp_path)]) == 0
+
+    (part,) = json.loads((tmp_path / "parts.json").read_text())["parts"]
+    assert part["title"] == "Parts"
+    assert json.loads((tmp_path / f"{part['name']}.json").read_text()) == table
+
+
+def test_a_long_csv_field_is_read(tmp_path) -> None:
+    path = tmp_path / "long.csv"
+    path.write_text("id,text\n1," + "x" * 200_000 + "\n")
+
+    assert parse.main([str(path), str(tmp_path / "out")]) == 0
+
+
+def test_a_csv_field_past_the_limit_is_the_documents_error(tmp_path, capsys) -> None:
+    path = tmp_path / "long.csv"
+    path.write_text("id,text\n1," + "x" * (parse.MOST_CHARS + 1) + "\n")
+
+    assert parse.main([str(path), str(tmp_path / "out")]) == 3
+    assert "long.csv" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("value", "declared", "number"),
+    [
+        ("1,200", "INTEGER", 1200),
+        ("1,00,000", "INTEGER", 100000),
+        ("$1,200.50", "REAL", 1200.5),
+        ("US$ 30", "INTEGER", 30),
+        ("USD 30", "INTEGER", 30),
+        ("-€5", "INTEGER", -5),
+        ("€-5", "INTEGER", -5),
+        ("₹2.50", "REAL", 2.5),
+        (".5", "REAL", 0.5),
+        ("40%", "INTEGER", 40),
+        ("1e3", "REAL", 1000.0),
+    ],
+)
+def test_a_number_as_people_write_it_is_coerced(value, declared, number) -> None:
+    assert coerce(value, declared) == number
+
+
+@pytest.mark.parametrize("value", ["1,5", "Room 12", "BAY 12", "1,2,3", "about 5", "USD"])
+def test_text_that_only_holds_a_number_is_not_one(value) -> None:
+    with pytest.raises(ValueError, match="is not a number"):
+        coerce(value, "INTEGER")
+    assert coerce(value, "TEXT") == value
+
+
+def test_made_up_text_is_never_replaced_again() -> None:
+    matched: set[str] = set()
+    replacements = {"Ann": "Bob", "Bob": "Cal", "Anna Lee": "Ann Ray"}
+
+    text, count = _replaced("Ann met Bob and Anna Lee.", replacements, matched)
+
+    assert text == "Bob met Cal and Ann Ray."
+    assert (count, matched) == (3, set(replacements))
+
+
+def test_a_collation_the_seed_drops_is_listed(tmp_path) -> None:
+    database = tmp_path / "world.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT COLLATE NOCASE)"
+        )
+        connection.execute("CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT)")
+        connection.execute("CREATE UNIQUE INDEX one_name ON tags (name COLLATE NOCASE)")
+
+    assert unseeded_schema(database) == [
+        "tags: index one_name collates NOCASE",
+        "users: collation NOCASE",
+    ]

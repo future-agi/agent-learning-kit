@@ -17,6 +17,7 @@ from ..bundle_author_v2 import _safe_sql_default, _sqlite_type
 
 _TYPES = frozenset({"TEXT", "INTEGER", "REAL", "NUMERIC", "BOOLEAN"})
 _CHECK = re.compile(r"\bCHECK\s*\(", re.IGNORECASE)
+_COLLATE = re.compile(r"\bCOLLATE\s+[\"'`\[]?(NOCASE|RTRIM)\b", re.IGNORECASE)
 
 
 def _quoted(name: str) -> str:
@@ -60,6 +61,10 @@ def _table(connection: sqlite3.Connection, table: str, sql: str) -> list[str]:
             f"{table}.{column}: references {parent}({parent_column or 'rowid'})"
         )
     features.extend(f"{table}: check {check}" for check in _checks(sql))
+    features.extend(
+        f"{table}: collation {name}"
+        for name in sorted({one.upper() for one in _COLLATE.findall(sql)})
+    )
     for _seq, index, unique, origin, partial in connection.execute(
         f"PRAGMA index_list({quoted})"
     ):
@@ -74,6 +79,14 @@ def _table(connection: sqlite3.Connection, table: str, sql: str) -> list[str]:
             features.append(f"{table}: index {index}")
         elif None in columns:
             features.append(f"{table}: expression index {index}")
+        elif collated := sorted(
+            {
+                row[4]
+                for row in connection.execute(f"PRAGMA index_xinfo({_quoted(index)})")
+                if row[5] and row[4].upper() != "BINARY"
+            }
+        ):
+            features.append(f"{table}: index {index} collates {', '.join(collated)}")
     return features
 
 
