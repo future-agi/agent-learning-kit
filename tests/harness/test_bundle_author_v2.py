@@ -9258,3 +9258,47 @@ def test_node_workdir_under_a_python_root_starts_in_its_workdir(tmp_path):
         "node",
         "server.js",
     ]
+
+
+def test_compose_node_control_service_requires_an_http_interface(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agent/package.json": '{"name":"agent"}',
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: ./agent\n"
+                "    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source, workspaces=["agent"])
+    runtime = {
+        "language": "node",
+        "execution": "compose",
+        "compose_file": "compose.yml",
+        "service": "agent",
+        "command": [],
+    }
+
+    with pytest.raises(BundleAuthorError, match="runtime_node_http_interface_required"):
+        resolve_environment_plan(
+            source,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime={
+                **runtime,
+                "interface": {"kind": "command", "protocol": "fi.alk"},
+            },
+        )
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={**runtime, "interface": _NODE_JSON_INTERFACE},
+    )
+    assert _agent_of(plan).run_command[-2:] == ["node", "server.js"]

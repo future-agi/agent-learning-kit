@@ -3217,6 +3217,9 @@ def resolve_environment_plan(
                 or _dockerfile_run(service_root)
             )
             service_js = _native_js_runtime(service_language, service_command or [])
+            if service_js and service_name == control_name and contract_interface_kind != "http":
+                # As in the native lane: only an HTTP route reaches a Bun or Node control service.
+                raise BundleAuthorError(f"runtime_{service_js}_http_interface_required")
             process = _plan_source_process(
                 root,
                 language=service_language,
