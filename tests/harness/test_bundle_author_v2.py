@@ -9135,3 +9135,31 @@ def test_compose_node_sidecar_in_a_workspace_member_changes_folder_once(tmp_path
         "server.js",
     ]
     assert tools.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+
+
+def test_subfolder_node_from_its_dockerfile_cmd_changes_folder_once(tmp_path):
+    """With no declared language or command, the Dockerfile CMD makes it Node, and Node enters its folder once."""
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/package.json": '{"name":"a"}',
+            "agents/a/server.js": _NODE_CHAT_SERVER,
+            "agents/a/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+        },
+    )
+    _node_package(source, workspaces=["agents/*"])
+    runtime = {"interface": _NODE_JSON_INTERFACE}
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.working_directory == "."
+    assert agent.run_command == [
+        "sh",
+        "-c",
+        'cd "./$1" && shift && exec "$@"',
+        "alk-source-process",
+        "agents/a",
+        "node",
+        "server.js",
+    ]
+    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]

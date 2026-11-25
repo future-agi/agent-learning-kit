@@ -2993,7 +2993,6 @@ def resolve_environment_plan(
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
     contract_runtime = contract_runtime if isinstance(contract_runtime, dict) else {}
     runtime_command = [str(item) for item in (contract_runtime.get("command") or [])]
-    js_runtime = _native_js_runtime(runtime_model.language, runtime_command)
     runtime_workdir = str(contract_runtime.get("workdir") or "")
     interface = contract_runtime.get("interface")
     interface = interface if isinstance(interface, dict) else {}
@@ -3008,6 +3007,8 @@ def resolve_environment_plan(
             )
             or []
         )
+    # Classified after the Dockerfile CMD fill: that CMD can be the only sign of a Node or Bun agent.
+    js_runtime = _native_js_runtime(runtime_model.language, runtime_command)
     interface_port = interface.get("port")
     interface_health_path = str(interface.get("health_path") or "/health")
 
