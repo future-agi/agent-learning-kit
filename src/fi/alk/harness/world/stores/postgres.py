@@ -152,23 +152,28 @@ class PostgresStore(ContainerStore):
         ordinary ``LIKE '%turkey%'`` with nothing to bind then reads its own ``%t`` as an
         unmatched one and raises before the statement ever reaches Postgres.
         """
-        return self._read(self._reader_address(), statement, params)
+        # A check's read names the world's tables as the world's own SQL does: system functions first, read-only.
+        return self._read(self._reader_address(), statement, params, _SYSTEM_FIRST)
 
     def query_as_world(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         """``query`` as the agent's tools' own role, under the world's row security: a handler's read."""
-        return self._read(self.dsn(), statement, params)
+        return self._read(self.dsn(), statement, params, "")
 
     def _reader_address(self) -> str:
         return getattr(self, "_reader_dsn", None) or self.dsn()
 
-    def _reader_connect(self) -> Any:
-        """The harness's own reads of the world: the store role where there is one, else the store's connection."""
+    def _reader_connect(self, writable: bool = False) -> Any:
+        """The harness's own reads of the world: the store role where there is one, on the system's own search path
+        (every statement it sends names its tables) and read-only unless it resets; else the store's connection."""
         reader = getattr(self, "_reader_dsn", None)
-        return _psycopg().connect(reader, autocommit=True) if reader else self._connect()
+        if not reader:
+            return self._connect()
+        options = PINNED_SEARCH_PATH if writable else f"{PINNED_SEARCH_PATH} -c default_transaction_read_only=on"
+        return _psycopg().connect(reader, autocommit=True, options=options)
 
-    def _read(self, address: str, statement: str, params: Sequence[Any]) -> list[dict[str, Any]]:
+    def _read(self, address: str, statement: str, params: Sequence[Any], path: str) -> list[dict[str, Any]]:
         with _psycopg().connect(
-            address, autocommit=True, options="-c default_transaction_read_only=on"
+            address, autocommit=True, options=f"{path} -c default_transaction_read_only=on".strip()
         ) as connection:
             cursor = connection.execute(statement, tuple(params) if params else None)
             columns = [description[0] for description in cursor.description or []]
@@ -372,7 +377,7 @@ class PostgresStore(ContainerStore):
         """A reset as the world's own role, which may neither truncate nor suspend triggers: every row deleted and put
         back in foreign-key order inside one transaction, and each sequence set back. Whatever of the world's runs
         (a trigger) runs with no more than that role's rights."""
-        with self._reader_connect() as connection:
+        with self._reader_connect(writable=True) as connection:
             tables = self._tables(connection)
             if not tables:
                 return

@@ -6108,6 +6108,73 @@ def migrator_credentials(
     return EngineCredentials(MIGRATOR_ROLE, password)
 
 
+# The harness's tables a trial writes: the bundle's own statements leave them empty, so whatever is in them before the
+# first trial was planted there (a committed call no agent made, a key that makes a retry read as a repeat).
+_RUNTIME_HARNESS_TABLES = (
+    "_alk_tool_trace",
+    "_alk_action_keys",
+    "_alk_trial_faults",
+    "_alk_worker_stops",
+    "_alk_worker_runs",
+)
+
+
+def _settle_harness_rows(
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+    bundle_dir: Path,
+    made_by: str,
+) -> None:
+    """The harness's tables hold only what the harness itself writes: each table a trial writes is emptied, the actors
+    are written again from the bundle's own definitions, and the seed's marker must hold exactly its one row. Run as
+    the harness, after the tables are its own."""
+    from .actors import ACTORS_DDL, actors_seed, load_actors
+
+    def run(statement: str, read_only: bool = False) -> Any:
+        return _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=baseline_db,
+            statement=statement,
+            read_only=read_only,
+        )
+
+    names = ", ".join(f"'public.{table}'" for table in _RUNTIME_HARNESS_TABLES)
+    run(
+        "DO $$ DECLARE r regclass; BEGIN FOR r IN SELECT to_regclass(t) FROM unnest(ARRAY["
+        f"{names}]) AS t WHERE to_regclass(t) IS NOT NULL LOOP "
+        "EXECUTE format('TRUNCATE TABLE %s RESTART IDENTITY', r); END LOOP; END $$"
+    )
+    if (run("SELECT to_regclass('public._alk_actors') IS NOT NULL", read_only=True) or [(False,)])[0][0] is True:
+        rows = actors_seed(load_actors(bundle_dir))[len(ACTORS_DDL) :]
+        run("TRUNCATE TABLE public._alk_actors" + (";\n" + rows if rows else ""))
+    held = None
+    if (run("SELECT to_regclass('public.harness_seed_sentinel') IS NOT NULL", read_only=True) or [(False,)])[0][0]:
+        marker = run(
+            "SELECT coalesce(array_agg(id ORDER BY id), '{}')::text FROM public.harness_seed_sentinel", read_only=True
+        )
+        held = marker[0][0] if marker and marker[0] else None
+    if held is not None and held != "{ready}":
+        raise ProcessRuntimeError(
+            "baseline",
+            "seed_failed",
+            seed_escalation_reason(
+                process_name, [f"harness table public.harness_seed_sentinel holds {held}, not just ready"], made_by
+            ),
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
+        )
+
+
 def seed_store_safely(
     store: StoreEntry,
     *,
@@ -6153,6 +6220,15 @@ def seed_store_safely(
                 process_name=process_name,
                 complete=complete,
             )
+            _settle_harness_rows(
+                port=port,
+                credentials=credentials,
+                baseline_db=dbname,
+                sql_runner=sql_runner,
+                process_name=process_name,
+                bundle_dir=bundle_dir,
+                made_by="migrations",
+            )
             before_seed.update(
                 seed_escalation_snapshot(
                     port=port,
@@ -6189,6 +6265,15 @@ def seed_store_safely(
             process_name=process_name,
             before_seed=before_seed,
             complete=complete,
+        )
+        _settle_harness_rows(
+            port=port,
+            credentials=credentials,
+            baseline_db=dbname,
+            sql_runner=sql_runner,
+            process_name=process_name,
+            bundle_dir=bundle_dir,
+            made_by="seed",
         )
     return login
 

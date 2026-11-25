@@ -9,6 +9,7 @@ end run it against a real Postgres when `ALK_TEST_POSTGRES_DSN` names a superuse
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 import time
@@ -1927,6 +1928,82 @@ def test_a_bundle_s_own_sentinel_runs_as_the_restricted_login_and_the_harness_s_
         assert pr.sentinel_credentials(store, harness, login) is expected
     assert pr.sentinel_credentials(StoreEntry.model_construct(sentinel=SimpleNamespace(query="x")), harness, None) \
         is harness
+
+
+@real_postgres
+def test_rows_planted_in_the_harness_tables_never_reach_a_trial(tmp_path: Path):
+    """The final audit's forgery: the migrations (as the restricted login, before the harness takes its tables)
+    write a committed call no agent made and a key that would make a retry read as a repeat, change an actor's rights
+    and add one. The harness empties every table a trial writes and writes the actors again from the bundle's own."""
+    from fi.alk.harness.actors import ACTORS_FILE
+
+    (tmp_path / ACTORS_FILE).write_text(
+        json.dumps({"actors": [{"id": "reviewer", "name": "Rae", "permitted_actions": ["deals.approve"]}]}),
+        encoding="utf-8",
+    )
+    build, run, baseline = _seeded(
+        tmp_path,
+        "INSERT INTO public._alk_tool_trace (name, arguments, ok, at, outcome, actor_id) "
+        "VALUES ('refund', '{}', true, 1e12, 'committed', 'agent');\n"
+        "INSERT INTO public._alk_action_keys (actor_id, idempotency_key, state) VALUES ('agent', 'k1', 'done');\n"
+        "INSERT INTO public._alk_actors (id, kind, side, role, permitted_actions) "
+        "VALUES ('reviewer', 'person', 'world', '', '[\"deals.delete\"]'), ('ghost', 'person', 'world', '', '[]');\n",
+        "",
+    )
+    try:
+        build()
+        assert run(baseline, "SELECT count(*) FROM public._alk_tool_trace") == [(0,)]
+        assert run(baseline, "SELECT count(*) FROM public._alk_action_keys") == [(0,)]
+        assert run(baseline, "SELECT id, permitted_actions::text FROM public._alk_actors ORDER BY id") == [
+            ("reviewer", '["deals.approve"]')
+        ]
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_a_seed_marker_holding_more_than_its_one_row_refuses_the_build(tmp_path: Path):
+    build, run, baseline = _seeded(
+        tmp_path,
+        "CREATE TABLE IF NOT EXISTS public.harness_seed_sentinel (id text PRIMARY KEY);\n"
+        "INSERT INTO public.harness_seed_sentinel VALUES ('ready'), ('forged');\n",
+        "",
+    )
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            build()
+        assert "harness_seed_sentinel holds {forged,ready}" in str(refused.value)
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_the_store_role_s_reads_and_snapshot_never_reach_a_world_shadow(door_worlds, monkeypatch):
+    """The final audit's nit: a world's `public.array_position(int2vector, smallint)` outranks the system's for the
+    store's primary-key read; the store role's reads run read-only on the system's own path, so it never runs."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores.postgres import attached_world_store
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "INSERT INTO riders (name) VALUES ('ada'); "
+            "CREATE FUNCTION public.array_position(int2vector, smallint) RETURNS int LANGUAGE sql AS "
+            "$$ INSERT INTO public.riders (name) VALUES ('shadow') RETURNING 1 $$"
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = attached_world_store(
+        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+    )
+
+    snapshot = store.freeze()
+    store.table("riders")
+    store.state()
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT name FROM riders ORDER BY id").fetchall() == [("ada",)]
 
 
 def _pg_dump_schema(owner: str) -> str:
