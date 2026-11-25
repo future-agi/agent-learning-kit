@@ -5455,9 +5455,16 @@ def _conversation_outcome(
     )
 
 
-_TRANSFER_HANDOFF_PHRASE = re.compile(
+_TRANSFER_WORD = re.compile(r"\btransfer(?:r(?:ing|ed))?\b")
+_TRANSFER_DIRECT_PHRASE = re.compile(
     r"\b(?:transfer|transferring|connect|connecting)\s+(?:you|your\s+call)\b"
-    r"|\btransfer(?:ring)?\s+(?:the\s+call\s+)?to\b"
+)
+_TRANSFER_HANDOFF_PHRASE = re.compile(
+    _TRANSFER_DIRECT_PHRASE.pattern
+    + r"|\btransfer(?:r(?:ing|ed))?\s+(?:(?:the|this)\s+call\s+)?(?:over\s+)?to\b"
+    r"|\btransfer(?:ring)?\s+(?:the|this)\s+call\b"
+    r"|\btransferring\s+now\b"
+    r"|\b(?:be|being|get\s+you|have\s+you)\s+transferred\b"
 )
 _TRANSFER_HANDOFF_MARKER = re.compile(r"\b(?:now|connect|connecting|please\s+wait)\b")
 
@@ -5465,7 +5472,7 @@ _TRANSFER_HANDOFF_MARKER = re.compile(r"\b(?:now|connect|connecting|please\s+wai
 def _is_transfer_handoff(role: str, text: str) -> bool:
     return (
         role == "assistant"
-        and re.search(r"\btransfer(?:ring)?\b", text) is not None
+        and _TRANSFER_WORD.search(text) is not None
         and _TRANSFER_HANDOFF_PHRASE.search(text) is not None
         and _TRANSFER_HANDOFF_MARKER.search(text) is not None
     )

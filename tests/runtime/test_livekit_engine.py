@@ -4216,6 +4216,8 @@ def test_a_crashed_provider_bridge_is_not_the_target_ending_the_call() -> None:
         "please don't disconnect, the transfer fee is ten dollars.",
         "a transfer is possible, but not right now.",
         "you can transfer funds once you connect your bank.",
+        "our transfer desk can connect with you now.",
+        "the money was transferred yesterday, it should show now.",
     ],
 )
 def test_transfer_words_inside_other_words_are_not_a_handoff(line: str) -> None:
@@ -4230,6 +4232,9 @@ def test_transfer_words_inside_other_words_are_not_a_handoff(line: str) -> None:
         "please wait while i transfer your call.",
         "transferring to billing now.",
         "let me transfer the call to a specialist now.",
+        "transferring now, please hold.",
+        "you'll be transferred to a specialist now.",
+        "you're being transferred now.",
     ],
 )
 def test_a_real_transfer_handoff_is_recognised(line: str) -> None:
