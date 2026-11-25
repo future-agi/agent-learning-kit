@@ -2681,9 +2681,10 @@ def sealed_routes(bundle_dir: Any) -> Callable[[], dict[str, Any]]:
     return read
 
 
-def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None) -> Any:
+def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None, records_dsn: str | None = None) -> Any:
     """The world's door in the runner's process: the agent's tools service behind it, the world's own action log, actor
-    list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy."""
+    list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy. Record
+    changes run as `records_dsn`, the world's own role, so the log's superuser never writes a customer's rows."""
     from .world_door import (
         HttpExecutor,
         PostgresLog,
@@ -2695,22 +2696,22 @@ def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None
     )
 
     return WorldDoor(
-        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(dsn))),
+        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(records_dsn or dsn))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
         workers=sealed_routes(bundle_dir),
     )
 
 
-def record_door(dsn: str, bundle_dir: Any = None) -> Any:
+def record_door(dsn: str, bundle_dir: Any = None, records_dsn: str | None = None) -> Any:
     """The world's door in the runner's process for an agent whose tools run in its own process: an actor's record
     change runs on the world's database; an action on one of the agent's own tools is refused, since only the agent's
-    process can run it."""
+    process can run it. Record changes run as `records_dsn`, the world's own role."""
     from .in_process_door import _NotHere
     from .world_door import PostgresLog, PostgresRecords, PostgresRoster, RecordExecutor, Routed, WorldDoor
 
     return WorldDoor(
-        Routed(_NotHere(), RecordExecutor(PostgresRecords(dsn))),
+        Routed(_NotHere(), RecordExecutor(PostgresRecords(records_dsn or dsn))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
         workers=sealed_routes(bundle_dir),
@@ -2749,7 +2750,10 @@ def _actor_dispatcher(
         return build_dispatcher(
             dict(doc),
             bundle_dir,
-            act=DoorActs(record_door(database.address, bundle_dir), _bundle_contract(bundle_dir)),
+            act=DoorActs(
+                record_door(database.address, bundle_dir, records_dsn=database.tool_address),
+                _bundle_contract(bundle_dir),
+            ),
             read_log=_ActionLog(database.address),
             records=_world_records(runtime),
             columns=_world_columns(runtime),
@@ -2765,7 +2769,10 @@ def _actor_dispatcher(
     return build_dispatcher(
         dict(doc),
         bundle_dir,
-        act=DoorActs(runner_door(tools.address, database.address, budget, bundle_dir), _bundle_contract(bundle_dir)),
+        act=DoorActs(
+            runner_door(tools.address, database.address, budget, bundle_dir, records_dsn=database.tool_address),
+            _bundle_contract(bundle_dir),
+        ),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
         columns=_world_columns(runtime),

@@ -376,6 +376,7 @@ def chat_door(
     tools_url: str | None = None,
     service_actions: set[str] | None = None,
     bundle_dir: Any = None,
+    records_dsn: str | None = None,
 ) -> Any:
     """The world's door for a chat run: the agent's own tools service runs its service actions and every actor's tool
     action when it has one, the world's own handlers the rest; the trial's action log is kept in memory (mirrored to the world's table when it keeps actors), and
@@ -408,7 +409,8 @@ def chat_door(
     if mirror_dsn:
         from .world_door import PostgresRecords
 
-        records = RecordExecutor(PostgresRecords(mirror_dsn))
+        # Record changes run as the world's own role; the mirror's superuser only keeps the log.
+        records = RecordExecutor(PostgresRecords(records_dsn or mirror_dsn))
     tools = (
         _ServiceTools(world, HttpExecutor(tools_url), HandlerExecutor(handle), set(service_actions or ()))
         if tools_url
@@ -1143,6 +1145,7 @@ class HostedChatCallRunner:
             tools_url=service.address if service is not None else None,
             service_actions=service_actions(self._contract),
             bundle_dir=self._context.bundle_dir,
+            records_dsn=world_db.tool_address if world_db is not None else None,
         )
         acts = DoorActs(door, self._contract.model_dump())
         meter = ActorMeter()

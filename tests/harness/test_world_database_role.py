@@ -1080,6 +1080,56 @@ def test_a_customer_trigger_fired_by_the_world_s_rows_cannot_forge_the_call_log(
         assert connection.execute("SELECT count(*) FROM _alk_tool_trace WHERE name = 'forged'").fetchone() == (1,)
 
 
+def _runner_doors(superuser: str, world: str) -> dict[str, object]:
+    from fi.alk.harness import chat_call_runner
+
+    return {
+        "record_door": call_runner.record_door(superuser, records_dsn=world),
+        "runner_door": call_runner.runner_door("http://127.0.0.1:9", superuser, 1.0, records_dsn=world),
+        "chat_door": chat_call_runner.chat_door(object(), superuser, {}, [], records_dsn=world),
+    }
+
+
+@real_postgres
+def test_an_actor_s_record_change_in_the_runner_s_doors_runs_as_the_world_s_role(door_worlds):
+    """E2-r: the runner's own doors change a world's rows with the world's role, so a customer trigger fired by an
+    actor's row cannot write the harness tables."""
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "CREATE FUNCTION forge() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+            "INSERT INTO _alk_tool_trace (name, arguments, ok, at) VALUES ('forged', '{}'::jsonb, true, 0); "
+            "RETURN NEW; END $$; "
+            "CREATE TRIGGER forge AFTER INSERT ON riders FOR EACH ROW EXECUTE FUNCTION forge()"
+        )
+
+    for name, door in _runner_doors(superuser, world).items():
+        with pytest.raises(Exception) as refused:
+            door.executor.records.execute("INSERT INTO riders (name) VALUES (%s)", ["ada"])
+        assert "permission denied" in str(refused.value), name
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT count(*) FROM _alk_tool_trace WHERE name = 'forged'").fetchone() == (0,)
+
+
+def test_the_runner_hands_its_record_door_the_world_s_role_address(monkeypatch, tmp_path: Path):
+    from types import SimpleNamespace
+
+    made: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        call_runner, "record_door", lambda dsn, bundle_dir=None, records_dsn=None: made.append((dsn, records_dsn))
+    )
+    monkeypatch.setattr(call_runner, "_bundle_contract", lambda bundle_dir: {})
+    monkeypatch.setattr(call_runner, "DoorActs", lambda door, contract: door)
+    monkeypatch.setattr(call_runner, "build_dispatcher", lambda *args, **kwargs: "dispatcher")
+    monkeypatch.setattr(call_runner, "_world_records", lambda runtime: None)
+    monkeypatch.setattr(call_runner, "_world_columns", lambda runtime: None)
+    database = SimpleNamespace(protocol="postgres", address="superuser-url", tool_address="world-url")
+    runtime = SimpleNamespace(endpoints={"db": database, "world_door": SimpleNamespace(protocol="http")})
+
+    assert call_runner._actor_dispatcher({"actors": [{"id": "a"}]}, tmp_path, runtime, "t1", 1.0) == "dispatcher"
+    assert made == [("superuser-url", "world-url")]
+
+
 def test_every_door_process_writes_the_world_s_rows_with_the_world_s_role(monkeypatch):
     import importlib
 
