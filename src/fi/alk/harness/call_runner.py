@@ -88,6 +88,7 @@ from .world_door import (
     is_read,
     logged_as,
     named_alike,
+    own_tool,
     route_action,
     routed_faults,
     row_arguments,
@@ -145,7 +146,6 @@ from .simulator_voice import (
 )
 from . import tool_evidence as evidence
 from .world.errors import WorldUnavailable
-from .world.runtime import Call
 from . import request_binding
 from .world.runtime import (
     Call,
@@ -1270,7 +1270,7 @@ def evidence_notices(
             # The in-process door names the call by the tool or records the tool beside it. The proxy logs the world
             # action it reached (a route's `{part}` standing for the part the call named) with the method it was
             # made with; its row's name is only the route's last part, never the tool.
-            if not proxied and (str(row.get("name") or "") in tools or str(row.get("agent_tool") or "") in tools):
+            if not proxied and (str(row.get("name") or "") in tools or own_tool(row) in tools):
                 return True
             made_with = str(row.get("method") or "").upper()
             return action_matches(logged_as(row), action) and not (method and made_with and made_with != method)
@@ -1403,7 +1403,7 @@ def _collect_tool_trace_calls(
     calls: list[Call] = []
     for record in records:
         # The agent's own tool name when the world recorded it beside the route the call took.
-        name = record.get("agent_tool") or record.get("name")
+        name = own_tool(record) or record.get("name")
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")
@@ -1669,7 +1669,7 @@ def trial_state_changes(
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
         )
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
-        name = str(row.get("agent_tool") or row.get("name") or "")
+        name = own_tool(row) or str(row.get("name") or "")
         if outcome == "committed" and is_read(row):
             entry["read"] += 1
             entry["read_actions"].append(name if who == AGENT or who.startswith("worker:") else logged_as(row))
@@ -1797,7 +1797,7 @@ def trial_shared_record_fields(
         arguments = row.get("arguments")
         if not isinstance(arguments, Mapping):
             continue
-        tool = str(row.get("agent_tool") or row.get("name") or "")
+        tool = own_tool(row) or str(row.get("name") or "")
         outcome = row.get("outcome") or (
             "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
         )
@@ -2291,7 +2291,7 @@ def fault_notices(
         # A call through the tool proxy also carries the agent's own tool name, which a fault may name instead.
         rows = [
             row for row in agent_rows
-            if same_action(row, action) or named_alike(action, str(row.get("agent_tool") or ""))
+            if same_action(row, action) or named_alike(action, own_tool(row))
         ]
         # A fault that names its method holds only calls made with it: a GET of the route is not a call of its DELETE.
         # A row from a log that kept no method still counts, as before methods were logged.
@@ -3330,6 +3330,26 @@ CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
 TOOL_SPANS_ON = "tool_spans_on"
 TOOL_SPANS_NOT_INSTALLED = "tool_spans_not_installed"
 TOOL_SPANS_SILENT = "tool_spans_silent"
+# What the mark hook can note: the frameworks it instruments (`simulation_mark_bootstrap._INSTRUMENTORS`, which can't
+# be imported here, as importing it installs the hook) and its three states. The note is written by the agent's own
+# process, so a pair outside these is dropped rather than repeated in a notice, and only its first lines are read.
+# A test holds these equal to the hook's.
+_OBSERVED_FRAMEWORKS = frozenset(
+    {
+        "agents",
+        "langchain_core",
+        "crewai",
+        "google.adk",
+        "autogen_agentchat",
+        "smolagents",
+        "claude_agent_sdk",
+        "llama_index.core",
+        "pydantic_ai",
+        "strands",
+    }
+)
+_OBSERVED_STATES = frozenset({"on", "process_own", "not_installed"})
+_LARGEST_OBSERVING_NOTE = 65_536
 
 
 def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
@@ -3338,8 +3358,18 @@ def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
     path = _tool_trace_file(runtime)
     if path is None:
         return None
+    note = Path(str(path) + ".observing")
     try:
-        text = Path(str(path) + ".observing").read_text(encoding="utf-8")
+        # The agent's process can write this folder: only a plain file is read, never a pipe or device it left.
+        if not note.is_file():
+            return None
+        with open(note, "rb") as handle:
+            raw = handle.read(_LARGEST_OBSERVING_NOTE + 1)
+        if len(raw) > _LARGEST_OBSERVING_NOTE:
+            # Each process that imports a framework appends its line, so a process started on every turn writes the
+            # same lines again: the whole lines that fit say what the rest repeats.
+            raw = raw[: raw.rfind(b"\n", 0, _LARGEST_OBSERVING_NOTE) + 1]
+        text = raw.decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return None
     noted: set[tuple[str, str]] = set()
@@ -3351,7 +3381,8 @@ def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
         if not (isinstance(record, dict) and isinstance(record.get("framework"), str)
                 and isinstance(record.get("state"), str)):
             return None
-        noted.add((record["framework"], record["state"]))
+        if record["framework"] in _OBSERVED_FRAMEWORKS and record["state"] in _OBSERVED_STATES:
+            noted.add((record["framework"], record["state"]))
     return noted or None
 
 
@@ -3380,7 +3411,9 @@ def tool_span_notices(
             }
         )
     ran = [call for call in graded_calls(calls) if call.source in (evidence.TRACER, evidence.AGENT)]
-    if silent and live and ran and not _read_file_tool_calls(runtime)[1]:
+    # Tool spans only: a hand-off span says nothing of whether the source recorded the tools.
+    tool_spans = [span for span in _read_file_tool_calls(runtime)[1] if not span.handoff]
+    if silent and live and ran and not tool_spans:
         notices.append(
             {
                 "code": TOOL_SPANS_SILENT,

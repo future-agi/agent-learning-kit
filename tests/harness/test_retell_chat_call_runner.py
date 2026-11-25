@@ -212,14 +212,33 @@ def test_retell_chat_uses_authored_scenario_document_for_selected_trial(
     assert outcome.messages[-1]["content"] == "Your account is active."
 
 
-def _bound_run(tmp_path, monkeypatch, read_trace):
-    """One Retell chat trial on a request-bound world whose agent calls its own `find_orders`."""
+def _bound_run(tmp_path, monkeypatch, read_trace, reported=("find_orders",)):
+    """One Retell chat trial on a request-bound world whose agent calls its own `find_orders`,
+    which the binding maps onto the environment's `search_orders`."""
     from fi.alk.harness.call_runner import _RequestBinding
     from fi.alk.harness.world.runtime import Call
 
     # As in the chat worker, which builds its context without the bundle's evidence seam.
     context = _context(tmp_path)
     assert context.evidence_seam is None
+    contract = context.bundle_dir / "contract.json"
+    body = json.loads(contract.read_text())
+    body["tools"] = [{"name": "find_orders", "args": ["zip"]}]
+    contract.write_text(json.dumps(body))
+    server = context.bundle_dir / "generated" / "tool-server"
+    server.mkdir(parents=True)
+    (server / "tools.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "search_orders",
+                    "description": "Find orders.",
+                    "parameters": {"type": "object", "properties": {}},
+                    "mutates_state": False,
+                }
+            ]
+        )
+    )
 
     class Wrapper:
         def __init__(self, **_kwargs):
@@ -232,9 +251,10 @@ def _bound_run(tmp_path, monkeypatch, read_trace):
             return
 
     world = _ToolWorld()
-    # What Retell reports: the agent's own name for the tool.
-    world.calls.append(
-        Call(name="find_orders", arguments={"zip": "30301"}, result={"count": 1})
+    # What Retell reports: the agent's own names for its tools.
+    world.calls.extend(
+        Call(name=name, arguments={"zip": "30301"}, result={"count": 1})
+        for name in reported
     )
     cleared = []
     monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
@@ -311,10 +331,31 @@ def test_a_bound_retell_chat_whose_trace_cannot_be_read_is_unmeasured(
 def test_a_bound_retell_chat_with_no_world_call_keeps_the_platforms_own_actions(
     tmp_path, monkeypatch
 ) -> None:
-    outcome, _cleared = _bound_run(tmp_path, monkeypatch, lambda _r, **_k: ())
+    outcome, _cleared = _bound_run(
+        tmp_path, monkeypatch, lambda _r, **_k: (), reported=("end_call",)
+    )
 
-    assert [call.name for call in outcome.calls] == ["find_orders"]
+    assert [call.name for call in outcome.calls] == ["end_call"]
     assert outcome.evidence_collected is True
+    assert outcome.tool_capture_failed is False
+    assert outcome.unmeasured == ()
+
+
+@pytest.mark.parametrize("reported", ["find_orders", "search_orders"])
+def test_a_served_tool_the_world_never_ran_is_no_evidence_it_was_called(
+    tmp_path, monkeypatch, reported
+) -> None:
+    """Retell reports the call, under the agent's name for it or the environment's, and the world
+    traced none: grading Retell's word would pass a trial on a call nothing made."""
+    outcome, _cleared = _bound_run(
+        tmp_path, monkeypatch, lambda _r, **_k: (), reported=(reported, "end_call")
+    )
+
+    assert [call.name for call in outcome.calls] == ["end_call"]
+    assert outcome.tool_capture_failed is True
+    assert outcome.evidence_collected is False
+    # The platform's own action is left to see, and does not make the trial one to grade.
+    assert outcome.unmeasured
 
 
 def test_postgres_a_bound_retell_chat_reads_the_call_the_world_traced(

@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping
 
 from fi.simulate.agent.wrapper import (
@@ -48,6 +49,12 @@ from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario,
 from .run.conversation import Transcript
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
+from .releases import (
+    TOOL_SERVER_DIRECTORY,
+    TOOLS,
+    attached_tool_names,
+    load_tools,
+)
 from .usage import simulator_funding
 
 logger = logging.getLogger(__name__)
@@ -276,6 +283,17 @@ class RetellChatWrapper(AgentWrapper):
             return
 
 
+def _served_tools(bundle_dir: Path, contract: AgentContract) -> set[str]:
+    """Every name the world's tool server answers to or traces under: the agent's tools and the
+    environment's. A call under any of them either reached the world or was not made there."""
+    served = {tool.name for tool in contract.tools}
+    server = bundle_dir / TOOL_SERVER_DIRECTORY
+    if (server / TOOLS).is_file():
+        served |= {tool.name for tool in load_tools(server)}
+        served |= attached_tool_names(server)
+    return served
+
+
 class RetellChatCallRunner:
     """Drive multi-turn scenarios directly through Retell's native Chat API."""
 
@@ -409,6 +427,7 @@ class RetellChatCallRunner:
         )
         calls = tuple(transcript.calls)
         capture_failed = False
+        unmeasured: tuple[str, ...] = ()
         if traced:
             # Retell names the agent's own tools, which a `tool_routed` binding maps onto the
             # environment's: graded as they are, a correct call reads as one never made. A trace
@@ -421,16 +440,28 @@ class RetellChatCallRunner:
                 )
                 calls, capture_failed = tuple(exc.calls), True
             else:
-                # With no call in the world, what Retell reports is the platform's own actions
-                # (ending the chat, a transfer), which never reach the tool server.
                 if graded_calls(world_calls):
                     calls = world_calls
+                else:
+                    # The platform's own actions (ending the chat, a transfer) never reach the
+                    # tool server. A served tool Retell says was called and the world never ran
+                    # is no evidence it was: the trial is unmeasured.
+                    served = _served_tools(self._context.bundle_dir, self._contract)
+                    own = tuple(call for call in calls if call.name not in served)
+                    if own != calls:
+                        capture_failed = True
+                        unmeasured = (
+                            "the platform reports calls of the world's tools, and the world "
+                            "ran none",
+                        )
+                    calls = own
         await _upload_tool_trace(
             self._adapter, calls, scenario_key=scenario.scenario_key, binding=binding
         )
         outcome = CallOutcome(
             calls=calls,
             tool_capture_failed=capture_failed,
+            unmeasured=unmeasured,
             evidence_collected=traced and not capture_failed,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),

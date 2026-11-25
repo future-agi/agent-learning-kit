@@ -196,7 +196,7 @@ def _failed(said: str) -> str:
     return "\n".join(line for line in said.splitlines() if ": failed" in line)
 
 
-async def adapt(workbench: Workbench, pairing: Any = None) -> None:
+async def adapt(workbench: Workbench) -> None:
     if workbench.mode is not BindingMode.TOOL_ROUTED:
         try:
             answer = await _ask(_conflicts_prompt(workbench))
@@ -204,13 +204,12 @@ async def adapt(workbench: Workbench, pairing: Any = None) -> None:
             answer = {}
         workbench.report_conflicts(_quoted(workbench, answer.get("conflicts")))
         return await _finish(workbench)
-    if pairing is None:
+    if workbench.pairing is None:
         raise AdaptationFailure(
             "adaptation_pairing_missing",
             "run mode binds the pairing the person reviewed, and the job carries none",
         )
-    # Frozen and complete before the model is asked: the prompt shows what code will enforce.
-    workbench.freeze_pairing(pairing)
+    # Complete before the model is asked: the prompt shows what code will enforce.
     messages = _binding_prompt(workbench, workbench.pairing)
     answer = await _ask(messages)
     accepted, said = workbench.submit_binding(answer)

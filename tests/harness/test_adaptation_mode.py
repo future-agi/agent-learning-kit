@@ -3,11 +3,17 @@ called as-is."""
 
 from __future__ import annotations
 
+import copy
+import random
+
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import _WrappedReferencingError
 
 from fi.alk.harness.adaptation.profile import (
     AgentProfile,
     argument_mismatches,
+    identity_mapping,
     select_mode,
 )
 from fi.alk.harness.bindings import run_bound_call
@@ -182,7 +188,10 @@ def _account(**properties: dict) -> dict:
 
 def test_the_same_nested_schema_calls_the_environment_directly():
     agent = _open(
-        _account(id={"type": "string", "description": "The account's id"}),
+        _account(
+            id={"type": "string", "description": "The account's id"},
+            tier={"type": "string", "enum": ["basic", "plus"]},
+        ),
         {"type": "array", "items": {"type": "string"}, "maxItems": 3},
     )
     assert select_mode(agent, [OPEN]) is BindingMode.CANONICAL
@@ -336,3 +345,302 @@ def test_the_compatibility_answer_and_the_run_agree_on_an_extra_property():
         environment_tools=[CLOSED],
     )
     assert refused.status == "invalid" and "note" in refused.error
+
+
+# --- an agent's schema that accepts more than the environment's -----------------------------------
+
+TEXT = {"type": "string"}
+COUNT = {"type": "integer"}
+
+
+def _object(**keywords: object) -> dict:
+    return {"type": "object", **keywords}
+
+
+def _list(**keywords: object) -> dict:
+    return _object(properties={"list": {"type": "array", **keywords}})
+
+
+# Each with a call the agent's schema accepts and the environment's refuses.
+WIDER = {
+    "an environment argument left open": (
+        _object(properties={"id": TEXT}),
+        _object(properties={"id": TEXT, "note": COUNT}),
+        {"note": "x"},
+    ),
+    "no properties at all": (_object(), _object(properties={"id": TEXT}), {"id": 5}),
+    "additional properties of a type": (
+        _object(properties={"id": TEXT}, additionalProperties=TEXT),
+        _object(properties={"id": TEXT, "note": COUNT}),
+        {"note": "x"},
+    ),
+    "an environment argument left open, nested": (
+        _object(properties={"case": _object()}),
+        _object(properties={"case": _object(properties={"id": TEXT})}),
+        {"case": {"id": 1}},
+    ),
+    "the same additional properties, one side naming one": (
+        _object(additionalProperties=COUNT),
+        _object(properties={"a": TEXT}, additionalProperties=COUNT),
+        {"a": 1},
+    ),
+    "the same additional properties, the agent naming one": (
+        _object(properties={"a": COUNT}, additionalProperties=TEXT),
+        _object(additionalProperties=TEXT),
+        {"a": 1},
+    ),
+    "pattern properties": (
+        _object(additionalProperties=False, patternProperties={"^x": {}}),
+        _object(additionalProperties=False),
+        {"x1": 1},
+    ),
+    "a property the environment never takes": (
+        _object(properties={"x": TEXT}),
+        _object(properties={"x": False}),
+        {"x": "a"},
+    ),
+    "items the environment never takes": (_list(), _list(items=False), {"list": [1]}),
+    "nothing the environment takes": (_object(), False, {"a": 1}),
+    "prefix items": (
+        _list(items=TEXT, prefixItems=[COUNT]),
+        _list(items=TEXT),
+        {"list": [1]},
+    ),
+    "contains none": (
+        _list(contains=TEXT, minContains=0),
+        _list(contains=TEXT),
+        {"list": [1]},
+    ),
+    "unevaluated properties": (
+        _object(properties={"a": COUNT}, unevaluatedProperties=False),
+        _object(unevaluatedProperties=False),
+        {"a": 1},
+    ),
+    "unevaluated items": (
+        _list(items=TEXT, unevaluatedItems=False),
+        _list(unevaluatedItems=False),
+        {"list": ["a"]},
+    ),
+    "true for one": (
+        _object(properties={"a": {"enum": [True]}}),
+        _object(properties={"a": {"enum": [1]}}),
+        {"a": True},
+    ),
+    "zero for false": (
+        _object(properties={"a": {"const": 0}}),
+        _object(properties={"a": {"const": False}}),
+        {"a": 0},
+    ),
+    "the same reference to other definitions": (
+        _object(properties={"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {}}}),
+        _object(properties={"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": TEXT}}),
+        {"a": 1},
+    ),
+    "the same reference to another root": (
+        _object(
+            properties={
+                "a": {
+                    "$id": "http://agent/a",
+                    "$ref": "#/$defs/A",
+                    "$defs": {"A": {}},
+                }
+            },
+            **{"$defs": {"A": TEXT}},
+        ),
+        _object(properties={"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": TEXT}}),
+        {"a": 1},
+    ),
+}
+
+
+@pytest.mark.parametrize("name", WIDER)
+def test_a_wider_agent_schema_is_a_mismatch(name):
+    agent, environment, call = WIDER[name]
+    assert Draft202012Validator(agent).is_valid(call)
+    assert not Draft202012Validator(environment).is_valid(call)
+    assert argument_mismatches(agent, environment)
+
+
+@pytest.mark.parametrize(
+    "agent, environment",
+    [
+        # Shared definitions, described in other words.
+        (
+            _object(
+                properties={"a": {"$ref": "#/$defs/A", "description": "ours"}},
+                **{"$defs": {"A": TEXT}},
+            ),
+            _object(properties={"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": TEXT}}),
+        ),
+        # A provider's schema: the environment's properties, other names left open on both sides.
+        (_object(properties={"id": TEXT}), _object(properties={"id": TEXT})),
+        # A generated one: closed, its draft named, an optional environment argument left out.
+        (
+            _object(
+                properties={"id": TEXT},
+                additionalProperties=False,
+                **{"$schema": "http://json-schema.org/draft-07/schema#"},
+            ),
+            _object(properties={"id": TEXT, "note": COUNT}),
+        ),
+        # An environment argument that takes anything may be left undeclared.
+        (
+            _object(properties={"id": TEXT}),
+            _object(properties={"id": TEXT, "note": {"description": "Anything."}}),
+        ),
+        # A property called like an annotation is a property.
+        (_object(properties={"title": TEXT}), _object(properties={"title": TEXT})),
+        (
+            _object(properties={"a": {"anyOf": [{**TEXT, "title": "A"}, COUNT]}}),
+            _object(properties={"a": {"anyOf": [TEXT, COUNT]}}),
+        ),
+    ],
+)
+def test_a_schema_shown_compatible_is_no_mismatch(agent, environment):
+    assert argument_mismatches(agent, environment) == []
+
+
+def test_a_schema_that_cannot_be_used_is_a_mismatch():
+    for agent in (
+        _object(properties=[]),
+        _object(required="id"),
+        _object(properties={"id": {"type": "strng"}}),
+        _object(properties={"id": {"$ref": "#/nope"}}),
+        _object(properties={"id": {"$ref": "http://127.0.0.1:9/id"}}),
+    ):
+        (problem, *_rest) = argument_mismatches(agent, {"type": "object"})
+        assert "cannot be used" in problem
+
+
+def test_an_agent_with_some_tools_that_leaves_an_optional_argument_out_maps_onto_itself():
+    """Its schema is open to other names, so a call of it is not always an environment call; the
+    mapping passes on only the arguments it declares, and that always is one."""
+    tool = _tool("open_case", {"account": OPEN.parameters["properties"]["account"]}, [])
+    tool["parameters"]["required"] = ["account"]
+    agent = _agent(tool)
+    assert argument_mismatches(tool["parameters"], OPEN.parameters)
+    assert select_mode(agent, [OPEN, BOOK]) is BindingMode.TOOL_ROUTED
+    mapping = identity_mapping(agent, [OPEN, BOOK])
+    assert mapping["tools"][0]["steps"][0]["arguments"] == {
+        "account": {"arg": "account"}
+    }
+    # Nested, nothing is dropped on the way, so there the open schema still needs a mapping.
+    nested = _agent(_tool("open_case", {"account": _account(id=TEXT)}, ["account"]))
+    assert identity_mapping(nested, [OPEN, BOOK]) is None
+
+
+# --- the same, over schemas nobody thought of -----------------------------------------------------
+
+_NAMES = ("a", "b", "x1")
+_SCALARS = (0, 1, 1.0, 2, 1.5, True, False, None, "", "a", "bb", "ccc")
+
+
+def _schema(rng: random.Random, depth: int = 0) -> object:
+    if rng.random() < 0.12:
+        return rng.choice([True, False, {}])
+    kinds = ["string", "integer", "number", "boolean", "null", "object", "array"]
+    schema: dict = {}
+    if rng.random() < 0.8:
+        kind = rng.choice(kinds[-2:] if depth == 0 else kinds)
+        schema["type"] = [kind, "null"] if rng.random() < 0.15 else kind
+
+    def inner() -> object:
+        return _schema(rng, depth + 1) if depth < 2 else {"type": rng.choice(kinds[:5])}
+
+    def some() -> dict:
+        return {name: inner() for name in _NAMES if rng.random() < 0.5}
+
+    rules = {
+        "enum": lambda: rng.sample(_SCALARS, 3),
+        "const": lambda: rng.choice(_SCALARS),
+        "minimum": lambda: rng.choice([0, 1, 2]),
+        "maxLength": lambda: rng.choice([0, 1, 2]),
+        "pattern": lambda: rng.choice(["^a", "b"]),
+        "maxItems": lambda: rng.choice([0, 1, 2]),
+        "not": inner,
+        "anyOf": lambda: [inner(), inner()],
+        "if": inner,
+        "then": inner,
+        "contains": inner,
+        "minContains": lambda: rng.choice([0, 1]),
+        "prefixItems": lambda: [inner()],
+        "propertyNames": lambda: {"maxLength": 1},
+        "patternProperties": lambda: {"^x": inner()},
+        "unevaluatedProperties": inner,
+        "unevaluatedItems": inner,
+        "minProperties": lambda: 1,
+        "dependentRequired": lambda: {"a": ["b"]},
+        "$ref": lambda: rng.choice(
+            ["#", "#/$defs/A", "#/properties/a", "#/definitions/A"]
+        ),
+        "$id": lambda: rng.choice(["http://one/", "http://two/"]),
+        "$defs": lambda: {"A": inner()},
+        "nullable": lambda: True,
+        "title": lambda: "words",
+    }
+    common = {
+        "properties": some,
+        "required": lambda: rng.sample(_NAMES, rng.randint(0, 2)),
+        "additionalProperties": lambda: rng.choice([False, False, True, inner()]),
+        "items": inner,
+    }
+    for pool, chance in ((common, 0.45), (rules, 0.04)):
+        for keyword, value in pool.items():
+            if rng.random() < chance:
+                schema[keyword] = value()
+    return schema
+
+
+def _near(rng: random.Random, schema: object) -> object:
+    """`schema` with a few rules taken away, added or changed, anywhere in it."""
+    changed = copy.deepcopy(schema)
+    for _ in range(rng.randint(0, 2)):
+        places = [changed]
+        for place in places:
+            if isinstance(place, dict):
+                places.extend(one for one in place.values() if isinstance(one, dict))
+        place = rng.choice([one for one in places if isinstance(one, dict)] or [{}])
+        if place and rng.random() < 0.5:
+            del place[rng.choice(list(place))]
+        else:
+            other = _schema(rng, 1)
+            if isinstance(other, dict) and other:
+                keyword = rng.choice(list(other))
+                place[keyword] = other[keyword]
+    return changed
+
+
+def _value(rng: random.Random, depth: int = 0) -> object:
+    roll = rng.random()
+    if depth < 3 and roll < (0.8 if depth == 0 else 0.3):
+        return {name: _value(rng, depth + 1) for name in _NAMES if rng.random() < 0.5}
+    if depth < 3 and roll < (0.95 if depth == 0 else 0.45):
+        return [_value(rng, depth + 1) for _ in range(rng.randint(0, 2))]
+    return rng.choice(_SCALARS)
+
+
+def test_no_mismatch_means_no_agent_call_the_environment_refuses():
+    """Pairs of schemas, mostly near each other, against random values: whenever the answer is
+    "compatible", a value the agent's schema accepts is one the environment's accepts."""
+    rng = random.Random(7951)
+    values = [_value(rng) for _ in range(120)]
+    compatible = agreed = 0
+    for _ in range(1000):
+        environment = _schema(rng)
+        agent = _near(rng, environment) if rng.random() < 0.85 else _schema(rng)
+        if not isinstance(agent, dict) or argument_mismatches(agent, environment):
+            continue
+        compatible += 1
+        theirs = Draft202012Validator(environment)
+        ours = Draft202012Validator(agent)
+        for value in values:
+            try:
+                sent = ours.is_valid(value)
+            except (RecursionError, _WrappedReferencingError):
+                break
+            if not sent:
+                continue
+            agreed += 1
+            assert theirs.is_valid(value), (agent, environment, value)
+    # Enough of them to mean something.
+    assert compatible > 100 and agreed > 2000, (compatible, agreed)
