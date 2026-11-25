@@ -4287,6 +4287,9 @@ def test_provider_reported_agent_ending_recovers_short_call_for_eval(
         {"ended_reason": "customer-ended-call"},
         {"ended_reason": "assistant-error"},
         {"end_reason": "user_hangup"},
+        {"ended_reason": "customer-ended-call-during-warm-transfer"},
+        {"end_reason": "user_hangup_during_transfer"},
+        {"ended_reason": "call.in-progress.transfer-cancelled-by-assistant"},
         {
             "tool_calls": [
                 {"name": "to_front_desk", "type": "transfer_call", "ok": False}
