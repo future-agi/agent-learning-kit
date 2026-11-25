@@ -108,6 +108,9 @@ def test_vapi_import_profile_includes_prompt_and_reusable_tools_without_secrets(
     )
     assert "vapi-secret" not in str(profile)
     assert "credential-1" not in str(profile)
+    # Cleaning the server and tool addresses leaves the instructions whole.
+    assert profile[provider_import.PROMPT_CHECK] == "unchanged"
+    assert provider_import.whole_prompt(profile) == "Book a table."
 
 
 def test_retell_import_profile_includes_prompt_and_exact_tool_schema() -> None:
@@ -149,6 +152,11 @@ def test_retell_import_profile_includes_prompt_and_exact_tool_schema() -> None:
     tool = profile["general_tools"][0]
     assert tool["parameters"]["required"] == ["preference"]
     assert tool["url"] == "https://example.test/provider/tools/record_preference"
+    # Cleaning the tool's address leaves the instructions whole.
+    assert profile[provider_import.PROMPT_CHECK] == "unchanged"
+    assert provider_import.whole_prompt(profile) == (
+        "Always record a stated preference before ending."
+    )
 
 
 def test_vapi_import_clones_tools_rewires_urls_and_cleans_up() -> None:

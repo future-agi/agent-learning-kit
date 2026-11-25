@@ -4213,6 +4213,7 @@ _VAPI_SYSTEM = [
                 "response_engine_type": "retell-llm",
                 "general_prompt": "Take bookings.",
                 "states": None,
+                "prompt_check": "unchanged",
             },
             "Take bookings.",
         ),
@@ -4222,14 +4223,38 @@ _VAPI_SYSTEM = [
                 "response_engine_type": "retell-llm",
                 "general_prompt": "Take bookings.",
                 "states": [],
+                "prompt_check": "unchanged",
             },
             "Take bookings.",
         ),
         # Every system message, in order; a seeded assistant line is not an instruction.
         (
-            {"provider": "vapi", "model": {"messages": _VAPI_SYSTEM}},
+            {
+                "provider": "vapi",
+                "model": {"messages": _VAPI_SYSTEM},
+                "prompt_check": "unchanged",
+            },
             "You are Ava, the clinic's receptionist.\n\nNever give medical advice.",
         ),
+        # A fetched profile its sanitizer changed, or one with no record of the check.
+        (
+            {
+                "provider": "retell",
+                "response_engine_type": "retell-llm",
+                "general_prompt": "Take bookings.",
+                "prompt_check": "changed",
+            },
+            None,
+        ),
+        (
+            {
+                "provider": "retell",
+                "response_engine_type": "retell-llm",
+                "general_prompt": "Take bookings.",
+            },
+            None,
+        ),
+        ({"provider": "vapi", "model": {"messages": _VAPI_SYSTEM}}, None),
         # A general prompt beside states is only a part of what the agent is told.
         (
             {
@@ -4285,28 +4310,30 @@ def test_the_whole_prompt_is_taken_only_where_code_takes_every_text(profile, who
 
 
 @pytest.mark.parametrize("provider", ["retell", "vapi"])
-def test_a_prompt_the_profiles_sanitizer_rewrote_is_not_taken(provider):
-    from fi.alk.harness.provider_import import _safe_profile_value, whole_prompt
+def test_a_fetched_profile_with_no_record_of_its_check_is_not_taken(provider):
+    from fi.alk.harness.provider_import import whole_prompt
 
-    def profile(text):
+    def profile(**record):
+        text = "You are Ava. Always confirm the date."
         if provider == "retell":
             return {
                 "provider": "retell",
                 "response_engine_type": "retell-llm",
                 "general_prompt": text,
+                **record,
             }
-        return {"provider": "vapi", "model": {"messages": [{"role": "system", "content": text}]}}
+        return {
+            "provider": "vapi",
+            "model": {"messages": [{"role": "system", "content": text}]},
+            **record,
+        }
 
-    # A prompt that begins with an address is rewritten as one: cut at its query, its
-    # newlines gone. What is left can't be told from a whole prompt, so none is taken.
-    for text in (
-        "https://acme.example/kb\nYou are Ava. Can you help? Always confirm the date.",
-        "https://acme.example/kb?x=1\nYou are Ava.",
-    ):
-        assert whole_prompt(_safe_profile_value(profile(text))) is None
-    # An address inside the prompt is left as written, and the prompt is whole.
-    inside = "You are Ava. See https://acme.example/kb?x=1 for more."
-    assert whole_prompt(_safe_profile_value(profile(inside))) == inside
+    # A profile cached before the fetch recorded its check can't be told from one the
+    # sanitizer cut, so its prompt is not taken as whole.
+    assert whole_prompt(profile()) is None
+    assert whole_prompt(profile(prompt_check="unchanged")) == (
+        "You are Ava. Always confirm the date."
+    )
 
 
 @pytest.mark.parametrize(
@@ -4329,6 +4356,7 @@ def test_a_fetched_prompt_the_sanitizer_changed_is_not_taken(prompt):
     )
 
     assert profile["general_prompt"] != prompt
+    assert profile["prompt_check"] == "changed"
     assert whole_prompt(profile) is None
 
 
@@ -4343,6 +4371,7 @@ def test_a_fetched_prompt_the_sanitizer_left_alone_is_taken():
         request=_retell_answering(prompt),
     )
 
+    assert profile["prompt_check"] == "unchanged"
     assert whole_prompt(profile) == prompt
 
 
@@ -4367,14 +4396,67 @@ def test_the_copy_limit_is_counted_in_bytes():
     assert whole_prompt({"provider": "phone", "system_prompt": text}) is None
 
 
-def test_every_vapi_system_message_is_checked_for_an_address():
+def test_every_vapi_system_message_is_checked_when_fetched():
+    from fi.alk.harness.provider_import import inspect_provider_target, whole_prompt
+
+    def fetched(later):
+        return inspect_provider_target(
+            "vapi",
+            source_target_id="assistant-1",
+            api_key="vapi-secret",
+            request=_vapi_answering(["You are Ava.", later]),
+        )
+
+    # Only the later message is one the sanitizer rewrites.
+    changed = fetched("https://acme.example/kb?x=1\nRead this first.")
+    assert changed["model"]["messages"][0]["content"] == "You are Ava."
+    assert changed["prompt_check"] == "changed"
+    assert whole_prompt(changed) is None
+
+    intact = fetched("Read this first.")
+    assert intact["prompt_check"] == "unchanged"
+    assert whole_prompt(intact) == "You are Ava.\n\nRead this first."
+
+
+def _vapi_answering(system: list[str]):
+    def request(method, url, api_key, body):
+        return {
+            "name": "Ava",
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "system", "content": text} for text in system],
+            },
+        }
+
+    return request
+
+
+def test_the_copy_limit_is_checked_before_the_prompt_is_built():
+    import tracemalloc
+
     from fi.alk.harness.provider_import import whole_prompt
 
-    messages = [
-        {"role": "system", "content": "You are Ava."},
-        {"role": "system", "content": "https://acme.example/kb Read this first."},
-    ]
-    assert whole_prompt({"provider": "vapi", "model": {"messages": messages}}) is None
+    # Two system messages, each within the limit, together four times over it.
+    half = "a" * (2 * 1024 * 1024)
+    profile = {
+        "provider": "vapi",
+        "model": {
+            "messages": [
+                {"role": "system", "content": half},
+                {"role": "system", "content": half[:-1] + "b"},
+            ]
+        },
+        "prompt_check": "unchanged",
+    }
+    tracemalloc.start()
+    try:
+        assert whole_prompt(profile) is None
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # Neither joined nor encoded: far less than one message's size is ever held.
+    assert peak < 256 * 1024
 
 
 @pytest.mark.parametrize("provider", ["phone", "livekit"])
@@ -4468,13 +4550,12 @@ def test_a_copied_profile_prompt_names_no_repository_lines_whatever_the_contract
         unconfirmed_prompt_from=lines,
     )
 
-    copied = _provider_prompt_copied(contract, _PHONE)
+    copied = _provider_prompt_copied(contract, "Take bookings. Be brief.")
     assert copied.system_prompt_excerpt == "Take bookings. Be brief."
     assert copied.system_prompt_copied is True
     assert copied.system_prompt_from == [] and copied.unconfirmed_prompt_from == []
-    # No profile, or none whole: the contract is left as it was checked.
+    # No whole prompt: the contract is left as it was checked.
     assert _provider_prompt_copied(contract, None) is contract
-    assert _provider_prompt_copied(contract, {"provider": "bland"}) is contract
 
 
 def _stage_submitter(source, destination: Path):
@@ -4561,6 +4642,78 @@ def test_a_reading_under_a_profile_with_a_whole_prompt_is_not_asked_for_one(tmp_
 
     assert not result.get("is_error"), result
     assert saved(destination)["system_prompt_excerpt"] == "Take bookings. Be brief."
+
+
+@pytest.mark.parametrize("alias", ["rules", "constraints", "policies", "guardrails"])
+def test_rules_under_any_name_save_on_the_first_call(tmp_path, root, alias):
+    destination = tmp_path / "out"
+    result = provider_submitter(destination, _STAGED, root)(
+        payload(**{alias: ["Never book past 9pm."]})
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["hard_constraints"] == ["Never book past 9pm."]
+
+
+@pytest.mark.parametrize("profile", [None, _STAGED])
+def test_a_null_conversational_flag_is_asked_like_an_omitted_one(tmp_path, root, profile):
+    destination = tmp_path / "out"
+    submit = (
+        submitter(destination, root)
+        if profile is None
+        else provider_submitter(destination, profile, root)
+    )
+
+    first = submit(payload(conversational=None))
+    assert first.get("is_error"), first
+    assert "no hard_constraints and no system_prompt_excerpt" in text_of(first)
+
+    second = submit(payload(conversational=None))
+    assert not second.get("is_error"), second
+    # The contract's own default, which the ask now follows.
+    assert saved(destination)["conversational"] is True
+
+
+def test_an_explicitly_not_conversational_agent_is_not_asked(tmp_path, root):
+    destination = tmp_path / "out"
+    result = provider_submitter(destination, _STAGED, root)(payload(conversational=False))
+
+    assert not result.get("is_error"), result
+
+
+def test_a_named_profile_that_could_not_be_read_is_not_said_to_have_been_shown(
+    tmp_path, root
+):
+    destination = tmp_path / "out"
+    # The build named a profile, but it couldn't be read: in force, empty, never shown.
+    first = provider_submitter(destination, {}, root)(payload())
+
+    assert first.get("is_error"), first
+    said = text_of(first)
+    assert "no hard_constraints and no system_prompt_excerpt" in said
+    assert "you were shown" not in said
+    assert "could not be read" in said
+    # Its repository lines are not the prompt either.
+    assert "system_prompt_from" not in said and "search the whole source" not in said
+
+
+def test_the_providers_whole_prompt_is_taken_once_for_a_stage(tmp_path, root, monkeypatch):
+    from fi.alk.harness import provider_import
+
+    calls = []
+    real = provider_import.whole_prompt
+
+    def counted(profile):
+        calls.append(profile)
+        return real(profile)
+
+    monkeypatch.setattr(provider_import, "whole_prompt", counted)
+    destination = tmp_path / "out"
+    submit = provider_submitter(destination, _PHONE, root)
+    assert not submit(payload(hard_constraints=["Be brief."])).get("is_error")
+
+    assert saved(destination)["system_prompt_copied"] is True
+    assert len(calls) == 1
 
 
 def test_the_profile_in_force_is_the_sources_own_or_the_one_the_build_named(
