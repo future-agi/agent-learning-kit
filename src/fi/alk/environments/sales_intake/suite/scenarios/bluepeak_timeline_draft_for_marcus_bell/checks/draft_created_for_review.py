@@ -28,17 +28,21 @@ def check(world, calls, reference=None):
         low = (d.get("body") or "").lower()
         if re.search(r"demo (is|has been) (booked|confirmed|scheduled)|booked (your|a|the) demo", low) and not any(x["created_at"] == now and x["status"] == "booked" for x in state.get("demos", [])):
             return "done wrong: the draft says a demo is booked, but none was booked"
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "create_draft")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The email thread or Slack thread the reference fixes and whether its content reached this run:
     every message of the email thread (or the one email) with its body returned by a read, and the
     text of every message in the Slack thread (the desk's own posts aside) returned by a thread read,
     channel read or search. Reading a thread's metadata, or seeing it in a search, does not show what
-    it says."""
+    it says.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     wanted = []
@@ -104,6 +108,7 @@ def _texts_shown(calls):
         if c.ok and c.name in ("slack_read_thread", "slack_read_channel", "slack_search_public_and_private"):
             walk(c.result)
     return shown
+
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

@@ -29,15 +29,19 @@ def check(world, calls, reference=None):
             want[it.get("sku")] = want.get(it.get("sku"), 0) + int(it.get("quantity") or 0)
         if want and held != want:
             return f"done wrong: order {order_id} has returns for {held}, the customer settled on {want}"
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "create_return")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The evidence the reference fixes and whether its content reached this run: every message of an
     email thread (or the one email) with its body returned by a read, and a library document read.
-    Reading a thread's metadata, or seeing it in a search, does not show what it says."""
+    Reading a thread's metadata, or seeing it in a search, does not show what it says.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     wanted = []
     for step in reference or ():

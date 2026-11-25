@@ -50,17 +50,26 @@ def check(world, calls, reference=None):
                 cents = int(round(float(x.replace(",", "")) * 100))
                 if tenant and known and cents not in known:
                     return f"done wrong: the draft quotes ${x}, which is not an amount in {tenant}'s records"
-    missing = _evidence_missing(world, calls, reference)
+    bodies = [d.get("body") or "" for d in drafts] + [m["body"] for m in messages if m["thread_id"] == wanted_thread]
+    named = set(re.findall(r"\binv_\w+", " ".join(bodies)))
+    missing = _records_missing(state, calls, reference, named)
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the draft rests on {', '.join(missing)}, which had not come back when it was written"
+    missing = _evidence_missing(world, calls, reference, "create_draft")
+    if missing:
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The email thread or Slack thread the reference fixes and whether its content reached this run:
     every message of the email thread (or the one email) with its body returned by a read, and the
     text of every message in the Slack thread (the desk's own posts aside) returned by a thread read,
     channel read or search. Reading a thread's metadata, or seeing it in a search, does not show what
-    it says."""
+    it says.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     wanted = []
@@ -141,6 +150,37 @@ def _unbacked_claim(text, state, tenant):
     if re.search(r"\b(plan|seat|downgrade|upgrade)[a-z ]{0,30} (has been|is|was) (scheduled|applied|booked)\b|\bwe (have )?(scheduled|applied) (the |your )?(plan|seat|downgrade|upgrade)", low) and not changed:
         return "claims a plan change is scheduled, but none is"
     return None
+
+
+def _records_missing(state, calls, reference, named):
+    """The billing records the reference fixes that had not come back when the first draft was
+    written, by any read that returns the same facts: the tenant's invoices (those `named`, or all of
+    them) listed or read by their lines; credit notes with or without the invoice filter; a term end
+    from the subscription whose period ends with it."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name == "create_draft"), len(calls))
+    reads = [c for c in calls[:first] if c.ok and isinstance(c.result, dict)]
+    invoices = {i["invoice_id"] for c in reads if c.name == "list_invoices" for i in c.result.get("invoices") or []}
+    invoices |= {c.result.get("invoice_id") for c in reads if c.name == "get_invoice_lines"}
+    term_end = {r["tenant_id"]: r["term_end"] for r in state.get("renewal_terms", [])}
+    missing = []
+    for step in reference or ():
+        tool, want = step.get("tool"), step.get("arguments") or {}
+        tenant = want.get("tenant_id")
+        if not tenant or tool not in ("list_invoices", "get_invoice_lines", "get_credit_notes", "get_payment_status", "get_renewal_terms"):
+            continue
+        if tool == "list_invoices":
+            mine = {i["invoice_id"] for i in state.get("invoices", []) if i["tenant_id"] == tenant}
+            seen = (mine & named or mine) <= invoices
+        else:
+            seen = any(c.name == tool and all(c.arguments.get(k) in (v, None, "") for k, v in want.items()) for c in reads)
+            if tool == "get_renewal_terms":
+                seen = seen or any(
+                    c.name == "get_subscription" and c.result.get("tenant_id") == tenant and c.result.get("current_period_end") == term_end.get(tenant)
+                    for c in reads
+                )
+        if not seen:
+            missing.append(f"{tool} for {', '.join(str(v) for v in want.values())}")
+    return missing
 
 
 if __name__ == "__main__":

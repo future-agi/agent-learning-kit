@@ -53,7 +53,9 @@
         "threadId": "th_r04_return_request_rachel"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: th_r04_return_request_rachel"
+      }
     },
     {
       "tool": "verify_order_owner",

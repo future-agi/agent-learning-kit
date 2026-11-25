@@ -34,7 +34,7 @@ from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
-from scenario_quality import judge_reply, live_judge, passing_prefixes
+from scenario_quality import judge_reply, live_judge, passing_prefixes, passing_read_last, read_last
 
 HERE = Path(environments.__file__).parent / "internal_knowledge"
 SUITE = HERE / "suite"
@@ -482,6 +482,20 @@ WRONG_RUNS = [
         "knowledge_request_updated",
         "before its replacement",
     ),
+    (
+        "slack_reply_corrected_parental_leave_maya",
+        "posts the answer and reads the thread and the passage afterwards",
+        lambda k: read_last(_scenario(k).solution, "slack_read_thread", "fetch_passage"),
+        "slack_reply_in_thread",
+        "done blind",
+    ),
+    (
+        "slack_reply_client_dinner_conflict_lucas",
+        "posts that the conflict was flagged and flags it afterwards",
+        lambda k: read_last(_scenario(k).solution, "flag_document_issue"),
+        "slack_reply_in_thread",
+        "done wrong",
+    ),
 ]
 
 
@@ -495,6 +509,13 @@ def test_wrong_run_is_rejected(built: Path, key: str, wrong: str, steps, check: 
     assert said.get(check), (key, wrong, said)
     if word:
         assert word in said[check], (key, wrong, said[check])
+
+
+def test_evidence_read_after_the_write_does_not_count(built: Path) -> None:
+    """No scenario passes when the mail, Slack and documents it rests on are read after acting."""
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    writes = {tool["name"] for tool in tools if tool["mutates_state"]}
+    assert [key for key in SCENARIOS if passing_read_last(built, SUITE, key, writes)] == []
 
 
 def _signed_in(built: Path, employee_id: str | None):

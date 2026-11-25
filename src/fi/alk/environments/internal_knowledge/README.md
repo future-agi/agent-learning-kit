@@ -297,6 +297,8 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 | `issue_that_is_not_one` | flags the superseded Travel Policy 2025 as an error anyway | `version_history_consulted` | nobody asked for |
 | `gap_noticed_flag_declined` | flags the missing definition after Maya declined | `missing_evidence_reported` | nobody asked for |
 | `filed_in_the_wrong_collection` | withdraws KR-410 before opening its replacement | `knowledge_request_updated` | before its replacement |
+| `slack_reply_corrected_parental_leave_maya` | posts the answer and reads the thread and the passage afterwards | `slack_reply_in_thread` | done blind |
+| `slack_reply_client_dinner_conflict_lucas` | posts that the conflict was flagged and flags it afterwards | `slack_reply_in_thread` | done wrong |
 
 ### Scenario quality (16 Nov 2026)
 

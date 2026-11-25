@@ -59,6 +59,37 @@ def passing_prefixes(built: Path, suite: Path, key: str) -> list[int]:
     return passing
 
 
+# The reads whose text a decision rests on: mail, Slack and documents.
+EVIDENCE = ("get_thread", "get_message", "slack_read_thread", "read_file_content", "fetch_passage")
+
+
+def read_last(steps, *tools: str) -> list:
+    """`steps` with every step of `tools` moved to the end: the evidence read after acting on it."""
+    return sorted(steps, key=lambda step: step.tool in tools)
+
+
+def passing_read_last(built: Path, suite: Path, key: str, writes: set[str]) -> bool:
+    """Whether every deterministic sub-goal of `key` still holds when its evidence is read last. A
+    reference that fixes no evidence, or commits no write (`writes`), has no order to keep."""
+    scenario = read_folder(suite, key)
+    if not any(step.tool in EVIDENCE and step.fixed for step in scenario.solution):
+        return False
+    steps = read_last(scenario.solution, *EVIDENCE)
+    catalogue = load_catalogue(suite)
+    reference = reference_of(scenario.solution)
+    world, calls, _refused, _ = run_steps(
+        scenario, built / WORLD, with_solution=True, steps=steps
+    )
+    try:
+        return any(call.ok and call.name in writes for call in calls) and all(
+            run_check(goal.check, world, calls, name=name, reference=reference).held
+            for name in scenario.sub_goals
+            if (goal := catalogue.named(name)) is not None and goal.deterministic()
+        )
+    finally:
+        world.close()
+
+
 def judge_reply(built: Path, suite: Path, key: str, goal: str, reply: str) -> tuple[bool | None, str]:
     """The judge's verdict on `goal` for a run that made the reference's calls and then said
     `reply` to the caller's opening message."""

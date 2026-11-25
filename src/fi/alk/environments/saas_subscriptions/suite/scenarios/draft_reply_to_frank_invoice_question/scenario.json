@@ -54,7 +54,10 @@
         "tenant_id": "T06"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T06",
+        "invoice_id": "caller: inv_06_curr"
+      }
     },
     {
       "tool": "get_credit_notes",
@@ -64,7 +67,10 @@
         "invoice_id": "inv_06_curr"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T06",
+        "invoice_id": "caller: inv_06_curr"
+      }
     },
     {
       "tool": "create_draft",

@@ -9,7 +9,7 @@ def check(world, calls, reference=None):
         return f"done wrong: handoff category {new[0]['category']}, the case is {want['category']}"
     if want.get("customer_id") and not any(h["customer_id"] == want["customer_id"] for h in new):
         return f"done wrong: handoff for {new[0]['customer_id']}"
-    return _blind(world, calls, reference)
+    return _blind(world, calls, reference, "create_handoff")
 
 
 def _now(state):
@@ -24,11 +24,15 @@ def _want(reference, tool):
     return out
 
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The evidence the reference fixes and whether it reached this run: every message of an email
     thread (or the one email) with its body returned by a read, and a staff calendar read directly or
     through the slots computed from it. Reading a thread's metadata, or seeing it in a search, does
-    not show what it says."""
+    not show what it says.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     cal_of_staff = {r["staff_id"]: r["calendar_id"] for r in state.get("staff", [])}
     cal_of_event = {e["event_id"]: e["calendar_id"] for e in state.get("calendar_events", [])}
@@ -87,10 +91,10 @@ def _bodies_shown(calls):
     return shown
 
 
-def _blind(world, calls, reference):
-    missing = _evidence_missing(world, calls, reference)
+def _blind(world, calls, reference, *writes):
+    missing = _evidence_missing(world, calls, reference, *writes)
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
 

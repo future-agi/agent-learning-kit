@@ -53,17 +53,21 @@
         "tenant_id": "T02"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T02",
+        "invoice_id": "caller: inv_02_curr"
+      }
     },
     {
       "tool": "list_invoices",
       "arguments": {
         "tenant_id": "T02",
-        "status": "open",
         "actor_id": "U_BL3"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T02"
+      }
     },
     {
       "tool": "create_draft",

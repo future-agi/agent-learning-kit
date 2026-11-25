@@ -40,15 +40,19 @@ def check(world, calls, reference=None):
             for word in ("in_review", "in review", "resolved", "closed"):
                 if word in text and c["status"].replace("_", " ") != word.replace("_", " ") and not (word == "closed" and c["status"] == "resolved"):
                     return f"done wrong: the reply calls {cid} {word}, but the HR system has it {c['status']}"
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "slack_send_message")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The Slack thread or library document the reference fixes and whether its content reached this
     run: the text of every message in the thread (the desk's own posts aside) returned by a thread
-    read, channel read or search, and the document read."""
+    read, channel read or search, and the document read.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     wanted = []

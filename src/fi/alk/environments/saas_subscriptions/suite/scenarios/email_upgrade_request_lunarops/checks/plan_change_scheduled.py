@@ -41,17 +41,21 @@ def check(world, calls, reference=None):
             sub = next((s for s in state.get("subscriptions", []) if s.get("tenant_id") == tid and s.get("status") == "active"), {})
             if r.get("effective_at") != sub.get("current_period_end"):
                 return f"done wrong: the change takes effect {r.get('effective_at')}, the admin asked for the end of the period {sub.get('current_period_end')}"
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "schedule_plan_change")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The email thread or Slack thread the reference fixes and whether its content reached this run:
     every message of the email thread (or the one email) with its body returned by a read, and the
     text of every message in the Slack thread (the desk's own posts aside) returned by a thread read,
     channel read or search. Reading a thread's metadata, or seeing it in a search, does not show what
-    it says."""
+    it says.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     wanted = []

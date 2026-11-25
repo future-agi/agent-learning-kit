@@ -52,7 +52,9 @@
         "tenant_id": "T11"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T11"
+      }
     },
     {
       "tool": "create_draft",

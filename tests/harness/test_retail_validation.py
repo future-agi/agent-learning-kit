@@ -33,7 +33,7 @@ from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
-from scenario_quality import judge_reply, live_judge, passing_prefixes
+from scenario_quality import judge_reply, live_judge, passing_prefixes, passing_read_last, read_last
 
 HERE = Path(environments.__file__).parent / "retail"
 SUITE = HERE / "suite"
@@ -526,6 +526,13 @@ WRONG_RUNS = [
         "subgoal_refuse_ineligible_returns",
         "not done",
     ),
+    (
+        "ret_email_corrected_item",
+        "creates the corrected return and reads the email thread afterwards",
+        lambda k: read_last(_scenario(k).solution, "get_thread"),
+        "subgoal_return_created",
+        "done blind",
+    ),
 ]
 
 
@@ -539,6 +546,13 @@ def test_wrong_run_is_rejected(built: Path, key: str, wrong: str, steps, check: 
     assert said.get(check), (key, wrong, said)
     if word:
         assert word in said[check], (key, wrong, said[check])
+
+
+def test_evidence_read_after_the_write_does_not_count(built: Path) -> None:
+    """No scenario passes when the mail, Slack and documents it rests on are read after acting."""
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    writes = {tool["name"] for tool in tools if tool["mutates_state"]}
+    assert [key for key in KEYS if passing_read_last(built, SUITE, key, writes)] == []
 
 
 def test_the_store_refuses_what_the_plan_says_must_never_happen(built: Path) -> None:
@@ -1175,3 +1189,16 @@ def test_a_draft_may_say_what_a_refund_will_do_but_not_that_it_happened(built: P
     key = "email_draft_disambiguate_thread_by_sender"
     said = _grade(built, key, _swap(key, "create_draft", body=body)).get("draft_created_for_review")
     assert (said or "").startswith(word) if word else said is None, (body, said)
+
+
+@pytest.mark.parametrize("months, expires", [(6, "2027-04-26"), (12, "2027-10-26"), (24, "2028-10-26")])
+def test_store_credit_lasts_as_long_as_the_policy_says(built: Path, months: int, expires: str) -> None:
+    world = _signed_in(built, "C16")
+    try:
+        world.change("environment_policy", "store_credit_expiry_months", {"value": str(months)}, by="name")
+        step = next(s for s in _scenario("exc_email_price_difference_store_credit").solution if s.tool == "create_exchange")
+        assert world.call("create_exchange", step.arguments).ok
+        credit = next(c for c in world.state()["store_credits"] if c["customer_id"] == "C16")
+        assert credit["expires_at"][:10] == expires, credit
+    finally:
+        world.close()

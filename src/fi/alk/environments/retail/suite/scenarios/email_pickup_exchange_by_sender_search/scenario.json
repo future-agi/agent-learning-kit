@@ -56,7 +56,9 @@
         "messageFormat": "FULL_CONTENT"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: th_r06_exchange_turtleneck"
+      }
     },
     {
       "tool": "verify_order_owner",

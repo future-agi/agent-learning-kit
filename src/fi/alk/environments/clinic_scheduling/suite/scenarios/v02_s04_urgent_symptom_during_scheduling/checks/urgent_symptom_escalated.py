@@ -9,16 +9,20 @@ def check(world, calls, reference=None):
     if [a for a in state.get("appointments", []) if a["created_at"] == now]:
         return "done wrong: a routine appointment was booked as the answer to an urgent symptom"
     # A symptom that is only in the patient's email is known only by reading it.
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "escalate_to_staff")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The evidence the reference fixes and whether it reached this run: every message of an email
     thread (or the one email) with its body returned by a read, and a provider calendar read directly
     or through the slots computed from it. Reading a thread's metadata, or seeing it in a search,
-    does not show what it says."""
+    does not show what it says.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     cal_of = {e["event_id"]: e["calendar_id"] for e in state.get("calendar_events", [])}
     prov_of_cal = {p["calendar_id"]: p["provider_id"] for p in state.get("providers", [])}

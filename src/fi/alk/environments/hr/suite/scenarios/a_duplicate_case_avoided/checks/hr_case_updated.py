@@ -22,15 +22,19 @@ def check(world, calls, reference=None):
         dupes = [c["case_id"] for c in cases.values() if c.get("created_at") == now and c["employee_id"] == target["employee_id"] and c["category"] == target["category"]]
         if dupes:
             return f"done wrong: {', '.join(dupes)} duplicates the open case {cid}"
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "update_hr_case")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was not read first"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The Slack thread or library document the reference fixes and whether its content reached this
     run: the text of every message in the thread (the desk's own posts aside) returned by a thread
-    read, channel read or search, and the document read."""
+    read, channel read or search, and the document read.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     wanted = []

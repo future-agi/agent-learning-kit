@@ -37,7 +37,7 @@ from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
-from scenario_quality import judge_reply, live_judge, passing_prefixes
+from scenario_quality import judge_reply, live_judge, passing_prefixes, passing_read_last, read_last
 
 HERE = Path(environments.__file__).parent / "saas_subscriptions"
 SUITE = HERE / "suite"
@@ -471,6 +471,62 @@ WRONG_RUNS = [
         "restricted_content_withheld",
         "not done",
     ),
+    (
+        "email_seat_correction_schedule_plan_change",
+        "schedules the corrected seats and reads the email afterwards",
+        lambda k: read_last(_scenario(k).solution, "get_thread"),
+        "plan_change_scheduled",
+        "done blind",
+    ),
+    (
+        "draft_leo_invoice_list_reply",
+        "lists the invoices without reading them",
+        lambda k: _without(k, "list_invoices"),
+        "draft_created_for_review",
+        "done blind",
+    ),
+    (
+        "draft_reply_to_frank_invoice_question",
+        "explains the charges without reading the invoice's lines",
+        lambda k: _without(k, "get_invoice_lines"),
+        "draft_created_for_review",
+        "done blind",
+    ),
+    (
+        "draft_reply_to_frank_invoice_question",
+        "reports the credit note without reading it",
+        lambda k: _without(k, "get_credit_notes"),
+        "draft_created_for_review",
+        "done blind",
+    ),
+    (
+        "email_claimed_discount_draft_reply",
+        "says no discount is on record without reading the credit notes",
+        lambda k: _without(k, "get_credit_notes"),
+        "draft_created_for_review",
+        "done blind",
+    ),
+    (
+        "email_claimed_discount_draft_reply",
+        "says no discount is on record without reading the invoice",
+        lambda k: _without(k, "list_invoices"),
+        "draft_created_for_review",
+        "done blind",
+    ),
+    (
+        "email_payment_retry_draft_reply",
+        "gives the retry date without reading the payment",
+        lambda k: _without(k, "get_payment_status"),
+        "draft_created_for_review",
+        "done blind",
+    ),
+    (
+        "email_term_end_cancellation_draft_reply",
+        "confirms the term end without reading the renewal terms",
+        lambda k: _without(k, "get_renewal_terms"),
+        "draft_created_for_review",
+        "done blind",
+    ),
 ]
 
 
@@ -484,6 +540,13 @@ def test_wrong_run_is_rejected(built: Path, key: str, wrong: str, steps, check: 
     assert said.get(check), (key, wrong, said)
     if word:
         assert word in said[check], (key, wrong, said[check])
+
+
+def test_evidence_read_after_the_write_does_not_count(built: Path) -> None:
+    """No scenario passes when the mail, Slack and documents it rests on are read after acting."""
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    writes = {tool["name"] for tool in tools if tool["mutates_state"]}
+    assert [key for key in KEYS if passing_read_last(built, SUITE, key, writes)] == []
 
 
 def _signed_in(built: Path, caller: str | None):
@@ -1109,6 +1172,14 @@ ALTERNATE_ROUTES = [
      + [s for s in _scenario(k).solution if s.tool != "slack_read_thread"]),
     ("plan_entitlements_and_features_inquiry", "reads the entitlements before the subscription, and verifies last",
      lambda k: list(reversed(_scenario(k).solution))),
+    ("email_claimed_discount_draft_reply", "reads the invoice by its lines, and every credit note, instead of the list and the filter",
+     lambda k: [s for s in _scenario(k).solution if s.tool == "get_thread"]
+     + [_step("get_invoice_lines", tenant_id="T02", actor_id="U_BL3", invoice_id="inv_02_curr"), _step("get_credit_notes", tenant_id="T02", actor_id="U_BL3")]
+     + [s for s in _scenario(k).solution if s.tool == "create_draft"]),
+    ("draft_leo_invoice_list_reply", "lists every invoice instead of the paid ones",
+     lambda k: _swap(k, "list_invoices", status=None)),
+    ("email_term_end_cancellation_draft_reply", "reads the subscription, which ends and cancels with the term, instead of the renewal terms",
+     lambda k: [_step("get_subscription", tenant_id="T11", actor_id="U_OPS1")] + _without(k, "get_renewal_terms")),
     ("slack_corrected_amount_kiteworks", "reads the whole channel instead of the thread",
      lambda k: [_step("slack_read_channel", channel_id="CH_BILLESC")] + [s for s in _scenario(k).solution if s.tool != "slack_read_thread"]),
 ]

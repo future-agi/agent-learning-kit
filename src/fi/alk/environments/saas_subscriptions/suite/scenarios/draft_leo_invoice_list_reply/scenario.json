@@ -54,7 +54,9 @@
         "actor_id": "U_AM5"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T12"
+      }
     },
     {
       "tool": "create_draft",

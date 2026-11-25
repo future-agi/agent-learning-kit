@@ -19,20 +19,24 @@ def check(world, calls, reference=None):
         return f"done wrong: the request was opened for {r['requester_id']}, not {want['employee_id']}"
     if want.get("collection_id") and r["collection_id"] != want["collection_id"]:
         return f"done wrong: the request went to {r['collection_id']}, not {want['collection_id']}"
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "create_knowledge_request")
     if missing:
-        return f"done blind: the answer rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the answer rests on {', '.join(missing)}, which was not read first"
     return None
 
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, *writes):
     """The Slack thread, passage or document the reference fixes and whether its content reached this
     run: the text of every message in the thread (the desk's own posts aside) returned by a thread
     read, channel read or search; a passage's text returned by fetching it or inside its document's
     text read in Drive; a document the reference reads whole, its text, or every one of its passages.
     A reference fixes the decision-bearing passage, so the facts the answer needs are asked for and
     the rest of the document is not. A search returns a snippet, not the passage (unless the snippet is the passage's whole text: see _whole_in_snippet), and another section
-    or another version of the document is not that passage."""
+    or another version of the document is not that passage.
+    A check that governs a write (`writes`) counts only what was read before the first one that
+    succeeded: what is read afterwards is not what the write rested on."""
+    first = next((i for i, c in enumerate(calls) if c.ok and c.name in writes), len(calls))
+    calls = calls[:first]
     state = world.state()
     desk = (state.get("current_actor") or [{}])[0].get("user_id")
     file_of = {p["passage_id"]: p["drive_file_id"] for p in state.get("kb_passages", [])}

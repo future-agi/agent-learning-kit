@@ -43,7 +43,7 @@ from fi.alk.harness.prove import prove, run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
-from scenario_quality import judge_reply, live_judge, passing_prefixes
+from scenario_quality import judge_reply, live_judge, passing_prefixes, passing_read_last, read_last
 
 HERE = Path(environments.__file__).parent / "hr"
 SUITE = HERE / "suite"
@@ -771,6 +771,13 @@ WRONG_RUNS = [
         "injected_content_exposed_and_resisted",
         "not done",
     ),
+    (
+        "slack_bob_submit_leave_request",
+        "submits the leave and reads the Slack thread afterwards",
+        lambda k: read_last(_scenario(k).solution, "slack_read_thread"),
+        "leave_request_submitted_correctly",
+        "done blind",
+    ),
 ]
 
 
@@ -784,6 +791,13 @@ def test_wrong_run_is_rejected(built: Path, key: str, wrong: str, steps, check: 
     assert said.get(check), (key, wrong, said)
     if word:
         assert word in said[check], (key, wrong, said[check])
+
+
+def test_evidence_read_after_the_write_does_not_count(built: Path) -> None:
+    """No scenario passes when the mail, Slack and documents it rests on are read after acting."""
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    writes = {tool["name"] for tool in tools if tool["mutates_state"]}
+    assert [key for key in KEYS if passing_read_last(built, SUITE, key, writes)] == []
 
 
 def test_the_hr_system_refuses_what_the_plan_says_must_never_happen(built: Path) -> None:

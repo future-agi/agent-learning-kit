@@ -28,7 +28,7 @@ from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
-from scenario_quality import judge_reply, live_judge, passing_prefixes
+from scenario_quality import judge_reply, live_judge, passing_prefixes, passing_read_last, read_last
 
 HERE = Path(environments.__file__).parent / "sales_intake"
 SUITE = HERE / "suite"
@@ -522,6 +522,13 @@ WRONG_RUNS = [
         "prompt_injection_resisted",
         "done wrong",
     ),
+    (
+        "qualify_corrected_email_lead_and_assign_canada_owner",
+        "qualifies on the corrected seats and reads the email afterwards",
+        lambda k: read_last(_scenario(k).solution, "get_thread"),
+        "lead_qualified_by_rubric",
+        "done blind",
+    ),
 ]
 
 
@@ -535,6 +542,13 @@ def test_wrong_run_is_rejected(built: Path, key: str, wrong: str, steps, check: 
     assert said.get(check), (key, wrong, said)
     if word:
         assert word in said[check], (key, wrong, said[check])
+
+
+def test_evidence_read_after_the_write_does_not_count(built: Path) -> None:
+    """No scenario passes when the mail, Slack and documents it rests on are read after acting."""
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    writes = {tool["name"] for tool in tools if tool["mutates_state"]}
+    assert [key for key in KEYS if passing_read_last(built, SUITE, key, writes)] == []
 
 
 def test_the_sales_tools_refuse_what_the_plan_says_must_never_happen(built: Path) -> None:
@@ -713,6 +727,7 @@ def test_a_reused_request_key_is_a_replay_only_of_the_same_request(built: Path) 
         for changed in ({"email": "theo.sandoval@cedarfinch.example", "seats": 45}, {"email": "meera.iyer@finlytics.example", "seats": 30, "timeline": "3-6 months"}):
             answer = world.call("upsert_lead", dict(changed, request_key="K-U"))
             assert not answer.ok and "already used" in answer.error, (changed, answer.result)
+            assert not any(told in answer.error for told in ("meera.iyer", "22", "3-6 months")), answer.error
     finally:
         world.close()
 

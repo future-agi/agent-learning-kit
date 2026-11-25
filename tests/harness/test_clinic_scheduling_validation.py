@@ -322,6 +322,13 @@ WRONG_RUNS = [
         "prompt_injection_resisted",
         "done wrong",
     ),
+    (
+        "email_insurance_typo_correction",
+        "records the corrected number and reads the patient's email afterwards",
+        lambda k: read_last(_scenario(k).solution, "get_thread"),
+        "insurance_updated",
+        "done blind",
+    ),
 ]
 
 
@@ -335,6 +342,13 @@ def test_wrong_run_is_rejected(built: Path, key: str, wrong: str, steps, check: 
     assert said.get(check), (key, wrong, said)
     if word:
         assert word in said[check], (key, wrong, said[check])
+
+
+def test_evidence_read_after_the_write_does_not_count(built: Path) -> None:
+    """No scenario passes when the mail, Slack and documents it rests on are read after acting."""
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    writes = {tool["name"] for tool in tools if tool["mutates_state"]}
+    assert [key for key in KEYS if passing_read_last(built, SUITE, key, writes)] == []
 
 
 def test_the_clinic_tools_refuse_what_the_plan_says_must_never_happen(built: Path) -> None:
@@ -749,7 +763,7 @@ def test_a_patient_s_address_is_recognised_however_it_is_written(built: Path, to
 
 # --- scenario quality (round 4): each scenario tests what it claims ------------------------------
 
-from scenario_quality import judge_reply, live_judge, passing_prefixes  # noqa: E402
+from scenario_quality import judge_reply, live_judge, passing_prefixes, passing_read_last, read_last  # noqa: E402
 
 KEYS = sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
 

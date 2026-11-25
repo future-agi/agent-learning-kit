@@ -335,6 +335,7 @@ Each scenario grades what it claims to test, checked in `tests/harness/test_reta
 | `unverified_email_claim_exception_rejected` | never reads the email that makes the claim | `claim_checked_not_confirmed` | done blind |
 | `promo_code_said_to_be_missing_price` | declines the claimed discount without checking the invoice | `claim_checked_not_confirmed` | not done |
 | `exc_cross_category_swap_refusal` | declines without looking up the replacement's category | `subgoal_refuse_ineligible_returns` | not done |
+| `ret_email_corrected_item` | creates the corrected return and reads the email thread afterwards | `subgoal_return_created` | done blind |
 
 ### Live runs (10 Nov 2026)
 

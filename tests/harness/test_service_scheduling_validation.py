@@ -17,7 +17,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from scenario_quality import judge_reply, live_judge, passing_prefixes
+from scenario_quality import judge_reply, live_judge, passing_prefixes, passing_read_last, read_last
 
 from fi.alk import environments
 from fi.alk.environments import designed
@@ -367,6 +367,13 @@ WRONG_RUNS = [
         "prompt_injection_resisted",
         "not done",
     ),
+    (
+        "pickup_mailbox_corrected_reschedule",
+        "moves the appointment and reads the corrected email afterwards",
+        lambda k: read_last(_scenario(k).solution, "get_thread"),
+        "appointment_rescheduled_atomically",
+        "done blind",
+    ),
 ]
 
 
@@ -380,6 +387,13 @@ def test_wrong_run_is_rejected(built: Path, key: str, wrong: str, steps, check: 
     assert said.get(check), (key, wrong, said)
     if word:
         assert word in said[check], (key, wrong, said[check])
+
+
+def test_evidence_read_after_the_write_does_not_count(built: Path) -> None:
+    """No scenario passes when the mail, Slack and documents it rests on are read after acting."""
+    tools = json.loads((HERE / "tools.json").read_text(encoding="utf-8"))
+    writes = {tool["name"] for tool in tools if tool["mutates_state"]}
+    assert [key for key in KEYS if passing_read_last(built, SUITE, key, writes)] == []
 
 
 def test_the_booking_tools_refuse_what_the_plan_says_must_never_happen(built: Path) -> None:

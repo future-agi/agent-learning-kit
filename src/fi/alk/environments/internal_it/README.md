@@ -320,6 +320,7 @@ Evidence-aware checks read their target from the scenario's fixed values and req
 | `policy_temporary_access_maximum_duration` | answers from the superseded 2025 policy, which allowed 90 days | `effective_policy_consulted` | not done |
 | `slack_manager_approved_without_token` | reads Quinn's thread, where the approver did approve, instead of Laura's | `status_reported_from_access_system` | done blind |
 | `duplicate_pending_slack` | reads Ryan's token post instead of Sarah's thread | `status_reported_from_access_system` | done blind |
+| `slack_reply_mismatched_token` | posts the reply and reads the thread it answers afterwards | `slack_reply_in_thread` | done blind |
 
 ### Scenario quality (round 4)
 

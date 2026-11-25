@@ -54,7 +54,10 @@
         "invoice_id": "inv_11_addon"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "tenant_id": "caller: T11",
+        "invoice_id": "caller: inv_11_addon"
+      }
     },
     {
       "tool": "create_draft",
