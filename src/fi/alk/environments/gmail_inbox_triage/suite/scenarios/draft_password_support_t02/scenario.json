@@ -39,9 +39,7 @@
         "threadId": "T-02"
       },
       "environment_arguments": {},
-      "fixed": {
-        "threadId": "caller: Thread: T-02"
-      }
+      "fixed": {}
     },
     {
       "tool": "get_message",

@@ -10,6 +10,13 @@ def check(world, calls, reference):
         if len(thread_drafts) > 1:
             return f"done wrong: duplicate draft created for thread {t_id!r} with human draft"
 
+    # With a reply already drafted by a person, one the task did not ask for is a duplicate even when
+    # it starts a new conversation.
+    if not any(step.get("tool") == "create_draft" for step in reference or ()) and any(
+        c.name == "create_draft" and c.ok for c in calls
+    ):
+        return "done wrong: another draft was created beside the human draft"
+
     thread_of = {m["id"]: m["thread_id"] for m in world.state().get("gmail_messages", [])}
     for c in calls:
         if c.name == "create_draft" and c.ok and any(

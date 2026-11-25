@@ -1,5 +1,5 @@
-"""A Slack post retried after a lost reply returns the original message (plan §3.3), in every
-vertical whose desk posts to Slack: the same sender, destination, thread, text and request key
+"""A Slack post retried after a lost reply returns the original message (plan §3.3), in the Slack
+capability and every vertical whose desk posts to Slack: the same sender, destination, thread, text and request key
 replay without posting again or needing a fresh approval. The same key for anything else is a
 conflict, and the used approval cannot cover a second post.
 """
@@ -18,7 +18,7 @@ from fi.alk.harness.folder import read_folder
 from fi.alk.harness.prove import play_reference_step, run_steps
 from fi.alk.harness.releases import WORLD
 
-VERTICALS = ("hr", "internal_it", "saas_subscriptions", "sales_intake", "internal_knowledge")
+VERTICALS = ("slack_channel_digest", "hr", "internal_it", "saas_subscriptions", "sales_intake", "internal_knowledge")
 
 
 def _posted(here: Path, world_root: Path):

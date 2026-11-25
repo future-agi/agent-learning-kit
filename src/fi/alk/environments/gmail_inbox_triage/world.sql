@@ -18,7 +18,6 @@ CREATE TABLE gmail_drafts (
     updated_at TEXT NOT NULL
 );
 CREATE TABLE environment_policy (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-INSERT INTO "environment_policy" VALUES('lookback_days','7');
 CREATE TABLE gmail_labels (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,

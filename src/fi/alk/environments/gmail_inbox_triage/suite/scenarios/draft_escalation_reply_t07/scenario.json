@@ -68,6 +68,17 @@
       }
     },
     {
+      "tool": "label_thread",
+      "arguments": {
+        "threadId": "T-21",
+        "labelIds": [
+          "TRIAGED"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
       "tool": "create_draft",
       "arguments": {
         "replyToMessageId": "M-07",

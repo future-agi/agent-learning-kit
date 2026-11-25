@@ -1,24 +1,27 @@
 def check(world, calls, reference=None):
+    wanted = next((s.get("arguments", {}) for s in reference or () if s.get("tool") == "slack_send_message"), {})
     st = world.state()
-    ledger = st.get("slack_message_ledger", [])
-    if not ledger:
-        return "not done: no record in message_ledger"
-    delivered = [r for r in ledger if r.get("status") == "delivered"]
+    delivered = [r for r in st.get("slack_message_ledger", []) if r.get("status") == "delivered"]
     if not delivered:
         return "not done: no delivered record in message_ledger"
-        
-    if reference:
-        for step in reference:
-            if step.get("tool") == "slack_send_message":
-                wanted_key = step.get("arguments", {}).get("request_key")
-                if wanted_key and not any(r.get("request_key") == wanted_key for r in delivered):
-                    return f"done wrong: expected request_key in ledger to be {wanted_key!r}"
-                    
-    msgs = st.get("slack_messages", [])
-    delivered_ids = {r.get("message_id") for r in delivered if r.get("message_id")}
-    matching = [m for m in msgs if m.get("message_id") in delivered_ids]
-    if not matching:
-        return "not done: message not recorded in messages table"
+    key = wanted.get("request_key")
+    if key and not any(r.get("request_key") == key for r in delivered):
+        return f"done wrong: expected request_key in ledger to be {key!r}"
+    messages = {m["message_id"]: m for m in st.get("slack_messages", [])}
+
+    def plain(text):
+        return " ".join((text or "").split())
+
+    for r in delivered:
+        posted = messages.get(r.get("message_id"))
+        if posted is None:
+            return "not done: message not recorded in messages table"
+        if wanted.get("channel_id") and posted["channel_id"] != wanted["channel_id"]:
+            return f"done wrong: posted to {posted['channel_id']!r}, expected {wanted['channel_id']!r}"
+        if wanted.get("message") and plain(posted["text"]) != plain(wanted["message"]):
+            return "done wrong: the posted text is not the approved digest"
+    if len(delivered) > 1:
+        return "done wrong: the digest was posted more than once"
     return None
 
 

@@ -1,22 +1,20 @@
 def check(world, calls, reference):
-    expected_queries = []
+    import re
+
+    def topics(query):
+        """The words searched for: the quoted values of the query, not its operators."""
+        return {w for value in re.findall(r"'((?:[^'\\]|\\')*)'", query.lower()) for w in re.findall(r"[a-z]{4,}", value)}
+
+    wanted = set()
     for step in reference:
         if step.get("tool") == "search_files":
-            q = step.get("arguments", {}).get("query")
-            if q:
-                expected_queries.append(q.lower())
+            wanted |= topics(step.get("arguments", {}).get("query") or "")
     searches = [c for c in calls if c.name == "search_files" and c.ok]
     if not searches:
         return "not done: agent made no search tool call"
-    if expected_queries:
-        matched = False
-        for c in searches:
-            q_arg = str(c.arguments.get("query", "")).lower()
-            if any(eq in q_arg or q_arg in eq or any(w in q_arg for w in eq.split()) for eq in expected_queries):
-                matched = True
-                break
-        if not matched:
-            return f"done wrong: searches did not query expected topic {expected_queries!r}"
+    searched = set().union(*(topics(str(c.arguments.get("query", ""))) for c in searches))
+    if wanted and not any(w in s or s in w for w in wanted for s in searched):
+        return f"done wrong: searches did not query expected topic {sorted(wanted)!r}"
     return None
 
 
