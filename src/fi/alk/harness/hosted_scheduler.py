@@ -295,8 +295,11 @@ class CallAborted(RuntimeError):
         partial: CallOutcome | None = None,
         marker: str | None = None,
         code: str = "call_failed",
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
+        # Producers may supply receipt-safe, JSON-compatible failure details.
+        self.details = details
         self.partial = partial
         self.marker = marker
         self.code = code

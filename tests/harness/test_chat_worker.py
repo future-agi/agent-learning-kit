@@ -246,17 +246,64 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     assert dict(os.environ) == original
 
 
+def test_cancel_during_handler_startup_closes_child(tmp_path, monkeypatch):
+    from threading import Event
+    from unittest.mock import Mock
+
+    child = Mock()
+    release = Event()
+    runner = chat_worker.IsolatedChatCallRunner(_Adapter(), _context(tmp_path))
+
+    async def cancel_during_startup():
+        started = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def acquire(*_args):
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(5)
+            return child
+
+        monkeypatch.setattr(chat_worker, "handler_child_for", acquire)
+        call = asyncio.create_task(runner.run(SimpleNamespace(), _ready_runtime()))
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            for _ in range(2):
+                call.cancel()
+                await asyncio.sleep(0)
+                assert not call.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(call, 5)
+        child.close.assert_called_once_with()
+        child.sock.fileno.assert_not_called()
+
+    asyncio.run(cancel_during_startup())
+
+
+@pytest.mark.parametrize("details", [None, {"stage": "connect", "attempt": 1}])
 def test_isolated_chat_runner_preserves_structured_worker_failure(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, details
 ):
     context = _context(tmp_path)
 
-    async def worker(*_args, **_kwargs):
-        return {
-            "error": "chat_target_failed: upstream unavailable",
-            "error_code": "target_agent_failed",
-            "error_marker": "target_unavailable",
-        }
+    async def fail(*_args, **_kwargs):
+        raise CallAborted(
+            "chat_target_failed: upstream unavailable",
+            code="target_agent_failed", marker="target_unavailable",
+            **({"details": details} if details is not None else {}),
+        )
+
+    async def worker(_module, payload, **_kwargs):
+        path = tmp_path / "result.json"
+        monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(path)])
+        await chat_worker.main()
+        result = json.loads(path.read_text())
+        assert ("details" in result) == (details is not None)
+        return result
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", fail)
 
     monkeypatch.setattr(chat_worker, "run_json_worker", worker)
     runner = chat_worker.IsolatedChatCallRunner(_Adapter(), context)
@@ -283,6 +330,7 @@ def test_isolated_chat_runner_preserves_structured_worker_failure(
     )
     assert error.value.code == "target_agent_failed"
     assert error.value.marker == "target_unavailable"
+    assert getattr(error.value, "details", None) == details
 
 
 @pytest.mark.parametrize("with_partial", [False, True])
