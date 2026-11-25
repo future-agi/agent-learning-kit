@@ -321,25 +321,45 @@ def route_action(endpoint: str) -> str:
     return endpoint.split("?", 1)[0].strip("/").replace("/", ".")
 
 
+def _entries(contract: Any) -> list[Mapping[str, Any]]:
+    listed = (
+        contract.get("tool_entrypoints")
+        if isinstance(contract, Mapping)
+        else getattr(contract, "tool_entrypoints", None)
+    )
+    return [one if isinstance(one, Mapping) else one.model_dump() for one in listed or []]
+
+
+def fault_action(action: str, contract: Any) -> str:
+    """The world action a fault names: one written as a contract route's path (`crm/apply_discount`) is that route's
+    action (`crm.apply_discount`); anything else, a method or a host around the path included, stays as written."""
+    if "/" not in action:
+        return action
+    read = route_action(action)
+    routes = {route_action(str(one.get("endpoint") or "")) for one in _entries(contract)} - {""}
+    return read if any(action_matches(read, route) for route in routes) else action
+
+
 def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
     """The scenario's faults with each one that names a tool by its name renamed to the world action of that tool's
     route, from the contract's own tool entrypoints, so the HTTP door, which sees only routes, holds it. A tool with no
-    route (one the agent runs in its own process) keeps its name, which the in-process door matches."""
-    entries = contract.get("tool_entrypoints") if isinstance(contract, Mapping) else getattr(contract, "tool_entrypoints", None)
+    route (one the agent runs in its own process) keeps its name, which the in-process door matches. An action written
+    as a route's path is read as that route's world action (`fault_action`)."""
     routes: dict[str, dict[str, str]] = {}
-    for entry in entries or []:
-        entry = entry if isinstance(entry, Mapping) else entry.model_dump()
+    for entry in _entries(contract):
         tool, route = str(entry.get("tool") or ""), route_action(str(entry.get("endpoint") or ""))
         if tool and route:
             # Two tools can share a route under different methods (GET and DELETE on `/orders/{id}`): the method keeps
             # a fault on one off the other.
             method = str(entry.get("method") or "").strip().upper()
             routes[tool] = {"action": route, **({"method": method} if method else {})}
-    return [
-        {**one, **routes[str(one.get("action"))]} if str(one.get("action") or "") in routes else dict(one)
-        for one in faults or []
-        if isinstance(one, Mapping)
-    ]
+    routed: list[dict[str, Any]] = []
+    for one in faults or []:
+        if not isinstance(one, Mapping):
+            continue
+        action = fault_action(str(one.get("action") or ""), contract)
+        routed.append({**one, "action": action, **routes.get(action, {})} if action else dict(one))
+    return routed
 
 
 def faults_named(
