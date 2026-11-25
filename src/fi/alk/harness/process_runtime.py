@@ -81,7 +81,14 @@ from .world_roles import (
     world_role_name,
 )
 from .egress_proxy import EgressProxy
-from .world_door import HARNESS_TABLES_DDL, PINNED_SEARCH_PATH, SEED_SENTINEL_QUERY, PostgresLog
+from .world_door import (
+    HARNESS_TABLES_COMPLETE,
+    HARNESS_TABLES_DDL,
+    HARNESS_TABLES_KEY,
+    PINNED_SEARCH_PATH,
+    SEED_SENTINEL_QUERY,
+    PostgresLog,
+)
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -4406,9 +4413,11 @@ def apply_store_seed(
     """§2c: "migrations then seed_files... applied in listed order" — migrations always precede
     seed_files, regardless of how many files either list holds, and each list keeps its own
     authored order (never sorted). ``after_migrations`` runs between the two lists. Migrations run as
-    ``migration_credentials`` when given (the non-superuser migrations login), the seed as ``credentials``."""
+    ``migration_credentials`` when given (the non-superuser migrations login), and the seed as that login too: what a
+    seed runs can then neither create in `pg_catalog` nor join a system extension, and runs as the rows' owner."""
     for files in (store.migrations, store.seed_files):
         as_migration = files is store.migrations and migration_credentials is not None
+        as_login = migration_credentials is not None
         for relative_path in files:
             path = bundle_dir / relative_path
             if as_migration:
@@ -4423,20 +4432,21 @@ def apply_store_seed(
             try:
                 apply_seed_file(
                     engine, path, port=port, dbname=dbname,
-                    credentials=migration_credentials if as_migration else credentials, process_name=process_name,
+                    credentials=migration_credentials if as_login else credentials, process_name=process_name,
                     sync_run=sync_run, user=user, group=group, rabbitmq_import=rabbitmq_import,
                     source_digest=source_digest, generic_artifact_root=generic_artifact_root,
                 )
             except ProcessRuntimeError as failed:
-                if not as_migration:
+                if not as_login:
                     raise
                 said = str(failed).split(": ", 1)[-1]
                 raise ProcessRuntimeError(
                     failed.stage,
                     failed.code,
-                    f"{said}. Migrations run as a login that is no superuser and owns only this database: one that "
-                    "makes an event trigger, a function in an untrusted language, a role or an extension only a "
-                    "superuser may add fails here; move that statement to a seed file or drop it.",
+                    f"{said}. Migrations and the seed run as a login that is no superuser and owns only this "
+                    "database: a statement that makes an event trigger, a function in an untrusted language, a role, "
+                    "an object in pg_catalog or an extension only a superuser may add fails here; drop it, or use a "
+                    "trusted extension instead.",
                     process=failed.process or process_name,
                     domain=failed.domain or FailureDomain.ENVIRONMENT,
                     diagnostics=failed.diagnostics,
@@ -5325,6 +5335,7 @@ def _freeze_one_store(
             else None
         )
         before_seed: set[SeedEscalation] = set()
+        harness_tables_complete = (manifest.metadata or {}).get(HARNESS_TABLES_KEY) == HARNESS_TABLES_COMPLETE
 
         def _snapshot_before_seed() -> None:
             # What the source's own migrations made: the seed check below refuses only what the seed adds or changes.
@@ -5335,6 +5346,7 @@ def _freeze_one_store(
                     baseline_db=baseline_dbname,
                     sql_runner=context.sql_runner,
                     process_name=process.name,
+                    complete=harness_tables_complete,
                 )
                 before_seed.update(
                     seed_escalation_snapshot(
@@ -5372,6 +5384,7 @@ def _freeze_one_store(
                 sql_runner=context.sql_runner,
                 process_name=process.name,
                 before_seed=before_seed,
+                complete=harness_tables_complete,
             )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
@@ -5839,11 +5852,18 @@ def _harness_table_shapes(
 
 
 def _harness_shape_problems(
-    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+    complete: bool = False,
 ) -> list[str]:
     """Each harness table column the harness does not make, or makes with another type: the door and the checks
     read the table as its own statements made it (a text `ok` stores a failed call as 'false', read as passed). A
-    column it adds later may be missing, as in a bundle sealed before that column was kept."""
+    column it adds later may be missing only in a bundle sealed before that column was kept; a bundle that says its
+    migration makes them all (``complete``) must have every table and every column."""
     shapes = _harness_table_shapes(
         port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name
     )
@@ -5860,6 +5880,13 @@ def _harness_shape_problems(
         read_only=True,
     )
     problems = []
+    found: dict[str, set[str]] = {}
+    for table, column, _kind in (row for row in rows or [] if len(row) == 3):
+        found.setdefault(str(table), set()).add(str(column))
+    if complete:
+        for table, columns in shapes.items():
+            for column in sorted(set(columns) - found.get(table, set())):
+                problems.append(f"harness table public.{table} lacks column {column}, which the harness makes")
     for table, column, kind in (row for row in rows or [] if len(row) == 3):
         expected = shapes.get(str(table), {}).get(str(column))
         if str(table) in shapes and expected != str(kind):
@@ -5871,7 +5898,13 @@ def _harness_shape_problems(
 
 
 def _adopt_harness_tables(
-    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+    complete: bool = False,
 ) -> None:
     """After the migrations, which make the harness's own tables (the bundle's prefix) as the migrations' login: each
     `_alk_*` table must run no code of anyone's, and is then the superuser's, so nothing the migrations made can
@@ -5893,7 +5926,12 @@ def _adopt_harness_tables(
 
     found = [str(row[0]) for row in run(HARNESS_TABLES_WITH_CODE, read_only=True) or [] if row]
     found += _harness_shape_problems(
-        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+        port=port,
+        credentials=credentials,
+        baseline_db=baseline_db,
+        sql_runner=sql_runner,
+        process_name=process_name,
+        complete=complete,
     )
     if found:
         raise ProcessRuntimeError(
@@ -5983,6 +6021,7 @@ def _refuse_seed_escalation(
     sql_runner: SqlRunner,
     process_name: str,
     before_seed: set[SeedEscalation] | None = None,
+    complete: bool = False,
 ) -> None:
     """After the seed, which runs as the superuser: the build fails when the seed left a way to act with more rights
     than a world's role has, before any world is made from it. What the source's migrations already made
@@ -6020,7 +6059,12 @@ def _refuse_seed_escalation(
     )
     found = [what for _db, what, _print in ours | (others - (before_seed or set()))]
     found += _harness_shape_problems(
-        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+        port=port,
+        credentials=credentials,
+        baseline_db=baseline_db,
+        sql_runner=sql_runner,
+        process_name=process_name,
+        complete=complete,
     )
     if found:
         raise ProcessRuntimeError(

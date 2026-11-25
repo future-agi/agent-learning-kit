@@ -119,6 +119,8 @@ from .world_door import (
     DOOR_CAPABILITIES,
     DOOR_FILE,
     HARNESS_TABLES_DDL,
+    HARNESS_TABLES_COMPLETE,
+    HARNESS_TABLES_KEY,
     SEED_SENTINEL_QUERY,
     method_action,
     world_action,
@@ -4751,6 +4753,8 @@ def author_bundle_v2(
                 "environment_plan_version": "2",
                 # A build's seal, told apart from a chat's reseal, which stamps the tree it sealed from instead.
                 "sealed_from": BUILD_SEAL,
+                # Its migration makes every harness table with every column: the build requires each of them.
+                HARNESS_TABLES_KEY: HARNESS_TABLES_COMPLETE,
                 **(
                     {"source_tool_trace_version": _SOURCE_TOOL_TRACE_VERSION}
                     if _uses_source_tool_trace(plan.processes)

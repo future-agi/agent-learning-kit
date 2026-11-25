@@ -605,6 +605,11 @@ def pinned_options(options: str = "") -> str:
     return f"{options} {PINNED_SEARCH_PATH}".strip()
 
 
+# A bundle whose migration makes every harness table with every column says so in its metadata; one sealed before may
+# lack columns the harness adds later.
+HARNESS_TABLES_KEY = "harness_tables"
+HARNESS_TABLES_COMPLETE = "complete"
+
 # The baseline's seed sentinel, the harness's own table, named with its schema.
 SEED_SENTINEL_QUERY = "SELECT id FROM public.harness_seed_sentinel WHERE id='ready'"
 

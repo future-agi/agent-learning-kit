@@ -425,6 +425,9 @@ def test_a_world_with_a_handler_channel_never_imports_the_agent_code(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(chat, "_HostedToolStore", _Store)
+    from fi.alk.harness import privilege
+
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     context, source = _bundle(tmp_path)
     contract = AgentContract.model_validate_json(
         (context.bundle_dir / "contract.json").read_text()
@@ -441,8 +444,8 @@ def test_a_world_with_a_handler_channel_never_imports_the_agent_code(
 
     assert isinstance(world, ChildWorld)
     assert call.result == {"from": "child"} and world.calls == [call]
-    # Checks grade the rows the harness reads, as with one fixed user.
-    assert _Store.dsns[-1] == _DSN
+    # Checks read the rows as the world's own role: nothing of the world's runs with the harness's rights.
+    assert _Store.dsns[-1].dsn() == _WORLD_DSN
     assert _AGENT_MODULE not in sys.modules
     assert str(source) not in sys.path
     with pytest.raises(RuntimeError):

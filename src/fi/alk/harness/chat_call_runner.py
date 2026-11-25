@@ -49,7 +49,8 @@ from .usage import (
 from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
 from . import tool_evidence as evidence
 from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
-from .world.stores.postgres import AttachedPostgresStore
+from .world.stores import StoreError
+from .world.stores.postgres import AttachedPostgresStore, attached_world_store
 from .world_door import door_failure, world_action
 
 logger = logging.getLogger(__name__)
@@ -282,8 +283,11 @@ class _HostedToolStore:
 
     key = "hosted-postgres"
 
-    def __init__(self, dsn: str) -> None:
-        self._store = AttachedPostgresStore(dsn)
+    def __init__(self, target: str | AttachedPostgresStore) -> None:
+        # A store already chosen for the world (`attached_world_store`), or the world role's address (a handler child).
+        self._store = (
+            target if isinstance(target, AttachedPostgresStore) else AttachedPostgresStore(target, restore_as_role=True)
+        )
 
     def start(self) -> None:
         self._store.start()
@@ -570,17 +574,22 @@ def tool_world(
             "chat_world_unavailable: world_db postgres endpoint is absent"
         )
     tools = [tool.model_dump(mode="json") for tool in contract.tools]
+    # The world's own SQL (a handler's, a check's read) runs as its role, never as the harness.
+    try:
+        attached = attached_world_store(endpoint)
+    except StoreError as error:
+        raise CallAborted(str(error)) from error
     if handler_channel is not None:
         # Under per-user isolation the handlers, and the agent code they import, run in the
         # handler child; nothing of the agent's code is imported into this process. State is
         # read as the harness, as with one fixed user, so checks grade the same rows.
         return ChildWorld(
-            store=_HostedToolStore(endpoint.address),
+            store=_HostedToolStore(attached),
             channel=handler_channel,
             tools=tools,
             refusal_signature=contract.refusal_signature,
         )
-    world = GeneratedWorld(store=_HostedToolStore(endpoint.address))
+    world = GeneratedWorld(store=_HostedToolStore(attached))
     world.tools = tools
     world.handlers = handler_sources(bundle_dir, contract)
     world.refusal_signature = contract.refusal_signature

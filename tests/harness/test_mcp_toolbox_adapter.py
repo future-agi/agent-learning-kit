@@ -111,6 +111,10 @@ def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_p
         yield Connection()
 
     monkeypatch.setattr(psycopg, "connect", connect)
+    # A bundle sealed before the world's role: the door's path, found free of shadows.
+    from fi.alk.harness import mcp_toolbox_adapter
+
+    monkeypatch.setitem(mcp_toolbox_adapter._SHADOW_FREE, "unused", True)
     statement = (
         "SELECT '$1', $$ $2 $$, $tag$ $1 $tag$, '100%', $2, $1, $1 -- $99\n/* $98 */"
     )

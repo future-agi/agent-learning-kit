@@ -136,6 +136,9 @@ class HostedWorld(HttpObservationHandle):
             **self._http_client._execution_state(),
             "kind": "hosted",
             "dsn": self._store.dsn(),
+            # How the world's store resets (`attached_world_store`): the phase worker's store does the same.
+            "admin_dsn": getattr(self._store, "_admin_dsn", None),
+            "restore_as_role": bool(getattr(self._store, "_restore_as_role", False)),
             "world_index": self.world_index,
             "rng": self.rng.getstate(),
             "baseline": self._baseline_row_counts,

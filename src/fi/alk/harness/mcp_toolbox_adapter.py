@@ -37,6 +37,27 @@ def _signature(parameters: list[dict[str, Any]]) -> str:
     return ", ".join(names)
 
 
+# A bundle sealed before the world's role ran the tools runs them as the door, with `public` on its path: a function or
+# operator of the world's named like a system one could then run with the door's rights. Checked once per database.
+_SHADOWS = (
+    "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+    "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%' "
+    "AND EXISTS (SELECT 1 FROM pg_proc s WHERE s.pronamespace = 11::oid AND s.proname = p.proname) "
+    "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 1255::oid AND d.objid = p.oid "
+    "AND d.deptype = 'e'::\"char\")"
+)
+_SHADOW_FREE: dict[str, bool] = {}
+
+
+def _door_path_is_shadow_free(database_url: str) -> bool:
+    import psycopg
+
+    if database_url not in _SHADOW_FREE:
+        with psycopg.connect(database_url, autocommit=True, options="-c search_path=pg_catalog,pg_temp") as check:
+            _SHADOW_FREE[database_url] = check.execute(_SHADOWS).fetchone()[0] == 0
+    return _SHADOW_FREE[database_url]
+
+
 def _execute(
     tool_name: str,
     spec: dict[str, Any],
@@ -57,6 +78,11 @@ def _execute(
     result: Any = None
     error: str | None = None
     try:
+        if not records_url and not _door_path_is_shadow_free(database_url):
+            raise RuntimeError(
+                "door_path_refused: this environment was sealed before its tools ran with the world's own role, and "
+                "the world defines a function named like a system one; rebuild the environment"
+            )
         # A bundle sealed before the world's role was given here runs the statement as the door: the system's own
         # functions come first, and the statement still finds the world's tables.
         with psycopg.connect(
