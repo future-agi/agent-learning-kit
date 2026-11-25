@@ -210,13 +210,17 @@ function markedJson(text, pairs, calls) {
       }
       putAttributes(resourceSpan.resource, [...pairs]);
     }
-    if (!calls) continue;
     for (const scopeSpan of field(resourceSpan, "scopeSpans", "scope_spans")) {
       for (const span of field(scopeSpan, "spans", "spans")) {
         if (!span || typeof span !== "object") continue;
         const start = nanos(span.startTimeUnixNano ?? span.start_time_unix_nano);
-        const call = start === null ? null : calls.at(start);
-        if (call) putAttributes(span, [[CALL_KEY, call]]);
+        const call = start === null || !calls ? null : calls.at(start);
+        if (call) {
+          putAttributes(span, [[CALL_KEY, call]]);
+        } else if (Array.isArray(span.attributes)) {
+          // Only the hook names a span's call: one the exporter set itself is never sent.
+          span.attributes = span.attributes.filter((one) => !(one && one.key === CALL_KEY));
+        }
       }
     }
   }

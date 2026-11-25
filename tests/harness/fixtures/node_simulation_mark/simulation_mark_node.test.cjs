@@ -706,3 +706,30 @@ test("a request whose agent picks its own connection is not given the key", asyn
     Array(4).fill(["customer-key", undefined]),
   );
 });
+
+test("a call id the exporter set itself is dropped from a span the hook does not stamp", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
+  const callFile = path.join(dir, "simulation_call_execution_id");
+  const forged = [
+    { key: "fi.simulator.call_execution_id", value: { stringValue: "someone-elses-call" } },
+    { key: "fi.span.kind", value: { stringValue: "LLM" } },
+  ];
+  const body = JSON.stringify(otlp([span("forged", 1n, forged)]));
+  const script = `
+    await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+      method: "POST", headers: { "content-type": "application/json" }, body: ${JSON.stringify(body)},
+    });
+  `;
+  // With a call file (no call running at the span's start) and without one.
+  for (const env of [envFor(collector, callFile), envFor(collector)]) {
+    const result = await run(script, env);
+    assert.equal(result.code, 0, result.stderr);
+  }
+  assert.equal(collector.seen.length, 2);
+  for (const sent of collector.seen) {
+    const exported = JSON.parse(sent.body.toString());
+    assert.deepEqual(attributes(exported.resourceSpans[0].scopeSpans[0].spans[0].attributes), { "fi.span.kind": "LLM" });
+  }
+});
