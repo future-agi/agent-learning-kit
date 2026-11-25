@@ -84,14 +84,24 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         "rolsuper::text || rolcreaterole::text FROM pg_roles "
         "WHERE (rolsuper OR rolcreaterole) AND rolname <> current_user"
     )
+    # A SECURITY DEFINER function runs as its owner: it is a way to more rights only when that owner is a superuser or
+    # holds a right on a harness table. One the migrations' login owns (no superuser, no harness right) runs as that.
+    owner_reaches = (
+        "(o.rolsuper OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind IN ('r', 'p', 'v', 'm') "
+        "AND c.relname LIKE '\\_alk\\_%' AND has_table_privilege(o.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE')))"
+    )
     code = (
         "SELECT 'event trigger ' || evtname, "
         "md5(evtevent || evtfoid::text || evtenabled::text || evtowner::text || coalesce(evttags::text, '')) "
         "FROM pg_event_trigger "
-        "UNION ALL SELECT 'security definer function ' || p.oid::regprocedure::text, "
-        "md5(p.prosrc || coalesce(p.probin, '') || p.proowner::text || coalesce(p.proconfig::text, '')) "
-        "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-        "WHERE p.prosecdef AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
+        "UNION ALL SELECT CASE WHEN p.prosecdef THEN 'security definer function ' "
+        "ELSE 'function in untrusted language ' || l.lanname || ' ' END || p.oid::regprocedure::text, "
+        "md5(p.prosrc || coalesce(p.probin, '') || p.proowner::text || coalesce(p.proconfig::text, '') "
+        "|| coalesce(p.proacl::text, '')) "
+        "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang "
+        "JOIN pg_roles o ON o.oid = p.proowner "
+        "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') "
+        f"AND ((p.prosecdef AND {owner_reaches}) OR (NOT l.lanpltrusted AND l.lanname NOT IN ('internal', 'c')))"
     )
     return SeedEscalationQueries(our_roles, other_roles, code)
 
@@ -102,6 +112,6 @@ def seed_escalation_reason(process_name: str, found: Iterable[str]) -> str:
         f"{process_name}: the seed gave rights no world may have: "
         + "; ".join(sorted(set(found)))
         + ". Change the seed so it gives no role SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS, puts "
-        "no role in another, leaves the harness's roles as they are, and defines no event trigger or SECURITY "
-        "DEFINER function."
+        "no role in another, leaves the harness's roles as they are, and defines no event trigger, function in an "
+        "untrusted language, or SECURITY DEFINER function owned by a superuser."
     )
