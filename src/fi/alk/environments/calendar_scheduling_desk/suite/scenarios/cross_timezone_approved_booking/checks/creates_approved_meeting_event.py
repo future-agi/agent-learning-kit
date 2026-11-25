@@ -1,4 +1,5 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    from datetime import datetime
     made = [c for c in calls if c.name == "create_event" and c.ok]
     if not made:
         return "not done: no successful create_event call was made"
@@ -6,7 +7,28 @@ def check(world, calls):
     evts = [e for e in st.get("calendar_events", []) if e.get("status") == "confirmed" and e.get("event_id", "").startswith("EVT-CR-")]
     if not evts:
         return "not done: created event was not found in confirmed status in world state"
-    outbox = st.get("calendar_simulated_outbox", [])
+    if len(evts) > 1:
+        return f"done wrong: more than one event was created: {sorted(e['event_id'] for e in evts)}"
+    event = evts[0]
+    wanted = next((s.get("arguments", {}) for s in reference or () if s.get("tool") == "create_event"), {})
+
+    def moment(value):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    if wanted.get("calendarId") and event["calendar_id"] != wanted["calendarId"]:
+        return f"done wrong: event was created on {event['calendar_id']!r}, expected {wanted['calendarId']!r}"
+    for argument, column in (("startTime", "start_time"), ("endTime", "end_time")):
+        if wanted.get(argument) and moment(event[column]) != moment(wanted[argument]):
+            return f"done wrong: event {column} is {event[column]}, expected {wanted[argument]}"
+    invited = {a["email"].lower() for a in st.get("calendar_event_attendees", []) if a["event_id"] == event["event_id"]}
+    expected = {a["email"].lower() for a in wanted.get("attendees") or []}
+    missing = expected - invited
+    if missing:
+        return f"done wrong: attendees not invited: {sorted(missing)}"
+    caller = {a["user_id"].lower() for a in st.get("current_actor", [])}
+    if expected and invited - expected - caller:
+        return f"done wrong: attendees invited who were not asked for: {sorted(invited - expected - caller)}"
+    outbox = [m for m in st.get("calendar_simulated_outbox", []) if m.get("event_id") == event["event_id"]]
     if not outbox:
         return "not done: simulated invitation outbox record was not created"
     return None

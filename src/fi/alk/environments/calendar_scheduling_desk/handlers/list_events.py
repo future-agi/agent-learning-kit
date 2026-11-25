@@ -1,3 +1,21 @@
+def _moment(value, zone):
+    """The moment an ISO 8601 time names, in UTC. A time without an offset, and an all-day date
+    (its midnight), are local to `zone`."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (moment if moment.tzinfo else moment.replace(tzinfo=ZoneInfo(zone))).astimezone(timezone.utc)
+
+
+def _utc(name, value, zone):
+    """A time argument as events store it, in UTC."""
+    try:
+        return _moment(value, zone).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        raise ToolError(f"{name} {value!r} is not a time in {zone!r}", category="invalid_input")
+
+
 def handle(args, db):
     import re
 
@@ -16,7 +34,10 @@ def handle(args, db):
         raise ToolError(f"startTime must be an ISO 8601 timestamp: {start_time}", category="invalid_input")
     if end_time and not re.match(iso_pattern, end_time):
         raise ToolError(f"endTime must be an ISO 8601 timestamp: {end_time}", category="invalid_input")
-    if start_time and end_time and start_time >= end_time:
+    time_zone = args.get("timeZone") or cal["time_zone"]
+    start = _moment(_utc("startTime", start_time, time_zone), "UTC") if start_time else None
+    end = _moment(_utc("endTime", end_time, time_zone), "UTC") if end_time else None
+    if start and end and start >= end:
         raise ToolError("startTime must be less than endTime", category="invalid_input")
     page_size = args.get("pageSize")
     if page_size is None:
@@ -29,21 +50,20 @@ def handle(args, db):
             offset = int(args["pageToken"])
         except ValueError:
             raise ToolError(f"Invalid pageToken: {args['pageToken']}", category="invalid_input")
+        if offset < 0:
+            raise ToolError(f"Invalid pageToken: {args['pageToken']}", category="invalid_input")
     order_by = args.get("orderBy") or "default"
     if order_by not in ("default", "startTime", "startTimeDesc", "lastModified"):
         raise ToolError(f"Unknown orderBy {order_by!r}", category="invalid_input")
     full_text = (args.get("fullText") or "").lower().split()
 
-    query = "SELECT * FROM calendar_events WHERE calendar_id = ? AND status != 'cancelled'"
-    params = [cal_id]
-    if start_time:
-        query += " AND end_time >= ?"
-        params.append(start_time)
-    if end_time:
-        query += " AND start_time <= ?"
-        params.append(end_time)
-    query += {"startTimeDesc": " ORDER BY start_time DESC", "lastModified": " ORDER BY updated_at DESC"}.get(order_by, " ORDER BY start_time ASC")
-    rows = db.query(query, params)
+    rows = [
+        r
+        for r in db.query("SELECT * FROM calendar_events WHERE calendar_id = ? AND status != 'cancelled' ORDER BY updated_at DESC", (cal_id,))
+        if not (start and _moment(r["end_time"], r["time_zone"]) < start) and not (end and _moment(r["start_time"], r["time_zone"]) > end)
+    ]
+    if order_by != "lastModified":
+        rows.sort(key=lambda r: _moment(r["start_time"], r["time_zone"]), reverse=order_by == "startTimeDesc")
 
     events = []
     for r in rows:

@@ -78,7 +78,10 @@
       "environment_arguments": {},
       "fixed": {
         "approval_id": "caller: provide your approval token APP-1001",
-        "calendarId": "caller: CAL-PRIMARY"
+        "calendarId": "caller: CAL-PRIMARY",
+        "startTime": "caller: 14:00:00Z tomorrow October 27, 2026",
+        "endTime": "caller: 30-minute meeting from 14:00:00Z",
+        "attendees": "caller: bob@company.com and charlie@company.com"
       }
     }
   ],

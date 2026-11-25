@@ -59,7 +59,10 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "approval_id": "caller: provide token APP-SE-01"
+        "approval_id": "caller: provide token APP-SE-01",
+        "eventId": "caller: EVT-SE-01",
+        "startTime": "caller: Oct 29 at 10:00 AM EDT (14:00:00Z)",
+        "endTime": "caller: 14:30:00Z"
       }
     }
   ],

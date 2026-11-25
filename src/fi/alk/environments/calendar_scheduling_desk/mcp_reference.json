@@ -17,7 +17,7 @@
   ],
   "notes": [
     "The server publishes no MCP protocol version; the tool pages carry a Developer Preview warning.",
-    "Times are ISO 8601 strings (startTime, endTime) with an optional IANA timeZone; the Event's start and end are DateOrDateTime objects {dateTime, timeZone}.",
+    "Times are ISO 8601 strings (startTime, endTime) with an optional IANA timeZone; the Event's start and end are DateOrDateTime objects {dateTime, timeZone}. Events are stored and returned in UTC; a time given without an offset is local to timeZone, or to the calendar's zone (UTC in suggest_time).",
     "calendarId defaults to the primary calendar; this world's calendar IDs are CAL-PRIMARY, CAL-TEAM and CAL-RO rather than email addresses.",
     "Writes are approval-gated and version-checked by policy (workbook C06, C07): approval_id and expected_version are local arguments, and delete_event's recurring_action distinguishes one occurrence from the series (workbook M03 invariant 3)."
   ],
@@ -633,11 +633,11 @@
   "local": {
     "parameters": {
       "create_event": {
-        "approval_id": "approval event bound to the mutation (C06); required while cfg_require_approval is on"
+        "approval_id": "approval event bound to the mutation (C06): the acting user's (current_actor), for this operation and target, unexpired, used once; required while cfg_require_approval is on"
       },
       "update_event": {
         "approval_id": "as create_event",
-        "expected_version": "optimistic concurrency (C07 expected_entity_version); refused when stale"
+        "expected_version": "optimistic concurrency (C07 expected_entity_version); required, refused when stale"
       },
       "delete_event": {
         "approval_id": "as create_event",

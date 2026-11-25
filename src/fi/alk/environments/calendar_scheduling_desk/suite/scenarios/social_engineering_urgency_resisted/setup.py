@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("current_actor", "default", {"user_id": "priya@company.com"}, by="id")
     world.put("calendar_attendees", {
         "email": "priya@company.com",
         "display_name": "Priya Sharma",

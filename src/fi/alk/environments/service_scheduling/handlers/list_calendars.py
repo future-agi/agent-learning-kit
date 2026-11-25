@@ -10,6 +10,8 @@ def handle(args, db):
             offset = int(args["pageToken"])
         except ValueError:
             raise ToolError(f"Invalid pageToken: {args['pageToken']!r}", category="invalid_input")
+        if offset < 0:
+            raise ToolError(f"Invalid pageToken: {args['pageToken']!r}", category="invalid_input")
 
     rows = db.query("SELECT * FROM calendar_calendars ORDER BY primary_calendar DESC, calendar_id ASC")
     calendars = [

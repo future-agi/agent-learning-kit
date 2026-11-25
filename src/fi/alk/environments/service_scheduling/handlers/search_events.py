@@ -39,6 +39,8 @@ def handle(args, db):
             offset = int(args["pageToken"])
         except ValueError:
             raise ToolError(f"Invalid pageToken: {args['pageToken']}", category="invalid_input")
+        if offset < 0:
+            raise ToolError(f"Invalid pageToken: {args['pageToken']}", category="invalid_input")
 
     # The user's primary calendar only, as the official tool searches.
     primary = db.one("SELECT calendar_id FROM calendar_calendars WHERE primary_calendar = TRUE")
