@@ -513,9 +513,10 @@ def test_a_browser_that_never_opens_its_port_is_stopped(tmp_path, monkeypatch) -
     try:
         with pytest.raises(RuntimeError, match="within"):
             kit.start()
+        # Stopped by the failed start itself, before anything closes the kit.
+        assert stopped == [handle]
     finally:
         kit.close()
-    assert stopped == [handle]
 
 
 def test_a_browser_that_exits_at_once_says_so_with_the_end_of_its_output(tmp_path) -> None:

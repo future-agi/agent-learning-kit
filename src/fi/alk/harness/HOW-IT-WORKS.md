@@ -121,13 +121,18 @@ for the world's life, which counts the clients that attach. The browser's reques
 refusing proxy of its own whose list is the sites and nothing else: never loopback, and never a
 site whose name resolves to loopback; Chromium sends loopback through it too, and QUIC and WebRTC
 are off. A refusal is logged at the world's door as the agent's `egress_blocked` attempt marked
-`via: browser`, and shows in the trial's `blocked` list, only while a client holds the browser;
-the browser's own service traffic is pointed at `kit-browser.invalid` and never logged. A trial
-says `browser_not_used` when no client attached, and `browser_not_started` when the job has sites
-for an agent not read as needing a browser. That bound holds for the environment's browser only:
-the agent's own code, or a browser it starts itself, is bound by the sandbox's firewall. It covers
-what the browser is asked to load, not a client that changes the browser's own settings through
-its DevTools address.
+`via: browser`, and shows in the trial's `blocked` list, once a client has attached to the browser
+running now and until that browser stops; before that, and for the browser's own service traffic
+(pointed at `kit-browser.invalid`), nothing is logged. The proxy sees a host, not who in the browser
+asked, so its count holds a page's own requests (scripts, fonts, a favicon) as well as the agent's
+navigations; the browser record tells them apart. A trial says `browser_not_used` when no client
+attached, and `browser_not_started` when the job has sites for an agent not read as needing a
+browser; both are reported, not graded. The relay serves as many clients as the egress proxy does
+and lets a connection idle both ways go after as long as the longest call allowed. That bound holds
+for the environment's browser only: the agent's own code, or a browser it starts itself, is bound by
+the sandbox's firewall. It covers what the browser is asked to load over the network, not local
+files the agent's user can read, nor a client that changes the browser's own settings through its
+DevTools address.
 
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the

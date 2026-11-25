@@ -12,13 +12,19 @@ Two bounds hold, and they are not the same:
 - The sandbox as a whole reaches the firewall's wider list. The agent's own code, or a browser it
   starts itself, is bound only by that.
 
-The first bound covers what the browser is asked to load. It does not hold against a client that
-changes the browser's own settings through its DevTools address, which that address allows; a
-filter between the agent and the browser would be needed for that.
+The first bound covers what the browser is asked to load over the network. It does not hold against a
+client that changes the browser's own settings through its DevTools address, which that address
+allows; a filter between the agent and the browser would be needed for that. Nor does it cover
+local files: the browser can open what the agent's user can read, as the agent itself can.
 
 The browser runs as the agent's user with a bare environment, starts on an empty profile at each
 reset, and its own background traffic is switched off as far as Chromium's switches allow. What it
-still asks for on its own is never logged as the agent's attempt.
+asks for before a client attaches is never logged as the agent's attempt.
+
+What the proxy logs is per host: it sees a host name, not who asked. Once a client has attached, a
+refused request is logged whether the agent's navigation asked for it or a page it opened did (a
+script, a font, a favicon), and a refused https site is asked for again by the browser itself.
+Telling those apart is the browser record's work, from inside the browser.
 """
 
 from __future__ import annotations
@@ -167,9 +173,10 @@ def _resolve(host: str) -> str:
 class BrowserProxy(EgressProxy):
     """The browser's own refusing proxy: the environment's sites, never loopback, and nothing else.
 
-    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, only while a
-    client holds the browser: before that only the browser itself can have asked. A request for the
-    housekeeping name is never logged.
+    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, once a client
+    has attached to the browser now running, and until it stops: before that only the browser itself can
+    have asked. It is logged by host, whoever in the browser asked. A request for the housekeeping name is
+    never logged.
     """
 
     via = "browser"
