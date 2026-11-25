@@ -36,6 +36,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
 const nodeModule = require("node:module");
+const nodePath = require("node:path");
 const zlib = require("node:zlib");
 
 const CALL_FILE = "FI_SIMULATION_CALL_FILE";
@@ -136,11 +137,26 @@ class CallWindows {
       }
     }
     this.seen = seen;
-    const now = stat === null ? BigInt(Date.now()) * 1000000n : stat.mtimeNs;
-    if (open && open.end === null) open.end = now;
+    if (open && open.end === null) {
+      // A replaced file ends the window at the new file's write; a removed one at the removal,
+      // which set its folder's write time, else at the time it was seen gone.
+      let end = stat === null ? this.removedAt() : stat.mtimeNs;
+      if (end < open.start) end = open.start;
+      open.end = end;
+    }
     if (call !== null) {
       this.windows.push({ call, start: stat.mtimeNs, end: null });
       if (this.windows.length > WINDOWS_KEPT) this.windows.shift();
+    }
+  }
+
+  removedAt() {
+    const now = BigInt(Date.now()) * 1000000n;
+    try {
+      const folder = fs.statSync(nodePath.dirname(this.path), { bigint: true }).mtimeNs;
+      return folder < now ? folder : now;
+    } catch (_) {
+      return now;
     }
   }
 

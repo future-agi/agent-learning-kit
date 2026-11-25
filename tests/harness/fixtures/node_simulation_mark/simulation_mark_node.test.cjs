@@ -353,3 +353,41 @@ test("the Future AGI keys in the environment are never set, read or changed", as
     assert.deepEqual(JSON.parse(result.stdout), expected);
   }
 });
+
+test("a span that starts after the call file is removed, before the hook looks, has no call", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
+  const callFile = path.join(dir, "simulation_call_execution_id");
+  // The event loop is held from the removal to the export, so no poll sees the removal first.
+  const script = `
+    import fs from "node:fs";
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const hold = (ms) => { const until = Date.now() + ms; while (Date.now() < until); };
+    const ns = () => BigInt(Date.now()) * 1000000n;
+    const span = (name, start) => ({ traceId: "0af7651916cd43dd8448eb211c80319c", spanId: "b7ad6b7169203331", name,
+      startTimeUnixNano: String(start), endTimeUnixNano: String(start + 1000n), attributes: [] });
+    fs.writeFileSync(${JSON.stringify(callFile)}, "call-a");
+    await wait(250);
+    const duringA = ns();
+    hold(30);
+    fs.unlinkSync(${JSON.stringify(callFile)});
+    hold(50);
+    const afterA = ns();
+    hold(30);
+    await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans: [span("a", duringA), span("after", afterA)] }] }] }),
+    });
+  `;
+  const result = await run(script, envFor(collector, callFile));
+  assert.equal(result.code, 0, result.stderr);
+  const exported = JSON.parse(collector.seen[0].body.toString());
+  const stamps = Object.fromEntries(
+    exported.resourceSpans[0].scopeSpans[0].spans.map((one) => [
+      one.name,
+      attributes(one.attributes)["fi.simulator.call_execution_id"] ?? null,
+    ]),
+  );
+  assert.deepEqual(stamps, { a: "call-a", after: null });
+});
