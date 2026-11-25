@@ -22,6 +22,7 @@ from fi.alk.harness.prove import play_reference_step, run_steps
 from fi.alk.harness.releases import WORLD
 
 VERTICALS = (
+    "banking",
     "retail",
     "hr",
     "internal_it",

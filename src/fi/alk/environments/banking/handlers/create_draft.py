@@ -1,3 +1,44 @@
+_BANK = "@apexhorizonbank.com"
+
+
+def _addresses(*fields):
+    """The complete mailbox addresses in address fields ("a@x, Name <b@y>"), lower-cased. Only a
+    whole address is one: a display name, or a longer address that contains it, is not."""
+    from email.utils import getaddresses
+
+    return {address.strip().lower() for _, address in getaddresses([f for f in fields if f]) if "@" in address}
+
+
+def _caller_email(db):
+    """The email of the customer signed in to this conversation, set by the session."""
+    row = db.one("SELECT c.email FROM session_caller s JOIN customers c ON c.customer_id = s.customer_id WHERE s.id = 'default'")
+    return row["email"].strip().lower() if row else None
+
+
+def _colleague(db):
+    """Whether the person in this conversation, as the session knows them, is one of the bank's
+    active support colleagues, who work the whole mailbox."""
+    return db.one("SELECT 1 AS x FROM session_caller s JOIN support_staff p ON p.staff_id = s.staff_id WHERE s.id = 'default' AND p.active = 1") is not None
+
+
+def _people(*fields):
+    """The non-bank addresses in comma-separated address fields."""
+    return {address for address in _addresses(*fields) if not address.endswith(_BANK)}
+
+
+def _yours(db, thread_id):
+    """The support mailbox holds every customer's email; a customer's thread is opened only for that
+    customer or a support colleague, and one with no customer on it only for a colleague."""
+    if _colleague(db):
+        return True
+    people = set()
+    for m in db.query("SELECT sender, recipient, cc FROM gmail_messages WHERE thread_id = ?", (thread_id,)):
+        people |= _people(m["sender"], m["recipient"], m["cc"])
+    for d in db.query("SELECT recipient, cc, bcc FROM gmail_drafts WHERE thread_id = ?", (thread_id,)):
+        people |= _people(d["recipient"], d["cc"], d["bcc"])
+    return people == {_caller_email(db)}
+
+
 def handle(args, db):
     def addresses(name):
         value = args.get(name)
@@ -23,6 +64,13 @@ def handle(args, db):
     clock_row = db.one("SELECT now FROM clock")
     now = clock_row["now"] if clock_row else "2026-10-26T10:00:00Z"
 
+    # A draft goes to the customer in the conversation (or the bank); a colleague drafts to any customer.
+    if not _colleague(db):
+        me = _caller_email(db)
+        others = _people(*to, *cc, *bcc) - {me}
+        if me is None or others:
+            raise ToolError(f"A draft goes only to the customer in this conversation; {sorted(others)} are not them", category="permission_denied")
+
     if reply_to:
         original = db.one("SELECT * FROM gmail_messages WHERE id = ?", (reply_to,))
         if original is None:
@@ -31,6 +79,8 @@ def handle(args, db):
         t = db.one("SELECT * FROM gmail_threads WHERE id = ?", (thread_id,))
         if t and t["is_restricted"]:
             raise ToolError(f"Access to thread {thread_id!r} is restricted", category="permission_denied")
+        if not _yours(db, thread_id):
+            raise ToolError(f"Thread {thread_id!r} is not the mail of the customer in this conversation", category="permission_denied")
         if not subject:
             subject = original["subject"] if original["subject"].lower().startswith("re:") else f"Re: {original['subject']}"
     else:

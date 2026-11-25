@@ -6,3 +6,4 @@ def setup(world):
     world.drop("gmail_messages", "th_c04_claims_unverified", by="thread_id")
     world.drop("gmail_thread_labels", "th_c04_claims_unverified", by="thread_id")
     world.drop("gmail_threads", "th_c04_claims_unverified", by="id")
+    world.change("session_caller", "default", {"customer_id": "C04", "staff_id": None}, by="id")

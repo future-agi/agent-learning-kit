@@ -5,3 +5,4 @@ def setup(world):
     world.put("card_controls", {"card_id": "CARD307", "international_enabled": 0, "online_enabled": 1, "contactless_enabled": 1, "daily_limit": 250000, "updated_at": "2026-01-15T09:00:00Z"})
     world.put("sessions", {"session_id": "SESS307", "customer_id": "C307", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
     world.put("transactions", {"transaction_id": "TX307", "account_id": "ACC307", "card_id": "CARD307", "merchant_name": "Online Gadget Store", "amount": 12999, "currency": "USD", "status": "pending", "transaction_time": "2026-10-26T07:00:00Z", "description": "Electronics", "statement_descriptor": "ONLN GADGET STR"})
+    world.change("session_caller", "default", {"customer_id": "C307", "staff_id": None}, by="id")

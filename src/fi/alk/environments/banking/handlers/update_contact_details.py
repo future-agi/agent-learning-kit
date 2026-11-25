@@ -1,5 +1,13 @@
 import json
 
+
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, session or passcode
+    the desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
 def handle(args, db):
     customer_id = args.get("customer_id")
     session_id = args.get("session_id")
@@ -19,6 +27,8 @@ def handle(args, db):
         raise ToolError("new_value is not an email address.")
     if field == "phone" and not new_value.lstrip("+").replace(" ", "").isdigit():
         raise ToolError("new_value is not a phone number.")
+    if customer_id != _caller(db):
+        raise ToolError("Only the customer signed in to this conversation is served; this is not them.", category="permission_denied")
     sess = db.one("SELECT * FROM sessions WHERE session_id = ?", [session_id])
     if not sess:
         raise ToolError(f"Session {session_id} not found.")
@@ -36,6 +46,8 @@ def handle(args, db):
     if request_key:
         existing = db.one("SELECT * FROM contact_change_requests WHERE request_key = ?", [request_key])
         if existing:
+            if (existing["customer_id"], existing["field"], existing["new_value"]) != (customer_id, field, new_value):
+                raise ToolError(f"request_key {request_key!r} was already used for a different request; use a new key for this one.", category="conflict")
             return {
                 "change_id": existing["change_id"],
                 "customer_id": customer_id,

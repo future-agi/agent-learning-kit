@@ -117,14 +117,11 @@ CREATE TABLE disputes (
     resolution TEXT
 );
 CREATE TABLE environment_policy (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-INSERT INTO environment_policy VALUES('verification_method','"passcode"');
 INSERT INTO environment_policy VALUES('max_failed_attempts','3');
 INSERT INTO environment_policy VALUES('allow_pending_disputes','false');
 INSERT INTO environment_policy VALUES('max_dispute_age_days','60');
 INSERT INTO environment_policy VALUES('allowed_reasons','"unrecognized_charge,incorrect_amount,duplicate_charge,goods_not_received"');
 INSERT INTO environment_policy VALUES('require_confirmation','true');
-INSERT INTO environment_policy VALUES('retry_limit','2');
-INSERT INTO environment_policy VALUES('lookback_days','7');
 INSERT INTO environment_policy VALUES('expedited_replacement_fee','2500');
 INSERT INTO environment_policy VALUES('max_daily_limit','500000');
 INSERT INTO environment_policy VALUES('foreign_transaction_fee_bps','300');
@@ -162,6 +159,30 @@ INSERT INTO sessions VALUES('SESS09','C09','chat',1,'2026-10-26T11:51:15Z',0,'20
 INSERT INTO sessions VALUES('SESS10','C10','chat',1,'2026-10-26T11:53:45Z',0,'2026-10-26T11:50:00Z',NULL);
 INSERT INTO sessions VALUES('SESS11','C11','chat',1,'2026-10-26T11:54:10Z',0,'2026-10-26T11:50:00Z',NULL);
 INSERT INTO sessions VALUES('SESS12','C12','chat',1,'2026-10-26T11:52:50Z',0,'2026-10-26T11:50:00Z',NULL);
+-- The bank's support colleagues, who work the mailbox with the assistant.
+CREATE TABLE support_staff (
+    staff_id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL,
+    active INTEGER NOT NULL
+);
+INSERT INTO support_staff VALUES('ST01','Ruth Adeyemi','ruth.adeyemi@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST02','Marco Ruiz','marco.ruiz@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST03','Dev Sharma','dev.sharma@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST04','Nina Okoro','nina.okoro@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST05','Aline Dupont','aline.dupont@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST06','Harold Finch','harold.finch@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST07','Ben Carter','ben.carter@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST08','Keiko Sato','keiko.sato@apexhorizonbank.com','support_agent',1);
+INSERT INTO support_staff VALUES('ST09','Alex Ward','alex.ward@apexhorizonbank.com','support_supervisor',1);
+-- Who is in this conversation, set by the session: a customer, a support colleague, or nobody identified.
+CREATE TABLE session_caller (
+    id TEXT PRIMARY KEY NOT NULL,
+    customer_id TEXT,
+    staff_id TEXT
+);
+INSERT INTO session_caller VALUES('default',NULL,NULL);
 CREATE TABLE transactions (
     transaction_id TEXT PRIMARY KEY NOT NULL,
     account_id TEXT NOT NULL,

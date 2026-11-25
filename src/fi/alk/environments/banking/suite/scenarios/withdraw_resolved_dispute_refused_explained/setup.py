@@ -1,2 +1,3 @@
 def setup(world):
     world.put("sessions", {"session_id": "SESS206", "customer_id": "C06", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
+    world.change("session_caller", "default", {"customer_id": "C06", "staff_id": None}, by="id")
