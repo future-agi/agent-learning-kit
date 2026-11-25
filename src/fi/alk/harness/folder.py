@@ -105,6 +105,12 @@ def check_ready(scenario: Scenario, world: GeneratedWorld) -> Outcome:
     return _run(scenario.ready_code, f"{scenario.name}/ready.py", "ready", world)
 
 
+def plain_name(name: str) -> bool:
+    """Whether a name is one path part. Scenario and sub-goal names become file names, and a name
+    such as `../composition-change/x` would write outside the suite."""
+    return name not in ("", ".", "..") and not set(name) & set("/\\\0")
+
+
 def folder_for(destination: Path, name: str) -> Path:
     return Path(destination) / SCENARIOS / name
 
@@ -136,6 +142,10 @@ def check_file(sub_goal: SubGoal) -> str:
 
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
+    if unplain := [
+        one for one in (scenario.name, *scenario.sub_goals) if not plain_name(one)
+    ]:
+        raise ValueError(f"not a plain file name: {', '.join(map(repr, unplain))}")
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 

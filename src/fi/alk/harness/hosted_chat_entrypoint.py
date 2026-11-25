@@ -1101,17 +1101,21 @@ class HostedChatRuntime:
 
     async def _open_for_composition(self) -> Stage:
         from .builder import open_for_composition
-        from .composition_edit import open_composition
+        from .composition_edit import SuiteProof, open_composition
 
         self.composition, laid_out = await asyncio.to_thread(open_composition, self.workspace)
         if laid_out:
             # The working copy is the composition's suite as published: nothing is unsaved yet.
             self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+        if self._view_proof is not None:
+            await asyncio.to_thread(self._view_proof.close)
+        self._view_proof = SuiteProof(self.composition, self._design_postgres)
         return open_for_composition(
             self.composition,
             platform=self._builder_platform_server(),
             ask=self._ask,
             hosted_prompt=self._hosted_prompt(),
+            postgres_proof=self._view_proof.scenario if self._view_proof.needed() else None,
         )
 
     async def _seal_composition(self) -> dict[str, Any] | None:
@@ -2328,7 +2332,7 @@ class HostedChatRuntime:
             with suppress(asyncio.CancelledError):
                 await activity_task
             await self.conversation.close()
-            # Its databases live on the design's cluster, so it closes first.
+            # Its databases live on the scratch cluster, so it closes first.
             if self._view_proof is not None:
                 self._view_proof.close()
             self._design_cluster.close()

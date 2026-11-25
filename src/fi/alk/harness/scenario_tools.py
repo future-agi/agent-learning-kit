@@ -69,6 +69,7 @@ from .folder import (
     SCENARIOS,
     apply_setup,
     document_for,
+    plain_name,
     check_problems,
     unasserted_behaviour,
     read_all,
@@ -2301,6 +2302,8 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    if unplain := [one for one in (scenario.name, *scenario.sub_goals) if not plain_name(one)]:
+        return _err(f"Not kept. These names cannot be file names: {', '.join(map(repr, unplain))}")
     try:
         contract = load_contract(world_root)
     except (OSError, ValueError):
