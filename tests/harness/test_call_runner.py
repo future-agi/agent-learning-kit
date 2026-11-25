@@ -5034,6 +5034,32 @@ def test_traceai_langchain_spans_of_tools_that_return_a_list_and_a_dict_are_the_
     assert evidence_notices(log, calls, {"find_hotels", "get_booking"}) == []
 
 
+def test_a_span_from_another_framework_whose_real_result_is_an_output_dict_is_the_agent_s_own_call_once(tmp_path):
+    from fi.alk.harness import tool_evidence as evidence
+    from fi.alk.harness.call_runner import collect_seam_calls, evidence_notices
+
+    span = {"name": "run_code", "is_error": False, "at": 100.0, "ended_at": 100.2, "source": "otel",
+            "event_id": "c3d9e1f0a2b4c6d8", "parent_span_id": "", "relationship": "unknown",
+            "arguments": json.dumps({"code": "print(1)"}), "output": json.dumps({"output": "1\n"})}
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text(json.dumps(span) + "\n")
+    reported = [
+        Call(name="run_code", arguments={"code": "print(1)"}, ok=True, at=101.3, result={"output": "1\n"},
+             runtime_ids={"call_id": "toolu_01"}, source=evidence.AGENT),
+    ]
+
+    calls = collect_seam_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)}), EvidenceSeam.TOOL_TRACE, reported, strict=True
+    )
+
+    assert [(call.name, call.source, call.seen_by) for call in calls] == [
+        ("run_code", evidence.AGENT, [evidence.SPAN]),
+    ]
+    assert calls[0].result == {"output": "1\n"}
+    log = [{"name": "run_code", "actor_id": "agent", "outcome": "committed"}]
+    assert evidence_notices(log, calls, {"run_code"}) == []
+
+
 def _ride_contract():
     """The ride voice agent's tools as its contract binds them: each a method of the agent, most calling the world over
     a route (one under another name), some agent-only steps that never reach the world."""

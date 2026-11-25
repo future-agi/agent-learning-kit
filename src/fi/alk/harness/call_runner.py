@@ -3072,8 +3072,9 @@ def _read_file_tool_calls(
         raw_at = record.get("at")
         result = None if is_error else _structured(output)
         if record.get("source") == _SPAN_SOURCE:
+            if _langchain_arguments(arguments):
+                result = _unwrapped_result(result)
             arguments = _unwrapped_arguments(arguments)
-            result = _unwrapped_result(result)
         call = Call(
             name=name,
             arguments=arguments,
@@ -3843,8 +3844,12 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def _langchain_arguments(arguments: dict[str, Any]) -> bool:
+    return set(arguments) == {"input"} and isinstance(arguments["input"], str)
+
+
 def _unwrapped_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
-    if set(arguments) != {"input"} or not isinstance(arguments["input"], str):
+    if not _langchain_arguments(arguments):
         return arguments
     inner = _structured(arguments["input"])
     return inner if isinstance(inner, dict) else arguments
