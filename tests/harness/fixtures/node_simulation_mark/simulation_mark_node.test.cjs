@@ -621,3 +621,46 @@ test("a span gets a call only while the hook saw that call's file, never one it 
   assert.ok([null, "call-d"].includes(stamps["in-short"]), JSON.stringify(stamps));
   assert.deepEqual({ ...stamps, "in-short": null }, { "in-a": "call-a", gap: null, "in-short": null, "after-e": null });
 });
+
+test("a client that copies the request's headers to follow a redirect never copies the ingest key", async (t) => {
+  const other = await stub();
+  const collector = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(307, { location: `http://127.0.0.1:${other.port}/v1/traces` });
+      res.end();
+    });
+  });
+  await new Promise((resolve) => collector.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    collector.close();
+    other.server.close();
+  });
+  const port = collector.address().port;
+  // As superagent does: the next hop is built from req.getHeaders().
+  const script = `
+    import http from "node:http";
+    const seen = await new Promise((resolve, reject) => {
+      const req = http.request("http://127.0.0.1:${port}/v1/traces", {
+        method: "POST", headers: { "content-type": "application/json", "x-api-key": "customer-key" },
+      }, (res) => {
+        res.resume();
+        const next = http.request(res.headers.location, { method: "POST", headers: req.getHeaders() }, (last) => {
+          last.resume();
+          last.on("end", () => resolve([req.getHeader("x-api-key"), req.getHeader("x-secret-key")]));
+        });
+        next.on("error", reject);
+        next.end("{}");
+      });
+      req.on("error", reject);
+      req.end("{}");
+    });
+    console.log(JSON.stringify(seen));
+  `;
+  const result = await run(script, envFor({ port }));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(other.seen.length, 1);
+  assert.equal(other.seen[0].headers["x-api-key"], "customer-key");
+  assert.equal(other.seen[0].headers["x-secret-key"], undefined);
+  assert.deepEqual(JSON.parse(result.stdout), ["customer-key", null]);
+});

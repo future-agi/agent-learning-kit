@@ -353,25 +353,62 @@ function install() {
     return Buffer.from(String(chunk), typeof encoding === "string" ? encoding : "utf8");
   }
 
-  /** Hold the body until `end`, then send it marked; the auth headers stay ours until sent. */
-  function buffered(req) {
+  /**
+   * Hold the body until `end`, then send it marked. The auth headers on the wire stay ours, and
+   * the request reads back the caller's own values for them: a client that copies the request's
+   * headers, to follow a redirect for one, never copies the ingest key.
+   */
+  function buffered(req, callerHeaders) {
     const originalWrite = req.write;
     const originalEnd = req.end;
     const originalSetHeader = req.setHeader;
+    const originalGetHeaders = req.getHeaders;
     const chunks = [];
     const ourValue = new Map(ours);
+    const callerValue = new Map(
+      headerEntries(callerHeaders)
+        .map(([name, value]) => [String(name).toLowerCase(), value])
+        .filter(([name]) => ourValue.has(name)),
+    );
     req.setHeader = function (name, value) {
       const lower = String(name).toLowerCase();
-      return originalSetHeader.call(this, name, ourValue.has(lower) ? ourValue.get(lower) : value);
+      if (!ourValue.has(lower)) return originalSetHeader.call(this, name, value);
+      callerValue.set(lower, value);
+      return originalSetHeader.call(this, name, ourValue.get(lower));
     };
     if (typeof req.appendHeader === "function") {
       const originalAppendHeader = req.appendHeader;
       req.appendHeader = function (name, value) {
         const lower = String(name).toLowerCase();
-        if (ourValue.has(lower)) return originalSetHeader.call(this, name, ourValue.get(lower));
-        return originalAppendHeader.call(this, name, value);
+        if (!ourValue.has(lower)) return originalAppendHeader.call(this, name, value);
+        callerValue.set(lower, value);
+        return originalSetHeader.call(this, name, ourValue.get(lower));
       };
     }
+    const originalRemoveHeader = req.removeHeader;
+    req.removeHeader = function (name) {
+      const lower = String(name).toLowerCase();
+      if (!ourValue.has(lower)) return originalRemoveHeader.call(this, name);
+      callerValue.delete(lower);
+    };
+    const originalGetHeader = req.getHeader;
+    req.getHeader = function (name) {
+      const lower = String(name).toLowerCase();
+      return ourValue.has(lower) ? callerValue.get(lower) : originalGetHeader.call(this, name);
+    };
+    const originalHasHeader = req.hasHeader;
+    req.hasHeader = function (name) {
+      const lower = String(name).toLowerCase();
+      return ourValue.has(lower) ? callerValue.has(lower) : originalHasHeader.call(this, name);
+    };
+    req.getHeaders = function () {
+      const headers = originalGetHeaders.call(this);
+      for (const name of ourValue.keys()) {
+        delete headers[name];
+        if (callerValue.has(name)) headers[name] = callerValue.get(name);
+      }
+      return headers;
+    };
     req.write = function (chunk, encoding, callback) {
       const done = typeof encoding === "function" ? encoding : callback;
       const buffer = chunkBuffer(chunk, encoding);
@@ -412,6 +449,7 @@ function install() {
     const wrapped = function request(...args) {
       let call = args;
       let ourRequest = false;
+      let callerHeaders;
       try {
         let url = null;
         let index = 0;
@@ -434,6 +472,7 @@ function install() {
         ) {
           ourRequest = true;
           const headers = opts.headers;
+          callerHeaders = headers;
           let swapped;
           try {
             swapped = withOurKey(headers);
@@ -453,7 +492,7 @@ function install() {
       const req = original.apply(this, call);
       if (ourRequest) {
         try {
-          buffered(req);
+          buffered(req, callerHeaders);
         } catch (_) {
           write("failed");
         }
