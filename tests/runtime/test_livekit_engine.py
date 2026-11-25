@@ -4249,7 +4249,6 @@ def _short_call_failure() -> livekit._CaseOutcome:
 @pytest.mark.parametrize(
     "metadata",
     [
-        {"ended_reason": "call.in-progress.error-transfer-failed"},
         {"ended_reason": "assistant-forwarded-call"},
         {"ended_reason": "assistant-ended-call"},
         {"tool_calls": [{"name": "transferCall"}]},
@@ -4290,6 +4289,7 @@ def test_provider_reported_agent_ending_recovers_short_call_for_eval(
         {"ended_reason": "customer-ended-call-during-warm-transfer"},
         {"end_reason": "user_hangup_during_transfer"},
         {"ended_reason": "call.in-progress.transfer-cancelled-by-assistant"},
+        {"ended_reason": "call.in-progress.error-transfer-failed"},
         {
             "tool_calls": [
                 {"name": "to_front_desk", "type": "transfer_call", "ok": False}

@@ -5160,7 +5160,7 @@ def _provider_reports_agent_ending(metadata: dict[str, Any]) -> bool:
     )
     if reason in _AGENT_ENDED_REASONS:
         return True
-    if "transfer" in reason and not _caller_or_canceled_transfer(reason):
+    if "transfer" in reason and not _caller_or_unfinished_transfer(reason):
         return True
     calls = metadata.get("tool_calls")
     if not isinstance(calls, list):
@@ -5177,8 +5177,10 @@ def _provider_reports_agent_ending(metadata: dict[str, Any]) -> bool:
     )
 
 
-def _caller_or_canceled_transfer(reason: str) -> bool:
-    return reason.startswith(("customer", "user")) or "cancel" in reason
+def _caller_or_unfinished_transfer(reason: str) -> bool:
+    return reason.startswith(("customer", "user")) or any(
+        word in reason for word in ("cancel", "fail", "error")
+    )
 
 
 def _reconcile_provider_observation(
