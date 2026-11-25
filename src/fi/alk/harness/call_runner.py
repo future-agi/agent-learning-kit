@@ -3851,12 +3851,7 @@ def _unwrapped_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unwrapped_result(result: Any) -> Any:
-    if (
-        isinstance(result, dict)
-        and set(result) == {"output"}
-        and isinstance(result["output"], str)
-        and not _framework_message(result)
-    ):
+    if isinstance(result, dict) and set(result) == {"output"} and not _framework_message(result):
         return _structured(result["output"])
     return result
 

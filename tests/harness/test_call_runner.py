@@ -4993,6 +4993,47 @@ def test_a_langchain_span_that_wraps_a_plain_answer_is_the_agent_s_own_call_once
     assert evidence_notices(log, calls, {"lookup_booking"}) == []
 
 
+def test_traceai_langchain_spans_of_tools_that_return_a_list_and_a_dict_are_the_agent_s_own_calls_once(tmp_path):
+    from fi.alk.harness import tool_evidence as evidence
+    from fi.alk.harness.call_runner import collect_seam_calls, evidence_notices
+
+    rooms = [{"city": "Porto", "hotel_id": "H-POR-1", "name": "Harbor Porto Ribeira", "nightly_rate": 180,
+              "rooms_left": 2}]
+    booking = {"booking_id": "HB-7001", "check_in": "2026-11-02", "found": True, "guest": "Guest One",
+               "hotel_id": "H-POR-1", "nights": 3, "status": "confirmed"}
+    spans = [
+        {"name": "find_hotels", "is_error": False, "at": 100.0, "ended_at": 100.2, "source": "otel",
+         "event_id": "a0cd1c5ce45f3697", "parent_span_id": "", "relationship": "unknown",
+         "arguments": json.dumps({"input": "{'city': 'Porto'}"}), "output": json.dumps({"output": rooms})},
+        {"name": "get_booking", "is_error": False, "at": 104.0, "ended_at": 104.2, "source": "otel",
+         "event_id": "b71c4fd2e858c94f", "parent_span_id": "", "relationship": "unknown",
+         "arguments": json.dumps({"input": "{'booking_id': 'HB-7001'}"}), "output": json.dumps({"output": booking})},
+    ]
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text("".join(json.dumps(span) + "\n" for span in spans))
+    reported = [
+        Call(name="find_hotels", arguments={"city": "Porto"}, ok=True, at=101.3, result=[dict(rooms[0])],
+             runtime_ids={"call_id": "toolu_01"}, source=evidence.AGENT),
+        Call(name="get_booking", arguments={"booking_id": "HB-7001"}, ok=True, at=105.8, result=dict(booking),
+             runtime_ids={"call_id": "toolu_02"}, source=evidence.AGENT),
+    ]
+
+    calls = collect_seam_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)}), EvidenceSeam.TOOL_TRACE, reported, strict=True
+    )
+
+    assert [(call.name, call.source, call.seen_by) for call in calls] == [
+        ("find_hotels", evidence.AGENT, [evidence.SPAN]),
+        ("get_booking", evidence.AGENT, [evidence.SPAN]),
+    ]
+    assert calls[0].result == rooms and calls[1].result == booking
+    log = [
+        {"name": "find_hotels", "actor_id": "agent", "outcome": "committed"},
+        {"name": "get_booking", "actor_id": "agent", "outcome": "committed"},
+    ]
+    assert evidence_notices(log, calls, {"find_hotels", "get_booking"}) == []
+
+
 def _ride_contract():
     """The ride voice agent's tools as its contract binds them: each a method of the agent, most calling the world over
     a route (one under another name), some agent-only steps that never reach the world."""
