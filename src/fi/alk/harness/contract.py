@@ -1285,6 +1285,13 @@ class AgentContract(BaseModel):
     # the quote given for it. The quote went out instead, or, when the quote was too short to
     # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
     unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # Set by the save, never by the reading: true only when the save replaced the excerpt by
+    # code, either with the lines in system_prompt_from, copied from the source as written, or,
+    # with system_prompt_from empty, with a provider's whole prompt from its own definition.
+    # Without it the excerpt is a quote that may leave text out, and the built-in suite evals do
+    # not grade on it. Copied lines are as written, not complete: they are the ones the reading
+    # named.
+    system_prompt_copied: bool = False
     # None is unknown. Kept only when its name was found on the line cited in the source.
     model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
@@ -1333,6 +1340,9 @@ class AgentContract(BaseModel):
         # The same for the record of unconfirmed prompt lines, kept only when there are some.
         if not data.get("unconfirmed_prompt_from"):
             data.pop("unconfirmed_prompt_from", None)
+        # And for whether the prompt was copied, kept only when it was.
+        if not data.get("system_prompt_copied"):
+            data.pop("system_prompt_copied", None)
         # And for what the agent needs from its environment: only a browser agent has any.
         if not data.get("environment_needs"):
             data.pop("environment_needs", None)
@@ -1608,6 +1618,7 @@ KEPT_AS_WRITTEN = (
     "AgentContract.conversational",
     "AgentContract.system_prompt_from",
     "AgentContract.unconfirmed_prompt_from",
+    "AgentContract.system_prompt_copied",
     # The model name the code cites, with its file and line: read as written, like the prompt lines.
     "AgentContract.model",
     "AgentContract.tools",

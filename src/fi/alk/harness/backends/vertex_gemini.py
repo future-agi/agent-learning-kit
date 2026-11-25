@@ -346,6 +346,7 @@ class VertexGeminiSession:
         # refused for the session's call budget.
         self._calls = 0
         self._budget_spent = False
+        self._active_usage: StageDone | None = None
         self._resume_invocation_id: str | None = None
         context = spec.conversation
         self.session_id = (
@@ -548,11 +549,9 @@ class VertexGeminiSession:
         resume_invocation_id = self._resume_invocation_id
         self._pending = None
         self._resume_invocation_id = None
-        turns = 0
+        done = StageDone(session_id=self.session_id, models={self._model})
+        self._active_usage = done
         calls_before = self._calls
-        tokens_in = 0
-        tokens_out = 0
-        tokens_cached = 0
         settled = False
         terminal_save_succeeded = False
         context = self._spec.conversation
@@ -609,11 +608,12 @@ class VertexGeminiSession:
                 )
             ) as events:
                 async for event in events:
+                    done.calls = self._calls - calls_before
                     usage = getattr(event, "usage_metadata", None)
                     if usage is not None:
-                        tokens_in += usage.prompt_token_count or 0
-                        tokens_out += usage.candidates_token_count or 0
-                        tokens_cached += (
+                        done.tokens_in += usage.prompt_token_count or 0
+                        done.tokens_out += usage.candidates_token_count or 0
+                        done.tokens_cached += (
                             getattr(usage, "cached_content_token_count", 0) or 0
                         )
                     parts: list[Any] = []
@@ -666,7 +666,7 @@ class VertexGeminiSession:
                             )
                     if parts:
                         if not getattr(event, "partial", False):
-                            turns += 1
+                            done.turns += 1
                         yield ModelReply(parts=parts, model=self._model)
                     for outcome in returned:
                         yield outcome
@@ -676,61 +676,35 @@ class VertexGeminiSession:
                     if event.is_final_response():
                         settled = True
         except Exception as exc:
-            yield StageDone(
-                outcome="failed",
-                turns=turns,
-                calls=self._calls - calls_before,
-                cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                tokens_cached=tokens_cached,
-                session_id=self.session_id,
-                models={self._model},
-                is_error=True,
-                api_error_status=getattr(exc, "code", None),
-                errors=[str(exc)[:400]],
-            )
-            return
-        if self._budget_spent:
-            # The final reply was ours, not the model's: the session's budget stopped it.
-            yield StageDone(
-                outcome=CALL_BUDGET_SPENT,
-                is_error=True,
-                turns=turns,
-                calls=self._calls - calls_before,
-                cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                tokens_cached=tokens_cached,
-                session_id=self.session_id,
-                models={self._model},
-                errors=[
+            done.outcome = "failed"
+            done.is_error = True
+            done.api_error_status = getattr(exc, "code", None)
+            done.errors = [str(exc)[:400]]
+        else:
+            if self._budget_spent:
+                done.outcome = CALL_BUDGET_SPENT
+                done.is_error = True
+                done.errors = [
                     f"the session spent its whole budget of {self._spec.call_budget} model calls"
-                ],
-            )
-            return
-        # A stream that ends without a final response ran out of its call budget, which is
-        # not the same as the model having finished. Reported as success it reads as a stage
-        # that did its work, and a half-written suite comes back green.
-        yield StageDone(
-            outcome="success" if settled else "max_turns",
-            is_error=not settled,
-            turns=turns,
-            calls=self._calls - calls_before,
-            cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            tokens_cached=tokens_cached,
-            session_id=self.session_id,
-            models={self._model},
-            errors=(
-                []
-                if settled
-                else [
+                ]
+            elif not settled:
+                done.outcome = "max_turns"
+                done.is_error = True
+                done.errors = [
                     f"the stage spent its whole budget of {self._spec.max_turns} calls"
                 ]
-            ),
-        )
+        done.calls = self._calls - calls_before
+        done.cost_usd = self._cost(done.tokens_in, done.tokens_out, done.tokens_cached)
+        self._active_usage = None
+        yield done
+
+    def take_interrupted_usage(self) -> StageDone | None:
+        """Claim the unfinished turn once; no provider token counts means no bill."""
+        done, self._active_usage = self._active_usage, None
+        if done is None or not (done.tokens_in or done.tokens_out or done.tokens_cached):
+            return None
+        done.cost_usd = self._cost(done.tokens_in, done.tokens_out, done.tokens_cached)
+        return done
 
     def _cost(
         self, tokens_in: int, tokens_out: int, tokens_cached: int = 0
