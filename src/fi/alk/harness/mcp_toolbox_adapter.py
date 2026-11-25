@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import keyword
+import logging
 import os
 import time
 import unicodedata
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _signature(parameters: list[dict[str, Any]]) -> str:
@@ -69,6 +72,24 @@ def _execute(
         error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        try:
+            # The world's own call log, as the tool proxy keeps it: what reached the world.
+            with psycopg.connect(database_url, autocommit=True) as log:
+                log.execute(
+                    "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        tool_name,
+                        json.dumps(arguments, default=str),
+                        json.dumps(result, default=str),
+                        error is None,
+                        error or "",
+                        started,
+                    ),
+                )
+        except Exception as unlogged:  # noqa: BLE001 - the log must never change the tool's response
+            logger.warning("call log not written: %s", type(unlogged).__name__)
+            logger.debug("the failure in full", exc_info=True)
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         with trace_path.open("a", encoding="utf-8") as trace:
             trace.write(
@@ -86,6 +107,20 @@ def _execute(
                 )
                 + "\n"
             )
+
+
+def _json_accepted(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+    """Request headers that ask for JSON by name when the client takes any type.
+
+    The server only answers in JSON, and the MCP SDK sends JSON only to a request that names it;
+    a Toolbox client accepts anything (``*/*``) and would be refused with 406.
+    """
+    accept = b",".join(value for name, value in headers if name.lower() == b"accept")
+    types = {part.split(b";")[0].strip().lower() for part in accept.split(b",") if part.strip()}
+    if types and not types & {b"*/*", b"application/*"}:
+        return headers
+    kept = [(name, value) for name, value in headers if name.lower() != b"accept"]
+    return [*kept, (b"accept", b"application/json")]
 
 
 def _application(definitions: dict[str, Any], database_url: str, trace_path: Path):
@@ -135,7 +170,7 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
     async def toolset_compatible(
         scope: dict[str, Any], receive: Any, send: Any
     ) -> None:
-        """Toolbox clients append a toolset name to ``/mcp/``; MCP itself does not."""
+        """Toolbox clients append a toolset name to ``/mcp/`` and accept any type; MCP itself does not."""
 
         if scope.get("type") == "http" and scope.get("path") == "/health":
             await send(
@@ -150,7 +185,12 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
         if scope.get("type") == "http" and str(scope.get("path") or "").startswith(
             "/mcp/"
         ):
-            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+            scope = {
+                **scope,
+                "path": "/mcp/",
+                "raw_path": b"/mcp/",
+                "headers": _json_accepted(list(scope.get("headers") or [])),
+            }
         await application(scope, receive, send)
 
     return toolset_compatible

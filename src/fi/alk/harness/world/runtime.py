@@ -208,6 +208,8 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # The HTTP path a call through the tool proxy went to; empty for any other source.
+    endpoint: str = ""
     # The channel the world saw the call come in on, from its door row: "" for the shared address, a worker's id for
     # that worker's own channel, None when there was no door row or the row is from before channels. Never lent.
     channel: str | None = None

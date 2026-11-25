@@ -17,7 +17,7 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
    repo today (see `_collect_http_tool_calls`'s docstring — a verified finding, not an assumption)
    and is intentionally left returning zero calls rather than inventing a capture proxy.
    `tool_trace` is read from the world's own postgres database against an unpinned, isolated
-   convention (see `_collect_tool_trace_calls`'s docstring). Either way, zero calls captured is
+   convention (see `collect_tool_trace_calls`'s docstring). Either way, zero calls captured is
    never fabricated into something else — the scheduler's own `evidence_missing` retry-once policy
    is the contract-correct handling for "no evidence."
 3. **Uploading artifacts.** The transcript and any produced recordings are uploaded through the
@@ -233,7 +233,7 @@ _RUN_SECONDS_PAD_SECONDS = 60.0
 _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 
 # Unpinned by any contract and no producer exists yet. Isolated as one
-# constant + two functions (`_clear_tool_trace_calls`, `_collect_tool_trace_calls`) so a real
+# constant + two functions (`_clear_tool_trace_calls`, `collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
 
@@ -1239,7 +1239,7 @@ def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
-def _collect_tool_trace_calls(
+def collect_tool_trace_calls(
     runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
@@ -1296,6 +1296,7 @@ def _collect_tool_trace_calls(
                 error=error,
                 refused=refused,
                 at=at,
+                endpoint=str(record.get("endpoint") or ""),
                 # The worker the world saw make it, by the channel it came through.
                 worker_id=str(record.get("worker_id") or ""),
                 refusal_code=str(record.get("refusal_code") or "") if refused else "",
@@ -1380,7 +1381,7 @@ def collect_seam_calls(
             # The bundle's seed creates the table, so a missing one is a failed capture too. The file's span lines
             # still count when the database cannot be read.
             try:
-                found = list(_collect_tool_trace_calls(runtime, strict=strict))
+                found = list(collect_tool_trace_calls(runtime, strict=strict))
             except ToolCaptureFailed as exc:
                 unread = unread or exc
         # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span
@@ -2938,7 +2939,7 @@ _SPAN_SOURCE = "otel"
 _MISSING = object()
 
 
-def _collect_file_tool_calls(
+def collect_file_tool_calls(
     runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
     return _with_span_calls((), runtime, strict=strict)

@@ -1,7 +1,11 @@
 """Private chat ingress and workflow readiness checks."""
 
+from __future__ import annotations
+
 import asyncio
 import json
+import logging
+import time
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -12,7 +16,10 @@ from fi.simulate.agent.wrapper import AgentInput
 from .chat_transport import create_chat_wrapper
 from .diagnostics import HarnessDiagnostic
 from .job import FailureCause, HarnessStage
+from .tool_routing import received_calls, record_tool_routing, world_call_log
 from .world.runtime import graded_calls, trace_row
+
+logger = logging.getLogger(__name__)
 
 
 def _chat_target_cause(trace):
@@ -383,6 +390,7 @@ async def probe_chat_workflow(
         if handlers is not None:
             context = replace(context, handler_channel=HandlerChannel(handlers.sock))
         runner = HostedChatCallRunner(artifacts, context)
+        since = time.time()
         async with asyncio.timeout(timeout):
             outcome = await runner.run(scenario, runtime)
         graded = graded_calls(outcome.calls)
@@ -414,6 +422,15 @@ async def probe_chat_workflow(
                     + ". Inspect how the agent's tools are bound to the world.",
                 )
             receipt["tool_evidence_status"] = "never_reached_world"
+        record_tool_routing(
+            authoring,
+            scenario.scenario_key,
+            runner._contract,
+            runtime,
+            received=received_calls(world_call_log(runtime, since), runner.received),
+            reported=outcome.calls,
+            bundle=bundle,
+        )
         receipt["status"] = "passed"
     except RuntimeValidationError:
         raise

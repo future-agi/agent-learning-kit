@@ -1223,6 +1223,28 @@ def test_a_fault_the_platform_names_by_the_tool_holds_the_call_the_http_door_see
     assert other.outcome == "committed"
 
 
+def test_a_fault_written_as_the_route_s_path_holds_the_call_and_is_never_an_unknown_action():
+    from fi.alk.harness.call_runner import fault_notices
+    from fi.alk.harness.world_door import routed_faults
+
+    contract = {"tool_entrypoints": [{"tool": "apply_discount", "endpoint": "/crm/apply_discount", "mode": "import"}]}
+    faults = routed_faults([{"action": "crm/apply_discount", "mode": "error", "status": 403}], contract)
+    executor = _Executor()
+    door = _door(executor, faults=faults)
+
+    outcome = door.enter(ToolCall(action="crm.apply_discount", name="apply_discount", arguments={}, method="POST"))
+
+    assert outcome.outcome == "faulted" and executor.ran == []
+    notices = fault_notices(faults, [], [], contract=contract)
+    assert not [one for one in notices if one["code"] == "fault_unknown_action"]
+    # A method or a host around the path is not a route's path: the fault names no action, so the trial is unmeasured.
+    for written in ("POST /crm/apply_discount", "https://host/crm/apply_discount"):
+        kept = routed_faults([{"action": written, "mode": "error", "status": 403}], contract)
+        assert kept[0]["action"] == written
+        notices = fault_notices(kept, [], [], contract=contract)
+        assert [one["code"] for one in notices] == ["fault_unknown_action"]
+
+
 def test_a_keyed_retry_with_true_where_the_first_sent_1_is_another_write_never_its_duplicate():
     executor = _Executor()
     door = _door(executor)

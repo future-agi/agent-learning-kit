@@ -950,7 +950,7 @@ def _chat_target(faults):
 
     contract = SimpleNamespace(tool_entrypoints=[{"tool": "update_deal", "endpoint": "crm/update_deal"}])
     world = _InProcessWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=None, contract=contract, world=world, scenario_key="s", scenario_id="s-1", faults=faults
     )
     return target, world
