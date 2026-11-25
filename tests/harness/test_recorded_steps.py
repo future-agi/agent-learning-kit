@@ -154,6 +154,8 @@ def test_the_live_proof_records_the_same_step_and_reports_it(tmp_path, monkeypat
         "any(c.name == 'memorize' and c.ok and c.arguments.get('value') == 'Seattle' for c in calls)",
         "succeeded(calls, 'memorize', value='Seattle')",
         "answered(calls, 'memorize', value='Seattle')",
+        "exactly_once(calls, 'memorize', value='Seattle')",
+        "came_before(calls, 'memorize', 'book_trip')",
         "any(c.name == 'memorize' and not c.refused and c.arguments.get('value') == 'Seattle' for c in calls)",
     ],
 )
@@ -164,6 +166,35 @@ def test_a_check_that_reads_whether_a_call_went_through_keeps_the_step_assumed(t
     proof = _prove(tmp_path, _case(), check)
 
     assert proof.assumed == ["memorize"] and proof.recorded == [] and not proof.proved
+
+
+def test_a_negated_exactly_once_never_proves_a_step_that_did_not_run(tmp_path, monkeypatch):
+    """`not exactly_once(...)` holds on a call recorded but never run, and fails once the call really went through:
+    it reads what the call came to, so the step stays assumed, never proof."""
+    from fi.alk.harness.checks import exactly_once
+    from fi.alk.harness.prove import record_unrun_step
+
+    _in_process_world(tmp_path, monkeypatch)
+    check = (
+        "def check(world, calls):\n"
+        "    return None if not exactly_once(calls, 'memorize', value='Seattle') else 'remembered once'\n"
+    )
+    recorded = record_unrun_step(
+        SimpleNamespace(calls=[]), SimpleNamespace(tool="memorize", arguments={"value": "Seattle"})
+    )
+    ran = SimpleNamespace(name="memorize", arguments={"value": "Seattle"}, ok=True, refused=False, error=None)
+
+    proof = _prove(tmp_path, _case(), check)
+
+    assert not exactly_once([recorded], "memorize", value="Seattle")
+    assert exactly_once([ran], "memorize", value="Seattle")
+    assert proof.assumed == ["memorize"] and proof.recorded == [] and not proof.proved
+
+
+def test_every_check_helper_says_whether_it_reads_what_a_call_came_to():
+    from fi.alk.harness.checks import CHECK_HELPERS
+
+    assert all(isinstance(getattr(helper, "reads_outcomes", None), bool) for helper in CHECK_HELPERS.values())
 
 
 def test_a_recorded_call_never_reads_as_gone_through_or_answered():
