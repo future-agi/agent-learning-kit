@@ -489,6 +489,74 @@ def test_a_door_role_s_password_never_reaches_a_kept_log():
     secrets_by_name = pr._engine_diagnostic_secrets(credentials, 2)
     for index in (0, 1):
         assert pr.door_role(credentials["postgres"], index).password in secrets_by_name.values()
+        assert pr.reader_role(credentials["postgres"], index).password in secrets_by_name.values()
+
+
+def _reader_manifest():
+    def mutate(body):
+        body["capabilities"]["database"]["configuration_name"] = "WORLD_DATABASE_URL"
+        for process in body["processes"]:
+            if process["name"] == "tools-api":
+                process["environment"]["DATABASE_URL"] = "{{WORLD_DATABASE_URL}}"
+                process["environment"]["WORLD_READER_DATABASE_URL"] = "{{WORLD_READER_DATABASE_URL}}"
+        return body
+
+    return runtime_tests._manifest(mutate)
+
+
+@pytest.mark.parametrize("world_roles", [True, False])
+def test_a_bundle_whose_servers_read_the_world_gets_its_reader_under_either_mode(tmp_path: Path, world_roles: bool):
+    manifest = _reader_manifest()
+    credentials = pr.generate_engine_credentials(manifest)
+    plan = pr.plan_ports(manifest, instances=2)
+    endpoints = pr.build_endpoints(
+        manifest, world_index=1, port_plan=plan, credentials=credentials, world_roles=world_roles
+    )
+    tools = next(one for one in manifest.processes if one.name == "tools-api")
+
+    rendered = pr.render_environment(
+        tools,
+        world_index=1,
+        world_dir=tmp_path,
+        port_plan=plan,
+        configuration_addresses=pr.configuration_addresses_from_endpoints(endpoints),
+    )
+
+    reader = urlsplit(rendered["WORLD_READER_DATABASE_URL"])
+    assert (reader.username, reader.path) == ("alk_r1", "/w1")
+    assert reader.password == pr.reader_role(credentials["postgres"], 1).password
+    assert urlsplit(rendered["DATABASE_URL"]).username == ("alk_w1" if world_roles else "harness")
+    # A bundle that names it nowhere has none.
+    plain = runtime_tests._manifest()
+    assert (
+        pr.build_endpoints(
+            plain, world_index=1, port_plan=pr.plan_ports(plain, instances=2), credentials=credentials,
+            world_roles=world_roles,
+        )["database"].reader_address
+        is None
+    )
+
+
+@pytest.mark.parametrize("isolate", [True, False])
+def test_a_reset_makes_the_worlds_reader_login_and_lets_it_in(isolate: bool):
+    statements, runner = _recording()
+    reader = pr.reader_role(_CREDENTIALS, 3)
+
+    pr._reset_template_database(
+        host="localhost", port=1, credentials=_CREDENTIALS, world_db="w3", template_db="baseline_t",
+        sql_runner=runner, process_name="db", isolate=isolate,
+        role=pr.world_role(_CREDENTIALS, 3) if isolate else None, reader=reader,
+    )
+
+    made = next(i for i, one in enumerate(statements) if 'CREATE ROLE "alk_r3" LOGIN IN ROLE "world_reader"' in one)
+    assert statements[made + 1 : made + 3] == [
+        "ALTER ROLE \"alk_r3\" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS "
+        f"PASSWORD '{reader.password}'",
+        'GRANT CONNECT ON DATABASE "w3" TO "alk_r3"',
+    ]
+    assert made > next(i for i, one in enumerate(statements) if one.startswith('CREATE DATABASE "w3"'))
+    if isolate:
+        assert statements[made + 3] == 'ALTER DATABASE "w3" ALLOW_CONNECTIONS true'
 
 
 def test_a_world_with_a_door_lets_in_its_own_door_role_only():

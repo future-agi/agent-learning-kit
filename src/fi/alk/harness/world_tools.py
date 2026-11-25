@@ -146,6 +146,7 @@ class AttachedServers:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._stop: asyncio.Event | None = None
+        self._starting = threading.Lock()
         self._sessions: dict[str, tuple[Any, str]] = {}
         self.definitions: list[Any] = []
 
@@ -171,21 +172,23 @@ class AttachedServers:
         )
 
     def start(self) -> None:
-        if self._loop is not None:
-            return
-        loop = asyncio.new_event_loop()
-        ready: asyncio.Future[None] = loop.create_future()
-        self._thread = threading.Thread(target=loop.run_forever, daemon=True)
-        self._thread.start()
-        self._loop = loop
-        asyncio.run_coroutine_threadsafe(self._serve(ready), loop)
-        try:
-            asyncio.run_coroutine_threadsafe(_wait(ready), loop).result(
-                ATTACHED_START_SECONDS
-            )
-        except BaseException:
-            self.close()
-            raise
+        # Two first calls at once: the second waits until the servers the first starts are ready.
+        with self._starting:
+            if self._loop is not None:
+                return
+            loop = asyncio.new_event_loop()
+            ready: asyncio.Future[None] = loop.create_future()
+            self._thread = threading.Thread(target=loop.run_forever, daemon=True)
+            self._thread.start()
+            self._loop = loop
+            asyncio.run_coroutine_threadsafe(self._serve(ready), loop)
+            try:
+                asyncio.run_coroutine_threadsafe(_wait(ready), loop).result(
+                    ATTACHED_START_SECONDS
+                )
+            except BaseException:
+                self.close()
+                raise
 
     async def _serve(self, ready: asyncio.Future[None]) -> None:
         from mcp import ClientSession
@@ -277,17 +280,18 @@ async def _wait(future: asyncio.Future[None]) -> None:
     await future
 
 
+def reads_database(servers: Sequence[Any]) -> bool:
+    return any(server.attach.database_reader is not None for server in servers)
+
+
 def attach_servers(
-    servers: Sequence[Any], database_url: str, *, cwd: Path | None = None
+    servers: Sequence[Any], reader_url: str | None, *, cwd: Path | None = None
 ) -> AttachedServers | None:
-    """The world's attached servers, with a reader login of its own when one reads the
-    database. `database_url` is the world's owner; the servers never see it."""
+    """The world's attached servers. `reader_url` is its reader login, which whoever holds the
+    database's admin makes (the harness for a run, a proof for itself): no login that runs the
+    world's own calls can make one. A world whose servers read no database has none."""
     if not servers:
         return None
-    reader_url = None
-    if any(server.attach.database_reader is not None for server in servers):
-        database = conninfo.conninfo_to_dict(database_url).get("dbname") or "world"
-        reader_url = ensure_reader_login(database_url, f"{database}_reader")
     return AttachedServers(servers, reader_url=reader_url, cwd=cwd)
 
 

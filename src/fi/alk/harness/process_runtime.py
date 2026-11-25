@@ -80,11 +80,14 @@ from .world_roles import (
     STORE_ROLE_PREFIX,
     WORLD_ROLE_PREFIX,
     WORLD_DOOR_DATABASE_URL,
+    WORLD_READER_DATABASE_URL,
     door_role_name,
     has_world_door,
+    has_world_reader,
     seed_escalation_queries,
     seed_escalation_reason,
     log_role_name,
+    reader_role_name,
     store_role_name,
     world_role_name,
 )
@@ -223,6 +226,8 @@ class RuntimeEndpoint(BaseModel):
     store_address: str | None = None
     # The world's log reader (`log_role`): the harness's reads of its own log and marker.
     log_address: str | None = None
+    # The world's reader (`reader_role`): what the attached MCP servers of a release read the listed tables with.
+    reader_address: str | None = None
 
 
 class EnvironmentRuntime(BaseModel):
@@ -809,6 +814,11 @@ def log_role(credentials: EngineCredentials, world_index: int) -> EngineCredenti
     return _derived_role(credentials, log_role_name(world_index))
 
 
+def reader_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's reader, derived the same way as the world's: the attached MCP servers' read of the listed tables."""
+    return _derived_role(credentials, reader_role_name(world_index))
+
+
 def _log_role_of(credentials: EngineCredentials, role: EngineCredentials) -> EngineCredentials:
     return _derived_role(credentials, LOG_ROLE_PREFIX + role.username[len(WORLD_ROLE_PREFIX):])
 
@@ -836,6 +846,7 @@ def _engine_diagnostic_secrets(
                     door_role(value, world_index),
                     store_role(value, world_index),
                     log_role(value, world_index),
+                    reader_role(value, world_index),
                 ):
                     secrets_by_name[f"{name}:{role.username}"] = role.password
     return secrets_by_name
@@ -928,9 +939,11 @@ def build_endpoints(
     capability slug, per §3's own reader list).
 
     With `world_roles` (per-user isolation), each postgres capability also carries the world's
-    own role's address, for customer processes and the handler child."""
+    own role's address, for customer processes and the handler child. A bundle whose attached servers read the world
+    gets the reader's address under either mode."""
     endpoints: dict[str, RuntimeEndpoint] = {}
     door = world_roles and has_world_door(manifest)
+    reader = has_world_reader(manifest)
     for slug, capability in manifest.capabilities.items():
         port = port_plan.port_for(capability.service, world_index)
         engine_credentials = credentials.get(capability.service)
@@ -976,6 +989,18 @@ def build_endpoints(
                 world_index=world_index,
                 credentials=door_role(engine_credentials, world_index),
             )
+        reader_address = None
+        if (
+            reader
+            and capability.protocol is CapabilityProtocol.POSTGRES
+            and engine_credentials is not None
+        ):
+            reader_address = render_capability_address(
+                capability,
+                port=port,
+                world_index=world_index,
+                credentials=reader_role(engine_credentials, world_index),
+            )
         endpoints[slug] = RuntimeEndpoint(
             capability=slug,
             protocol=capability.protocol.value,
@@ -985,6 +1010,7 @@ def build_endpoints(
             door_address=door_address,
             store_address=store_address,
             log_address=log_address,
+            reader_address=reader_address,
         )
     return endpoints
 
@@ -1004,6 +1030,8 @@ def configuration_addresses_from_endpoints(
             addresses[WORLD_DOOR_DATABASE_URL] = (
                 endpoint.door_address or endpoint.tool_address or endpoint.address
             )
+            if endpoint.reader_address:
+                addresses[WORLD_READER_DATABASE_URL] = endpoint.reader_address
     return addresses
 
 
@@ -5870,6 +5898,9 @@ def _seal_world_store(
             door=door_role(credentials, world_index)
             if context.require_declared_user and has_world_door(manifest)
             else None,
+            reader=reader_role(credentials, world_index)
+            if has_world_reader(manifest)
+            else None,
         )
         return None
 
@@ -6828,6 +6859,21 @@ def _grant_log_role_group(run: Callable[[str, str], None], baseline_db: str) -> 
         )
 
 
+def _reader_login_statements(reader: EngineCredentials | None, world_db: str) -> list[str]:
+    """The world's reader login, in the group the seed granted the listed tables to and nothing else."""
+    if reader is None:
+        return []
+    return [
+        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{READER_ROLE}') "
+        f'THEN CREATE ROLE "{READER_ROLE}" NOLOGIN; END IF; '
+        f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{reader.username}') "
+        f'THEN CREATE ROLE "{reader.username}" LOGIN IN ROLE "{READER_ROLE}"; END IF; END $$',
+        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
+        f"PASSWORD '{reader.password}'",
+        f'GRANT CONNECT ON DATABASE "{world_db}" TO "{reader.username}"',
+    ]
+
+
 def _reset_template_database(
     *,
     host: str,
@@ -6840,6 +6886,7 @@ def _reset_template_database(
     isolate: bool = False,
     role: EngineCredentials | None = None,
     door: EngineCredentials | None = None,
+    reader: EngineCredentials | None = None,
 ) -> None:
     """§4.2 `template_database`: "drop + recreate the world's logical DB from the template." The
     admin connection targets `postgres` (never `world_db` itself or the template — postgres
@@ -6850,7 +6897,9 @@ def _reset_template_database(
     Under per-user isolation (`isolate`) the copy is created closed to connections, and opens only
     after PUBLIC has lost CONNECT on it and `role` (the world's own; an authoring lane has none)
     has gained it, so no other world's role is ever able to connect to it. The world's `door` role
-    (a bundle that runs its door as `svc-door`) is let in the same way.
+    (a bundle that runs its door as `svc-door`) is let in the same way, and so is its `reader` (a
+    release whose attached servers read the world), which is made under either mode: the tool
+    server's own role can make no login.
     """
     admin = dict(
         host=host,
@@ -6877,13 +6926,17 @@ def _reset_template_database(
         statement=f'DROP DATABASE IF EXISTS "{world_db}"',
     )
     if not isolate:
-        _call_sql(
-            sql_runner,
-            stage="reset",
-            process_name=process_name,
-            **admin,
-            statement=f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
-        )
+        for statement in [
+            f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}"',
+            *_reader_login_statements(reader, world_db),
+        ]:
+            _call_sql(
+                sql_runner,
+                stage="reset",
+                process_name=process_name,
+                **admin,
+                statement=statement,
+            )
         return
     statements = [
         f'CREATE DATABASE "{world_db}" TEMPLATE "{template_db}" ALLOW_CONNECTIONS false',
@@ -6911,14 +6964,14 @@ def _reset_template_database(
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{store.username}"',
         ]
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
-        reader = _log_role_of(credentials, role)
+        log = _log_role_of(credentials, role)
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{reader.username}') THEN CREATE ROLE \"{reader.username}\" LOGIN IN ROLE "
+            f"'{log.username}') THEN CREATE ROLE \"{log.username}\" LOGIN IN ROLE "
             f'"{LOG_ROLE_GROUP}"; END IF; END $$',
-            f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
-            f"PASSWORD '{reader.password}'",
-            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{reader.username}"',
+            f'ALTER ROLE "{log.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
+            f"PASSWORD '{log.password}'",
+            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{log.username}"',
         ]
     if role is not None and door is not None:
         statements += [
@@ -6929,6 +6982,7 @@ def _reset_template_database(
             f"PASSWORD '{door.password}'",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{door.username}"',
         ]
+    statements += _reader_login_statements(reader, world_db)
     statements.append(f'ALTER DATABASE "{world_db}" ALLOW_CONNECTIONS true')
     for statement in statements:
         _call_sql(
@@ -9248,7 +9302,12 @@ class ProcessRuntimeProvider:
                     # The world role's address would still name the world's database: a handler
                     # child on a lane has none, and fails closed.
                     key: endpoint.model_copy(
-                        update={"address": address, "tool_address": None, "door_address": None}
+                        update={
+                            "address": address,
+                            "tool_address": None,
+                            "door_address": None,
+                            "reader_address": None,
+                        }
                     ),
                 }
             }
@@ -9469,6 +9528,9 @@ class ProcessRuntimeProvider:
                             isolate=context.require_declared_user,
                             role=world_role(live_credentials, world_index)
                             if context.require_declared_user
+                            else None,
+                            reader=reader_role(live_credentials, world_index)
+                            if has_world_reader(self._manifest)
                             else None,
                         )
                     # Q7, p6-review-r3: the loop above just reset EVERY tracked world's database —

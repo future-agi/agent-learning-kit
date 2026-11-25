@@ -37,8 +37,10 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    SerializerFunctionWrapHandler,
     ValidationError,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -539,6 +541,14 @@ class SimulatorLlm(_Strict):
     thinking: str | None = None
     # Tried in turn when `model` fails; frozen so a later deployment cannot change a run.
     fallback_models: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _as_written(self, dump: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A manifest written before the field existed stays without it, so it keeps its digest."""
+        core = dump(self)
+        if "fallback_models" not in self.model_fields_set:
+            core.pop("fallback_models", None)
+        return core
 
 
 class SimulatorVoice(_Strict):
@@ -1340,6 +1350,10 @@ class PostgresProof:
     world is; every attempt gets a fresh clone of it with the scenario's setup applied, plays its
     calls through `WorldTools` (with a binding, or canonically when it is None) and is graded
     through the hosted world handle. Suite sealing and binding proofs share it.
+
+    Authored code (setup, checks, handlers) reaches the world as a login that can read and change
+    its rows and nothing else, as a run's does; `admin_dsn` only makes and drops what that login
+    may use.
     """
 
     def __init__(
@@ -1365,12 +1379,37 @@ class PostgresProof:
         self._servers = load_servers(environment_root)
         self._base = f"alk_proof_{secrets.token_hex(6)}"
         self._target = f"{self._base}_w"
+        self._login = f"{self._base}_login"
+        self._password = secrets.token_urlsafe(24)
         self.server_version = ""
 
     def _dsn(self, database: str) -> str:
         from psycopg import conninfo
 
         return conninfo.make_conninfo(self._admin_dsn, dbname=database)
+
+    def _world_dsn(self) -> str:
+        from psycopg import conninfo
+
+        return conninfo.make_conninfo(
+            self._dsn(self._target), user=self._login, password=self._password
+        )
+
+    def _attach(self) -> Any:
+        from .world_tools import attach_servers, ensure_reader_login, reads_database
+
+        reader_url = None
+        if reads_database(self._servers):
+            reader_url = ensure_reader_login(
+                self._dsn(self._target), f"{self._target}_reader"
+            )
+        return attach_servers(self._servers, reader_url, cwd=self._environment_root)
+
+    def _fresh_world(self) -> None:
+        self._admin(
+            f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
+            f'CREATE DATABASE "{self._target}" TEMPLATE "{self._base}"',
+        )
 
     def _admin(self, *statements: str) -> None:
         import psycopg
@@ -1392,6 +1431,19 @@ class PostgresProof:
                 connection.execute(
                     world_seed_sql(self._environment_root, self._profile)
                 )
+                # Clones of this database keep the grants. The harness's `_alk_*` tables are
+                # among them: the tool server logs a call with the login that runs it.
+                for statement in (
+                    f'CREATE ROLE "{self._login}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+                    f"PASSWORD '{self._password}'",
+                    "REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+                    f'GRANT USAGE ON SCHEMA public TO "{self._login}"',
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public "
+                    f'TO "{self._login}"',
+                    "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public "
+                    f'TO "{self._login}"',
+                ):
+                    connection.execute(statement)
         except BaseException:
             self.__exit__()
             raise
@@ -1402,6 +1454,7 @@ class PostgresProof:
             f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
             f'DROP DATABASE IF EXISTS "{self._base}" WITH (FORCE)',
             f'DROP ROLE IF EXISTS "{self._target}_reader"',
+            f'DROP ROLE IF EXISTS "{self._login}"',
         )
 
     def checks(self, scenario: Any, catalogue: Any = None) -> list[tuple[str, str]]:
@@ -1420,15 +1473,8 @@ class PostgresProof:
     def attached_definitions(self) -> list[ToolDefinition]:
         """The attached servers' tools as a fresh world offers them, read from each server's own
         `tools/list`; raises `ToolError` when a server does not offer a tool it lists."""
-        from .world_tools import attach_servers
-
-        self._admin(
-            f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
-            f'CREATE DATABASE "{self._target}" TEMPLATE "{self._base}"',
-        )
-        attached = attach_servers(
-            self._servers, self._dsn(self._target), cwd=self._environment_root
-        )
+        self._fresh_world()
+        attached = self._attach()
         if attached is None:
             return []
         try:
@@ -1456,23 +1502,20 @@ class PostgresProof:
         from .world.handle import HostedWorld
         from .world.runtime import Call
         from .world.stores.postgres import AttachedPostgresStore
-        from .world_tools import WorldTools, attach_servers
+        from .world_tools import WorldTools
 
-        self._admin(
-            f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
-            f'CREATE DATABASE "{self._target}" TEMPLATE "{self._base}"',
-        )
-        dsn = self._dsn(self._target)
+        self._fresh_world()
+        dsn = self._world_dsn()
         store = AttachedPostgresStore(dsn)
         tools = WorldTools(
             self._handlers,
             self.environment_tools,
             dsn,
             binding=binding,
-            attached=attach_servers(self._servers, dsn, cwd=self._environment_root),
+            attached=self._attach(),
         )
         counts = {table: len(rows) for table, rows in store.state().items()}
-        world = HostedWorld(store, 0, random.Random(0), counts)
+        world = HostedWorld(store, 0, random.Random(0), counts, isolated=True)
         ready = apply_setup(scenario, world)
         if ready.ok:
             ready = check_ready(scenario, world)
@@ -2123,6 +2166,7 @@ def compose_bundle(
     from .provider_lifecycle import ProviderType
     from .release_tool_server import BINDING_FILE
     from .world_door import SEED_SENTINEL_QUERY
+    from .world_tools import reads_database
 
     releases_root, output = Path(releases_root), Path(output)
     manifest = load_run_manifest(manifest_path)
@@ -2244,6 +2288,10 @@ def compose_bundle(
             "EVENT_PATH": PROVIDER_EVENT_PATH,
             "REQUEST_BINDING": "1",
         }
+    if reads_database(load_servers(world_root)):
+        server_environment["WORLD_READER_DATABASE_URL"] = (
+            "{{WORLD_READER_DATABASE_URL}}"
+        )
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
         shutil.copytree(
