@@ -10,9 +10,11 @@ keeps its thought signature in them). The agent reports nothing about its calls:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -32,10 +34,12 @@ from .chat_call_runner import (
     _duration_ms,
     _record_text_usage,
     _scenario_document,
+    _sealed_through_stop,
+    _stopped_call,
     _with_scenario_edits,
 )
 from .contract import AgentContract
-from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
+from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .releases import HOSTED_AGENT as CONNECTOR
@@ -198,6 +202,14 @@ class HostedAgentCallRunner:
         world: World | None = None,
     ) -> CallOutcome:
         del world  # The agent reaches the leased world through its MCP endpoint.
+        return await _sealed_through_stop(
+            self._context.stop_requested,
+            lambda sealing: self._run(scenario, runtime, sealing),
+        )
+
+    async def _run(
+        self, scenario: Scenario, runtime: EnvironmentRuntime, sealing: asyncio.Event
+    ) -> CallOutcome:
         endpoint = runtime.endpoints.get(WORLD_MCP_CAPABILITY)
         world_db = _find_postgres_endpoint(runtime)
         if endpoint is None or world_db is None:
@@ -231,6 +243,11 @@ class HostedAgentCallRunner:
         except CallAborted as exc:
             failure = exc
             raise
+        except asyncio.CancelledError as exc:
+            if not self._context.stop_requested():
+                raise
+            # The person stopped the run: seal what the call kept below, then raise.
+            failure, transcript = _stopped_call(exc)
         except Exception as exc:  # the agent's or the model's failure is the call's
             wrapped = CallAborted(
                 f"hosted_agent_failed: {type(exc).__name__}: {exc}",
@@ -242,6 +259,7 @@ class HostedAgentCallRunner:
             failure = wrapped
             raise wrapped from exc
         finally:
+            sealing.set()
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,
@@ -263,7 +281,7 @@ class HostedAgentCallRunner:
         await _upload_tool_trace(
             self._adapter, calls, scenario_key=scenario.scenario_key, binding=None
         )
-        return CallOutcome(
+        outcome = CallOutcome(
             calls=calls,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
@@ -275,3 +293,7 @@ class HostedAgentCallRunner:
             # An unread or incomplete trace is a failed capture, whatever the scenario requires.
             tool_capture_failed=trace is None,
         )
+        if isinstance(failure, CallCancelled):
+            failure.partial = replace(outcome, stop_reason="user_canceled")
+            raise failure
+        return outcome

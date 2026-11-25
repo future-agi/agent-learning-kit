@@ -94,7 +94,8 @@ async def _record_text_usage(
     )
     # A call that failed midway still carries the transcript it got, for the record; it is billed as
     # failed, under the failure's domain, all the same.
-    completed = failure is None
+    # A cancelled call has neither: it ended without a transcript, so it did not complete.
+    completed = failure is None and transcript is not None
     try:
         await asyncio.to_thread(
             reporter.record,
