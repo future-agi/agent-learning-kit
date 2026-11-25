@@ -917,6 +917,66 @@ def test_an_sdk_nothing_here_covers_marks_the_process_partial(
     assert f"unmeasured {sdk}" in result.stderr
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_fork_during_measurement_leaves_both_processes_working(
+    tmp_path: Path, collector: Collector
+) -> None:
+    env = _environment(tmp_path, collector)
+    (tmp_path / "call").unlink()
+    result = _run(
+        """
+        import os, signal, threading
+        from pathlib import Path
+        import simulation_measure as measure
+
+        # The mark hook has already captured the scheduler's path. Only the child
+        # will measure its call; the parent watcher must not emit a matching span.
+        call_file = os.environ.pop("FI_SIMULATION_CALL_FILE")
+        measure._mark_partial()
+        def watchers():
+            return [t for t in threading.enumerate() if t.name == "alk-simulation-measure"]
+
+        parent_watcher, = watchers()
+        parent_lock = measure._lock
+        held, release = threading.Event(), threading.Event()
+        def hold_lock():
+            with parent_lock:
+                held.set()
+                release.wait()
+
+        holder = threading.Thread(target=hold_lock, daemon=True)
+        holder.start()
+        assert held.wait(5)
+        pid = os.fork()
+        if not pid:
+            signal.alarm(10)  # Bound a child blocked on the inherited lock.
+            os.environ["FI_SIMULATION_CALL_FILE"] = call_file
+            Path(call_file).write_text("fork-child")
+            measure._mark_partial()
+            child_watcher, = watchers()
+            assert child_watcher is not parent_watcher
+            measure._flush()
+            os._exit(0)
+
+        try:
+            _, status = os.waitpid(pid, 0)
+            assert os.waitstatus_to_exitcode(status) == 0, status
+            assert measure._lock is parent_lock and parent_lock.locked()
+            assert watchers() == [parent_watcher]
+        finally:
+            release.set()
+            holder.join(5)
+        """,
+        env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert any(
+        span["attributes"].get("fi.simulator.call_execution_id") == "fork-child"
+        and span["attributes"].get(STATE) == "partial"
+        for span in _settled(collector, 1)
+    )
+
+
 def _unseen_sdk_stand_in(root: Path) -> Path:
     """An importable vertexai: an SDK nothing here covers, whose calls may go over gRPC."""
     packages = root / "packages"

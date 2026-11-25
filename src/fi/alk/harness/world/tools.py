@@ -2036,6 +2036,17 @@ def world_tools(
             )
         return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{listed}{stuck}")
 
+    def json_refusal() -> dict[str, Any] | None:
+        if unreadable := _unreadable_json(world, source_root, contract):
+            return _err(
+                "Not saved. These JSON columns hold values that are not JSON: "
+                + ", ".join(unreadable)
+                + ". The runtime seed reads a JSON column as JSON text: an object such as "
+                '{"a": 1}, a list such as [], or a string in quotes such as "2026-06-03". '
+                "Set them with change_data."
+            )
+        return None
+
     @tool(
         "save_world",
         "Freeze the world and write it out. Refused unless it passes its own checks.",
@@ -2067,14 +2078,8 @@ def world_tools(
                 + '. The runtime seed reads an array as a JSON list, such as [] or ["a"]. '
                 "Set them with change_data."
             )
-        if unreadable := _unreadable_json(world, source_root, contract):
-            return _err(
-                "Not saved. These JSON columns hold values that are not JSON: "
-                + ", ".join(unreadable)
-                + ". The runtime seed reads a JSON column as JSON text: an object such as "
-                '{"a": 1}, a list such as [], or a string in quotes such as "2026-06-03". '
-                "Set them with change_data."
-            )
+        if refusal := json_refusal():
+            return refusal
         data_free = (
             (
                 is_data_free_conversation(contract)
@@ -2201,6 +2206,9 @@ def world_tools(
             }
             for spec in contract.tools
         ]
+        # World checks run against the live store; validate the rows actually saved.
+        if world_checks and (refusal := json_refusal()):
+            return refusal
         path = save(
             world,
             destination,
