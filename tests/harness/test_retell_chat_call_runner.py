@@ -28,7 +28,8 @@ from fi.alk.harness.retell_chat_call_runner import (
     RetellChatWrapper,
     _completion_messages,
 )
-from fi.alk.harness.run.conversation import TargetConversationEnded
+from fi.alk.harness import judge
+from fi.alk.harness.run.conversation import TargetConversationEnded, Transcript
 from fi.simulate.agent.wrapper import AgentInput, AgentResponse
 
 
@@ -56,6 +57,96 @@ def test_completion_messages_preserve_agent_and_completed_tool_evidence() -> Non
     ]
     assert responses[0]["tool_call_id"] == "tool-1"
     assert responses[0]["success"] is True
+
+
+_RETELL_405 = (
+    "HTTP 405: Axios Error: error code: ERR_BAD_REQUEST, error message: Request failed with status code 405\n"
+    "response status: 405\n"
+    'response data: ["<!doctype html><html><head><title>Example Domain</title></head></html>"]'
+)
+
+
+def _tool_turn(content: str, **extra: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "tool_call_invocation",
+            "tool_call_id": "tool-1",
+            "name": "track_parcel",
+            "arguments": '{"tracking_number":"TRK123456"}',
+        },
+        {"role": "tool_call_result", "tool_call_id": "tool-1", "content": content, **extra},
+        {"role": "agent", "content": "Sorry, I hit a technical issue."},
+    ]
+
+
+def test_completion_messages_mark_an_http_error_result_as_failed() -> None:
+    _answer, _calls, responses = _completion_messages(_tool_turn(_RETELL_405))
+
+    assert responses[0]["success"] is False
+    assert responses[0]["status"] == 405
+    assert responses[0]["error"].startswith("HTTP 405: Axios Error")
+    assert len(responses[0]["error"]) <= 200
+    assert responses[0]["content"] == _RETELL_405
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["HTTP 500: Internal Server Error", "Axios Error\nresponse status: 503\nresponse data: []"],
+)
+def test_completion_messages_mark_server_errors_as_failed(content: str) -> None:
+    _answer, _calls, responses = _completion_messages(_tool_turn(content))
+
+    assert responses[0]["success"] is False
+    assert responses[0]["error"].startswith("HTTP 5")
+
+
+def test_completion_messages_honor_a_provider_reported_tool_failure() -> None:
+    _answer, _calls, responses = _completion_messages(
+        _tool_turn("could not reach the function", successful=False)
+    )
+
+    assert responses[0]["success"] is False
+    assert responses[0]["error"] == "tool call failed"
+    assert "status" not in responses[0]
+
+
+def test_completion_messages_keep_a_result_mentioning_http_as_a_success() -> None:
+    _answer, _calls, responses = _completion_messages(
+        _tool_turn('{"note": "HTTP 404 pages are handled", "status": "delivered"}')
+    )
+
+    assert responses[0]["success"] is True
+    assert responses[0]["error"] is None
+
+
+def test_a_retell_tool_that_returned_http_405_is_recorded_as_failed_for_grading(monkeypatch) -> None:
+    wrapper = RetellChatWrapper(api_key="secret", agent_id="agent-1")
+
+    def request(method, path, payload=None):
+        del method, payload
+        if path == "/create-chat":
+            return {"chat_id": "chat-1"}
+        return {"messages": _tool_turn(_RETELL_405)}
+
+    monkeypatch.setattr(wrapper, "_request", request)
+    world = SimpleNamespace(calls=[])
+    target = _HostedChatTarget(
+        wrapper=wrapper,
+        contract=SimpleNamespace(runtime=None, tool_entrypoints=[]),
+        world=world,
+        scenario_key="damaged-parcel",
+        scenario_id="scenario-1",
+    )
+
+    asyncio.run(target.say("Where is TRK123456?"))
+
+    (call,) = world.calls
+    assert call.name == "track_parcel"
+    assert call.ok is False
+    assert call.refused is False
+    assert call.error.startswith("HTTP 405")
+    assert judge._call(call)["ok"] is False
+    assert "-> crashed: HTTP 405" in Transcript(calls=[call]).actions()
 
 
 def test_retell_chat_wrapper_creates_one_chat_and_completes_multiple_turns(
