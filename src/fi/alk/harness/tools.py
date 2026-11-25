@@ -897,6 +897,10 @@ def contract_tools(
     # Here rather than at the top: the checker's child imports this module.
     from . import save_checker
     from .save_checker import SAVE_DEADLINE, ChildKeepsEnding, NotInTime, Saved
+    from .provider_import import whole_prompt
+
+    # The provider's whole prompt, when one is in force and code can take every text of it.
+    provider_prompt = whole_prompt(provider_profile) if provider_profile is not None else None
 
     events_schema = CompletedToolEvents.model_json_schema()
     events_schema["properties"]["failure_events"]["items"] = (
@@ -2108,13 +2112,20 @@ def contract_tools(
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
                 and not payload.get("system_prompt_from")
-                # With a provider's definition in force, its prompt is the one; lines aren't.
-                and provider_profile is None,
-                "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
-                "Its prompt usually exists and often lives away from the main agent file — "
-                "search the whole source for a long instructions string before deciding there "
-                "is none. If you find it, name its lines in system_prompt_from so it is copied "
-                "whole.",
+                # A provider's whole prompt is copied at the save, so it is not missing.
+                and provider_prompt is None,
+                (
+                    "no hard_constraints and no system_prompt_excerpt, for a conversational "
+                    "agent. Its prompt and rules are in the provider definition you were shown: "
+                    "quote the prompt in system_prompt_excerpt, with ... where you leave text "
+                    "out, and record its rules in hard_constraints."
+                    if provider_profile is not None
+                    else "no hard_constraints and no system_prompt_excerpt, for a conversational "
+                    "agent. Its prompt usually exists and often lives away from the main agent "
+                    "file — search the whole source for a long instructions string before "
+                    "deciding there is none. If you find it, name its lines in system_prompt_from "
+                    "so it is copied whole."
+                ),
             ),
             (
                 "data",

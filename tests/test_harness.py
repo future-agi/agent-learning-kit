@@ -7860,6 +7860,21 @@ def test_unmeasured_eval_in_summary_and_json():
     assert json.loads(as_json([result]))[0]["checkpoints_met"] == "2/2"
 
 
+def test_an_unmeasured_reason_sent_to_the_platform_is_capped():
+    from fi.alk.harness import platform
+    from fi.alk.harness.run.grade import Judgement
+
+    long = Judgement(
+        claim="custom_eval",
+        kind="custom_eval",
+        holds=False,
+        why="Not measured: " + "x" * 3000,
+        unmeasured="no_whole_instructions",
+    )
+    [sent] = platform.unmeasured_of(_reported_result(conduct=[long]))
+    assert sent["reason"] == long.why[:2000]
+
+
 def test_unmeasured_eval_reaches_the_platform_as_unmeasured():
     from fi.alk.harness import platform
     from fi.alk.harness.run.grade import Checkpoint, Judgement

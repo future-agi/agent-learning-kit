@@ -127,40 +127,52 @@ def _rewritten_as_url(value: str) -> bool:
 _LARGEST_WHOLE_PROMPT = 1024 * 1024
 
 
-def whole_prompt(profile: Mapping[str, Any]) -> str | None:
-    """The agent's whole instructions from a provider profile, or None where code can't take
-    every text of them, or where taking them would cut them.
+# Set on a fetched profile when its sanitizer changed a text of the prompt: what is left may
+# be cut, and can't be told from a whole prompt.
+PROMPT_REWRITTEN = "prompt_rewritten_by_sanitizer"
 
-    Phone and LiveKit carry the prompt the user gave. Retell's one general prompt is whole when
-    there are no states; with states or a conversation flow it is only a part. Vapi's are the
-    system messages of the assistant's model, in order.
+
+def _prompt_texts(profile: Mapping[str, Any]) -> list[Any] | None:
+    """The texts that together are the agent's prompt in a provider profile, or None where they
+    are not one prompt.
+
+    Phone and LiveKit carry the prompt the user gave. Retell's one general prompt is the whole
+    when there are no states; with states or a conversation flow it is only a part. Vapi's are
+    the system messages of the assistant's model, in order.
     """
     provider = str(profile.get("provider") or "")
-    texts: list[Any]
     if provider in {"phone", "livekit"}:
-        texts = [profile.get("system_prompt")]
-    elif provider == "retell":
+        return [profile.get("system_prompt")]
+    if provider == "retell":
         if profile.get("response_engine_type") != "retell-llm" or profile.get("states"):
             return None
-        texts = [profile.get("general_prompt")]
-    elif provider == "vapi":
+        return [profile.get("general_prompt")]
+    if provider == "vapi":
         model = profile.get("model")
         messages = model.get("messages") if isinstance(model, Mapping) else None
         if not isinstance(messages, list):
             return None
-        texts = [
+        return [
             message.get("content")
             for message in messages
             if isinstance(message, Mapping) and message.get("role") == "system"
         ]
-    else:
-        return None
+    return None
+
+
+def whole_prompt(profile: Mapping[str, Any]) -> str | None:
+    """The agent's whole instructions from a provider profile, or None where code can't take
+    every text of them, or where taking them would cut them."""
+    texts = _prompt_texts(profile)
     if not texts or not all(isinstance(text, str) and text.strip() for text in texts):
         return None
-    if provider in {"retell", "vapi"} and any(
+    if profile.get(PROMPT_REWRITTEN):
+        return None
+    if profile.get("provider") in {"retell", "vapi"} and any(
         _rewritten_as_url(text) for text in texts
     ):
-        # Fetched profiles were sanitized, and one rewritten as an address may have been cut.
+        # Fetched profiles were sanitized, and one rewritten as an address may have been cut;
+        # a profile fetched before the sanitizer said so is judged by its text.
         return None
     whole = "\n\n".join(texts)
     if len(whole.encode("utf-8")) > _LARGEST_WHOLE_PROMPT:
@@ -265,7 +277,10 @@ def inspect_provider_target(
                 "retell_response_engine_unsupported: provider_import supports "
                 "retell-llm and conversation-flow"
             )
-    return _safe_profile_value(profile)
+    safe = _safe_profile_value(profile)
+    if _prompt_texts(safe) != _prompt_texts(profile):
+        safe[PROMPT_REWRITTEN] = True
+    return safe
 
 
 def _request_json(

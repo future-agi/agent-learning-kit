@@ -10,8 +10,10 @@ All notable release changes for Agent Learning Kit are tracked here.
   prompt is taken for phone and LiveKit connections (the prompt the user gave), for Retell with one
   general prompt and no states, and for Vapi (every system message of the assistant's model, in
   order). Where a provider definition is in force, repository lines are not used for the prompt;
-  a Retell agent with states or a conversation flow is not marked, nor is a fetched prompt that
-  begins with a web address, which the profile's sanitizer may have cut. Otherwise the eval that needs the
+  a Retell agent with states or a conversation flow is not marked, nor is a fetched prompt the
+  profile's sanitizer changed (it rewrites a text that begins with a web address, and may cut it).
+  Where no whole prompt can be taken, a reading that records neither a prompt nor rules is asked
+  once, from the provider's definition. Otherwise the eval that needs the
   instructions is reported as not measured, with the cause `no_whole_instructions` or
   `no_instructions`, instead of being graded on a quote that may leave text out. A not-measured eval
   is neither a pass nor a fail: it is no checkpoint, it is listed with its cause in the summary and
