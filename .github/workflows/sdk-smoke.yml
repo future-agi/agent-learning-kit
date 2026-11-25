@@ -448,3 +448,19 @@ jobs:
         run: |
           python -m pytest -q -rs tests/harness/test_livekit_reference.py | tee livekit.out
           ! grep -q "skipped" livekit.out
+
+  before-push-scripts:
+    # The tests of scripts/check_new_tests_in_ci.py and scripts/before_push.py. They build
+    # throwaway git repositories and install nothing. Named here so that CI runs them: the
+    # first of the two scripts fails a change whose new test files no job runs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run the tests of the before-push scripts
+        run: |
+          python -I scripts/test_check_new_tests_in_ci.py
+          python -I scripts/test_before_push.py
