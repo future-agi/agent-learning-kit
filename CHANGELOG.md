@@ -14,9 +14,9 @@ All notable release changes for Agent Learning Kit are tracked here.
   platform could not tell it from the agent's own slow start. The process's name stays out of
   the cause, since the user's manifest names it.
 
-- `fi-instrumentation-otel` is capped below 1.5.1 for now. 1.5.1 changed which key an exporter
-  sends in a simulation, and the kit's exporter test fails with it; the cap goes once that is
-  decided (TH-10547).
+- In a hosted simulation, traceAI's exporters again send traces to the simulation collector
+  with the simulation's ingest key, including with `fi-instrumentation-otel` 1.5.1 and later.
+  The cap below 1.5.1 is removed.
 
 - `StepEfficiency` now measures repeated tool calls against total tool calls,
   rather than total steps, so several repeats within one step cannot produce a
