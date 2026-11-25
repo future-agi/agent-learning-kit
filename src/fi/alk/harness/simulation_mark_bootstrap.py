@@ -322,6 +322,78 @@ def _patch_exporter(module, ingest, lower: bool) -> None:
     _write("applied")
 
 
+# traceAI's exporters and whether each is the gRPC one. They work out their headers before the
+# base constructor runs and, from fi-instrumentation-otel 1.5.1, pin those headers afterwards, so
+# the swap ``_patch_exporter`` makes inside the base constructor is undone. They are given our key
+# as their explicit headers instead: traceAI's own rule then holds, explicit credentials win and
+# the environment pair (the customer's key) is not added.
+_TRACEAI = "fi_instrumentation.otel"
+_TRACEAI_EXPORTERS = {"HTTPSpanExporter": False, "GRPCSpanExporter": True}
+# The traceAI helpers that resolve an exporter's endpoint, and the pin step that makes them needed.
+_TRACEAI_HELPERS = (
+    "_get_class_signature",
+    "_normalized_endpoint",
+    "get_env_grpc_collector_endpoint",
+)
+_TRACEAI_PINS = ("_pin_http_headers", "_pin_grpc_headers")
+
+
+def _traceai_endpoint(module, bound, grpc: bool):
+    """The endpoint a traceAI exporter sends to, resolved by traceAI's own helpers."""
+    endpoint = bound.arguments.get("endpoint")
+    if endpoint is None:
+        if grpc:
+            endpoint = module.get_env_grpc_collector_endpoint()
+        else:
+            _, endpoint = module._normalized_endpoint(None)
+    return endpoint
+
+
+def _patch_traceai(module, ingest) -> None:
+    ours, collector = ingest
+    if not all(hasattr(module, name) for name in _TRACEAI_HELPERS):
+        # Without the pin step the base patch already sets our key; with it, the endpoint cannot
+        # be resolved as traceAI does, and the log must say the key may not be ours.
+        if any(hasattr(module, name) for name in _TRACEAI_PINS):
+            _write("failed")
+        return
+    for name, grpc in _TRACEAI_EXPORTERS.items():
+        cls = getattr(module, name, None)
+        if cls is None:
+            continue
+        original = cls.__init__
+        if getattr(original, _PATCHED, False):
+            continue
+        # traceAI binds its arguments to the signature of the OTLP exporter it extends.
+        signature = module._get_class_signature(cls.__bases__[0])
+
+        def wrapper(self, *args, _original=original, _signature=signature, _grpc=grpc, **kwargs):
+            try:
+                bound = _signature.bind_partial(*args, **kwargs)
+                endpoint = _traceai_endpoint(module, bound, _grpc)
+            except Exception:
+                # The endpoint is unknown, so nothing can be said about whose key it gets.
+                _write("failed")
+                return _original(self, *args, **kwargs)
+            if _host_port(endpoint) != collector:
+                # Not our collector: the exporter is built exactly as the caller asked.
+                return _original(self, *args, **kwargs)
+            try:
+                entries = _header_entries(bound.arguments.get("headers"))
+            except Exception:
+                # The caller's other headers are dropped rather than the customer's key sent.
+                _write("failed")
+                entries = []
+            # No environment headers here: traceAI keeps them away from Future AGI endpoints.
+            bound.arguments["headers"] = _with_ingest(entries, ours, True)
+            return _original(self, *bound.args, **bound.kwargs)
+
+        functools.update_wrapper(wrapper, original)
+        setattr(wrapper, _PATCHED, True)
+        cls.__init__ = wrapper
+    _write("applied")
+
+
 class _CallFile:
     def __init__(self, path: str) -> None:
         self._path = path
@@ -467,6 +539,7 @@ def install() -> None:
                 _PATCHES[name] = functools.partial(
                     _patch_exporter, ingest=ingest, lower=lower
                 )
+            _PATCHES[_TRACEAI] = functools.partial(_patch_traceai, ingest=ingest)
         if not _PATCHES:
             return
         # The finder goes in first so that a failed patch of an already imported module still
