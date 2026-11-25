@@ -10299,6 +10299,17 @@ def test_node_mark_hook_leaves_the_future_agi_keys_to_the_customer(tmp_path: Pat
     assert "FI_SECRET_KEY" not in captured["env"]
 
 
+def test_node_mark_hook_drops_node_debug_which_prints_request_headers(tmp_path: Path) -> None:
+    # NODE_DEBUG=http or net writes each request's headers, the ingest pair's included, to stderr.
+    process = _source_process(name="agent", environment={"NODE_DEBUG": "http,net"})
+    captured = _spawn(tmp_path / "exporting", process, _EXPORT)
+    assert "NODE_OPTIONS" in captured["env"]
+    assert "NODE_DEBUG" not in captured["env"]
+    # Without the hook the process keeps its own value.
+    captured = _spawn(tmp_path / "not-exporting", process)
+    assert captured["env"]["NODE_DEBUG"] == "http,net"
+
+
 def test_node_option_quotes_a_path_as_node_reads_it() -> None:
     assert pr._node_require_option(Path("/work/worlds/w0/agent/hook.cjs")) == (
         '--require="/work/worlds/w0/agent/hook.cjs"'

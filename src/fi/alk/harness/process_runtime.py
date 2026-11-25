@@ -2682,6 +2682,9 @@ def spawn_source_process(
         # process it starts; another runtime ignores the name. The process's own options follow.
         # The process lane admits a Node agent only through the native Node runtime; until that
         # lands, the hook reaches only Node processes that an admitted agent starts.
+        # NODE_DEBUG=http or net writes each request's headers, the ingest pair's included, to
+        # the process's stderr; the Python hook exposes no such output.
+        env.pop("NODE_DEBUG", None)
         existing_node_options = env.get("NODE_OPTIONS", "").strip()
         env["NODE_OPTIONS"] = " ".join(
             part
