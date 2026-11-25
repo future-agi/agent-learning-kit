@@ -6619,6 +6619,388 @@ def test_native_bun_rejects_ambiguous_and_symlink_lock(tmp_path: Path) -> None:
         _plan_source_process(tmp_path, **kwargs)
 
 
+_NODE_CHAT_SERVER = """\
+const http = require("node:http");
+
+const orders = { A1: { status: "shipped", total: 42 } };
+const tools = {
+  lookup_order: ({ order_id }) => orders[order_id] ?? null,
+  refund_order: ({ order_id }) => {
+    if (!orders[order_id]) throw new Error("unknown order " + order_id);
+    orders[order_id].status = "refunded";
+    return { refunded: order_id };
+  },
+};
+
+function run(id, name, args) {
+  try {
+    return { id, name, arguments: args, result: tools[name](args), error: false };
+  } catch (error) {
+    return { id, name, arguments: args, result: { message: error.message }, error: true };
+  }
+}
+
+http
+  .createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/health") {
+      response.writeHead(200).end("ok");
+      return;
+    }
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      const { message } = JSON.parse(body);
+      const rows = [run("call-1", "lookup_order", { order_id: "A1" })];
+      if (message.includes("refund")) rows.push(run("call-2", "refund_order", { order_id: "B2" }));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ reply: "Order A1 is " + rows[0].result.status + ".", tools: rows }));
+    });
+  })
+  .listen(Number(process.env.PORT ?? 8080), "127.0.0.1");
+"""
+
+_NODE_JSON_INTERFACE = {
+    "kind": "http",
+    "port": 8080,
+    "path": "/chat",
+    "health_path": "/health",
+    "protocol": "json_template",
+    "include_tools": False,
+    "request_template": {"message": "{{new_message_content}}"},
+    "response_path": "reply",
+    "completed_tools": {
+        "items_path": "tools",
+        "id_path": "id",
+        "name_path": "name",
+        "arguments_path": "arguments",
+        "result_path": "result",
+        "error_path": "error",
+    },
+}
+
+
+def _node_package(root: Path, *, manager: str = "npm@10.9.2", **extra) -> None:
+    manifest = {"name": "order-chat", "packageManager": manager, **extra}
+    (root / "package.json").write_text(json.dumps(manifest))
+    lock = "pnpm-lock.yaml" if manager.startswith("pnpm@") else "package-lock.json"
+    (root / lock).write_text('{"lockfileVersion": 3}')
+
+
+def _node_plan_kwargs(root: Path, **changes):
+    return {
+        "language": "node",
+        "name": "agent",
+        "root": root,
+        "entry": None,
+        "control": True,
+        "needs_secrets": False,
+        "run_override": ["node", "server.js"],
+        **changes,
+    }
+
+
+@pytest.mark.parametrize("manager", ["npm@10.9.2", "pnpm@9.15.4"])
+@pytest.mark.parametrize("child", [".", "packages/chat"])
+def test_native_node_plan_installs_locked_root_and_preserves_child_command(
+    tmp_path: Path, child: str, manager: str
+) -> None:
+    _node_package(tmp_path, manager=manager)
+    component = tmp_path / child
+    component.mkdir(parents=True, exist_ok=True)
+    if child != ".":
+        (component / "package.json").write_text('{"name":"chat"}')
+    (component / "server.js").write_text(_NODE_CHAT_SERVER)
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "version": "22",
+            "execution": "native",
+            "workdir": child,
+            "command": ["node", "server.js"],
+            "install": "touch /tmp/must-not-execute",
+            "workspaces": {"project": "files"},
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+    assert plan.packaging == "generated_node"
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.workspaces == {
+        "project": "files" if child == "." else child + "/files"
+    }
+    probe, install = agent.build_commands
+    assert probe[:2] == ["python3", "-c"] and len(probe) == 3
+    assert install == (
+        ["corepack", "npm", "ci", "--ignore-scripts"]
+        if manager.startswith("npm@")
+        else ["corepack", "pnpm", "install", "--frozen-lockfile", "--ignore-scripts"]
+    )
+    assert agent.run_command == (
+        ["node", "server.js"]
+        if child == "."
+        else [
+            "sh",
+            "-c",
+            'cd "./$1" && shift && exec "$@"',
+            "alk-source-process",
+            child,
+            "node",
+            "server.js",
+        ]
+    )
+    assert "must-not-execute" not in repr(agent.build_commands)
+    # ALK binds no JavaScript tools: evidence comes from the completed rows, not a Python tracer.
+    assert "HARNESS_TOOL_TRACE" not in agent.environment
+
+
+def test_native_node_is_read_from_its_command_without_python_tracing(
+    tmp_path: Path,
+) -> None:
+    _node_package(tmp_path)
+    (tmp_path / "server.js").write_text(_NODE_CHAT_SERVER)
+    runtime = {
+        "execution": "native",
+        "command": ["node", "server.js"],
+        "interface": _NODE_JSON_INTERFACE,
+    }
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert plan.packaging == "generated_node"
+    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+    assert len(agent.build_commands) == 2
+    assert "HARNESS_TOOL_TRACE" not in agent.environment
+    with pytest.raises(BundleAuthorError, match="runtime_node_http_interface_required"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime={
+                **runtime,
+                "language": "node",
+                "interface": {"kind": "command", "protocol": "fi.alk"},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "manifest,locks,changes,error",
+    [
+        ({}, ["package-lock.json"], {}, "package_manager_missing"),
+        ({"packageManager": "npm@latest"}, ["package-lock.json"], {}, "package_manager_unpinned"),
+        ({"packageManager": "npm@10"}, ["package-lock.json"], {}, "package_manager_unpinned"),
+        ({"packageManager": "bun@1.3.14"}, ["bun.lock"], {}, "package_manager_unpinned"),
+        ({"packageManager": "yarn@4.5.0"}, ["yarn.lock"], {}, "package_manager_unpinned"),
+        ({"packageManager": "npm@10.9.2"}, [], {}, "lock_required"),
+        ({"packageManager": "npm@10.9.2"}, ["pnpm-lock.yaml"], {}, "lock_required"),
+        ({"packageManager": "pnpm@9.15.4"}, ["package-lock.json"], {}, "lock_required"),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "bun.lock"],
+            {},
+            "lock_required",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json"],
+            {"run_override": ["npm", "start"]},
+            "command_required",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json"],
+            {"extras": ["voice"]},
+            "python_options_invalid",
+        ),
+        ([], ["package-lock.json"], {}, "manifest_invalid"),
+    ],
+)
+def test_native_node_rejects_invalid_source(
+    tmp_path: Path, manifest, locks, changes, error: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text(json.dumps(manifest))
+    for name in locks:
+        (tmp_path / name).write_text("{}")
+    with pytest.raises(BundleAuthorError, match="runtime_node_" + error):
+        _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path, **changes))
+
+
+def test_native_node_accepts_corepack_hash_pin_and_rejects_symlink_lock(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    _node_package(tmp_path, manager="pnpm@9.15.4+sha512." + "ab" * 64)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+    assert process.build_commands[-1][:2] == ["corepack", "pnpm"]
+    (tmp_path / "pnpm-lock.yaml").unlink()
+    (tmp_path / "pnpm-lock.yaml").symlink_to(tmp_path / "package.json")
+    with pytest.raises(BundleAuthorError, match="runtime_node_manifest_unsafe"):
+        _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+
+
+def test_native_node_requires_node_and_corepack_on_path(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    bin_directory = tmp_path / "bin"
+    bin_directory.mkdir()
+    _node_package(tmp_path)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+
+    def probe() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, *process.build_commands[0][1:]],
+            env={"PATH": str(bin_directory)},
+            capture_output=True,
+            text=True,
+        )
+
+    def tool(name: str, output: str) -> None:
+        binary = bin_directory / name
+        binary.write_text(f"#!/bin/sh\necho {output}\n")
+        binary.chmod(0o755)
+
+    missing = probe()
+    assert missing.returncode != 0
+    assert "runtime_node_toolchain_missing" in missing.stderr
+    tool("node", "v22.11.0")
+    no_corepack = probe()
+    assert no_corepack.returncode != 0
+    assert "runtime_node_toolchain_missing" in no_corepack.stderr
+    tool("corepack", "0.31.0")
+    matching = probe()
+    assert matching.returncode == 0, matching.stderr
+    assert matching.stdout.strip() == "Node toolchain v22.11.0"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs a local node binary")
+def test_plain_node_json_route_reports_completed_tool_rows(tmp_path: Path) -> None:
+    """A stdlib ``node:http`` agent's own JSON route is the ingress, and its completed rows are
+    the tool evidence: ALK neither binds nor re-runs a JavaScript tool."""
+    import asyncio
+    import socket
+    import time
+    import urllib.request
+
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+    from fi.alk.harness.contract import RuntimeInterface
+    from fi.simulate.agent.wrapper import AgentInput
+
+    (tmp_path / "server.js").write_text(_NODE_CHAT_SERVER)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = subprocess.Popen(
+        ["node", "server.js"],
+        cwd=tmp_path,
+        env={**os.environ, "PORT": str(port)},
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(base + "/health", timeout=1).read()
+                break
+            except OSError:
+                time.sleep(0.05)
+        wrapper = create_chat_wrapper(
+            RuntimeInterface(**_NODE_JSON_INTERFACE), base, secret_values={}
+        )
+        response = asyncio.run(
+            wrapper.call(
+                AgentInput(
+                    thread_id="one",
+                    messages=[],
+                    new_message={"content": "refund order B2"},
+                )
+            )
+        )
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
+    assert response.content == "Order A1 is shipped."
+    rows = response.metadata["native_completed_tools"]
+    assert [(row["name"], row["ok"]) for row in rows] == [
+        ("lookup_order", True),
+        ("refund_order", False),
+    ]
+    assert rows[0]["result"] == {"status": "shipped", "total": 42}
+    assert rows[1]["result"] == {"message": "unknown order B2"}
+    assert not response.tool_calls
+
+
+def test_native_node_json_agent_seals_into_a_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _node_package(source, dependencies={"ms": "2.1.3"})
+    # A real lock: its integrity hashes must pass the source secret scan.
+    (source / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": "order-chat",
+                "lockfileVersion": 3,
+                "requires": True,
+                "packages": {
+                    "": {"name": "order-chat", "dependencies": {"ms": "2.1.3"}},
+                    "node_modules/ms": {
+                        "version": "2.1.3",
+                        "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+                        "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+                        "license": "MIT",
+                    },
+                },
+            },
+            indent=2,
+        )
+    )
+    (source / "server.js").write_text(_NODE_CHAT_SERVER)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "version": "22",
+                    "execution": "native",
+                    "command": ["node", "server.js"],
+                    "interface": _NODE_JSON_INTERFACE,
+                },
+                "data_store": {"kind": "none"},
+                "tools": [
+                    {"name": "lookup_order", "args": ["order_id"]},
+                    {"name": "refund_order", "args": ["order_id"]},
+                ],
+            }
+        )
+    )
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=output
+    )
+    agent = next(
+        p for p in manifest.processes if p.name == manifest.runtime.control_service
+    )
+    assert agent.run_command == ["node", "server.js"]
+    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+    context = output / agent.working_directory
+    assert (context / "server.js").read_text() == _NODE_CHAT_SERVER
+    assert (context / "package-lock.json").is_file()
+    load_bundle_v2(output)
+
+
 def test_native_process_runs_from_scanned_bundle_context(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -8673,3 +9055,63 @@ def test_a_leftover_that_does_not_parse_never_becomes_the_callback(tmp_path, lef
         (tmp_path / f"{name}.py").write_text(text, encoding="utf-8")
 
     assert _discover_callback_entrypoint(tmp_path) is None
+
+
+def test_subfolder_node_runs_from_subfolder(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/server.js": _NODE_CHAT_SERVER,
+        },
+    )
+    _node_package(source / "agents/a")
+    runtime = {
+        "language": "node",
+        "execution": "native",
+        "command": ["node", "server.js"],
+        "interface": _NODE_JSON_INTERFACE,
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.working_directory == "agents/a"
+    assert agent.run_command == ["node", "server.js"]
+    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+
+
+def test_compose_node_sidecar_in_a_workspace_member_changes_folder_once(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agent.py": "print('agent')\n",
+            "requirements.txt": "\n",
+            "tools/api/package.json": '{"name":"tools-api"}',
+            "tools/api/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  tools-api:\n"
+                "    build: ./tools/api\n"
+                "    command: [node, server.js]\n"
+                "  agent:\n"
+                "    build: .\n"
+                "    depends_on: [tools-api]\n"
+            ),
+        },
+    )
+    _node_package(source, workspaces=["tools/*"])
+
+    plan = resolve_environment_plan(source, _job(connector="auto"))
+
+    tools = next(process for process in plan.processes if process.name == "tools-api")
+    assert tools.working_directory == "."
+    assert tools.run_command == [
+        "sh",
+        "-c",
+        'cd "./$1" && shift && exec "$@"',
+        "alk-source-process",
+        "tools/api",
+        "node",
+        "server.js",
+    ]
+    assert tools.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]

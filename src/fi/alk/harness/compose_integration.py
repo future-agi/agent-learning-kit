@@ -48,9 +48,10 @@ def _disable_agents_sdk_tracing(service: dict) -> None:
 def runtime_capability_briefing() -> str:
     heading = (
         "\n\n## Available execution capabilities\n\n"
-        "Generated native process execution supports Python or source-declared pinned Bun, "
-        "not arbitrary native Node.js startup. Do not translate a Node.js project to Bun "
-        "without source evidence or invent a replacement entrypoint or runtime. "
+        "Generated native process execution supports Python, source-declared pinned Bun, "
+        "or source-declared pinned Node started with a node command. Read a Node.js project "
+        "as runtime.language=node; do not translate it to Bun without source evidence or "
+        "invent a replacement entrypoint or runtime. "
     )
     if not enabled():
         return heading + (

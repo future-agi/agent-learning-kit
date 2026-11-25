@@ -1498,65 +1498,132 @@ def _python_component_command(
     )
 
 
+_NODE_LANGUAGES = {"node", "nodejs"}
+# Every JavaScript lockfile a package root can carry; Node accepts only its pinned installer's one.
+_JS_LOCKS = (
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+)
+_NODE_INSTALLS = {
+    "npm": ("package-lock.json", ["corepack", "npm", "ci", "--ignore-scripts"]),
+    "pnpm": (
+        "pnpm-lock.yaml",
+        ["corepack", "pnpm", "install", "--frozen-lockfile", "--ignore-scripts"],
+    ),
+}
+# The installer runs through Corepack, so the exact packageManager version, not the image's own
+# npm, installs the lockfile. An agent the image's Node cannot run fails when it starts.
+_NODE_TOOLCHAIN_PROBE = (
+    "import shutil,subprocess,sys; "
+    "node=shutil.which('node'); corepack=shutil.which('corepack'); "
+    "node and corepack or sys.exit('runtime_node_toolchain_missing: provision Node and Corepack in the certified image'); "
+    "print('Node toolchain '+subprocess.check_output([node,'--version'],text=True).strip(),flush=True)"
+)
+
+
+def _native_js_runtime(language: str, command: Sequence[str]) -> str:
+    """``bun`` or ``node`` when a native process declares that JavaScript runtime, else empty."""
+    language = language.lower()
+    launcher = list(command[:1])
+    if language == "bun" or (not language and launcher == ["bun"]):
+        return "bun"
+    if language in _NODE_LANGUAGES or (not language and launcher == ["node"]):
+        return "node"
+    return ""
+
+
 def _plan_source_process(
     source: Path, *, language: str = "", **kwargs: Any
 ) -> SourceProcess:
     root = kwargs["root"]
     command = kwargs.get("run_override") or []
-    is_bun = language.lower() == "bun" or (
-        not language and command and command[0] == "bun"
-    )
-    if not is_bun:
+    lane = _native_js_runtime(language, command)
+    if not lane:
         return _plan_python(source, **kwargs)
-    if not command or command[0] != "bun":
-        raise BundleAuthorError("runtime_bun_command_required: expected bun argv")
+    if list(command[:1]) != [lane]:
+        raise BundleAuthorError(f"runtime_{lane}_command_required: expected {lane} argv")
     if (
         kwargs.get("extras")
         or kwargs.get("requirements_files")
         or kwargs.get("livekit_download")
     ):
-        raise BundleAuthorError("runtime_bun_python_options_invalid")
+        raise BundleAuthorError(f"runtime_{lane}_python_options_invalid")
     source, root = source.resolve(), root.resolve()
     if not root.is_relative_to(source):
-        raise BundleAuthorError("runtime_bun_workdir_outside_source")
+        raise BundleAuthorError(f"runtime_{lane}_workdir_outside_source")
     package_root = root
     manifest = {}
     while True:
         path = package_root / "package.json"
         if path.is_file():
             if path.is_symlink():
-                raise BundleAuthorError("runtime_bun_manifest_unsafe")
+                raise BundleAuthorError(f"runtime_{lane}_manifest_unsafe")
             try:
                 manifest = json.loads(path.read_text())
             except (ValueError, UnicodeError) as exc:
-                raise BundleAuthorError("runtime_bun_manifest_invalid") from exc
+                raise BundleAuthorError(f"runtime_{lane}_manifest_invalid") from exc
             if not isinstance(manifest, dict):
-                raise BundleAuthorError("runtime_bun_manifest_invalid")
+                raise BundleAuthorError(f"runtime_{lane}_manifest_invalid")
             if "packageManager" in manifest:
                 break
         if package_root == source:
-            raise BundleAuthorError("runtime_bun_package_manager_missing")
+            raise BundleAuthorError(f"runtime_{lane}_package_manager_missing")
         package_root = package_root.parent
     manager = manifest.get("packageManager")
-    if not isinstance(manager, str) or not re.fullmatch(
-        r"bun@[0-9]+\.[0-9]+\.[0-9]+", manager
-    ):
-        raise BundleAuthorError("runtime_bun_package_manager_unpinned")
-    version = manager.removeprefix("bun@")
-    if kwargs.get("version") and kwargs["version"] != version:
-        raise BundleAuthorError("runtime_bun_version_mismatch")
-    locks = [
-        package_root / name
-        for name in ("bun.lock", "bun.lockb")
-        if (package_root / name).is_file()
-    ]
-    if len(locks) != 1:
-        raise BundleAuthorError(
-            "runtime_bun_lock_required: expected exactly one source lockfile"
+    manager = manager if isinstance(manager, str) else ""
+    if lane == "bun":
+        if not re.fullmatch(r"bun@[0-9]+\.[0-9]+\.[0-9]+", manager):
+            raise BundleAuthorError("runtime_bun_package_manager_unpinned")
+        version = manager.removeprefix("bun@")
+        if kwargs.get("version") and kwargs["version"] != version:
+            raise BundleAuthorError("runtime_bun_version_mismatch")
+        locks = [
+            package_root / name
+            for name in ("bun.lock", "bun.lockb")
+            if (package_root / name).is_file()
+        ]
+        if len(locks) != 1:
+            raise BundleAuthorError(
+                "runtime_bun_lock_required: expected exactly one source lockfile"
+            )
+        verify = (
+            "import shutil,subprocess,sys; "
+            "binary=shutil.which('bun'); "
+            "binary or sys.exit('runtime_bun_toolchain_missing: provision pinned Bun in the certified image'); "
+            "actual=subprocess.check_output([binary,'--version'],text=True).strip(); "
+            "print('Bun toolchain '+actual,flush=True); "
+            "actual==sys.argv[1] or sys.exit('runtime_bun_toolchain_version_mismatch: '+actual)"
         )
+        build_commands = [
+            ["python3", "-c", verify, version],
+            ["bun", "install", "--frozen-lockfile"],
+        ]
+    else:
+        pinned = re.fullmatch(
+            r"(npm|pnpm)@[0-9]+\.[0-9]+\.[0-9]+(?:\+sha(?:1|224|256|384|512)\.[0-9a-f]+)?",
+            manager,
+        )
+        if not pinned:
+            raise BundleAuthorError("runtime_node_package_manager_unpinned")
+        lock_name, install = _NODE_INSTALLS[pinned[1]]
+        locks = [
+            package_root / name for name in _JS_LOCKS if (package_root / name).is_file()
+        ]
+        if [path.name for path in locks] != [lock_name]:
+            raise BundleAuthorError(
+                f"runtime_node_lock_required: expected exactly one source lockfile, {lock_name}"
+            )
+        build_commands = [
+            ["python3", "-c", _NODE_TOOLCHAIN_PROBE],
+            install,
+        ]
     for path in [package_root / "package.json", *locks]:
         if path.is_symlink() or not path.resolve().is_relative_to(source):
-            raise BundleAuthorError("runtime_bun_manifest_unsafe")
+            raise BundleAuthorError(f"runtime_{lane}_manifest_unsafe")
     child = root.relative_to(package_root).as_posix()
     run = (
         command
@@ -1570,14 +1637,6 @@ def _plan_source_process(
             *command,
         ]
     )
-    verify = (
-        "import shutil,subprocess,sys; "
-        "binary=shutil.which('bun'); "
-        "binary or sys.exit('runtime_bun_toolchain_missing: provision pinned Bun in the certified image'); "
-        "actual=subprocess.check_output([binary,'--version'],text=True).strip(); "
-        "print('Bun toolchain '+actual,flush=True); "
-        "actual==sys.argv[1] or sys.exit('runtime_bun_toolchain_version_mismatch: '+actual)"
-    )
     process = _python_process(
         name=kwargs["name"],
         working_directory=package_root.relative_to(source).as_posix(),
@@ -1590,10 +1649,7 @@ def _plan_source_process(
     )
     return process.model_copy(
         update={
-            "build_commands": [
-                ["python3", "-c", verify, version],
-                ["bun", "install", "--frozen-lockfile"],
-            ],
+            "build_commands": build_commands,
             "run_command": run,
             "source_component": child,
         }
@@ -2897,9 +2953,9 @@ def resolve_environment_plan(
         raise BundleAuthorError(
             "runtime_dockerfile_unsupported: process lane cannot execute a selected Dockerfile"
         )
-    if runtime_model.language.lower() not in {"", "python", "py", "bun"}:
+    if runtime_model.language.lower() not in {"", "python", "py", "bun", *_NODE_LANGUAGES}:
         raise BundleAuthorError(
-            "runtime_language_unsupported: process lane supports Python or pinned Bun source"
+            "runtime_language_unsupported: process lane supports Python, pinned Bun or pinned Node source"
         )
     provider_connect_only = (
         job.source.kind is SourceKind.PROVIDER
@@ -2936,9 +2992,7 @@ def resolve_environment_plan(
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
     contract_runtime = contract_runtime if isinstance(contract_runtime, dict) else {}
     runtime_command = [str(item) for item in (contract_runtime.get("command") or [])]
-    is_bun_runtime = runtime_model.language.lower() == "bun" or bool(
-        runtime_command and runtime_command[0] == "bun"
-    )
+    js_runtime = _native_js_runtime(runtime_model.language, runtime_command)
     runtime_workdir = str(contract_runtime.get("workdir") or "")
     interface = contract_runtime.get("interface")
     interface = interface if isinstance(interface, dict) else {}
@@ -3104,12 +3158,22 @@ def resolve_environment_plan(
             declared_runtime = service_name == declared_control
             if declared_runtime:
                 port = int(interface_port) if interface_port else port
+            service_language = runtime_model.language if declared_runtime else ""
+            service_command = (
+                runtime_command
+                or _compose_command(service.get("command"))
+                or _dockerfile_run(service_root)
+            ) if declared_runtime else (
+                _compose_command(service.get("command"))
+                or _dockerfile_run(service_root)
+            )
+            service_js = _native_js_runtime(service_language, service_command or [])
             process = _plan_source_process(
                 root,
-                language=runtime_model.language if declared_runtime else "",
+                language=service_language,
                 version=(
                     runtime_model.version
-                    if declared_runtime and runtime_model.language.lower() == "bun"
+                    if declared_runtime and _native_js_runtime(runtime_model.language, [])
                     else ""
                 ),
                 name=service_name,
@@ -3125,16 +3189,7 @@ def resolve_environment_plan(
                 install=runtime_model.install if service_name == control_name else "",
                 requirements_files=runtime_model.requirements_files if service_name == control_name else [],
                 context_excludes=tuple(runtime_model.context_excludes) if service_name == control_name else (),
-                run_override=(
-                    runtime_command
-                    or _compose_command(service.get("command"))
-                    or _dockerfile_run(service_root)
-                )
-                if declared_runtime
-                else (
-                    _compose_command(service.get("command"))
-                    or _dockerfile_run(service_root)
-                ),
+                run_override=service_command,
             )
             if (
                 port
@@ -3205,7 +3260,8 @@ def resolve_environment_plan(
                         ),
                     }
                 )
-            if not (declared_runtime and runtime_model.language.lower() == "bun"):
+            # A JavaScript process already starts from its own component.
+            if not service_js:
                 process = _python_component_command(source=root, component=service_root, process=process)
             processes.append(process)
             if port:
@@ -3374,15 +3430,15 @@ def resolve_environment_plan(
                     "ALK_CALLBACK_ENTRYPOINT": callback_entrypoint,
                 }
             )
-        if is_bun_runtime and not is_http_runtime:
-            raise BundleAuthorError("runtime_bun_http_interface_required")
+        if js_runtime and not is_http_runtime:
+            raise BundleAuthorError(f"runtime_{js_runtime}_http_interface_required")
         process = _plan_source_process(
             root,
             language=runtime_model.language,
             name=control_name,
-            # Bun walks up to its own package root, so it starts from the run folder.
+            # Bun and Node walk up to their own package root, so they start from the run folder.
             root=(
-                (run_folder if is_bun_runtime else component)
+                (run_folder if js_runtime else component)
                 if subfolder
                 else root if is_callback else component
             ),
@@ -3408,7 +3464,7 @@ def resolve_environment_plan(
                     else _dockerfile_run(component)
                 )
             ),
-            run_folder=run_folder if subfolder and not is_bun_runtime else None,
+            run_folder=run_folder if subfolder and not js_runtime else None,
         )
         if is_graph:
             python_command = process.run_command
@@ -3490,7 +3546,7 @@ def resolve_environment_plan(
                 final_run_command, process.environment, component, root
             )
             process = process.model_copy(update=update)
-        if not is_bun_runtime:
+        if not js_runtime:
             process = _python_component_command(
                 source=root,
                 component=(
@@ -3558,8 +3614,8 @@ def resolve_environment_plan(
         packaging = (
             "dockerfile"
             if (run_folder / "Dockerfile").is_file()
-            else "generated_bun"
-            if is_bun_runtime
+            else f"generated_{js_runtime}"
+            if js_runtime
             else "generated_python"
         )
 
@@ -3779,7 +3835,9 @@ def _sdk_tracing_off_until_the_hook(environment: dict[str, str]) -> None:
 def _source_tool_trace_environment(
     source: Path, runtime: Runtime, entries: list[dict[str, Any]]
 ) -> dict[str, str]:
-    if runtime.language.lower() not in {"", "python", "py"}:
+    if runtime.language.lower() not in {"", "python", "py"} or _native_js_runtime(
+        runtime.language, runtime.command
+    ):
         return {}
     declared = []
     for raw in entries:
