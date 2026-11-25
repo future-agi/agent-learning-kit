@@ -1475,7 +1475,7 @@ def _runner_service_address(
 
 def attached_postgres_store(destination: str | Path):
     """The standard world-store interface over the repository's running Postgres."""
-    from .world.stores.postgres import AttachedPostgresStore
+    from .world.stores.postgres import AttachedPostgresStore, system_first
 
     environment = ProvisionedEnvironment.load(Path(destination))
     if environment is None or not environment.running:
@@ -1498,8 +1498,9 @@ def attached_postgres_store(destination: str | Path):
                 address = _runner_service_address(
                     environment, address, next(iter(services))
                 )
-            return AttachedPostgresStore(address)
-    return AttachedPostgresStore(postgres_dsn(destination))
+            # No world role here: the harness's own address, with the system's functions first for the world's SQL.
+            return AttachedPostgresStore(system_first(address), admin_dsn=address)
+    return AttachedPostgresStore(system_first(postgres_dsn(destination)), admin_dsn=postgres_dsn(destination))
 
 
 def _configuration_name(value: str) -> str:

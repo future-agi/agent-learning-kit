@@ -93,7 +93,7 @@ from .scenario_source import (
 )
 from .usage import UsageJournal, UsageReporter
 from .world.handle import HostedWorld
-from .world.stores.postgres import AttachedPostgresStore
+from .world.stores.postgres import attached_world_store
 
 logger = logging.getLogger(__name__)
 
@@ -752,7 +752,8 @@ class ProcessWorldFactory:
         endpoint = _find_postgres_endpoint(runtime)
         build_output = await asyncio.to_thread(load_build_output, self._work_directory)
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
-        store = AttachedPostgresStore(endpoint.address)
+        # The world's own SQL runs as its role; the harness keeps its own address for a snapshot and a restore.
+        store = attached_world_store(endpoint)
         return await asyncio.to_thread(
             HostedWorld,
             store,

@@ -478,10 +478,12 @@ def test_a_worker_s_allowed_action_reaches_the_world_through_its_channel_and_nam
 def test_a_worker_s_action_outside_its_allow_list_is_refused_before_the_world(worker_proxy):
     url, rows = worker_proxy
     status, payload = _post(url, "/w/c-lookup/records/approve", {"deal": "1"})
-    assert (status, payload) == (403, {"detail": "records.approve is not permitted for order_lookup"})
+    # The agent hears a plain word; why is kept in the log row, which grading reads.
+    assert (status, payload) == (403, {"detail": "forbidden"})
     assert _World.seen == []
     [row] = rows()
     assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
+    assert row["refusal"] == "records.approve is not permitted for order_lookup"
 
 
 def test_a_worker_s_request_for_a_route_that_is_no_world_action_is_refused_before_the_world(worker_proxy):
@@ -658,6 +660,23 @@ def test_the_proxy_reads_its_sealed_routes_strictly(tmp_path, monkeypatch):
         proxy._sealed_routes()
 
 
+def test_an_agent_s_write_held_on_faults_that_cannot_be_read_hears_only_that_it_is_unavailable(proxy, store):
+    import psycopg
+
+    url, rows = proxy
+    with psycopg.connect(store.dsn(), autocommit=True) as connection:
+        connection.execute("CREATE VIEW _alk_trial_faults AS SELECT 1 AS id, to_jsonb(1 / 0) AS faults, 1::text AS xmin")
+    try:
+        # Ours, and opaque: the agent hears the world failed, never why.
+        assert _post(url, "/ok", {"item": "1"}) == (503, {"detail": "tool_world_failed"})
+    finally:
+        with psycopg.connect(store.dsn(), autocommit=True) as connection:
+            connection.execute("DROP VIEW _alk_trial_faults")
+    assert _World.seen == []
+    [row] = rows()
+    assert (row["outcome"], row["refusal_code"]) == ("faulted", "faults_unknown")
+
+
 @pytest.mark.parametrize(
     ("outcome", "status", "detail"),
     [
@@ -669,10 +688,10 @@ def test_the_proxy_reads_its_sealed_routes_strictly(tmp_path, monkeypatch):
          502, "tool_world_failed"),
         ({"outcome": "faulted", "status": 503, "reason": "whether this action was approved could not be read",
           "refusal_code": "approval_unknown"}, 503, "tool_world_failed"),
-        # The agent's own tools server not answering: its world, told why.
+        # The agent's own tools server not answering: its world, told in plain words.
         ({"outcome": "faulted", "status": 502, "reason": "ConnectionRefusedError: unavailable",
           "refusal_code": "upstream_unreachable"}, 502, "tool_upstream_unavailable"),
-        # A keyed retry after a lost answer: the agent's to handle, told why.
+        # A keyed retry after a lost answer: the agent's to handle, a fixed code, never the internal reason.
         ({"outcome": "faulted", "status": 503, "reason": "first try unknown", "refusal_code": "key_outcome_unknown"},
          503, "tool_key_outcome_unknown"),
     ],
