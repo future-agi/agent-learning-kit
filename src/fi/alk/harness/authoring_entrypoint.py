@@ -40,6 +40,7 @@ from .job import (
 )
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
+from .provider_tools import with_provider_tools
 from .scenarios import load as load_written
 from .source_folder import non_github_folder_failure, refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
@@ -541,7 +542,7 @@ def _load_provider_import_profile(
         cached = json.loads(profile_cache_path.read_text(encoding="utf-8"))
         if not isinstance(cached, dict):
             raise RuntimeError("provider_import_authoring_profile_invalid")
-        return cached
+        return with_provider_tools(cached)
     if secrets_path is None:
         raise RuntimeError("provider_import_authoring_secrets_missing")
     try:
@@ -567,7 +568,7 @@ def _load_provider_import_profile(
         profile_cache_path.write_text(
             json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-    return profile
+    return with_provider_tools(profile)
 
 
 def agent_source_kind(job: HarnessJob, profile: dict[str, object] | None) -> str:
