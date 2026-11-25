@@ -4570,11 +4570,17 @@ def probe_runtime_health(
     declared `readiness` entry for a capability this runtime actually exposes must pass; a
     capability with no readiness entry declared carries no health obligation (§2b: "Health/
     readiness is otherwise declared ONLY in the capability-level `readiness` section")."""
+    return _first_failed_readiness_probe(manifest, runtime, prober=prober) is None
+
+
+def _first_failed_readiness_probe(
+    manifest: EnvironmentBundleV2, runtime: EnvironmentRuntime, *, prober: CapabilityProber
+) -> ReadinessProbeV2 | None:
     for probe in manifest.readiness:
         endpoint = runtime.endpoints.get(probe.capability)
         capability = manifest.capabilities.get(probe.capability)
         if endpoint is None or capability is None:
-            return False
+            return probe
         host, port = _split_host_port(endpoint.address)
         user = password = dbname = None
         if capability.protocol is CapabilityProtocol.POSTGRES:
@@ -4597,8 +4603,8 @@ def probe_runtime_health(
             password=password,
             dbname=dbname,
         ):
-            return False
-    return True
+            return probe
+    return None
 
 
 async def healthy(
@@ -4887,15 +4893,25 @@ def _poll_runtime_health(
     )
     deadline = clock() + timeout
     runtime.startup_cause = None
-    while True:
+    while control is None or control.handle.is_running():
+        failed = _first_failed_readiness_probe(manifest, runtime, prober=prober)
+        # The probe may block until the deadline or return a stale success during shutdown.
         if control is not None and not control.handle.is_running():
-            runtime.startup_cause = FailureCause.AGENT_EXITED_BEFORE_READY
-            return False
-        if probe_runtime_health(manifest, runtime, prober=prober):
+            break
+        if failed is None:
             return True
         if clock() >= deadline:
+            capability = manifest.capabilities.get(failed.capability)
+            if capability is not None and failed.capability in runtime.endpoints:
+                runtime.startup_cause = (
+                    FailureCause.AGENT_NOT_READY_IN_TIME
+                    if capability.service == manifest.runtime.control_service
+                    else FailureCause.DEPENDENCY_NOT_READY_IN_TIME
+                )
             return False
         sleep(interval)
+    runtime.startup_cause = FailureCause.AGENT_EXITED_BEFORE_READY
+    return False
 
 
 # --- §5.3 build output (`build.json`) ---------------------------------------------------------

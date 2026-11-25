@@ -1715,6 +1715,21 @@ def test_world_pool_exhaustion_reaches_a_failed_terminal_world_pool_exhausted() 
     asyncio.run(scenario())
 
 
+def test_pool_exhaustion_forwards_readiness_timeout_to_terminal_event() -> None:
+    scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
+    harness = _build_harness(scenarios=scenarios, instances=1, always_unhealthy=True)
+    runtime = harness.provisioner._runtimes[0]
+    runtime.state = RuntimeState.UNHEALTHY
+    runtime.startup_cause = FailureCause.AGENT_NOT_READY_IN_TIME
+    assert asyncio.run(he.run_job(
+        harness.job_path, harness.source, harness.output, deps=harness.deps
+    )) == he.EXIT_OK
+    [terminal] = harness.transport.terminal_events()
+    failure = terminal["payload"]["failure"]
+    assert failure["code"] == "world_pool_exhausted"
+    assert failure["cause"] == "agent_not_ready_in_time"
+
+
 def test_fence_landing_on_the_final_drain_still_exits_fenced() -> None:
     # a fence that 403s specifically the events
     # POST carrying the terminal event (not an earlier one) must still exit 3 with no terminal

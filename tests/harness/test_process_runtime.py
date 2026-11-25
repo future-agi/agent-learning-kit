@@ -7290,16 +7290,22 @@ def _manifest_with_terminal_readiness(
     )
 
 
-def test_standalone_control_exit_ends_readiness_poll(tmp_path):
+@pytest.mark.parametrize("probe_result", [False, True])
+def test_standalone_control_exit_ends_readiness_poll(tmp_path, monkeypatch, probe_result):
     manifest = _manifest_with_terminal_readiness(timeout_seconds=0.3)
     source, bundle_dir = _provision_dirs(tmp_path)
     probes = []
+    poll = pr._poll_runtime_health
+    monkeypatch.setattr(
+        pr, "_poll_runtime_health",
+        lambda *args, **kwargs: poll(*args, **kwargs, clock=lambda: float(len(probes))),
+    )
 
     def exit_during_readiness(**kwargs):
         if kwargs["protocol"] is CapabilityProtocol.HTTP:
             probes.append(1)
             provider._world_handles[0]["agent"].handle.terminated = True
-            return False
+            return probe_result
         return True
 
     provider = _sql_spy_provider(prober=exit_during_readiness, secrets_path=tmp_path / "secrets.json")
@@ -7310,18 +7316,23 @@ def test_standalone_control_exit_ends_readiness_poll(tmp_path):
     assert runtime.startup_cause is FailureCause.AGENT_EXITED_BEFORE_READY
 
 
+@pytest.mark.parametrize("service, expected", [
+    ("agent", FailureCause.AGENT_NOT_READY_IN_TIME),
+    ("tools-api", FailureCause.DEPENDENCY_NOT_READY_IN_TIME),
+])
 def test_provision_promotion_exhausts_the_poll_and_returns_unhealthy_never_raises(
-    tmp_path: Path,
+    tmp_path: Path, service: str, expected: FailureCause,
 ) -> None:
     """N2, p6-review-r2 (BLOCKER): exhaustion is a state DECISION, not a provisioning failure —
     `provision()` must return the world `UNHEALTHY`, never raise, when the declared probe never
     passes within its own timeout — pinned against the exact §2a "terminal process" shape N2
     itself names."""
     manifest = _manifest_with_terminal_readiness(timeout_seconds=0.05)
+    manifest.capabilities["control"] = manifest.capabilities["control"].model_copy(update={"service": service})
     source, bundle_dir = _provision_dirs(tmp_path)
 
     def always_fails_http(**kwargs: Any) -> bool:
-        return kwargs.get("protocol") is not CapabilityProtocol.HTTP
+        return not provider._world_handles or kwargs.get("protocol") is not CapabilityProtocol.HTTP
 
     provider = _sql_spy_provider(
         prober=always_fails_http,
@@ -7338,6 +7349,7 @@ def test_provision_promotion_exhausts_the_poll_and_returns_unhealthy_never_raise
         )
     )
     assert runtimes[0].state is pr.RuntimeState.UNHEALTHY
+    assert runtimes[0].startup_cause is expected
 
 
 # --- N3, p6-review-r2 (MAJOR): a failed first provision() must not poison the provider -----------
