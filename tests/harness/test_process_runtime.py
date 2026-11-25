@@ -4637,8 +4637,10 @@ def test_freeze_baseline_readiness_timeout_is_a_typed_depends_on_timeout(
 
 
 def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The store's SQL files run through the driver against a real server; this spy records statements only.
+    monkeypatch.setattr(pr, "_run_sql_as_login", lambda path, **kwargs: None)
     manifest = _manifest(
         lambda body: {
             **body,
@@ -4693,7 +4695,7 @@ def test_freeze_baseline_template_database_seeds_seals_and_measures_row_counts(
 
 
 def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """t4 / B2, p6-review-r1: migration/seed files are customer-authored content applied through
     `psql -f`, which honors backslash meta-commands (`\\!`, `\\copy ... program`) — must run under
@@ -4740,15 +4742,17 @@ def test_freeze_baseline_seed_commands_run_under_the_stores_declared_user(
         ),  # a fake uid needs no real os.chown to prove the point.
     )
 
+    ran: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pr, "_run_sql_as_login", lambda path, **kwargs: ran.append((kwargs["relative_path"], kwargs["login"].username))
+    )
+
     pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=ctx)
 
-    psql_calls = [
-        (argv, kwargs) for argv, kwargs in seed_calls if argv and argv[0] == "psql"
-    ]
-    assert psql_calls, "expected a psql -f seed invocation"
-    _, kwargs = psql_calls[0]
-    assert kwargs.get("user") == 4444
-    assert kwargs.get("group") == 5555
+    # The bundle's SQL is run by the driver in this process as the restricted login: no psql and no child process
+    # under any OS user, so nothing in it is a client command (`\!`, `\copy ... program`).
+    assert not [argv for argv, _ in seed_calls if argv and argv[0] == "psql"]
+    assert ran == [("db/schema.sql", pr.MIGRATOR_ROLE)]
 
 
 def test_freeze_baseline_datadir_copy_terminates_the_bootstrap_and_snapshots_the_datadir(
@@ -6360,7 +6364,9 @@ def test_provision_fixed_port_above_w1_records_degrade(tmp_path: Path) -> None:
     assert build_output["degrade_reason"] == "fixed_port"
 
 
-def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -> None:
+def test_provision_reads_seed_files_from_bundle_dir_not_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """B1, p6-review-r1: §2c seed/migration paths are bundle-relative and must resolve against
     the VERIFIED bundle directory, never the untrusted checkout — a bundle declares `migrations:
     ["db/schema.sql"]`; preflight hashes/scans `<bundle_dir>/db/schema.sql`, so reading the same
@@ -6388,6 +6394,8 @@ def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -
     (bundle_dir / "db" / "schema.sql").write_text("-- schema\n")
 
     calls: list[Any] = []
+    applied: list[Path] = []
+    monkeypatch.setattr(pr, "_run_sql_as_login", lambda path, **kwargs: applied.append(Path(path)))
     provider = _sql_spy_provider(
         sync_run=_recording_sync_run(calls),
         secrets_path=tmp_path / "secrets.json",
@@ -6402,10 +6410,7 @@ def test_provision_reads_seed_files_from_bundle_dir_not_source(tmp_path: Path) -
             require_declared_user=False,
         )
     )
-    seed_calls = [argv for argv, _ in calls if argv and argv[0] == "psql"]
-    assert seed_calls, "expected a psql -f seed invocation"
-    applied_file = seed_calls[0][seed_calls[0].index("-f") + 1]
-    assert applied_file == str(bundle_dir / "db" / "schema.sql")
+    assert applied and applied[0] == bundle_dir / "db" / "schema.sql"
 
 
 def test_provision_empty_strategy_first_clone_reads_seed_files_from_bundle_dir_not_work_directory(

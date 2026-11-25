@@ -84,6 +84,7 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         'ALTER ROLE "alk_w3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
         f"PASSWORD '{role.password}'",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_w3"',
+        *pr._only_member_of("alk_w3", "alk_world_tools"),
         # The world's store role: the group's rights, past row security, and replica mode for a reset.
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_s3') THEN "
         'CREATE ROLE "alk_s3" LOGIN IN ROLE "alk_world_tools"; END IF; END $$',
@@ -92,12 +93,14 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
         "EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"alk_s3\"'; END IF; END $$",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_s3"',
+        *pr._only_member_of("alk_s3", "alk_world_tools"),
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_l3') THEN "
         'CREATE ROLE "alk_l3" LOGIN IN ROLE "alk_world_log"; END IF; END $$',
         'ALTER ROLE "alk_l3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
         f"PASSWORD '{pr.log_role(_CREDENTIALS, 3).password}'",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_l3"',
+        *pr._only_member_of("alk_l3", "alk_world_log"),
         'ALTER DATABASE "w3" ALLOW_CONNECTIONS true',
     ]
 
@@ -186,7 +189,9 @@ def test_customer_processes_get_the_world_s_role_only_under_isolation():
     )
 
 
-def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(tmp_path: Path):
+def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(tmp_path: Path, monkeypatch):
+    # The store's files are run by the driver against a real server; this one records statements only.
+    monkeypatch.setattr(pr, "_run_sql_as_login", lambda path, **kwargs: None)
     manifest = runtime_tests._manifest(
         lambda body: {
             **body,
@@ -502,11 +507,12 @@ def test_a_world_with_a_door_lets_in_its_own_door_role_only():
     )
 
     opened = statements.index('ALTER DATABASE "w3" ALLOW_CONNECTIONS true')
-    assert statements[opened - 3 : opened] == [
+    assert statements[opened - 5 : opened] == [
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_d3') THEN "
         'CREATE ROLE "alk_d3" LOGIN IN ROLE "alk_door"; END IF; END $$',
         f"ALTER ROLE \"alk_d3\" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{door.password}'",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_d3"',
+        *pr._only_member_of("alk_d3", "alk_door"),
     ]
 
 
@@ -874,8 +880,8 @@ def test_migrations_and_the_seed_run_as_the_migrations_login(tmp_path: Path, mon
     applied: list[tuple[str, str]] = []
     monkeypatch.setattr(
         pr,
-        "apply_seed_file",
-        lambda _engine, path, **kw: applied.append((Path(path).name, kw["credentials"].username)),
+        "_run_sql_as_login",
+        lambda path, **kw: applied.append((kw["relative_path"], kw["login"].username)),
     )
     code = seed_escalation_queries(pr.WORLD_ROLE_GROUP).code
     from_seed = ("event trigger planted", "s1")
@@ -907,11 +913,13 @@ def test_migrations_and_the_seed_run_as_the_migrations_login(tmp_path: Path, mon
 
 
 def test_a_migration_that_needs_a_superuser_says_where_the_statement_belongs(tmp_path: Path, monkeypatch):
-    def apply(_engine, path, **kw):
-        if Path(path).name == "migrate.sql":
-            raise pr.ProcessRuntimeError("seed", "seed_failed", "must be superuser to create an event trigger")
+    def apply(path, **kw):
+        if kw["relative_path"] == "migrate.sql":
+            raise pr.ProcessRuntimeError(
+                "seed", "seed_failed", pr._refused_as_login("migrate.sql", "ERROR:  must be superuser to create an event trigger")
+            )
 
-    monkeypatch.setattr(pr, "apply_seed_file", apply)
+    monkeypatch.setattr(pr, "_run_sql_as_login", apply)
     store = SimpleNamespace(migrations=["migrate.sql"], seed_files=["seed.sql"])
 
     with pytest.raises(pr.ProcessRuntimeError) as raised:
@@ -1927,7 +1935,12 @@ def test_a_sentinel_is_read_as_the_login_at_the_baseline_and_the_log_reader_at_a
     postgres = pr.ManagedEngine.POSTGRES
 
     assert pr.sentinel_credentials(postgres, harness, login=login) is login
-    assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=True) == pr.log_role(harness, 2)
+    # S1/S2: the log reader runs only the harness's own query; a bundle's own sentinel runs as the store role.
+    own = pr.SEED_SENTINEL_QUERY
+    assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=True, query=own) == pr.log_role(harness, 2)
+    assert pr.sentinel_credentials(
+        postgres, harness, world_index=2, world_roles=True, query="SELECT count(*)::text FROM riders"
+    ) == pr.store_role(harness, 2)
     assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=False) is harness
     other = next(engine for engine in pr.ManagedEngine if engine is not postgres)
     assert pr.sentinel_credentials(other, harness, login=login) is harness
@@ -2169,7 +2182,7 @@ def test_seeds_a_superuser_load_took_still_build_as_the_restricted_login(tmp_pat
     (
         ("CREATE ROLE anon NOLOGIN;\n", "Roles are the harness's own"),
         ("COPY public.items FROM '/etc/hostname';\n", "COPY ... FROM STDIN"),
-        ("SELECT 1;\n\\! touch {marker}\n", "psql meta-commands are not run (line 2: \\!)"),
+        ("SELECT 1;\n\\! touch {marker}\n", "line 2: \\! is a psql command, not SQL"),
     ),
 )
 def test_a_seed_the_login_cannot_run_says_what_to_change_and_nothing_else(tmp_path: Path, seed, said):
@@ -2204,136 +2217,172 @@ def test_the_restricted_login_cannot_log_in_once_retired():
     assert roles == [(False, True)] or roles == [(False, False)]
 
 
-_META = {
-    # Auditor B, R2-1: the three ways past the first filter, and the chained case Auditor A found.
-    "estring": ("SELECT E'\\'';\n\\! touch {marker}\n", True),
-    "copy desync": ("COPY public.items (id) FROM stdin /* x;\n*/ \\! touch {marker}\n", True),
-    "unrestrict chain": ("\\restrict k1\n\\unrestrict k1 \\! touch {marker}\n", True),
-    "copy after an unfinished statement": ("SELECT 1\nCOPY public.items (id) FROM stdin;\n\\! touch {marker}\n", True),
-    "gexec": ("SELECT 'x' \\gexec\n", True),
-    "real copy": ("COPY public.items (id) FROM stdin;\n1\n\\.\nSELECT 1;\n", False),
-    "pg_dump restrict lines": ("\\restrict AbC123\nSELECT 1;\n\\unrestrict AbC123\n", False),
-    "escapes in strings": ("SELECT E'a\\nb', 'c\\d';\n", False),
-    "dollar body": ("CREATE FUNCTION public.f() RETURNS text AS $b$\n\\! not meta\n$b$ LANGUAGE sql;\n", False),
-    "comments": ("/* \\! x */ SELECT 1; -- \\! y\n", False),
+_BUNDLE_SQL = {
+    # Every way past the old psql filter (Auditors A and B), and the ones psql itself would have run: with no psql,
+    # each is a build that fails, and the shell never runs.
+    "estring": ("SELECT E'\\'';\n\\! touch {marker}\n", False),
+    "copy desync": ("COPY public.items (id) FROM stdin /* x;\n*/ \\! touch {marker}\n", False),
+    "unrestrict chain": ("\\restrict k1\n\\unrestrict k1 \\! touch {marker}\n", False),
+    "copy after an unfinished statement": ("SELECT 1\nCOPY public.items (id) FROM stdin;\n\\! touch {marker}\n", False),
+    "copy named in a comment": ("COPY (SELECT 1) TO stdout; -- FROM stdin\n\\! touch {marker}\n", False),
+    "standard strings off": ("SET standard_conforming_strings = off;\nSELECT '\\'';\n\\! touch {marker}\n", False),
+    "gexec": ("SELECT 'x' \\gexec\n", False),
+    # pg_dump's own output, which builds.
+    "real copy": ("COPY public.items (id, note) FROM stdin;\n1\ttab\\there\n2\t\\N\n\\.\nSELECT 1;\n", True),
+    "pg_dump restrict lines": ("\\restrict AbC123\nSELECT 1;\n\\unrestrict AbC123\n", True),
+    "escapes in strings": ("SELECT E'a\\nb', 'c\\d';\n", True),
+    "backslash in a comment": ("/* \\! x */ SELECT 1; -- \\! y\n", True),
 }
 
 
-@pytest.mark.parametrize("case", sorted(_META))
-def test_psql_meta_commands_are_found_as_psql_reads_the_file(tmp_path: Path, case):
-    text, meta = _META[case]
-    file = tmp_path / "seed.sql"
-    file.write_text(text.replace("{marker}", str(tmp_path / "ran")), encoding="utf-8")
-
-    assert bool(pr._meta_commands(file)) is meta
-
-
 @real_postgres
-@pytest.mark.parametrize("case", sorted(name for name, (_text, meta) in _META.items() if meta and "touch" in _META[name][0]))
-def test_a_seed_past_the_old_filter_is_refused_and_its_shell_never_runs(tmp_path: Path, case):
+@pytest.mark.parametrize("case", sorted(_BUNDLE_SQL))
+def test_a_bundle_s_sql_runs_only_as_sql_and_never_as_a_psql_command(tmp_path: Path, case):
+    """R2-1: bundle SQL runs in the harness's own process as the restricted login (psycopg), never through psql, so
+    no line of it is a client command: one that would be fails the build, and its shell never runs."""
+    text, builds = _BUNDLE_SQL[case]
     marker = tmp_path / "ran"
     build, run, baseline = _seeded(
-        tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n", _META[case][0].replace("{marker}", str(marker))
+        tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY, note text);\n", text.replace("{marker}", str(marker))
     )
     try:
-        with pytest.raises(pr.ProcessRuntimeError) as refused:
+        if builds:
             build()
-        assert "psql meta-commands are not run" in str(refused.value)
+        else:
+            with pytest.raises(pr.ProcessRuntimeError):
+                build()
         assert not marker.exists()
+        if case == "real copy":
+            assert run(baseline, "SELECT id, note FROM public.items ORDER BY id") == [(1, "tab\there"), (2, None)]
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
 
-def test_with_world_roles_psql_runs_a_bundle_s_sql_as_an_account_that_is_not_the_database_server_s(
-    tmp_path: Path, monkeypatch
-):
-    """R2-1's boundary: under per-user isolation psql never runs a bundle's file as the database server's own OS user
-    (whose shell could rewrite pg_hba.conf), but as `nobody`, on a copy it can read, with no psqlrc."""
-    import pwd
+@real_postgres
+def test_bundle_sql_never_reaches_psql_or_a_child_s_environment(tmp_path: Path, monkeypatch):
+    """No psql, no child process, and no password in any environment a child could inherit."""
+    import subprocess
 
-    from fi.alk.harness import privilege
-    from fi.alk.harness.bundle_v2 import StoreEntry
+    def no_child(*args, **kwargs):
+        raise AssertionError(f"a child process ran: {args[:1]}")
 
-    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
-    (tmp_path / "schema.sql").write_text("CREATE TABLE public.items (id int);\n", encoding="utf-8")
-    ran: list[dict] = []
-
-    def sync_run(argv, **kwargs):
-        ran.append({"argv": list(argv), **kwargs})
-        return pr.subprocess.CompletedProcess(argv, 0, "", "")
-
-    store = StoreEntry.model_construct(capability="world_db", migrations=["schema.sql"], seed_files=[])
-    pr.apply_store_seed(
-        store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=tmp_path, port=1, dbname="b", credentials=_CREDENTIALS,
-        process_name="db", sync_run=sync_run, user=2003, group=2003,
-        migration_credentials=pr.EngineCredentials(pr.MIGRATOR_ROLE, "p"),
-    )
-
-    nobody = pwd.getpwnam("nobody")
-    [one] = ran
-    assert (one["user"], one["group"]) == (nobody.pw_uid, nobody.pw_gid) != (2003, 2003)
-    assert "-X" in one["argv"]
-    copied = Path(one["argv"][one["argv"].index("-f") + 1])
-    assert copied != tmp_path / "schema.sql" and oct(copied.stat().st_mode & 0o777) == "0o644"
+    monkeypatch.setattr(subprocess, "run", no_child)
+    monkeypatch.setattr(pr.subprocess, "run", no_child)
+    build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n",
+                                   "INSERT INTO public.items VALUES (1);\n")
+    try:
+        build()
+        assert "PGPASSWORD" not in os.environ
+        assert run(baseline, "SELECT count(*) FROM public.items") == [(1,)]
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
 
 @real_postgres
-def test_a_world_check_constraint_run_by_the_reset_cannot_copy_the_log(door_worlds, monkeypatch):
-    """R2-2 repro A: a customer CHECK calls a function that copies the harness's log into a schema the reset never
-    clears. The store role that resets the world has no right on the log, so nothing is copied."""
-    from fi.alk.harness import privilege
-    from fi.alk.harness.world.stores.postgres import attached_world_store
-
-    superuser, world, door, _reset = door_worlds(True)
-    world_door.PostgresLog(door).write(
-        {"name": "refund", "arguments": {}, "result": None, "ok": False, "error": "supervisor rule 7", "at": 1.0,
-         "action_id": "a1", "outcome": "refused", "actor_id": "agent"}
-    )
+def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_reset(door_worlds):
+    """S3: roles outlive a build, so a membership an older harness granted (a store role in a group that read the
+    log) would make every later build refuse; each reset leaves every per-world role in its one group."""
+    superuser, _world, _door, reset = door_worlds(True)
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute(
-            "CREATE SCHEMA stash; GRANT USAGE, CREATE ON SCHEMA stash TO PUBLIC; "
-            "CREATE TABLE stash.leaked (row text); GRANT ALL ON stash.leaked TO PUBLIC; "
-            "CREATE FUNCTION public.copy_log(text) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
-            "INSERT INTO stash.leaked SELECT t::text FROM public._alk_tool_trace t; RETURN true; "
-            "EXCEPTION WHEN insufficient_privilege THEN RETURN true; END $$; "
-            "INSERT INTO riders (name) VALUES ('ada'); ALTER TABLE riders ADD CONSTRAINT leak CHECK (public.copy_log(name))"
+            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_store') "
+            "THEN CREATE ROLE alk_world_store NOLOGIN; END IF; END $$; GRANT alk_world_store TO alk_s0"
         )
-        # Adding the constraint checked the existing row as the harness here; only the reset is under test.
-        connection.execute("TRUNCATE stash.leaked")
-    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
-    store = attached_world_store(
-        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url,
-                        log_address=door_worlds.log_url)
-    )
-    snapshot = store.freeze()
-    store.restore(snapshot)
+    reset(0)
     with psycopg.connect(superuser, autocommit=True) as connection:
-        assert connection.execute("SELECT count(*) FROM stash.leaked").fetchone() == (0,)
+        groups = connection.execute(
+            "SELECT g.rolname FROM pg_auth_members a JOIN pg_roles g ON g.oid = a.roleid "
+            "JOIN pg_roles r ON r.oid = a.member WHERE r.rolname = 'alk_s0' ORDER BY 1"
+        ).fetchall()
+    assert groups == [("alk_world_tools",)]
 
 
 @real_postgres
-@pytest.mark.parametrize(
-    "planted",
-    (
-        "CREATE TABLE public.riders (id int PRIMARY KEY, name text); "
-        "CREATE RULE leak AS ON INSERT TO public.riders DO ALSO SELECT 1; "
-        "ALTER TABLE public.riders ENABLE ALWAYS RULE leak",
-        "CREATE TABLE public.riders (id int PRIMARY KEY, name text); "
-        "CREATE FUNCTION public.noted() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; "
-        "CREATE TRIGGER noted AFTER INSERT ON public.riders FOR EACH ROW EXECUTE FUNCTION public.noted(); "
-        "ALTER TABLE public.riders ENABLE ALWAYS TRIGGER noted",
-    ),
-)
-def test_a_rule_or_trigger_set_to_fire_with_triggers_suspended_refuses_the_build(planted):
-    """R2-2 repro B and R2-4: ENABLE ALWAYS / REPLICA rules and triggers would run the world's code during every
-    reset; the build refuses them instead of a reset first meeting them."""
-    superuser, _migrator, baseline, checked, before, run = _migrated(_full_prefix() + ";\n" + planted, "")
+def test_a_bundle_s_own_sentinel_reading_a_world_table_passes_at_reset_and_no_world_role_can_notify(door_worlds):
+    """S1/S2: a bundle's own sentinel reads a world table as the store role at a reset (the log reader may not), and
+    no world role can call pg_notify to signal another session."""
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("INSERT INTO riders (name) VALUES ('ada')")
+    with psycopg.connect(door_worlds.store_url, autocommit=True) as store:
+        assert store.execute("SELECT count(*)::text FROM riders").fetchone() == ("1",)
+    with pytest.raises(Exception, match="permission denied"):
+        with psycopg.connect(door_worlds.log_url, autocommit=True) as reader:
+            reader.execute("SELECT count(*) FROM riders")
+    with pytest.raises(Exception, match="permission denied"):
+        with psycopg.connect(world, autocommit=True) as agent:
+            agent.execute("SELECT pg_notify('x', 'y')")
+
+
+@real_postgres
+def test_a_seed_that_fails_midway_leaves_the_login_unable_to_log_in(tmp_path: Path):
+    """R2-3: on every exit path after the login is made, it is left with no login, no bypass and no password."""
+    build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n",
+                                   "INSERT INTO public.nowhere VALUES (1);\n")
     try:
-        with pytest.raises(pr.ProcessRuntimeError) as refused:
-            pr._refuse_seed_escalation(**checked, before_seed=before)
-        assert "set to fire even with triggers suspended" in str(refused.value)
+        with pytest.raises(pr.ProcessRuntimeError):
+            build()
+        assert run("postgres", "SELECT rolcanlogin, rolbypassrls, rolpassword IS NULL FROM pg_authid "
+                   f"WHERE rolname = '{pr.MIGRATOR_ROLE}'") == [(False, False, True)]
     finally:
-        _dropped(superuser, baseline, run)
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_a_held_login_session_is_ended_and_the_baseline_is_not_sealed_with_another_session_open():
+    """B's held session: a session of the login kept open past its files is ended, and the baseline is sealed only
+    with the harness's own sessions connected."""
+    parts = urlsplit(_REAL)
+    port = parts.port or 5432
+    superuser = pr.EngineCredentials(parts.username, parts.password or "")
+    baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
+    checked = {"port": port, "credentials": superuser, "sql_runner": pr.default_sql_runner, "process_name": "db"}
+    admin = dict(host=parts.hostname or "localhost", port=port, user=superuser.username, password=superuser.password)
+    _customer_sql(**admin, dbname="postgres", statement=f'CREATE DATABASE "{baseline}"')
+    try:
+        login = pr.migrator_credentials(**checked, baseline_db=baseline)
+        held = psycopg.connect(**{**admin, "user": login.username, "password": login.password}, dbname=baseline,
+                               autocommit=True)
+        with pytest.raises(pr.ProcessRuntimeError, match=pr.MIGRATOR_ROLE):
+            pr._refuse_other_sessions(**checked, baseline_db=baseline)
+        pr._end_sessions_of(login, **checked)
+        with pytest.raises(psycopg.OperationalError):
+            held.execute("SELECT 1")
+        held.close()
+        pr._refuse_other_sessions(**checked, baseline_db=baseline)
+        pr.retire_login(login, **checked)
+    finally:
+        _customer_sql(**admin, dbname="postgres", statement=f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_a_real_pg_dump_schema_dump_builds_through_the_driver(tmp_path: Path):
+    """pg_dump compatibility without psql: a real `pg_dump --schema-only` (functions with dollar bodies, triggers,
+    owners, pg_dump's own restriction lines) runs as a migration."""
+    import subprocess
+
+    parts = urlsplit(_REAL)
+    source = f"alk_source_{uuid.uuid4().hex[:8]}"
+    admin = dict(host=parts.hostname or "localhost", port=parts.port or 5432, user=parts.username,
+                 password=parts.password or "")
+    _customer_sql(**admin, dbname="postgres", statement=f'CREATE DATABASE "{source}"')
+    try:
+        _customer_sql(**admin, dbname=source, statement=_SHOUTING)
+        dumped = subprocess.run(
+            ["pg_dump", "--schema-only", f"--host={parts.hostname}", f"--port={parts.port}",
+             f"--username={parts.username}", source],
+            capture_output=True, text=True, check=True, env={**os.environ, "PGPASSWORD": parts.password or ""},
+        ).stdout
+        dumped = "".join(line for line in dumped.splitlines(keepends=True)
+                         if not line.startswith("SET transaction_timeout"))
+        build, run, baseline = _seeded(tmp_path, dumped, _TOGGLED)
+        try:
+            build()
+            assert run(baseline, "SELECT name FROM public.parent ORDER BY id") == [("ALPHA",), ("BETA",)]
+        finally:
+            run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+    finally:
+        _customer_sql(**admin, dbname="postgres", statement=f'DROP DATABASE IF EXISTS "{source}" WITH (FORCE)')
 
 
 def _pg_dump_schema(owner: str) -> str:
