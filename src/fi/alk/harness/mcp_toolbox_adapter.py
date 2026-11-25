@@ -57,8 +57,13 @@ def _execute(
     result: Any = None
     error: str | None = None
     try:
+        # A bundle sealed before the world's role was given here runs the statement as the door: the system's own
+        # functions come first, and the statement still finds the world's tables.
         with psycopg.connect(
-            records_url or database_url, autocommit=True, cursor_factory=psycopg.RawCursor
+            records_url or database_url,
+            autocommit=True,
+            cursor_factory=psycopg.RawCursor,
+            **({} if records_url else {"options": "-c search_path=pg_catalog,public,pg_temp"}),
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(str(spec["statement"]), ordered)

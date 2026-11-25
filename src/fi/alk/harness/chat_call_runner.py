@@ -406,10 +406,13 @@ def chat_door(
         return bool(getattr(result, "success", True)), getattr(result, "result", None), str(result.content)
 
     records = None
-    if mirror_dsn:
+    from .privilege import IsolationMode, isolation_mode
+
+    if mirror_dsn and (records_dsn or isolation_mode() is not IsolationMode.PER_USER):
         from .world_door import PostgresRecords
 
-        # Record changes run as the world's own role; the mirror's superuser only keeps the log.
+        # Record changes run as the world's own role; the mirror's superuser only keeps the log. With world roles and
+        # none given, the door has no record changes at all rather than make them as the superuser.
         records = RecordExecutor(PostgresRecords(records_dsn or mirror_dsn))
     tools = (
         _ServiceTools(world, HttpExecutor(tools_url), HandlerExecutor(handle), set(service_actions or ()))

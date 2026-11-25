@@ -941,7 +941,7 @@ def _migrated(migration: str, seed: str, *, alk_table: bool = False, adopt: bool
     before = pr.seed_escalation_snapshot(**checked)
     run(superuser, baseline, seed)
     if alk_table:
-        run(superuser, baseline, "CREATE TABLE _alk_action_keys (key text PRIMARY KEY)")
+        run(superuser, baseline, world_door._KEYS_TABLE_DDL)
     return superuser, migrator, baseline, checked, before, run
 
 
@@ -1021,6 +1021,12 @@ _PLANTED = {
     "grant": "CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text); "
     "GRANT INSERT ON _alk_tool_trace TO PUBLIC",
     "view": "CREATE TABLE riders_log (id int); CREATE VIEW _alk_tool_trace AS SELECT * FROM riders_log",
+    # F2: `ANALYZE` evaluates a statistics object's expression as whoever runs it.
+    "statistics": "CREATE FUNCTION evil(text) RETURNS text LANGUAGE sql IMMUTABLE AS 'SELECT $1'; "
+    "CREATE TABLE _alk_action_keys (key text PRIMARY KEY); CREATE STATISTICS keyed ON (evil(key)) FROM _alk_action_keys",
+    # F1: the log in an older shape with `ok` as text: a failed call is stored as 'false' and read as passed.
+    "shape": "CREATE TABLE public._alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok text NOT NULL, error text, at double precision NOT NULL)",
 }
 
 
@@ -1056,7 +1062,8 @@ def test_a_harness_table_the_seed_made_that_runs_code_refuses_the_build_whoever_
     try:
         with pytest.raises(pr.ProcessRuntimeError) as refused:
             pr._refuse_seed_escalation(**checked, before_seed=before)
-        assert "harness table" in str(refused.value)
+        # A function planted in `pg_catalog` is refused first, before anything reads the harness tables.
+        assert ("pg_catalog the system did not make" if planted == "catalog" else "harness table") in str(refused.value)
     finally:
         if planted == "catalog":
             run(superuser, baseline, "DROP FUNCTION IF EXISTS pg_catalog.evil() CASCADE")
@@ -1156,25 +1163,36 @@ def test_a_migration_s_security_definer_function_cannot_reach_the_harness_tables
         # E1 without a trigger: a harness table the migrations own is refused too.
         # The bundle's own prefix makes the harness's tables in its migration: a plain one is taken over.
         ("CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text)", None),
-        # E3: functions in public that an unqualified call in a harness statement would resolve to.
+        # A source's own functions named like system ones build: every session of the harness's and the door's runs on
+        # the system's own search path, where they are never found. Each raises if anything of the harness's runs it.
         (
-            "CREATE FUNCTION public.unnest(text[]) RETURNS SETOF text LANGUAGE sql AS $$ SELECT 'x' $$",
-            "shadows a system function",
+            "CREATE FUNCTION public.unnest(text[]) RETURNS SETOF text LANGUAGE plpgsql AS "
+            "$$ BEGIN RAISE EXCEPTION 'shadow ran'; END $$",
+            None,
         ),
         (
-            "CREATE FUNCTION public.format(text, text) RETURNS text LANGUAGE sql AS $$ SELECT $1 $$",
-            "shadows a system function",
+            "CREATE FUNCTION public.format(text, text) RETURNS text LANGUAGE plpgsql AS "
+            "$$ BEGIN RAISE EXCEPTION 'shadow ran'; END $$",
+            None,
         ),
+        # A customer's own `gen_random_uuid()` shim, as a source written for an older Postgres keeps one.
+        ("CREATE FUNCTION public.gen_random_uuid() RETURNS uuid LANGUAGE sql AS 'SELECT pg_catalog.gen_random_uuid()'",
+         None),
         # Trusted extensions whose functions share system names (pgcrypto's gen_random_uuid, citext's lower) build.
         ("CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS citext", None),
     ],
 )
 def test_harness_tables_and_system_names_are_the_harness_s_alone(migration, refused):
-    superuser, _migrator, baseline, checked, _before, run = _migrated(migration, "", adopt=False)
+    # The source's statements, then the bundle's own prefix in the same migration file, as both authoring paths write.
+    superuser, _migrator, baseline, checked, _before, run = _migrated(
+        migration + ";\n" + author._TOOL_TRACE_DDL, "", adopt=False
+    )
 
     def build() -> None:
         pr._adopt_harness_tables(**checked)
         pr._refuse_seed_escalation(**checked, before_seed=pr.seed_escalation_snapshot(**checked))
+        pr._make_harness_tables(**checked)
+        pr._grant_world_role_group(**checked, door=True)
 
     try:
         if refused is None:
@@ -1386,6 +1404,104 @@ def test_harness_tables_in_a_schema_named_after_the_superuser_never_stand_in_for
     finally:
         run(superuser, baseline, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
         _dropped(superuser, baseline, run)
+
+
+def test_a_logged_ok_counts_only_a_real_true():
+    """F1: a log kept with `ok` as text holds 'false' for a failed call; it is never read as committed."""
+    assert world_door.is_committed({"ok": "false"}) is False
+    assert world_door.is_committed({"ok": "f"}) is False
+    assert world_door.is_committed({"ok": False}) is False
+    assert world_door.is_committed({"ok": "true"}) is True
+    assert world_door.is_committed({"ok": True}) is True
+    assert world_door.is_committed({}) is True
+
+
+@real_postgres
+def test_a_log_in_an_older_shape_with_a_text_ok_refuses_the_build_and_names_the_migrations():
+    """F1: a migration makes the call log first with `ok` as text; the bundle's prefix keeps it (IF NOT EXISTS) and
+    the door would store a failed call as 'false'. Its columns must be the harness's own, of the harness's types."""
+    planted = (
+        "CREATE TABLE public._alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+        "result jsonb, ok text NOT NULL, error text, at double precision NOT NULL);\n"
+    )
+    superuser, _migrator, baseline, checked, _before, run = _migrated(planted + author._TOOL_TRACE_DDL, "", adopt=False)
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._adopt_harness_tables(**checked)
+        assert "column ok text, which the harness makes as boolean" in str(refused.value)
+        assert "Change the migrations" in str(refused.value)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_a_seed_that_retypes_a_harness_column_refuses_the_build():
+    superuser, _migrator, baseline, checked, before, run = _migrated(
+        author._TOOL_TRACE_DDL, "ALTER TABLE public._alk_tool_trace ALTER COLUMN ok TYPE text"
+    )
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._refuse_seed_escalation(**checked, before_seed=before)
+        assert "column ok text" in str(refused.value)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_a_function_the_seed_put_in_pg_catalog_refuses_the_build_before_any_harness_session_finds_it():
+    """F4: the seed runs as the superuser and may create in `pg_catalog`; a session on the system's own search path
+    finds it first (`format(text, text)` wins the harness's grant)."""
+    superuser, _migrator, baseline, checked, before, run = _migrated(
+        author._TOOL_TRACE_DDL,
+        "CREATE FUNCTION pg_catalog.format(text, text) RETURNS text LANGUAGE plpgsql AS "
+        "$$ BEGIN RAISE EXCEPTION 'plant ran'; END $$",
+    )
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._refuse_seed_escalation(**checked, before_seed=before)
+        assert "function in pg_catalog the system did not make: format" in str(refused.value)
+        assert "plant ran" not in str(refused.value)
+    finally:
+        run(superuser, baseline, "DROP FUNCTION IF EXISTS pg_catalog.format(text, text)")
+        _dropped(superuser, baseline, run)
+
+
+def test_with_world_roles_an_actor_s_record_change_never_runs_as_the_superuser(monkeypatch, tmp_path: Path):
+    """With per-user isolation every world has a role of its own: a world without one is refused actors, and no door
+    falls back to the superuser's address. Without world roles (one fixed user) nothing changes."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness import chat_call_runner, privilege
+
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    with pytest.raises(RuntimeError, match="no_world_role"):
+        call_runner.record_door("superuser-url")
+    with pytest.raises(RuntimeError, match="no_world_role"):
+        call_runner.runner_door("http://127.0.0.1:9", "superuser-url", 1.0)
+    assert chat_call_runner.chat_door(object(), "superuser-url", {}, []).executor.records is None
+    database = SimpleNamespace(protocol="postgres", address="superuser-url", tool_address=None)
+    runtime = SimpleNamespace(endpoints={"db": database, "world_door": SimpleNamespace(protocol="http")})
+    why: list[tuple[str, str]] = []
+    assert call_runner._actor_dispatcher({"actors": [{"id": "a"}]}, tmp_path, runtime, "t1", 1.0, why_not=why) is None
+    assert why and why[0][0] == "no_world_role"
+
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.FIXED_USER)
+    assert call_runner.record_door("superuser-url").executor.records.execute.dsn == "superuser-url"
+
+
+def test_actors_read_a_world_s_rows_with_its_own_role(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.world.stores import postgres as stores
+
+    made: list[str] = []
+    monkeypatch.setattr(stores.AttachedPostgresStore, "__init__", lambda self, dsn: made.append(dsn))
+    runtime = SimpleNamespace(
+        endpoints={"db": SimpleNamespace(protocol="postgres", address="superuser-url", tool_address="world-url")}
+    )
+    call_runner._world_records(runtime)
+    call_runner._world_columns(runtime)
+    assert made == ["world-url", "world-url"]
 
 
 def _pg_dump_schema(owner: str) -> str:

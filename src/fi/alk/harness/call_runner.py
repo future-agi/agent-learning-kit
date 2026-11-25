@@ -71,6 +71,7 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
+    logged_ok,
     pinned_options,
     NOT_STOPPED,
     door_failure,
@@ -905,7 +906,8 @@ def _world_records(runtime: Any) -> Callable[[str], list[dict[str, Any]]] | None
         return None
     from .world.stores.postgres import AttachedPostgresStore
 
-    store = AttachedPostgresStore(endpoint.address)
+    # Read as the world's own role where there is one: a customer's function never runs with the superuser's rights.
+    store = AttachedPostgresStore(endpoint.tool_address or endpoint.address)
     return store.table
 
 
@@ -916,7 +918,7 @@ def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
         return None
     from .world.stores.postgres import AttachedPostgresStore
 
-    return AttachedPostgresStore(endpoint.address).columns
+    return AttachedPostgresStore(endpoint.tool_address or endpoint.address).columns
 
 
 def _resolved_call_actors(
@@ -1282,7 +1284,7 @@ def collect_tool_trace_calls(
         arguments = record.get("arguments")
         if not isinstance(arguments, dict):
             arguments = {}
-        ok = bool(record.get("ok", True))
+        ok = logged_ok(record.get("ok", True))
         result = _structured(record.get("result"))
         error = _truncate(str(record.get("error") or ""))
         raw_at = record.get("at")
@@ -1517,7 +1519,7 @@ def trial_state_changes(
             continue
         entry["attempted"] += 1
         outcome = row.get("outcome") or (
-            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+            "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
         name = str(row.get("agent_tool") or row.get("name") or "")
@@ -1650,7 +1652,7 @@ def trial_shared_record_fields(
             continue
         tool = str(row.get("agent_tool") or row.get("name") or "")
         outcome = row.get("outcome") or (
-            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+            "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
         for argument, value in arguments.items():
             if argument not in key_columns:
@@ -1888,7 +1890,7 @@ def actor_rows(
                 "name": chosen.name(who, logged_as(row), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
-                "ok": bool(row.get("ok")),
+                "ok": logged_ok(row.get("ok")),
                 "error": _truncate(str(row.get("error") or "")),
                 "refused": row.get("outcome") == "refused",
                 "at": row.get("at"),
@@ -2682,6 +2684,18 @@ def sealed_routes(bundle_dir: Any) -> Callable[[], dict[str, Any]]:
     return read
 
 
+def _records_address(dsn: str, records_dsn: str | None) -> str:
+    """Where an actor's record change runs: the world's own role. Only without world roles (one fixed user, where the
+    agent's own processes have the same address) is it the given one; with them and no role's address, refused."""
+    from .privilege import IsolationMode, isolation_mode
+
+    if records_dsn:
+        return records_dsn
+    if isolation_mode() is IsolationMode.PER_USER:
+        raise RuntimeError("no_world_role: a world's rows are changed only with its own role, and none was given")
+    return dsn
+
+
 def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None, records_dsn: str | None = None) -> Any:
     """The world's door in the runner's process: the agent's tools service behind it, the world's own action log, actor
     list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy. Record
@@ -2697,7 +2711,7 @@ def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None
     )
 
     return WorldDoor(
-        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(records_dsn or dsn))),
+        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(_records_address(dsn, records_dsn)))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
         workers=sealed_routes(bundle_dir),
@@ -2712,7 +2726,7 @@ def record_door(dsn: str, bundle_dir: Any = None, records_dsn: str | None = None
     from .world_door import PostgresLog, PostgresRecords, PostgresRoster, RecordExecutor, Routed, WorldDoor
 
     return WorldDoor(
-        Routed(_NotHere(), RecordExecutor(PostgresRecords(records_dsn or dsn))),
+        Routed(_NotHere(), RecordExecutor(PostgresRecords(_records_address(dsn, records_dsn)))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
         workers=sealed_routes(bundle_dir),
@@ -2746,6 +2760,13 @@ def _actor_dispatcher(
         return None
     tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
+    from .privilege import IsolationMode, isolation_mode
+
+    if database is not None and not database.tool_address and isolation_mode() is IsolationMode.PER_USER:
+        logger.warning("actors cannot act: this world has no role of its own to change its rows with")
+        if why_not is not None:
+            why_not.append(("no_world_role", "no world role: an actor's record change would run as the harness"))
+        return None
     if database is not None and runtime.endpoints.get("world_door") is not None and tools is None:
         # An actor acts through record changes there; one of the agent's own tools is refused with why.
         return build_dispatcher(
@@ -3853,7 +3874,7 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                     arguments = {"raw": arguments}
             if not isinstance(arguments, dict):
                 arguments = {}
-            ok = bool(raw.get("ok", True))
+            ok = logged_ok(raw.get("ok", True))
             raw_at = raw.get("at")
             at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
             calls.append(

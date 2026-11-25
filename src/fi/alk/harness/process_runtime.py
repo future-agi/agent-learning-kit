@@ -72,6 +72,7 @@ from .world_roles import (
     DOOR_TABLE_RIGHTS,
     HARNESS_ONLY_TABLES,
     HARNESS_TABLES_WITH_CODE,
+    PG_CATALOG_PLANTS,
     WORLD_DOOR_DATABASE_URL,
     door_role_name,
     has_world_door,
@@ -3006,6 +3007,7 @@ def _probe_postgres(
             password=password,
             dbname=dbname,
             connect_timeout=timeout,
+            options=PINNED_SEARCH_PATH,
         )
         try:
             connection.execute("SELECT 1")
@@ -3773,6 +3775,7 @@ def apply_postgres_sqlite_world(
         user=credentials.username,
         password=credentials.password,
         dbname=dbname,
+        options=PINNED_SEARCH_PATH,
     ) as postgres:
         source = inspect_postgres(postgres, source_digest=canonical_source_digest)
         source = _compose_seed_source_model(source, file, artifact_root)
@@ -3990,6 +3993,7 @@ def apply_postgres_world_ir(
         user=credentials.username,
         password=credentials.password,
         dbname=dbname,
+        options=PINNED_SEARCH_PATH,
     ) as postgres:
         source = inspect_postgres(postgres, source_digest=canonical_source_digest)
         source = _compose_seed_source_model(source, file, artifact_root)
@@ -5359,6 +5363,16 @@ def _freeze_one_store(
             after_migrations=_snapshot_before_seed,
             migration_credentials=migrations_as,
         )
+        # Before the sentinel is read: a session on the system's own search path must find nothing the seed planted.
+        if process.engine is ManagedEngine.POSTGRES:
+            _refuse_seed_escalation(
+                port=port,
+                credentials=credentials,
+                baseline_db=baseline_dbname,
+                sql_runner=context.sql_runner,
+                process_name=process.name,
+                before_seed=before_seed,
+            )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
         # state is caught at freeze (surfaced as `seed_failed` — the seed's own content did not
@@ -5387,15 +5401,6 @@ def _freeze_one_store(
                 f"{process.name}: sentinel check failed against the freshly seeded baseline",
                 process=process.name,
                 domain=FailureDomain.ENVIRONMENT,
-            )
-        if process.engine is ManagedEngine.POSTGRES:
-            _refuse_seed_escalation(
-                port=port,
-                credentials=credentials,
-                baseline_db=baseline_dbname,
-                sql_runner=context.sql_runner,
-                process_name=process.name,
-                before_seed=before_seed,
             )
 
         row_counts: dict[str, int] = {}
@@ -5784,6 +5789,87 @@ def _seed_escalations(
     return ours, others
 
 
+# What each harness table's columns are, by engine port, as the harness's own statements make them.
+_HARNESS_SHAPES: dict[int, dict[str, dict[str, str]]] = {}
+_HARNESS_COLUMNS = (
+    "SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod) FROM pg_attribute a "
+    "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE '\\_alk\\_%' "
+    "AND a.attnum > 0 AND NOT a.attisdropped"
+)
+
+
+def _harness_table_shapes(
+    *, port: int, credentials: EngineCredentials, sql_runner: SqlRunner, process_name: str
+) -> dict[str, dict[str, str]]:
+    """Each harness table's columns and their types, read from a scratch database the harness's own statements made
+    on this engine (so the types are the engine's own spelling); made once per engine."""
+    if port in _HARNESS_SHAPES:
+        return _HARNESS_SHAPES[port]
+    from .actors import ACTORS_DDL
+    from .bundle_author_v2 import _TOOL_TRACE_DDL
+
+    scratch = f"alk_shape_{secrets.token_hex(6)}"
+
+    def run(dbname: str, statement: str, read_only: bool = False) -> Any:
+        return _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=statement,
+            read_only=read_only,
+        )
+
+    run("postgres", f'CREATE DATABASE "{scratch}" TEMPLATE "template0"')
+    try:
+        run(scratch, _TOOL_TRACE_DDL + ACTORS_DDL)
+        shapes: dict[str, dict[str, str]] = {}
+        for row in run(scratch, _HARNESS_COLUMNS, read_only=True) or []:
+            if len(row) == 3:
+                shapes.setdefault(str(row[0]), {})[str(row[1])] = str(row[2])
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{scratch}"')
+    _HARNESS_SHAPES[port] = shapes
+    return shapes
+
+
+def _harness_shape_problems(
+    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+) -> list[str]:
+    """Each harness table column the harness does not make, or makes with another type: the door and the checks
+    read the table as its own statements made it (a text `ok` stores a failed call as 'false', read as passed). A
+    column it adds later may be missing, as in a bundle sealed before that column was kept."""
+    shapes = _harness_table_shapes(
+        port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name
+    )
+    rows = _call_sql(
+        sql_runner,
+        stage="baseline",
+        process_name=process_name,
+        host="localhost",
+        port=port,
+        user=credentials.username,
+        password=credentials.password,
+        dbname=baseline_db,
+        statement=_HARNESS_COLUMNS,
+        read_only=True,
+    )
+    problems = []
+    for table, column, kind in (row for row in rows or [] if len(row) == 3):
+        expected = shapes.get(str(table), {}).get(str(column))
+        if str(table) in shapes and expected != str(kind):
+            problems.append(
+                f"harness table public.{table} has column {column} {kind}, which the harness makes "
+                + (f"as {expected}" if expected else "nowhere")
+            )
+    return sorted(problems)
+
+
 def _adopt_harness_tables(
     *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
 ) -> None:
@@ -5806,11 +5892,14 @@ def _adopt_harness_tables(
         )
 
     found = [str(row[0]) for row in run(HARNESS_TABLES_WITH_CODE, read_only=True) or [] if row]
+    found += _harness_shape_problems(
+        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+    )
     if found:
         raise ProcessRuntimeError(
             "baseline",
             "seed_failed",
-            seed_escalation_reason(process_name, found),
+            seed_escalation_reason(process_name, found, made_by="migrations"),
             process=process_name,
             domain=FailureDomain.ENVIRONMENT,
         )
@@ -5899,10 +5988,40 @@ def _refuse_seed_escalation(
     than a world's role has, before any world is made from it. What the source's migrations already made
     (``before_seed``) is the source's own and passes unless the seed changed it; anything on the harness's roles is
     planted, whoever made it, since the harness makes them only after the seed."""
+    # First and alone: anything the seed put in `pg_catalog` would be found first by every later session.
+    planted = [
+        str(row[0])
+        for dbname in ("postgres", baseline_db)
+        for row in _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=PG_CATALOG_PLANTS,
+            read_only=True,
+        )
+        or []
+        if row and len(row) == 2
+    ]
+    if planted:
+        raise ProcessRuntimeError(
+            "baseline",
+            "seed_failed",
+            seed_escalation_reason(process_name, planted),
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
+        )
     ours, others = _seed_escalations(
         port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
     )
     found = [what for _db, what, _print in ours | (others - (before_seed or set()))]
+    found += _harness_shape_problems(
+        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+    )
     if found:
         raise ProcessRuntimeError(
             "baseline",

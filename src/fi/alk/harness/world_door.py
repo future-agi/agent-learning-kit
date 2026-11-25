@@ -431,9 +431,16 @@ def row_arguments(value: Any) -> Any:
     return value
 
 
+def logged_ok(value: Any) -> bool:
+    """`ok` as a boolean: a table that keeps it as text holds 'false' for a failed call, which is no pass."""
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value.strip().lower() in {"true", "t"}
+
+
 def is_committed(row: Mapping[str, Any]) -> bool:
     """Whether a log row is a committed action; a row from before outcomes were logged says so by `ok`."""
-    return (row.get("outcome") or ("committed" if row.get("ok", True) else "")) == "committed"
+    return (row.get("outcome") or ("committed" if logged_ok(row.get("ok", True)) else "")) == "committed"
 
 
 def named_alike(action: str, name: str) -> bool:

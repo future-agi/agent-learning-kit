@@ -80,15 +80,36 @@ _HARNESS_WHERE = (
     "AND n.nspname NOT LIKE 'pg\\_%'"
 )
 _FIRST_USER_OID = 16384
+# A function, operator, type or relation in `pg_catalog` the system did not make and no extension owns: a superuser
+# seed can put one there, and a session on the system's own search path then finds it first. Written with exact
+# oid and "char" comparisons only, so reading it calls nothing such an object could stand in for; run before
+# anything else after the seed.
+PG_CATALOG_PLANTS = (
+    "SELECT 'function in pg_catalog the system did not make: ' || p.proname::text, p.oid::text FROM pg_proc p "
+    f"WHERE p.pronamespace = 11::oid AND p.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+    "WHERE d.classid = 1255::oid AND d.objid = p.oid AND d.deptype = 'e'::\"char\") "
+    "UNION ALL SELECT 'operator in pg_catalog the system did not make: ' || o.oprname::text, o.oid::text "
+    f"FROM pg_operator o WHERE o.oprnamespace = 11::oid AND o.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS "
+    "(SELECT 1 FROM pg_depend d WHERE d.classid = 2617::oid AND d.objid = o.oid AND d.deptype = 'e'::\"char\") "
+    "UNION ALL SELECT 'type in pg_catalog the system did not make: ' || t.typname::text, t.oid::text FROM pg_type t "
+    f"WHERE t.typnamespace = 11::oid AND t.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+    "WHERE d.classid = 1247::oid AND d.objid = t.oid AND d.deptype = 'e'::\"char\") "
+    "UNION ALL SELECT 'relation in pg_catalog the system did not make: ' || c.relname::text, c.oid::text "
+    f"FROM pg_class c WHERE c.relnamespace = 11::oid AND c.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS "
+    "(SELECT 1 FROM pg_depend d WHERE d.classid = 1259::oid AND d.objid = c.oid AND d.deptype = 'e'::\"char\")"
+)
 HARNESS_TABLES_WITH_CODE = (
     "SELECT 'harness table ' || c.oid::regclass::text || ' is not a plain table', c.relkind::text "
     f"{_HARNESS_FROM}{_HARNESS_WHERE} AND (c.relkind NOT IN ('r', 'S', 'i') OR c.relispartition "
     "OR EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid)) "
-    "UNION ALL SELECT 'harness table ' || c.oid::regclass::text || ' carries a trigger, rule, row policy or grant', "
+    "UNION ALL SELECT 'harness table ' || c.oid::regclass::text "
+    "|| ' carries a trigger, rule, row policy, grant or extended statistics', "
     "md5(coalesce(c.relacl::text, '') || c.relrowsecurity::text || c.relhasrules::text) "
     f"{_HARNESS_FROM}{_HARNESS_WHERE} AND c.relkind = 'r' AND (c.relacl IS NOT NULL OR c.relrowsecurity OR c.relhasrules "
     "OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal) "
-    "OR EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)) "
+    "OR EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid) "
+    # `ANALYZE` evaluates a statistics object's expressions as whoever runs it.
+    "OR EXISTS (SELECT 1 FROM pg_statistic_ext x WHERE x.stxrelid = c.oid)) "
     "UNION ALL SELECT DISTINCT 'harness table ' || c.oid::regclass::text || ' uses code the system did not make: ' "
     "|| pg_describe_object(d.refclassid, d.refobjid, 0), d.refobjid::text "
     f"{_HARNESS_FROM}JOIN pg_depend d ON ("
@@ -151,40 +172,17 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         "WHERE c.relname LIKE '\\_alk\\_%' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') "
         "AND (NOT o.rolsuper OR c.relhastriggers OR c.relhasrules OR EXISTS "
         "(SELECT 1 FROM pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal))"
-        # A function or operator outside the system schemas that shares a system one's name and takes only system
-        # types: an unqualified call in a harness statement could resolve to it and run it with the harness's rights.
-        # An extension's own (citext's lower(citext), pgcrypto's gen_random_uuid()) is vetted code and stays.
-        " UNION ALL SELECT 'function ' || p.oid::regprocedure::text || ' shadows a system function', "
-        "md5(p.prosrc || p.proowner::text || coalesce(p.proacl::text, '')) "
-        "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-        "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%' "
-        "AND EXISTS (SELECT 1 FROM pg_proc s WHERE s.pronamespace = 'pg_catalog'::regnamespace "
-        "AND s.proname = p.proname) "
-        "AND NOT EXISTS (SELECT 1 FROM unnest(p.proargtypes::oid[]) AS a(t) JOIN pg_type ty ON ty.oid = a.t "
-        "WHERE ty.typnamespace <> 'pg_catalog'::regnamespace) "
-        "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid "
-        "AND d.deptype = 'e') "
-        " UNION ALL SELECT 'operator ' || o.oid::regoperator::text || ' shadows a system operator', "
-        "md5(o.oprcode::text || o.oprowner::text) "
-        "FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace "
-        "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%' "
-        "AND EXISTS (SELECT 1 FROM pg_operator s WHERE s.oprnamespace = 'pg_catalog'::regnamespace "
-        "AND s.oprname = o.oprname) "
-        "AND NOT EXISTS (SELECT 1 FROM pg_type ty WHERE ty.oid IN (o.oprleft, o.oprright) "
-        "AND ty.typnamespace <> 'pg_catalog'::regnamespace) "
-        "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_operator'::regclass AND d.objid = o.oid "
-        "AND d.deptype = 'e')"
     )
     return SeedEscalationQueries(our_roles, other_roles, code, HARNESS_TABLES_WITH_CODE)
 
 
-def seed_escalation_reason(process_name: str, found: Iterable[str]) -> str:
-    """Why the build is refused, and what to change in the seed."""
+def seed_escalation_reason(process_name: str, found: Iterable[str], made_by: str = "seed") -> str:
+    """Why the build is refused, and what to change in the seed or the migrations (``made_by``)."""
     return (
-        f"{process_name}: the seed gave rights no world may have: "
+        f"{process_name}: the {made_by} gave rights no world may have: "
         + "; ".join(sorted(set(found)))
-        + ". Change the seed so it gives no role SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS, puts "
+        + f". Change the {made_by} so it gives no role SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS, puts "
         "no role in another, leaves the harness's roles and _alk_ tables as they are (no trigger, rule or own copy of "
-        "one), and defines no event trigger, function in an untrusted language, SECURITY DEFINER function owned by a "
-        "superuser, or function or operator named like a system one."
+        "one), and defines no event trigger, function in an untrusted language, or SECURITY DEFINER function owned by a "
+        "superuser."
     )
