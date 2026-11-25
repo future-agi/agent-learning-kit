@@ -48,6 +48,65 @@ def test_session_replies_with_installed_adk(monkeypatch) -> None:
     assert events[-1].outcome == "success"
 
 
+@pytest.mark.parametrize("ending", ["cancel", "complete", "cancel_before_usage"])
+def test_stage_settles_reported_vertex_usage_once(monkeypatch, ending):
+    from types import SimpleNamespace
+
+    from google.adk.runners import Runner
+
+    from fi.alk.harness import spend
+    from fi.alk.harness.backends import SessionSpec
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiBackend, priced
+    from fi.alk.harness.session import Stage
+
+    model = "gemini-3.7-flash"
+    monkeypatch.setattr(spend, "_stages", {})
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+
+    async def run():
+        waiting = asyncio.Event()
+
+        async def events(self, **kwargs):
+            if ending != "cancel_before_usage":
+                yield SimpleNamespace(
+                    content=None,
+                    usage_metadata=SimpleNamespace(
+                        prompt_token_count=1000, candidates_token_count=200,
+                        cached_content_token_count=300,
+                    ),
+                    is_final_response=lambda: ending == "complete",
+                )
+            if ending != "complete":
+                waiting.set()
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(Runner, "run_async", events)
+        async with Stage(SessionSpec(system_prompt="Reply", model=model),
+                         backend=VertexGeminiBackend(), name="builder") as stage:
+            turn = asyncio.create_task(stage.say("Hello"))
+            if ending == "complete":
+                assert (await turn).outcome == "success"
+            else:
+                await asyncio.wait_for(waiting.wait(), timeout=5)
+                turn.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await turn
+            # The checkpoint reads the ledger immediately, before generator cleanup.
+            ending_ledger = spend.snapshot()
+        assert spend.snapshot() == ending_ledger
+        return ending_ledger
+
+    ledger = asyncio.run(run())
+    if ending == "cancel_before_usage":
+        assert ledger["stages"] == []
+    else:
+        entry, = ledger["stages"]
+        assert entry["priced"] == 1
+        assert (entry["tokens_in"], entry["tokens_out"], entry["tokens_cached"]) == (1000, 200, 300)
+        assert ledger["total_usd"] == round(priced(model, 1000, 200, 300), 6)
+
+
 def test_successful_authoring_save_is_terminal() -> None:
     assert _successful_terminal_save(
         "mcp__world__save_world", {"content": "Saved to /work/authoring."}
