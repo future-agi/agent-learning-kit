@@ -1204,6 +1204,15 @@ def _looks_like_missing_interpreter(argv0: str) -> bool:
     return bool(_INTERPRETER_PATTERN.match(Path(argv0).name))
 
 
+def _toolchain_probe_unsupported(step: Sequence[str], stderr: str | None) -> str:
+    """The reason a harness toolchain probe (``python3 -I -c``) gave for the image lacking a
+    toolchain, else empty. Only that harness-written step can blame the image this way."""
+    lines = (stderr or "").strip().splitlines()
+    if list(step[:3]) == ["python3", "-I", "-c"] and lines and lines[-1].startswith("runtime_unsupported:"):
+        return lines[-1]
+    return ""
+
+
 # --- process identity: user resolution and path containment (F1/F3, p5-round1-review) ---------
 
 
@@ -1677,6 +1686,17 @@ def build_process_tree(
                 continue
             break
         assert result is not None
+        unsupported = (
+            _toolchain_probe_unsupported(step, result.stderr) if result.returncode != 0 else ""
+        )
+        if unsupported:
+            raise ProcessRuntimeError(
+                "build",
+                "runtime_unsupported",
+                unsupported,
+                process=process.name,
+                domain=FailureDomain.ENVIRONMENT,
+            )
         if result.returncode != 0:
             raise ProcessRuntimeError(
                 "build",

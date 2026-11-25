@@ -1502,10 +1502,11 @@ _NODE_LANGUAGES = {"node", "nodejs"}
 # Corepack runs the exact npm the source pins.
 _NPM_INSTALL = ["corepack", "npm", "ci", "--ignore-scripts"]
 # Toolchain probes run isolated (-I): they start in the source tree, whose modules must not shadow the stdlib.
+# The build reads a probe's ``runtime_unsupported:`` exit as the image's failure, not the agent's.
 _NODE_TOOLCHAIN_PROBE = (
     "import shutil,subprocess,sys; "
     "node=shutil.which('node'); corepack=shutil.which('corepack'); "
-    "node and corepack or sys.exit('runtime_node_toolchain_missing: provision Node and Corepack in the certified image'); "
+    "node and corepack or sys.exit('runtime_unsupported: runtime_node_toolchain_missing: provision Node and Corepack in the certified image'); "
     "print('Node toolchain '+subprocess.check_output([node,'--version'],text=True).strip(),flush=True)"
 )
 _NODE_LAYOUT_UNSUPPORTED = (

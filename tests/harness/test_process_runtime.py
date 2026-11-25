@@ -1160,6 +1160,62 @@ def test_a_missing_non_interpreter_build_tool_is_build_failed_not_runtime_unsupp
     assert excinfo.value.code == "build_failed"
 
 
+def test_a_toolchain_probe_that_finds_no_node_is_runtime_unsupported(tmp_path: Path) -> None:
+    """The harness's own Node probe failing is the image's fault, not the agent's build."""
+    from fi.alk.harness.bundle_author_v2 import _NODE_TOOLCHAIN_PROBE
+
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+
+    def fake_run(step, *, cwd, env, **kwargs):
+        # The real probe, on a PATH with neither node nor corepack.
+        return subprocess.run(
+            [sys.executable, *step[1:]],
+            cwd=cwd,
+            env={"PATH": str(tmp_path / "no-bin")},
+            capture_output=True,
+            text=True,
+        )
+
+    process = _source_process(
+        working_directory="svc",
+        build_commands=[["python3", "-I", "-c", _NODE_TOOLCHAIN_PROBE], ["npm", "ci"]],
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.build_process_tree(
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
+            sleep=lambda _: None,
+        )
+    assert excinfo.value.code == "runtime_unsupported"
+    assert excinfo.value.domain is pr.FailureDomain.ENVIRONMENT
+    assert "runtime_node_toolchain_missing" in str(excinfo.value)
+
+
+def test_an_agent_build_step_that_prints_the_probe_marker_is_still_build_failed(
+    tmp_path: Path,
+) -> None:
+    """Only a harness probe (``python3 -I -c``) can report the image short of a toolchain."""
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+
+    def fake_run(step, *, cwd, env, **kwargs):
+        return subprocess.CompletedProcess(
+            step, 1, stdout="", stderr="runtime_unsupported: not my fault\n"
+        )
+
+    process = _source_process(working_directory="svc", build_commands=[["npm", "ci"]])
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.build_process_tree(
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
+            sleep=lambda _: None,
+        )
+    assert excinfo.value.code == "build_failed"
+
+
 def test_a_build_step_that_times_out_is_build_failed(tmp_path: Path) -> None:
     """F15, p5-round1-review: an install step wedged on a private registry with no DNS answer
     used to block the provisioner forever."""

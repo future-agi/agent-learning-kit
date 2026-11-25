@@ -6923,7 +6923,7 @@ def test_native_node_requires_node_and_corepack_on_path(tmp_path: Path) -> None:
 
     missing = probe()
     assert missing.returncode != 0
-    assert "runtime_node_toolchain_missing" in missing.stderr
+    assert missing.stderr.startswith("runtime_unsupported: runtime_node_toolchain_missing")
     tool("node", "v22.11.0")
     no_corepack = probe()
     assert no_corepack.returncode != 0
