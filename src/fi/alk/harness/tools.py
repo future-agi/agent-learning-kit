@@ -48,6 +48,7 @@ from .contract import (
     RuntimeInterface,
     ToolEntry,
     RuntimeSecretFile,
+    RuntimeToolService,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
@@ -240,8 +241,9 @@ def _checked_contract(
         if progress is not None:
             progress("contract", list(schema_problems))
         return _problems(schema_problems, arrived)
-    # Only the save records lines it couldn't confirm.
+    # Only the save records lines it couldn't confirm, or that it copied the prompt whole.
     contract.unconfirmed_prompt_from = []
+    contract.system_prompt_copied = False
 
     problems = validate_contract(contract)
     for entry in contract.tool_entrypoints:
@@ -436,6 +438,7 @@ def _checked_against_source(
                             # confirmed.
                             contract.system_prompt_excerpt = quote
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are left out and "
                                 "the quote is kept, since they don't hold it"
@@ -445,6 +448,7 @@ def _checked_against_source(
                             # lines nobody confirmed would be shown as it.
                             contract.system_prompt_excerpt = ""
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are recorded as "
                                 "unconfirmed and no prompt is saved, since they don't hold the "
@@ -638,6 +642,27 @@ def _modules_as_the_process_imports_them(
 _ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
+def _provider_prompt_copied(
+    contract: AgentContract, profile: dict[str, Any] | None
+) -> AgentContract:
+    """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
+    profile is in force and code can take every text of it. Otherwise it is left as checked:
+    the reading's quote, nothing marked."""
+    from .provider_import import whole_prompt
+
+    whole = whole_prompt(profile) if profile is not None else None
+    if whole is None:
+        return contract
+    return contract.model_copy(
+        update={
+            "system_prompt_excerpt": whole,
+            "system_prompt_from": [],
+            "unconfirmed_prompt_from": [],
+            "system_prompt_copied": True,
+        }
+    )
+
+
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
     # write_contract writes beside the file and moves it into place: a write that fails partway
     # leaves the contract an earlier call was told was saved as it was.
@@ -744,6 +769,7 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
         parts.append(excerpt)
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
+        contract.system_prompt_copied = True
     return problems
 
 
@@ -854,6 +880,7 @@ def contract_tools(
     subfolder: str | None = None,
     save_checks: Mode | None = None,
     save_stand_in: str | None = None,
+    provider_profile: dict[str, Any] | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -863,6 +890,10 @@ def contract_tools(
     ``save_checks`` picks where the checks that read the customer's files run (the default is the
     kit's); ``save_stand_in`` names a module whose stages replace the real ones in the child, for
     tests.
+
+    ``provider_profile`` is the provider definition the reading is shown, when there is one. It is
+    then the source of the agent's prompt: no repository lines are copied for it, and the save
+    copies its whole prompt where code can take every text of it.
     """
     # Here rather than at the top: the checker's child imports this module.
     from . import save_checker
@@ -1042,6 +1073,18 @@ def contract_tools(
                     "description": "Rules it must obey, in the source's own words. The agent "
                     "under test is told these and graded against them.",
                 },
+                "rule_sources": {
+                    "type": "array",
+                    "description": "For each rule read from a file of the agent's material (a policy or knowledge "
+                    "document, a prompt file): the rule exactly as written in hard_constraints, the file relative "
+                    "to the source root, and the line it comes from quoted exactly. Leave a rule out when no one "
+                    "line states it.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"rule": {"type": "string"}, "file": {"type": "string"}, "quote": {"type": "string"}},
+                        "required": ["rule", "file", "quote"],
+                    },
+                },
                 "tools": {
                     "type": "array",
                     "description": "Every tool the agent really has. Everything downstream is "
@@ -1096,6 +1139,12 @@ def contract_tools(
                                 "description": "The world's tables the tool adds to, changes or deletes from, "
                                 "declared from its code.",
                             },
+                            "world_free": {
+                                "type": "boolean",
+                                "description": "True only when the tool's code touches no table of the world and "
+                                "no service: it keeps the agent's own session memory or computes from its "
+                                "arguments alone. False when unsure.",
+                            },
                             "description": {"type": "string"},
                             "requires": {
                                 "type": "array",
@@ -1115,6 +1164,29 @@ def contract_tools(
                                 "every refusal the code returns as an ordinary value rather than an "
                                 "error. Read from the tool, the helpers it calls and the service "
                                 "behind it.",
+                            },
+                            "refusals": {
+                                "type": "array",
+                                "description": "Each refusal in `refuses` that turns on a field of a record the "
+                                "call names, as structure, when the tool's code or the service behind it shows it: "
+                                "the HTTP `status` it answers, the `table` and the `column` the call's `argument` is "
+                                "matched on, the record's `field` and the `values` that refuse (at least one), and "
+                                "the `message` the code gives. A record carrying a fault in the agent's "
+                                "own data (a payment that times out) is one. The world scenarios are proved on "
+                                "answers each the same way.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {"type": "integer"},
+                                        "table": {"type": "string"},
+                                        "column": {"type": "string"},
+                                        "argument": {"type": "string"},
+                                        "field": {"type": "string"},
+                                        "values": {"type": "array"},
+                                        "message": {"type": "string"},
+                                    },
+                                    "required": ["status", "table", "column", "argument", "field", "values"],
+                                },
                             },
                             "effects": {
                                 "type": "string",
@@ -1552,6 +1624,10 @@ def contract_tools(
                             },
                             "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
                         },
+                        "tool_service": {
+                            **RuntimeToolService.model_json_schema(),
+                            "description": Runtime.model_fields["tool_service"].description,
+                        },
                         "required_environment": {
                             "type": "object",
                             "additionalProperties": {
@@ -1808,6 +1884,9 @@ def contract_tools(
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = dict(unwrapped(args))
+        if provider_profile is not None:
+            # The provider's definition is what runs, so repository lines can't be the prompt.
+            payload.pop("system_prompt_from", None)
         # The quote as the contract will read it: under any alias, a list joined.
         excerpt = prompt_quote(_without_nulls(payload))
         if not excerpt.strip():
@@ -2074,7 +2153,9 @@ def contract_tools(
                 and not payload.get("hard_constraints")
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
-                and not payload.get("system_prompt_from"),
+                and not payload.get("system_prompt_from")
+                # With a provider's definition in force, its prompt is the one; lines aren't.
+                and provider_profile is None,
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
@@ -2123,6 +2204,8 @@ def contract_tools(
                 # since a prompt built at run time has no lines to name, and its quote is kept.
                 "prompt-lines",
                 source_root is not None
+                # With a provider's definition in force, repository lines are not its prompt.
+                and provider_profile is None
                 and bool(excerpt)
                 and not payload.get("system_prompt_from")
                 # Asked already, with the "prompt" nudge or a refusal of named lines: the lines
@@ -2172,7 +2255,9 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        result = _save_contract(checked.contract, destination)
+        result = _save_contract(
+            _provider_prompt_copied(checked.contract, provider_profile), destination
+        )
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result

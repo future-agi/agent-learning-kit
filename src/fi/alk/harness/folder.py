@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .catalogue import Catalogue, SubGoal
+from .json_file import write_json_atomic
 from .python_source import KIT_PYTHON
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
@@ -145,6 +146,9 @@ def document_for(scenario: Scenario) -> dict:
     body = scenario.model_dump()
     body.pop("setup_code", None)
     body.pop("ready_code", None)
+    # Written only when set, so a suite saved before must_pass existed reads as unchanged.
+    if not body.get("must_pass"):
+        body.pop("must_pass", None)
     if not body.get("call_actors"):
         body.pop("call_actors", None)
     if not body.get("actors"):
@@ -152,6 +156,8 @@ def document_for(scenario: Scenario) -> dict:
         body.pop("actors", None)
     if body.get("worker_budget_seconds") is None:
         body.pop("worker_budget_seconds", None)
+    if not body.get("restored_from"):
+        body.pop("restored_from", None)
     return body
 
 
@@ -244,20 +250,18 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / INDEX
-    path.write_text(
-        json.dumps(
-            [
-                {
-                    **document_for(one),
-                    "steps": len(one.solution),
-                    "folder": f"{SCENARIOS}/{one.name}",
-                }
-                for one in scenarios
-            ],
-            indent=2,
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+    # Whole or not at all: writers submit side by side and a reader never sees half an index.
+    write_json_atomic(
+        path,
+        [
+            {
+                **document_for(one),
+                "steps": len(one.solution),
+                "folder": f"{SCENARIOS}/{one.name}",
+            }
+            for one in scenarios
+        ],
+        sort_keys=False,
     )
     return path
 

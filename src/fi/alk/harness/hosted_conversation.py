@@ -136,6 +136,9 @@ def load_conversation_capabilities(
     return capabilities
 
 
+FAILED_SCENARIOS_LIMIT = 200
+
+
 class ConversationClient:
     def __init__(
         self,
@@ -259,8 +262,14 @@ class ConversationClient:
     async def scenarios(self, query: dict[str, Any]) -> dict[str, Any]:
         return await self._platform("scenarios", query)
 
-    async def publish(self, digest: str) -> dict[str, Any]:
-        return await self._platform("publish", {"digest": digest})
+    async def publish(self, digest: str, *, failed_scenarios: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        """Publish a checkpoint. `failed_scenarios` ({scenario_key, reason}) names cases left out of the
+        seal because a run could not load them; sent only when there are any, at most the platform's
+        200 so a larger set never refuses the whole save."""
+        body: dict[str, Any] = {"digest": digest}
+        if failed_scenarios:
+            body["failed_scenarios"] = list(failed_scenarios)[:FAILED_SCENARIOS_LIMIT]
+        return await self._platform("publish", body)
 
     async def runs(self, run_id: str = "", limit: int = 10) -> dict[str, Any]:
         return await self._platform(

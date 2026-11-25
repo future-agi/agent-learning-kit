@@ -3516,9 +3516,8 @@ def test_hosted_authoring_main_passes_the_refusal_through(tmp_path, monkeypatch)
 
 
 def _runtime(workspace: Path, *, state=None, control_only=True) -> HostedChatRuntime:
-    runtime = object.__new__(HostedChatRuntime)
-    runtime.workspace = workspace
-    runtime.job = {"scenario_count": 2}
+    from fi.alk.harness import hosted_chat_entrypoint as entrypoint
+
     emitted: list[tuple[str, dict]] = []
 
     async def emit(kind, **fields):
@@ -3527,12 +3526,16 @@ def _runtime(workspace: Path, *, state=None, control_only=True) -> HostedChatRun
     context = {"capabilities": {"control_only": control_only}}
     if state is not None:
         context["status"] = {"state": state}
-    runtime.client = SimpleNamespace(turn_context=context, command_watermark=3, emit=emit)
+    client = SimpleNamespace(turn_context=context, command_watermark=3, emit=emit)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(entrypoint, "resolve", lambda: SimpleNamespace(name="test"))
+        patch.setattr(entrypoint, "publish_actors_switch", lambda *args, **kwargs: None)
+        runtime = HostedChatRuntime(
+            client=client, policy=SimpleNamespace(), workspace=workspace, source=workspace,
+            job={"scenario_count": 2},
+        )
     runtime.emitted = emitted
     runtime.conversation = SimpleNamespace(stage_name="understand", stage=None)
-    runtime._nudge = None
-    runtime._from_platform = False
-    runtime._last_progress, runtime._idle_turns, runtime._opened_with = None, 0, None
     runtime._what_exists = lambda: (False, False)
     runtime._after_saved = lambda: None
     runtime.handled = []
@@ -7323,6 +7326,52 @@ def test_a_decode_total_spent_exactly_doesnt_say_the_walk_stopped(tmp_path, monk
 
     found, stopped = _save_walk(repo)
     assert not stopped and repo / "common" / "web.py" in found
+
+
+def test_a_build_proves_its_suite_after_its_validation(tmp_path, no_waiting, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / _FINISHED).write_text("{}", encoding="utf-8")
+    job = HarnessJob(
+        job_id="built",
+        run_id="built",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        scenario_count=2,
+        metadata={"generic_harness_v1": True, "used_scenario_keys": ["refund-late", "status-check"]},
+    )
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    steps = []
+
+    deadlines = []
+
+    async def validate(*args, **kwargs):
+        steps.append("validated")
+        deadlines.append(kwargs.get("deadline_at"))
+
+    monkeypatch.setattr(authoring_entrypoint, "_review_while_writing", lambda *args: None)
+    monkeypatch.setattr("fi.alk.harness.authoring_runtime_validation.validate_and_repair", validate)
+    monkeypatch.setattr(
+        authoring_entrypoint, "_prove_scenarios", lambda path, deadline, *, stage: steps.append(("proved", path, stage))
+    )
+    monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", "3600")
+    before = time.time()
+    status = authoring_entrypoint.main(
+        [str(job_path), "--source", str(source), "--output", str(output), "--await-harness"],
+        validate_runtime=True,
+    )
+    assert status == 0
+    assert steps == ["validated", ("proved", output.resolve(), "build")]
+    # The validation knows when the build is stopped: its start plus the build's time budget.
+    assert before + 3600 <= deadlines[0] <= time.time() + 3600
+    # Keys the environment gave before are taken for every writer of this build.
+    from fi.alk.harness.scenario import used_keys
+
+    assert {"refund-late", "status-check"} <= used_keys(output.resolve())
 
 
 # The scan and the save in the save checker's child, through every way the server is held

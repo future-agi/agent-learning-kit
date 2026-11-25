@@ -222,3 +222,203 @@ def test_an_error_fault_keeps_its_status_and_message_and_refuses_a_status_that_i
         Fault(action="orders.refund", mode="error", status=200)
     with pytest.raises(ValidationError):
         Fault(action="orders.refund", mode="explode")
+
+
+# --- attached files' roles (`knowledge/roles.json`) ---------------------------------------------------------------
+
+
+def _attach(root, roles, **files):
+    from fi.alk.harness.actors import KNOWLEDGE_ROLES
+
+    (root / "knowledge").mkdir(exist_ok=True)
+    for name, text in files.items():
+        (root / "knowledge" / name).write_text(text, encoding="utf-8")
+    (root / KNOWLEDGE_ROLES).write_text(roles if isinstance(roles, str) else json.dumps(roles), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [None, "{not json", json.dumps(["knowledge/answers.md"]), json.dumps({"knowledge/policy.md": "policy"})],
+    ids=["no-roles-file", "invalid-json", "not-an-object", "no-evaluator-only-file"],
+)
+def test_without_evaluator_only_files_the_rules_seal_exactly_as_before(tmp_path, roles):
+    from fi.alk.harness.actors import EVALUATOR_ONLY
+
+    if roles is not None:
+        _attach(tmp_path, roles, **{"policy.md": "Refunds within 14 days."})
+    write_actor_rules(tmp_path)
+
+    assert json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"] == EVALUATOR_ONLY
+
+
+def test_an_evaluator_only_attached_file_is_sealed_among_what_only_the_grader_reads(tmp_path):
+    from fi.alk.harness.actors import EVALUATOR_ONLY
+
+    _attach(
+        tmp_path,
+        {
+            "knowledge/answers.md": "evaluator_only",
+            "knowledge/policy.md": "policy",
+            "knowledge/orders.csv": "seed_records",
+        },
+        **{"answers.md": "Refund 18.00", "policy.md": "Refunds within 14 days.", "orders.csv": "id\nO-1\n"},
+    )
+    write_actor_rules(tmp_path)
+
+    files = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"]["files"]
+    assert files == [*EVALUATOR_ONLY["files"], "answers.md"]
+
+
+def test_an_unknown_role_is_kept_hidden_with_a_warning_and_saving_carries_on(tmp_path, caplog):
+    from fi.alk.harness.actors import EVALUATOR_ONLY, ActorList, read_knowledge, save_actors
+
+    _attach(tmp_path, {"knowledge/answers.md": "secret"}, **{"answers.md": "Refund 18.00"})
+
+    save_actors(tmp_path, ActorList())
+
+    # The safe side: read as evaluator-only, so neither the agent nor an actor is given it.
+    files = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"]["files"]
+    assert files == [*EVALUATOR_ONLY["files"], "answers.md"]
+    [read] = read_knowledge([{"kind": "files", "paths": ["knowledge/answers.md"]}], tmp_path)
+    assert read["read"] == []
+    assert any(
+        "knowledge/answers.md" in one.getMessage() and "'secret'" in one.getMessage() for one in caplog.records
+    )
+
+
+def test_a_role_for_a_path_outside_knowledge_is_left_out_with_a_warning(tmp_path, caplog):
+    from fi.alk.harness.actors import EVALUATOR_ONLY
+
+    outside = ["answers.md", "knowledge/../answers.md", "./answers.md", "knowledge/roles.json"]
+    _attach(tmp_path, dict.fromkeys(outside, "evaluator_only"), **{"answers.md": "Refund 18.00"})
+    write_actor_rules(tmp_path)
+
+    assert json.loads((tmp_path / ACTOR_RULES_FILE).read_text())["evaluator_only"] == EVALUATOR_ONLY
+    assert sum("not a file under knowledge/" in one.getMessage() for one in caplog.records) == len(outside)
+
+
+def test_an_actor_is_never_given_an_evaluator_only_attached_file(tmp_path):
+    from fi.alk.harness.actors import ActorList, read_knowledge, save_actors
+
+    _attach(
+        tmp_path,
+        {"knowledge/answers.md": "evaluator_only", "knowledge/policy.md": "policy"},
+        **{"answers.md": "Refund 18.00", "policy.md": "Refunds within 14 days."},
+    )
+    asked = [{"kind": "files", "paths": ["knowledge/answers.md", "knowledge/policy.md"]}]
+
+    [read] = read_knowledge(asked, tmp_path)
+    assert [one["path"] for one in read["read"]] == ["knowledge/policy.md"]
+    listing = ActorList.model_validate({"actors": [{**_PARTNER, "knowledge": asked}]})
+    with pytest.raises(ValueError, match="knowledge/answers.md"):
+        save_actors(tmp_path, listing)
+
+
+@pytest.mark.parametrize("key", ["./knowledge/answers.md", " knowledge/answers.md ", "knowledge/answers.md"])
+def test_a_role_key_with_a_leading_dot_slash_or_padding_still_keeps_the_file_from_actors(tmp_path, key):
+    from fi.alk.harness.actors import EVALUATOR_ONLY, KNOWLEDGE_ROLE_KEYS, read_knowledge
+
+    _attach(tmp_path, {key: "evaluator_only"}, **{"answers.md": "Refund 18.00", "policy.md": "Refunds within 14 days."})
+    write_actor_rules(tmp_path)
+
+    rules = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())
+    assert rules["evaluator_only"]["files"] == [*EVALUATOR_ONLY["files"], "answers.md"]
+    # The rule is sealed for every other reader of the roles file.
+    assert rules["knowledge_roles"] == KNOWLEDGE_ROLE_KEYS
+    asked = [{"kind": "files", "paths": ["knowledge/answers.md", "knowledge/policy.md"]}]
+    [read] = read_knowledge(asked, tmp_path)
+    assert [one["path"] for one in read["read"]] == ["knowledge/policy.md"]
+
+
+# The one table every reader of `knowledge/roles.json` must give the same answers for.
+ROLE_KEY_CASES = [
+    ("knowledge/x", "knowledge/x"),
+    ("./knowledge/x", "knowledge/x"),
+    ("  knowledge/x  ", "knowledge/x"),
+    ("knowledge/sub/x.md", "knowledge/sub/x.md"),
+    ("knowledge/../x", None),
+    ("knowledge/./x", None),
+    ("knowledge//x", None),
+    ("KNOWLEDGE/x", None),
+    ("knowledge/x/", None),
+    ("/knowledge/x", None),
+    ("knowledge/", None),
+    ("knowledge", None),
+    ("x", None),
+    ("././knowledge/x", None),
+    ("knowledge/roles.json", None),
+]
+
+
+@pytest.mark.parametrize(("raw", "expected"), ROLE_KEY_CASES, ids=[repr(one[0]) for one in ROLE_KEY_CASES])
+def test_a_roles_key_names_a_file_or_nothing(raw, expected):
+    from fi.alk.harness.actors import knowledge_role_key
+
+    assert knowledge_role_key(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "named", ["knowledge/roles.json", "/knowledge/roles.json", "knowledge//roles.json", "knowledge/./roles.json"]
+)
+def test_the_roles_file_is_never_an_actor_s_knowledge(named):
+    from fi.alk.harness.actors import actor_rules, knowledge_file_allowed
+
+    # It names which attached files are evaluator-only: a map to the grading answers.
+    assert knowledge_file_allowed(named) is False
+    assert knowledge_file_allowed("knowledge/policy.md") is True
+    assert "knowledge/roles.json" in actor_rules()["not_knowledge"]["files"]
+
+
+_SERVICE_ONLY = {
+    "agent": "support",
+    "tools": [{"name": "get_order", "args": []}, {"name": "issue_refund", "args": []}],
+    "tool_entrypoints": [
+        {"tool": "get_order", "mode": "service", "service": "tools-api", "endpoint": "orders/get"},
+        {"tool": "issue_refund", "mode": "service", "service": "tools-api", "endpoint": "refunds/issue"},
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    ("contract", "loaded"),
+    [
+        (_SERVICE_ONLY, False),
+        ({**_SERVICE_ONLY, "data_store": {"kind": "postgres", "configured_by": "DATABASE_URL"}}, True),
+        (
+            {**_SERVICE_ONLY, "tool_entrypoints": [*_SERVICE_ONLY["tool_entrypoints"][:1],
+                                                   {"tool": "issue_refund", "mode": "import", "module": "a"}]},
+            True,
+        ),
+        ({"agent": "chat", "tools": []}, True),
+    ],
+    ids=["service-only-no-store", "store-backed", "a-tool-in-process", "no-tools"],
+)
+def test_seed_records_reach_the_tools_unless_every_tool_serves_its_own_data(contract, loaded):
+    from fi.alk.harness.actors import seed_records_loaded
+    from fi.alk.harness.contract import AgentContract
+
+    assert seed_records_loaded(contract) is loaded
+    assert seed_records_loaded(AgentContract.model_validate(contract).model_dump(mode="json")) is loaded
+
+
+@pytest.mark.parametrize(("store", "loaded"), [(None, False), ({"kind": "postgres"}, True)])
+def test_the_builder_sees_seed_files_as_context_only_where_the_tools_serve_their_own_data(tmp_path, store, loaded):
+    import json
+
+    from fi.alk.harness.actors import SEED_RECORDS_CONTEXT_ONLY, actor_rules
+    from fi.alk.harness.builder import attached_files_brief
+    from fi.alk.harness.contract import AgentContract
+
+    body = {**_SERVICE_ONLY, **({"data_store": store} if store else {})}
+    (tmp_path / "contract.json").write_text(json.dumps(body))
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "knowledge" / "roles.json").write_text(
+        json.dumps({"knowledge/orders.csv": "seed_records", "knowledge/policy.md": "policy"})
+    )
+
+    brief = "\n".join(attached_files_brief(AgentContract.model_validate(body), tmp_path))
+
+    assert ("knowledge/orders.csv (seed_records; " + SEED_RECORDS_CONTEXT_ONLY + ")" in brief) is not loaded
+    assert "knowledge/policy.md (policy)" in brief
+    # Sealed for the platform to show at attach.
+    assert actor_rules(root=tmp_path)["seed_records_loaded"] is loaded
