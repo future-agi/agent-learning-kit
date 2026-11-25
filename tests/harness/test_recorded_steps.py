@@ -191,10 +191,13 @@ def test_a_negated_exactly_once_never_proves_a_step_that_did_not_run(tmp_path, m
     assert proof.assumed == ["memorize"] and proof.recorded == [] and not proof.proved
 
 
-def test_every_check_helper_says_whether_it_reads_what_a_call_came_to():
-    from fi.alk.harness.checks import CHECK_HELPERS
+def test_the_proof_reads_the_outcome_helpers_from_the_one_table_of_check_helpers():
+    from fi.alk.harness.checks import CHECK_HELPERS, OUTCOME_HELPERS
+    from fi.alk.harness.prove import _OUTCOME_HELPERS
 
-    assert all(isinstance(getattr(helper, "reads_outcomes", None), bool) for helper in CHECK_HELPERS.values())
+    assert _OUTCOME_HELPERS == OUTCOME_HELPERS and OUTCOME_HELPERS <= set(CHECK_HELPERS)
+    assert {"exactly_once", "came_before", "succeeded", "answered"} <= OUTCOME_HELPERS
+    assert not {"same_id", "same_value"} & OUTCOME_HELPERS
 
 
 def test_a_recorded_call_never_reads_as_gone_through_or_answered():

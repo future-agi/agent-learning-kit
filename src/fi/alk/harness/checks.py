@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .actors import is_pre_run
 from .world.runtime import Call, GeneratedWorld
@@ -364,33 +364,23 @@ def exactly_once(calls: Sequence[Any], name: str, **arguments: Any) -> bool:
     return len(succeeded(calls, name, **arguments)) + len(lost) == 1
 
 
-# Whether each helper reads what a call came to (went through, answered, committed, timed out): a check that uses one
-# is never proof of a step that did not run, as a call recorded but not run came to nothing.
-for _helper, _reads in (
-    (answered, True),
-    (succeeded, True),
-    (came_before, True),
-    (exactly_once, True),
-    (retried_timeouts, True),
-    (repeated_commits, True),
-    (committed_writes, True),
-    (same_id, False),
-    (same_value, False),
-):
-    _helper.reads_outcomes = _reads  # type: ignore[attr-defined]
-
-# Read-only helpers every check is given beside `world` and `calls`.
-CHECK_HELPERS = {
-    "answered": answered,
-    "succeeded": succeeded,
-    "came_before": came_before,
-    "exactly_once": exactly_once,
-    "same_id": same_id,
-    "same_value": same_value,
-    "retried_timeouts": retried_timeouts,
-    "repeated_commits": repeated_commits,
-    "committed_writes": committed_writes,
+# Read-only helpers every check is given beside `world` and `calls`, each with whether it reads what a call came to
+# (went through, answered, committed, timed out): a check that uses one is never proof of a step that did not run, as
+# a call recorded but not run came to nothing. One table, so a new helper is never given without saying which.
+_HELPERS: dict[str, tuple[Callable[..., Any], bool]] = {
+    "answered": (answered, True),
+    "succeeded": (succeeded, True),
+    "came_before": (came_before, True),
+    "exactly_once": (exactly_once, True),
+    "same_id": (same_id, False),
+    "same_value": (same_value, False),
+    "retried_timeouts": (retried_timeouts, True),
+    "repeated_commits": (repeated_commits, True),
+    "committed_writes": (committed_writes, True),
 }
+CHECK_HELPERS = {name: helper for name, (helper, _reads) in _HELPERS.items()}
+# The helpers that read what a call came to.
+OUTCOME_HELPERS = frozenset(name for name, (_helper, reads) in _HELPERS.items() if reads)
 
 
 def check_namespace() -> dict[str, Any]:
