@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import WorldQueryRejected
-from . import Held, Snapshot, StoreError
+from . import Held, Snapshot, StoreError, WorldResetRefused
 from .container import ContainerStore, docker
 
 SCHEMA = "schema.sql"
@@ -36,6 +36,8 @@ PINNED_SEARCH_PATH = "-c search_path=pg_catalog,pg_temp"
 # A session that runs the world's own SQL (a handler's, a check's) where there is no world role: the system's own
 # functions are found first, and the statement still finds the world's tables.
 _SYSTEM_FIRST = "-c search_path=pg_catalog,public,pg_temp"
+# Where a reset's put-back finds the world's own functions: after the system's.
+_WORLD_CODE_PATH = "pg_catalog, public, pg_temp"
 
 
 # A world trigger that fires even with triggers suspended (replica mode): a reset as the harness would run it.
@@ -54,8 +56,57 @@ _FOREIGN_KEYS = (
 )
 # Every schema of the world's own: a reset puts back every one, not only `public`.
 _CUSTOMER_SCHEMA = "schemaname NOT IN ('pg_catalog', 'information_schema') AND schemaname NOT LIKE 'pg\\_%'"
-# The login that owns the world's tables: a reset by the store role runs as it, with the customer's own rights.
-_TABLE_OWNER = "alk_migrator"
+# Every definition of the world's own, a digest per kind, read on `pg_catalog` alone so each is spelled the same
+# whichever session reads it: a reset compares it with its snapshot's before it commits.
+_IN_WORLD = "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%%'"
+_CATALOG = " UNION ALL ".join(
+    f"SELECT '{kind}', md5(coalesce(string_agg(x, E'\\n' ORDER BY x), '')) FROM ({rows}) d(x)"
+    for kind, rows in (
+        ("schemas", f"SELECT concat_ws('|', n.nspname, pg_get_userbyid(n.nspowner), n.nspacl::text) "
+         f"FROM pg_namespace n WHERE {_IN_WORLD}"),
+        ("relations", "SELECT concat_ws('|', n.nspname, c.relname, c.relkind, pg_get_userbyid(c.relowner), "
+         "c.relacl::text, c.relrowsecurity, c.relforcerowsecurity, c.relpersistence, c.reloptions::text) "
+         f"FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE {_IN_WORLD}"),
+        ("columns", "SELECT concat_ws('|', n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), "
+         "a.attnotnull, a.attidentity, a.attgenerated, a.attacl::text, pg_get_expr(d.adbin, d.adrelid)) "
+         "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+         "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+         f"WHERE a.attnum > 0 AND NOT a.attisdropped AND {_IN_WORLD}"),
+        ("constraints", "SELECT concat_ws('|', n.nspname, k.conname, k.conrelid::oid::text <> '0', "
+         "coalesce(c.relname, ''), pg_get_constraintdef(k.oid), k.convalidated) FROM pg_constraint k "
+         "JOIN pg_namespace n ON n.oid = k.connamespace LEFT JOIN pg_class c ON c.oid = k.conrelid "
+         f"WHERE {_IN_WORLD}"),
+        ("indexes", "SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid "
+         f"JOIN pg_namespace n ON n.oid = c.relnamespace WHERE {_IN_WORLD}"),
+        ("triggers", "SELECT concat_ws('|', n.nspname, c.relname, t.tgname, t.tgenabled, pg_get_triggerdef(t.oid)) "
+         "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+         f"WHERE NOT t.tgisinternal AND {_IN_WORLD}"),
+        ("rules", "SELECT concat_ws('|', n.nspname, c.relname, r.rulename, r.ev_enabled, pg_get_ruledef(r.oid)) "
+         "FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class JOIN pg_namespace n ON n.oid = c.relnamespace "
+         f"WHERE {_IN_WORLD}"),
+        ("policies", "SELECT concat_ws('|', n.nspname, c.relname, p.polname, p.polcmd, p.polpermissive, "
+         "p.polroles::text, pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid)) "
+         "FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+         f"WHERE {_IN_WORLD}"),
+        ("functions", "SELECT concat_ws('|', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), "
+         "pg_get_function_result(p.oid), pg_get_userbyid(p.proowner), p.prosecdef, p.proacl::text, "
+         "p.proconfig::text, p.provolatile, p.proleakproof, p.prolang, p.prosrc, p.probin) "
+         f"FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE {_IN_WORLD}"),
+        ("operators", "SELECT concat_ws('|', n.nspname, o.oprname, format_type(o.oprleft, NULL), "
+         "format_type(o.oprright, NULL), o.oprcode::oid, pg_get_userbyid(o.oprowner)) "
+         f"FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace WHERE {_IN_WORLD}"),
+        ("types", "SELECT concat_ws('|', n.nspname, t.typname, t.typtype, pg_get_userbyid(t.typowner), "
+         "t.typacl::text, (SELECT string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) FROM pg_enum e "
+         f"WHERE e.enumtypid = t.oid)) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE {_IN_WORLD}"),
+        ("casts", "SELECT concat_ws('|', c.castsource, c.casttarget, c.castfunc, c.castcontext) FROM pg_cast c "
+         "WHERE c.oid >= 16384"),
+        ("extensions", "SELECT concat_ws('|', e.extname, e.extversion, e.extnamespace) FROM pg_extension e"),
+        ("role settings", "SELECT concat_ws('|', s.setdatabase, pg_get_userbyid(s.setrole), s.setconfig::text) "
+         "FROM pg_db_role_setting s"),
+        ("event triggers", "SELECT concat_ws('|', e.evtname, e.evtevent, e.evtenabled, e.evtfoid) "
+         "FROM pg_event_trigger e"),
+    )
+)
 
 
 def _key(schema: str, table: str) -> str:
@@ -266,11 +317,18 @@ class PostgresStore(ContainerStore):
             + ("OVERRIDING SYSTEM VALUE " if overriding else "")
             + f"VALUES ({placeholders})"
         )
-        with connection.cursor() as cursor:
-            cursor.executemany(
-                statement,
-                [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
-            )
+        # The one statement of a reset that runs the world's own code (a check, an index expression): it finds the
+        # world's functions by their bare names after the system's own (R6-1). Every statement of the harness's own
+        # runs on the system's path alone, so none of them reaches a function of the world's.
+        connection.execute(f"SET LOCAL search_path = {_WORLD_CODE_PATH}")
+        try:
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    statement,
+                    [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
+                )
+        finally:
+            connection.execute("SET LOCAL search_path = pg_catalog, pg_temp")
 
     def _counters(self, connection: Any) -> dict[str, Any]:
         rows = connection.execute(
@@ -401,14 +459,48 @@ class PostgresStore(ContainerStore):
         return _psycopg().connect(admin, autocommit=True, options=PINNED_SEARCH_PATH)
 
     def freeze(self) -> Snapshot:
-        """Rows and sequence counters, which together are the whole mutable state."""
+        """Rows and sequence counters, which together are the whole mutable state, and the digest of every
+        definition a reset must leave as it found it."""
         with self._admin_connect() as connection:
             counters = self._counters(connection)
             rows = {
                 _key(schema, table): self._select_ordered(connection, table, schema)
                 for schema, table in self._reset_tables(connection)
             }
-        return Snapshot(rows=rows, counters=counters)
+            with connection.transaction():
+                catalog = self._catalog(connection)
+        return Snapshot(rows=rows, counters=counters, catalog=catalog)
+
+    @staticmethod
+    def _catalog(connection: Any) -> dict[str, str]:
+        """Every definition of the world's own, a digest per kind, spelled on `pg_catalog` alone (call inside a
+        transaction: the search path is set for it only)."""
+        connection.execute("SET LOCAL search_path = pg_catalog")
+        return {str(kind): str(digest) for kind, digest in connection.execute(_CATALOG).fetchall()}
+
+    def _verify_reset(self, connection: Any, snapshot: Snapshot, tables: list[tuple[str, str]]) -> None:
+        """Before a reset commits: the world as its snapshot held it, every table's rows (their count, for rows read
+        from disk) and every definition, or nothing of the reset is kept and the world is refused. The world's own
+        code a reset runs (a check, an index expression) is what could leave it otherwise."""
+        sorted_rows = lambda rows: sorted(repr(sorted(row.items())) for row in rows)  # noqa: E731
+        for schema, table in tables:
+            held = snapshot.rows.get(_key(schema, table)) or []
+            now = self._select_ordered(connection, table, schema)
+            same = sorted_rows(now) == sorted_rows(held) if snapshot.catalog else len(now) == len(held)
+            if not same:
+                raise WorldResetRefused(
+                    f"the reset left {schema}.{table} other than its snapshot ({len(now)} rows, {len(held)} expected): "
+                    "the world's own code changed it while the reset ran"
+                )
+        if snapshot.catalog:
+            changed = sorted(
+                kind for kind, digest in self._catalog(connection).items() if snapshot.catalog.get(kind) != digest
+            )
+            if changed:
+                raise WorldResetRefused(
+                    "the world's definitions changed since its snapshot (" + ", ".join(changed) + "): the reset is "
+                    "rolled back and the world is not reused"
+                )
 
     def restore(self, snapshot: Snapshot) -> None:
         """Put the data back exactly as the snapshot found it.
@@ -419,9 +511,17 @@ class PostgresStore(ContainerStore):
         have. Counters are set last, so the next scenario's first insert gets the id the first
         scenario's did.
         """
-        if getattr(self, "_restore_as_role", False):
-            self._restore_as_role_itself(snapshot)
-            return
+        try:
+            if getattr(self, "_restore_as_role", False):
+                self._restore_as_role_itself(snapshot)
+            else:
+                self._restore_as_admin(snapshot)
+        except _psycopg().Error as error:
+            # Whatever stopped it (a table no role of ours may empty, the world's own code failing), the world is
+            # not as its snapshot held it: ours to replace, never graded.
+            raise WorldResetRefused(f"the world could not be reset: {error}") from error
+
+    def _restore_as_admin(self, snapshot: Snapshot) -> None:
         with self._admin_connect() as connection:
             tables = self._reset_tables(connection)
             if not tables:
@@ -434,23 +534,22 @@ class PostgresStore(ContainerStore):
                     + " are set to fire in replica mode (ENABLE ALWAYS or ENABLE REPLICA)"
                 )
             listed = ", ".join(_ident(schema, table) for schema, table in tables)
-            # Suspended before the truncate too, so neither it nor a row put back fires a trigger of the world's.
-            connection.execute("SET session_replication_role = replica")
-            try:
+            with connection.transaction():
+                # Suspended before the truncate too, so neither it nor a row put back fires a trigger of the world's.
+                connection.execute("SET LOCAL session_replication_role = replica")
                 # One statement, so Postgres resolves the dependency order between them itself.
                 connection.execute(f"TRUNCATE TABLE {listed} RESTART IDENTITY CASCADE")
                 for schema, table in tables:
                     self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
-            finally:
-                connection.execute("SET session_replication_role = DEFAULT")
-            self._set_counters(connection, snapshot.counters)
+                self._set_counters(connection, snapshot.counters)
+                self._verify_reset(connection, snapshot, tables)
 
     def _restore_as_role_itself(self, snapshot: Snapshot) -> None:
-        """A reset by the world's store role, as the tables' owner: the customer's own rights and no more (no row
-        security bypassed but the owner's), so the world's code a reset runs (a check, an index) has only those.
-        Every row deleted and put back in foreign-key order inside one transaction, with the world's triggers and
-        foreign-key checks suspended, a table that forces row security relieved for the load only, and each sequence
-        set back."""
+        """A reset by the world's store role: its rows bypass row security (the role's own BYPASSRLS), and the world's
+        code a reset runs (a check, an index expression) has that role's rights only, which create and alter
+        nothing. Every row deleted and put back in foreign-key order inside one transaction, with the world's
+        triggers and foreign-key checks suspended and each sequence set back; checked against the snapshot before it
+        commits (`_verify_reset`)."""
         with self._reader_connect(writable=True) as connection:
             tables = self._reset_tables(connection)
             if not tables:
@@ -472,37 +571,15 @@ class PostgresStore(ContainerStore):
                 ready = [t for t in tables if t not in order and parents[t] <= set(order)]
                 order.extend(ready or [t for t in tables if t not in order])
             with connection.transaction():
-                forced: list[tuple[str, str]] = []
-                owned = connection.execute(
-                    "SELECT coalesce(bool_and(pg_get_userbyid(c.relowner) = %s), false) FROM pg_class c "
-                    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'r' AND (n.nspname, c.relname) "
-                    "IN (SELECT * FROM unnest(%s::text[], %s::text[]))",
-                    (_TABLE_OWNER, [schema for schema, _ in tables], [table for _, table in tables]),
-                ).fetchone()[0]
-                if getattr(self, "_reader_dsn", None) and owned:
-                    # As the owner the build made them as: the customer's own rights, not the store role's bypass.
-                    connection.execute(f'SET LOCAL ROLE "{_TABLE_OWNER}"')
-                    forced = [
-                        (str(schema), str(table))
-                        for schema, table in connection.execute(
-                            "SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-                            "WHERE c.relkind = 'r' AND c.relforcerowsecurity"
-                        ).fetchall()
-                        if (str(schema), str(table)) in parents
-                    ]
-                    for schema, table in forced:
-                        connection.execute(f"ALTER TABLE {_ident(schema, table)} NO FORCE ROW LEVEL SECURITY")
                 if getattr(self, "_reader_dsn", None):
-                    # The owner, or the store role, may suspend the world's triggers and foreign-key checks for its
-                    # own reset.
+                    # The store role may suspend the world's triggers and foreign-key checks for its own reset.
                     connection.execute("SET LOCAL session_replication_role = replica")
                 for schema, table in reversed(order):
                     connection.execute(f"DELETE FROM {_ident(schema, table)}")  # noqa: S608 - a listed table
                 for schema, table in order:
                     self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
                 self._set_counters(connection, snapshot.counters)
-                for schema, table in forced:
-                    connection.execute(f"ALTER TABLE {_ident(schema, table)} FORCE ROW LEVEL SECURITY")
+                self._verify_reset(connection, snapshot, tables)
 
     def save_to(self, path: str | Path) -> None:
         """Save both the records and the DDL a fresh Postgres store needs."""

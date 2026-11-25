@@ -4492,23 +4492,29 @@ def _without_trigger_toggles(file: Path) -> tuple[Path, int]:
 # the build. A misread can only fail the build: whatever reaches the server is SQL, as the same login.
 _PG_DUMP_RESTRICT = re.compile(r"\\(?:un)?restrict [A-Za-z0-9]+[ \t]*$")
 _COPY_FROM_STDIN = re.compile(r"^\s*COPY\b.*\bFROM\s+STDIN\b", re.IGNORECASE | re.DOTALL)
-_SCS_OFF = re.compile(r"^\s*SET\s+(?:SESSION\s+)?standard_conforming_strings\s*(?:=|TO)\s*'?off'?", re.IGNORECASE)
-_SCS_ON = re.compile(r"^\s*SET\s+(?:SESSION\s+)?standard_conforming_strings\s*(?:=|TO)\s*'?on'?", re.IGNORECASE)
-_DOLLAR = re.compile(r"\$(?:[^\W\d]\w*)?\$")
+# As psql reads them: a byte past ASCII is part of a name, and a dollar-quote tag is a name without a `$`.
+_DOLLAR = re.compile(r"\$(?:[A-Za-z_\u0080-\U0010ffff][A-Za-z0-9_\u0080-\U0010ffff]*)?\$")
 _WORD = re.compile(r"[A-Za-z_]\w*")
 
 
-def _bundle_statements(text: str) -> Iterator[tuple[str, str, str, int]]:
+def _in_name(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char in "_$") or ord(char) >= 0x80
+
+
+def _bundle_statements(
+    text: str, backslash_escapes: Callable[[], bool] = lambda: False
+) -> Iterator[tuple[str, str, str, int]]:
     """A bundle SQL file as psql reads it: ("sql", statement, "", line), ("copy", statement, data, line), or
     ("command", text, "", line) for a backslash where a statement would start (pg_dump's restriction lines are left
-    out). Raises ValueError for a COPY with no end-of-data line."""
+    out). ``backslash_escapes``: whether the server now reads '' strings with backslash escapes
+    (standard_conforming_strings off), asked at each string as psql asks the server's own report, so every way a file
+    may change it is followed. Raises ValueError for a COPY with no end-of-data line."""
     i, n, line = 0, len(text), 1
     start, start_line = 0, 1
     started = False  # anything but whitespace and comments since the last statement
     state: str | None = None
     parens = 0
     atomic = 0
-    escapes = False  # standard_conforming_strings off: '' strings take backslash escapes
     while i < n:
         char = text[i]
         if state is None:
@@ -4540,8 +4546,8 @@ def _bundle_statements(text: str) -> Iterator[tuple[str, str, str, int]]:
             if char == "'":
                 before = text[i - 1] if i else " "
                 earlier = text[i - 2] if i > 1 else " "
-                prefixed = before in "eE" and not (earlier.isalnum() or earlier in "_$")
-                state, i = ("E'" if prefixed or escapes else "'"), i + 1
+                prefixed = before in "eE" and not _in_name(earlier)
+                state, i = ("E'" if prefixed or backslash_escapes() else "'"), i + 1
                 continue
             if char == '"':
                 state, i = '"', i + 1
@@ -4549,7 +4555,7 @@ def _bundle_statements(text: str) -> Iterator[tuple[str, str, str, int]]:
             if char == "$":
                 tag = _DOLLAR.match(text, i)
                 before = text[i - 1] if i else " "
-                if tag and not (before.isalnum() or before in "_$"):
+                if tag and not _in_name(before):
                     state, i = tag.group(), tag.end()
                     continue
             if char == "(":
@@ -4571,10 +4577,6 @@ def _bundle_statements(text: str) -> Iterator[tuple[str, str, str, int]]:
                 statement = text[start : i + 1]
                 i += 1
                 started = False
-                if _SCS_OFF.match(statement):
-                    escapes = True
-                elif _SCS_ON.match(statement):
-                    escapes = False
                 if _COPY_FROM_STDIN.match(statement):
                     newline = text.find("\n", i)
                     data_start = n if newline < 0 else newline + 1
@@ -4665,13 +4667,14 @@ def _run_sql_as_login(
             domain=FailureDomain.ENVIRONMENT,
         )
 
-    text = file.read_text(encoding="utf-8")
+    text = file.read_text(encoding="utf-8-sig")
     with psycopg.connect(
         host="localhost", port=port, user=login.username, password=login.password, dbname=dbname, autocommit=True
     ) as connection:
         at = 0
         try:
-            for kind, statement, data, at in _bundle_statements(text):
+            reads_escapes = lambda: connection.info.parameter_status("standard_conforming_strings") == "off"  # noqa: E731
+            for kind, statement, data, at in _bundle_statements(text, reads_escapes):
                 if kind == "command":
                     raise refused(
                         f"line {at}: {statement.split()[0]} is a psql command, not SQL; psql commands are not run. "
@@ -6433,6 +6436,8 @@ def migrator_credentials(
         f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{MIGRATOR_ROLE}') "
         f'THEN CREATE ROLE "{MIGRATOR_ROLE}"; END IF; END $$',
     )
+    # Whatever an earlier build's files set on the login (`ALTER ROLE ... SET`), gone before these run.
+    run("postgres", _without_settings(MIGRATOR_ROLE))
     run(
         "postgres",
         # BYPASSRLS while the store's files run, as the superuser's load did: a table that forces row security still
@@ -6522,14 +6527,12 @@ def _settle_harness_rows(
         )
 
 
-# Every membership of a per-world role but its own group (a store role may also become the tables' owner, never
-# inheriting its rights), revoked.
+# Every membership of a per-world role but its own group, revoked.
 _NORMALISE_MEMBERSHIPS = (
     "DO $$ DECLARE r record; BEGIN FOR r IN SELECT m.rolname AS member, g.rolname AS grp FROM pg_auth_members a "
     "JOIN pg_roles m ON m.oid = a.member JOIN pg_roles g ON g.oid = a.roleid WHERE "
     f"(m.rolname ~ '^{WORLD_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{WORLD_ROLE_GROUP}') "
-    f"OR (m.rolname ~ '^{STORE_ROLE_PREFIX}[0-9]+$' AND NOT (g.rolname = '{WORLD_ROLE_GROUP}' "
-    f"OR (g.rolname = 'alk_migrator' AND NOT a.inherit_option))) "
+    f"OR (m.rolname ~ '^{STORE_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{WORLD_ROLE_GROUP}') "
     f"OR (m.rolname ~ '^{LOG_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{LOG_ROLE_GROUP}') "
     f"OR (m.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{DOOR_ROLE_GROUP}') "
     "LOOP EXECUTE format('REVOKE %I FROM %I', r.grp, r.member); END LOOP; END $$"
@@ -6665,6 +6668,17 @@ def seed_store_safely(
                 process_name=process_name,
                 bundle_dir=bundle_dir,
                 made_by="seed",
+            )
+            _call_sql(
+                sql_runner,
+                stage="baseline",
+                process_name=process_name,
+                host="localhost",
+                port=port,
+                user=credentials.username,
+                password=credentials.password,
+                dbname=dbname,
+                statement=_NO_CREATE_IN_WORLD,
             )
             if login is not None:
                 # Every check done: the bundle's sentinel is read as the restricted login, never as the harness.
@@ -7027,24 +7041,40 @@ def _grant_log_readers(run: Callable[[str, str], None], baseline_db: str) -> Non
         )
 
 
-def _only_member_of(role: str, group: str, *, may_become: str | None = None) -> list[str]:
-    """A per-world role in its one group and no other: roles outlive a build, and a group an older harness gave one
-    would otherwise stay. ``may_become``: a role it may switch to (SET ROLE) without inheriting its rights."""
-    allowed = ", ".join(f"'{name}'" for name in (group, may_become) if name)
-    statements = [
+def _only_member_of(role: str, group: str) -> list[str]:
+    """A per-world role in its one group and no other, and with no setting of its own: roles outlive a build, and a
+    group or a setting an older harness, or the world's code, gave one would otherwise stay."""
+    return [
         "DO $$ DECLARE g text; BEGIN FOR g IN SELECT gr.rolname FROM pg_auth_members a "
         "JOIN pg_roles gr ON gr.oid = a.roleid JOIN pg_roles r ON r.oid = a.member "
-        f"WHERE r.rolname = '{role}' AND gr.rolname NOT IN ({allowed}) LOOP "
+        f"WHERE r.rolname = '{role}' AND gr.rolname <> '{group}' LOOP "
         f"EXECUTE format('REVOKE %I FROM %I', g, '{role}'); END LOOP; END $$",
         f'GRANT "{group}" TO "{role}"',
+        _without_settings(role),
     ]
-    if may_become:
-        statements.append(
-            f"DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = '{may_become}') THEN "
-            f'REVOKE "{may_become}" FROM "{role}"; GRANT "{may_become}" TO "{role}" WITH INHERIT FALSE, SET TRUE; '
-            "END IF; END $$"
-        )
-    return statements
+
+
+def _without_settings(role: str) -> str:
+    """Every `ALTER ROLE ... SET` a role carries, in any database, taken back."""
+    return (
+        f"DO $$ DECLARE d text; BEGIN EXECUTE format('ALTER ROLE %I RESET ALL', '{role}'); "
+        "FOR d IN SELECT db.datname FROM pg_db_role_setting s JOIN pg_database db ON db.oid = s.setdatabase "
+        f"JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = '{role}' LOOP "
+        f"EXECUTE format('ALTER ROLE %I IN DATABASE %I RESET ALL', '{role}', d); END LOOP; END $$"
+    )
+
+
+# After the build no one but a superuser creates anything in the world's schemas: a world role's own table would
+# outlive every reset (and could stop one), and nothing the harness runs later needs to.
+_NO_CREATE_IN_WORLD = (
+    "DO $$ DECLARE r record; BEGIN FOR r IN SELECT n.nspname, a.grantee FROM pg_namespace n, "
+    "aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a WHERE n.nspname NOT IN ('pg_catalog', "
+    "'information_schema') AND n.nspname NOT LIKE 'pg\\_%' AND a.privilege_type = 'CREATE' AND (a.grantee = 0 "
+    "OR NOT (SELECT rolsuper FROM pg_roles WHERE oid = a.grantee)) LOOP IF r.grantee = 0 THEN "
+    "EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM PUBLIC', r.nspname); ELSE "
+    "EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', r.nspname, pg_get_userbyid(r.grantee)); END IF; "
+    "END LOOP; END $$"
+)
 
 
 def _reset_template_database(
@@ -7129,8 +7159,7 @@ def _reset_template_database(
             "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
             f"EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"{store.username}\"'; END IF; END $$",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{store.username}"',
-            # The store role resets the world as the tables' owner (`SET ROLE`), never inheriting its rights.
-            *_only_member_of(store.username, WORLD_ROLE_GROUP, may_become=MIGRATOR_ROLE),
+            *_only_member_of(store.username, WORLD_ROLE_GROUP),
         ]
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         reader = _log_role_of(credentials, role)

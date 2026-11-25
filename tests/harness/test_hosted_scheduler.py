@@ -2293,6 +2293,36 @@ def test_world_unavailable_retries_once_on_a_fresh_world_and_recovers() -> None:
     asyncio.run(scenario())
 
 
+def test_a_reset_a_check_s_read_could_not_finish_retires_the_world_and_grades_nothing_on_it() -> None:
+    """A reset the store refused (the world's definitions changed while it ran) is ours: the world is discarded and
+    the scenario runs again on a fresh one, never graded on the world that would not go back."""
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _provisioner = _pool(2, outbound=outbound)
+        await pool.start()
+        attempts = {"n": 0}
+
+        def check(world: Any, calls: Any) -> None:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise WorldResetRefused("the world's definitions changed since its snapshot (functions)")
+
+        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1
+        )
+        result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", check)])])
+        assert result.receipts[0].scenario_attempt == 2
+        kinds = [event for event, _ in outbound.events]
+        assert kinds.count("world_unhealthy") == 1
+        assert kinds.count("scenario_retried") == 1
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_world_unhealthy_cause_is_truncated_and_redacted() -> None:
     # T7/M7: `cause` is capped at 200 chars and must never carry endpoint credentials.
     async def scenario() -> None:

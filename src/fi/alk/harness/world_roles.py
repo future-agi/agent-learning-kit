@@ -23,9 +23,6 @@ STORE_ROLE_PREFIX = "alk_s"
 # World N's log reader: in no world group and running no world SQL, it alone reads the harness's log and marker for
 # the harness (a check's events, a reset's sentinel), pinned and read-only.
 LOG_ROLE_PREFIX = "alk_l"
-# The login a store's files run as, owner of the world's tables; a store role may become it (never inherit it) to
-# reset the world with the customer's own rights.
-TABLE_OWNER_ROLE = "alk_migrator"
 LOG_ROLE_GROUP = "alk_world_log"
 # The harness's own relations, by name, in SQL over `pg_class c`: its `_alk_*` tables and the seed's marker.
 HARNESS_RELNAME = "(c.relname LIKE '\\_alk\\_%' OR c.relname = 'harness_seed_sentinel')"
@@ -160,7 +157,6 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         f"(g.rolname = '{world_group}' AND (r.rolname ~ '^({WORLD_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$' "
         f"OR r.rolname = '{DOOR_ROLE_GROUP}')) "
         f"OR (g.rolname = '{LOG_ROLE_GROUP}' AND r.rolname ~ '^{LOG_ROLE_PREFIX}[0-9]+$') "
-        f"OR (g.rolname = '{TABLE_OWNER_ROLE}' AND r.rolname ~ '^{STORE_ROLE_PREFIX}[0-9]+$' AND NOT a.inherit_option) "
         f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$'))"
     )
     other_roles = (

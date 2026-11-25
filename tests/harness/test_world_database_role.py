@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import dataclasses
 import os
 import threading
 import time
@@ -93,7 +94,7 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
         "EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"alk_s3\"'; END IF; END $$",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_s3"',
-        *pr._only_member_of("alk_s3", "alk_world_tools", may_become="alk_migrator"),
+        *pr._only_member_of("alk_s3", "alk_world_tools"),
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_l3') THEN "
         'CREATE ROLE "alk_l3" LOGIN IN ROLE "alk_world_log"; END IF; END $$',
@@ -507,7 +508,7 @@ def test_a_world_with_a_door_lets_in_its_own_door_role_only():
     )
 
     opened = statements.index('ALTER DATABASE "w3" ALLOW_CONNECTIONS true')
-    assert statements[opened - 5 : opened] == [
+    assert statements[opened - 6 : opened] == [
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_d3') THEN "
         'CREATE ROLE "alk_d3" LOGIN IN ROLE "alk_door"; END IF; END $$',
         f"ALTER ROLE \"alk_d3\" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{door.password}'",
@@ -1577,6 +1578,8 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
         store._store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute("ALTER TABLE riders ENABLE TRIGGER noted")
+    # The trigger is back as the snapshot found it before the ALWAYS switch: its definitions read again.
+    snapshot = dataclasses.replace(snapshot, catalog=store._store.freeze().catalog)
     store._store.restore(snapshot)
     assert [row["name"] for row in store.records("riders")] == ["ada"]
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -1609,6 +1612,8 @@ def test_with_one_fixed_user_a_reset_suspends_the_world_s_triggers_and_refuses_o
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute("ALTER TABLE riders ENABLE TRIGGER noted")
         connection.execute("TRUNCATE audit.ran_as")
+    # The trigger is back as the snapshot found it before the ALWAYS switch: its definitions read again.
+    snapshot = dataclasses.replace(snapshot, catalog=store.freeze().catalog)
     store.restore(snapshot)
     assert [row["name"] for row in store.table("riders")] == ["ada"]
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -2289,16 +2294,23 @@ def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute(
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_store') "
-            "THEN CREATE ROLE alk_world_store NOLOGIN; END IF; END $$; GRANT alk_world_store TO alk_s0"
+            "THEN CREATE ROLE alk_world_store NOLOGIN; END IF; END $$; GRANT alk_world_store TO alk_s0; "
+            # The membership a store role briefly had, to reset as the tables' owner: it could become that owner on
+            # any connection of its own.
+            f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{pr.MIGRATOR_ROLE}') THEN "
+            f'CREATE ROLE "{pr.MIGRATOR_ROLE}" NOLOGIN; END IF; END $$; '
+            f'GRANT "{pr.MIGRATOR_ROLE}" TO alk_s0 WITH INHERIT FALSE, SET TRUE'
         )
     reset(0)
+    with psycopg.connect(door_worlds.store_url, autocommit=True) as store:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            store.execute(f'SET ROLE "{pr.MIGRATOR_ROLE}"')
     with psycopg.connect(superuser, autocommit=True) as connection:
         groups = connection.execute(
             "SELECT g.rolname FROM pg_auth_members a JOIN pg_roles g ON g.oid = a.roleid "
             "JOIN pg_roles r ON r.oid = a.member WHERE r.rolname = 'alk_s0' ORDER BY 1"
         ).fetchall()
-    # The one group, and the tables' owner it may become (never inheriting its rights) for a reset.
-    assert groups == [("alk_migrator",), ("alk_world_tools",)]
+    assert groups == [("alk_world_tools",)]
 
 
 @real_postgres
@@ -2423,47 +2435,199 @@ def test_a_row_in_another_customer_schema_never_outlives_a_reset(door_worlds, mo
         assert connection.execute("SELECT id, body FROM ext.notes ORDER BY id").fetchall() == [(1, "seed")]
 
 
-@real_postgres
-def test_a_reset_runs_the_world_s_code_as_the_tables_owner_and_puts_back_rows_row_security_hides(
-    door_worlds, monkeypatch
-):
-    """A3: with the tables the restricted login's, as a build makes them, the store role resets as that owner: a
-    customer CHECK the reset runs sees the customer's own rights (no bypass of its own), and rows row security hides
-    from the agent come back; a table that forces row security still forces it after."""
-    from fi.alk.harness import privilege
-
-    superuser, world, _door, _reset = door_worlds(True)
+def _owned_by_the_login(superuser: str, setup: str) -> None:
+    """The world as a build leaves it: its tables the restricted login's, nothing created by anyone but a superuser."""
     parts = urlsplit(_REAL)
     pr.migrator_credentials(port=parts.port or 5432, credentials=pr.EngineCredentials(parts.username, parts.password),
                             baseline_db="postgres", sql_runner=pr.default_sql_runner, process_name="db")
-    store_role = urlsplit(door_worlds.store_url).username
     with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(setup)
         connection.execute(
-            f'GRANT "{pr.MIGRATOR_ROLE}" TO "{store_role}" WITH INHERIT FALSE, SET TRUE; '
-            "CREATE SCHEMA trail; GRANT USAGE ON SCHEMA trail TO PUBLIC; "
-            "CREATE TABLE trail.seen (who text); GRANT SELECT, INSERT, UPDATE, DELETE ON trail.seen TO PUBLIC; "
-            "CREATE FUNCTION public.note(text) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
-            "INSERT INTO trail.seen VALUES (current_user); RETURN true; END $$; "
-            "CREATE TABLE public.secrets (id int PRIMARY KEY, owner text CHECK (public.note(owner))); "
-            "INSERT INTO public.secrets VALUES (1, 'ada'), (2, 'bo'); "
-            "ALTER TABLE public.secrets ENABLE ROW LEVEL SECURITY; ALTER TABLE public.secrets FORCE ROW LEVEL SECURITY; "
-            "CREATE POLICY mine ON public.secrets USING (owner = 'ada'); "
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON public.secrets TO alk_world_tools; "
-            f'ALTER TABLE public.secrets OWNER TO "{pr.MIGRATOR_ROLE}"; ALTER TABLE riders OWNER TO "{pr.MIGRATOR_ROLE}"; '
-            f'ALTER FUNCTION public.note(text) OWNER TO "{pr.MIGRATOR_ROLE}"; '
-            f'ALTER TABLE trail.seen OWNER TO "{pr.MIGRATOR_ROLE}"; TRUNCATE trail.seen'
+            "DO $$ DECLARE r record; BEGIN FOR r IN SELECT schemaname, tablename FROM pg_tables WHERE schemaname "
+            "NOT IN ('pg_catalog', 'information_schema') AND tablename NOT LIKE '\\_alk\\_%' "
+            "AND tablename <> 'harness_seed_sentinel' LOOP "
+            f"EXECUTE format('ALTER TABLE %I.%I OWNER TO {pr.MIGRATOR_ROLE}', r.schemaname, r.tablename); "
+            "END LOOP; END $$"
         )
+        connection.execute(pr._NO_CREATE_IN_WORLD)
+
+
+# Auditor A's arm and probe: a CHECK the reset runs, calling the world's function by its bare name, that tries to
+# plant a function of its own, switch a trigger to fire even in replica mode, and give its role a setting.
+_ARMED_CHECK = (
+    "CREATE FUNCTION public.helper() RETURNS int LANGUAGE sql AS 'SELECT 1'; "
+    # Its body names the world's own helper unqualified, as most customer code does (R6-1).
+    "CREATE FUNCTION public.plant() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN PERFORM helper(); "
+    "BEGIN EXECUTE 'CREATE FUNCTION public.backdoor() RETURNS int LANGUAGE sql AS ''SELECT 1'''; "
+    "EXCEPTION WHEN others THEN NULL; END; "
+    "BEGIN EXECUTE 'ALTER TABLE public.secrets ENABLE ALWAYS TRIGGER stamp'; EXCEPTION WHEN others THEN NULL; END; "
+    "RETURN true; END $$; "
+    "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; "
+    "CREATE TABLE public.secrets (id int PRIMARY KEY, owner text); "
+    "CREATE TRIGGER stamp BEFORE INSERT ON public.secrets FOR EACH ROW EXECUTE FUNCTION public.stamp(); "
+    "INSERT INTO public.secrets VALUES (1, 'ada'), (2, 'bo'); "
+    # Armed after the seed: only a row put back runs it.
+    "ALTER TABLE public.secrets ADD CONSTRAINT armed CHECK (plant()) NOT VALID; "
+    "ALTER TABLE public.secrets ENABLE ROW LEVEL SECURITY; ALTER TABLE public.secrets FORCE ROW LEVEL SECURITY; "
+    "CREATE POLICY mine ON public.secrets USING (owner = 'ada'); "
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON public.secrets TO alk_world_tools; "
+    f"ALTER FUNCTION public.plant() OWNER TO {pr.MIGRATOR_ROLE}; ALTER FUNCTION public.stamp() OWNER TO "
+    f"{pr.MIGRATOR_ROLE}"
+)
+
+
+@real_postgres
+def test_the_world_s_code_a_reset_runs_has_the_store_role_s_rights_and_plants_nothing(door_worlds, monkeypatch):
+    """Auditor A's arm/probe: the reset runs as the store role (never the tables' owner), on `pg_catalog, public` so
+    the world's own function is found by its bare name (R6-1). The CHECK's plant (a new function, an ALWAYS trigger)
+    fails for want of rights; rows row security hides come back; FORCE is still set."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    _owned_by_the_login(superuser, _ARMED_CHECK)
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
-        connection.execute("DELETE FROM public.secrets; TRUNCATE trail.seen")
+        connection.execute("DELETE FROM public.secrets")
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute("SELECT id FROM public.secrets ORDER BY id").fetchall() == [(1,), (2,)]
-        assert {row[0] for row in connection.execute("SELECT who FROM trail.seen").fetchall()} == {pr.MIGRATOR_ROLE}
-        assert connection.execute("SELECT relforcerowsecurity FROM pg_class WHERE relname = 'secrets'").fetchone() \
-            == (True,)
+        assert connection.execute("SELECT to_regproc('public.backdoor')").fetchone() == (None,)
+        assert connection.execute("SELECT tgenabled FROM pg_trigger WHERE tgname = 'stamp'").fetchone() == ("O",)
+        assert connection.execute(
+            "SELECT relforcerowsecurity FROM pg_class WHERE relname = 'secrets'"
+        ).fetchone() == (True,)
+
+
+@real_postgres
+@pytest.mark.parametrize("plant", ("function", "role setting"))
+def test_a_reset_that_would_change_a_definition_is_rolled_back_and_refused(door_worlds, monkeypatch, plant):
+    """Should any right let the world's code change a definition while a reset runs (here, CREATE granted back to
+    the store role, or a setting a role may make on itself), nothing of the reset is kept: the world is refused
+    (ours to replace, no check graded) and the plant is gone with the rollback."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.errors import WorldUnavailable
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    store_role = urlsplit(door_worlds.store_url).username
+    _owned_by_the_login(superuser, _ARMED_CHECK)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        if plant == "function":
+            connection.execute(f'GRANT CREATE ON SCHEMA public TO "{store_role}"')
+        else:
+            connection.execute(
+                "CREATE OR REPLACE FUNCTION public.plant() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
+                "EXECUTE 'ALTER ROLE ' || quote_ident(current_user) || ' SET work_mem = ''7MB'''; RETURN true; END $$"
+            )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("DELETE FROM public.secrets WHERE id = 2")
+    with pytest.raises(WorldResetRefused) as refused:
+        store.restore(snapshot)
+    assert isinstance(refused.value, WorldUnavailable)
+    assert ("functions" if plant == "function" else "role settings") in str(refused.value)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT to_regproc('public.backdoor')").fetchone() == (None,)
+        assert connection.execute(
+            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole", (store_role,)
+        ).fetchone() == (0,)
+        assert connection.execute("SELECT id FROM public.secrets").fetchall() == [(1,)]
+        connection.execute(f'REVOKE CREATE ON SCHEMA public FROM "{store_role}"')
+
+
+@real_postgres
+def test_a_reset_that_leaves_a_row_its_snapshot_did_not_hold_is_refused(door_worlds, monkeypatch):
+    """The world's code a reset runs writes a row (a CHECK that records who ran it): the world is not as its
+    snapshot held it, so the reset is rolled back and the world refused."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    _owned_by_the_login(
+        superuser,
+        "CREATE SCHEMA trail; GRANT USAGE ON SCHEMA trail TO PUBLIC; "
+        "CREATE TABLE trail.seen (who text); GRANT SELECT, INSERT, UPDATE, DELETE ON trail.seen TO PUBLIC; "
+        "CREATE FUNCTION public.note(text) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
+        "INSERT INTO trail.seen VALUES (current_user); RETURN true; END $$; "
+        "CREATE TABLE public.notes (id int PRIMARY KEY, body text CHECK (note(body))); "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools; "
+        "INSERT INTO public.notes VALUES (1, 'a'); TRUNCATE trail.seen",
+    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("DELETE FROM public.notes")
+    with pytest.raises(WorldResetRefused, match="trail.seen"):
+        store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT count(*) FROM trail.seen").fetchone() == (0,)
+
+
+@real_postgres
+def test_a_relation_a_world_role_made_after_the_snapshot_refuses_the_reset(door_worlds, monkeypatch):
+    """R6-2: a table a world role owns that the snapshot never held (made where CREATE was still granted) is no
+    store role's to empty or drop: the reset refuses the world rather than leave the trial's changes in place."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    world_role = urlsplit(world).username
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            f'CREATE TABLE public.left_behind (a int); ALTER TABLE public.left_behind OWNER TO "{world_role}"; '
+            "INSERT INTO public.left_behind VALUES (1); INSERT INTO riders (name) VALUES ('from the trial')"
+        )
+    with pytest.raises(WorldResetRefused):
+        store.restore(snapshot)
+
+
+@real_postgres
+def test_after_a_build_no_world_schema_takes_a_create_from_anyone_but_a_superuser(tmp_path: Path):
+    """R6-2: a customer schema that granted CREATE to PUBLIC (and `public`, which the login may create in) take
+    CREATE from no one but a superuser once the build is done."""
+    build, run, baseline = _seeded(
+        tmp_path,
+        "CREATE SCHEMA ext; GRANT USAGE, CREATE ON SCHEMA ext TO PUBLIC; CREATE TABLE ext.t (a int);\n",
+        "INSERT INTO ext.t VALUES (1);\n",
+    )
+    try:
+        build()
+        assert run(
+            baseline,
+            "SELECT n.nspname, pg_get_userbyid(a.grantee) FROM pg_namespace n, "
+            "aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a WHERE n.nspname IN ('ext', 'public') "
+            "AND a.privilege_type = 'CREATE' AND (a.grantee = 0 OR NOT (SELECT rolsuper FROM pg_roles "
+            "WHERE oid = a.grantee))",
+        ) == []
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_the_login_s_settings_an_earlier_build_made_are_gone_before_files_run():
+    """H2: `ALTER ROLE alk_migrator SET ...` (globally or in one database) from an earlier build's files does not
+    shape the next build's session."""
+    parts = urlsplit(_REAL)
+    credentials = pr.EngineCredentials(parts.username, parts.password)
+    pr.migrator_credentials(port=parts.port or 5432, credentials=credentials, baseline_db="postgres",
+                            sql_runner=pr.default_sql_runner, process_name="db")
+    with psycopg.connect(_REAL, autocommit=True) as connection:
+        connection.execute(f'ALTER ROLE "{pr.MIGRATOR_ROLE}" SET search_path = evil, public')
+        connection.execute(f"ALTER ROLE \"{pr.MIGRATOR_ROLE}\" IN DATABASE postgres SET work_mem = '9MB'")
+    pr.migrator_credentials(port=parts.port or 5432, credentials=credentials, baseline_db="postgres",
+                            sql_runner=pr.default_sql_runner, process_name="db")
+    with psycopg.connect(_REAL, autocommit=True) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole", (pr.MIGRATOR_ROLE,)
+        ).fetchone() == (0,)
 
 
 @real_postgres
@@ -2522,6 +2686,18 @@ _CUSTOMER_SQL = {
         "CREATE FUNCTION public.two() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT CASE WHEN true THEN 2 END; END;\n"
         "CREATE TABLE public.t (a int);",
         "INSERT INTO public.t VALUES (public.two());\n",
+    ),
+    "a byte-order mark": ("CREATE TABLE public.t (a int);", "\ufeffINSERT INTO public.t VALUES (1);\n"),
+    "backslash strings switched on by set_config": (
+        "CREATE TABLE public.t (body text);",
+        "SELECT set_config('standard_conforming_strings', '0', false);\nSELECT 'a\\';b';\n",
+    ),
+    "backslash strings switched on by SET ... = false": (
+        "CREATE TABLE public.t (body text);",
+        "SET standard_conforming_strings = false;\nSELECT 'a\\';b';\n",
+    ),
+    "a name with a byte past ASCII before a dollar": (
+        "CREATE TABLE public.t (a int);", "SELECT 1 AS €$a$;\nCREATE INDEX CONCURRENTLY t_a ON public.t (a);\n"
     ),
     # Real migrations, as the frameworks write them.
     "Rails structure.sql": (

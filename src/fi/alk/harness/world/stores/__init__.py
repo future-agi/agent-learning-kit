@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 
+from ..errors import WorldUnavailable
+
 
 class StoreError(RuntimeError):
     """The store could not be stood up, or could not answer.
@@ -37,6 +39,11 @@ class StoreError(RuntimeError):
     stop the run loudly, because every result after it would be measured against something that
     is not there.
     """
+
+
+class WorldResetRefused(StoreError, WorldUnavailable):
+    """A reset that would not leave the world as its snapshot held it (a definition changed, a row too many), rolled
+    back: the world is ours to replace, and no check is graded on it."""
 
 
 @dataclass
@@ -55,6 +62,9 @@ class Snapshot:
 
     rows: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     counters: dict[str, int] = field(default_factory=dict)
+    # What the engine's own definitions were (a digest per kind), where it reports them: a reset that leaves them
+    # other than this did not put the world back.
+    catalog: dict[str, str] = field(default_factory=dict)
 
     def counts(self) -> dict[str, int]:
         return {name: len(rows) for name, rows in self.rows.items()}
