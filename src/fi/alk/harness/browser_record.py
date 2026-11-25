@@ -40,7 +40,7 @@ from typing import Any
 from urllib import request as urllib_request
 from urllib.parse import urlsplit
 
-from .egress_proxy import host_allowed
+from .egress_proxy import entry_admits
 from .outbound import redact_outbound_text
 from .world_door import MemoryLog
 
@@ -197,7 +197,9 @@ class BrowserRecord:
             )
 
     def allowed(self, url: str) -> bool:
-        return host_allowed(_host(url), self.sites, loopback=False)
+        # The proxy's rule, each site read as the sandbox firewall reads it; loopback is never a site.
+        host = _host(url)
+        return any(entry_admits(site, host) for site in self.sites)
 
     def navigated(self, tab: str, url: str) -> None:
         """A page the browser opened. Its error page at a refused address is the refusal, already kept."""
