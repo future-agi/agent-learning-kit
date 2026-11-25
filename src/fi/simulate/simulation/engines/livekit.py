@@ -5449,6 +5449,7 @@ def _conversation_outcome(
 
 _TRANSFER_HANDOFF_PHRASE = re.compile(
     r"\b(?:transfer|transferring|connect|connecting)\s+(?:you|your\s+call)\b"
+    r"|\btransfer(?:ring)?\s+(?:the\s+call\s+)?to\b"
 )
 _TRANSFER_HANDOFF_MARKER = re.compile(r"\b(?:now|connect|connecting|please\s+wait)\b")
 

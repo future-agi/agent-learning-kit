@@ -4228,6 +4228,8 @@ def test_transfer_words_inside_other_words_are_not_a_handoff(line: str) -> None:
         "transferring you to the front desk now.",
         "i'll transfer you, please wait.",
         "please wait while i transfer your call.",
+        "transferring to billing now.",
+        "let me transfer the call to a specialist now.",
     ],
 )
 def test_a_real_transfer_handoff_is_recognised(line: str) -> None:
