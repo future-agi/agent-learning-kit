@@ -78,6 +78,7 @@ _JOURNAL = ".futureagi-conversation.json"
 # Each turn's ending as it was reported, usage included: kept before the turn's final
 # checkpoint, so a restart after a failed delivery replays the same ending.
 _TURN_ENDINGS = ".futureagi-turn-endings.json"
+_ENDING_PREFIX = ".futureagi-turn-ending-"
 _ENDING_OUTCOMES = frozenset({"success", "failed", "interrupted"})
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
 _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
@@ -698,7 +699,8 @@ class HostedChatRuntime:
         self._restart_after_turn = False
         # Endings the coordinator state already holds, as stored: each control-only checkpoint
         # adds only new or changed endings, not the whole history of them.
-        self._stored_endings: dict[str, str] = {}
+        self._endings: dict[str, dict[str, Any]] | None = None
+        self._pending_endings: dict[str, dict[str, Any]] = {}
         self._skipped_endings: set[str] = set()
         # The rebuild command this sandbox runs.
         self._nudge: dict[str, Any] | None = None
@@ -1838,13 +1840,12 @@ class HostedChatRuntime:
         delivery fails, the restart replays this same ending."""
         ending = {"command_message_id": message_id, "outcome": outcome, **self._turn_usage()}
         endings = self._read_turn_endings()
+        # A command id is an opaque wire value, not a workspace path.
+        digest = hashlib.sha256(message_id.encode()).hexdigest()
+        self._write_dotfile(f"{_ENDING_PREFIX}{digest}.json", {message_id: ending})
         endings[message_id] = ending
-        path = self.workspace / _TURN_ENDINGS
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(endings, sort_keys=True, separators=(",", ":")), encoding="utf-8"
-        )
-        temporary.replace(path)
+        if self._control_only():
+            self._pending_endings[message_id] = ending
         return ending
 
     def _turn_ending(self, message_id: str, **bare: Any) -> dict[str, Any]:
@@ -1856,8 +1857,18 @@ class HostedChatRuntime:
         }
 
     def _read_turn_endings(self) -> dict[str, dict[str, Any]]:
+        if self._endings is None:
+            endings = self._read_ending_file(self.workspace / _TURN_ENDINGS)
+            for path in self.workspace.glob(f"{_ENDING_PREFIX}*.json"):
+                endings.update(self._read_ending_file(path))
+            self._endings = endings
+            if self._control_only():
+                self._pending_endings.update(endings)
+        return self._endings
+
+    def _read_ending_file(self, path: Path) -> dict[str, dict[str, Any]]:
         try:
-            body = json.loads((self.workspace / _TURN_ENDINGS).read_text(encoding="utf-8"))
+            body = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
         if not isinstance(body, dict):
@@ -2621,32 +2632,30 @@ class HostedChatRuntime:
             except ConversationTransportError:
                 pass
         if self._control_only():
-            files = {}
-            for name in (_JOURNAL, _PENDING_QUESTION):
-                path = self.workspace / name
-                if path.is_file():
-                    files[name] = json.loads(path.read_text(encoding="utf-8"))
-            new_endings = {
-                key: value
-                for key, value in self._read_turn_endings().items()
-                if self._stored_endings.get(key) != json.dumps(value, sort_keys=True)
-            }
-            if new_endings:
-                files[_TURN_ENDINGS] = new_endings
-            await self.client.append_session(
-                self._coordinator_state_key(),
-                [
-                    {
-                        "type": "coordinator_state",
-                        "uuid": str(uuid.uuid4()),
-                        "files": files,
-                    }
-                ],
-            )
-            self._stored_endings.update(
-                {key: json.dumps(value, sort_keys=True) for key, value in new_endings.items()}
-            )
-            return {"control_only": True, "stored": True}
+            async with self._checkpoint_lock:
+                files = {}
+                for name in (_JOURNAL, _PENDING_QUESTION):
+                    path = self.workspace / name
+                    if path.is_file():
+                        files[name] = json.loads(path.read_text(encoding="utf-8"))
+                self._read_turn_endings()  # initialize once for a pre-existing workspace
+                new_endings = self._pending_endings.copy()
+                if new_endings:
+                    files[_TURN_ENDINGS] = new_endings
+                await self.client.append_session(
+                    self._coordinator_state_key(),
+                    [
+                        {
+                            "type": "coordinator_state",
+                            "uuid": str(uuid.uuid4()),
+                            "files": files,
+                        }
+                    ],
+                )
+                for key, ending in new_endings.items():
+                    if self._pending_endings.get(key) is ending:
+                        del self._pending_endings[key]
+                return {"control_only": True, "stored": True}
         async with self._checkpoint_lock:
             return await self.client.checkpoint(self.workspace)
 
@@ -2684,9 +2693,12 @@ class HostedChatRuntime:
             temporary.replace(path)
         else:
             path.unlink(missing_ok=True)
-        self._stored_endings = {
-            key: json.dumps(value, sort_keys=True) for key, value in endings.items()
-        }
+        # Local records can include an ending whose coordinator append failed.
+        self._endings = None
+        self._pending_endings.clear()
+        for key, value in self._read_turn_endings().items():
+            if endings.get(key) == value:
+                self._pending_endings.pop(key, None)
         self.conversation = self._conversation()
 
     def _provider_sessions(self) -> dict[str, str]:

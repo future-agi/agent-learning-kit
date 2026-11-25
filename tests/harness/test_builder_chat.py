@@ -1681,6 +1681,76 @@ def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch
     assert added == ["m-6"]
 
 
+def test_restored_checkpoint_only_processes_changed_endings(tmp_path, monkeypatch):
+    client = LosingClient(control_only=True)
+    name = ".futureagi-turn-endings.json"
+    history = {f"old-{i}": {"command_message_id": f"old-{i}", "outcome": "failed"}
+               for i in range(1000)}
+    entries = client.sessions["futureagi-coordinator-state"] = [{"files": {name: history}}]
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    asyncio.run(runtime._restore_coordinator_state())
+    assert runtime._turn_ending("old-999") == history["old-999"]
+
+    read, write, dumps = Path.read_text, Path.write_text, json.dumps
+    reads, writes, historical_encodes = [], [], []
+
+    def record_read(path, *args, **kwargs):
+        if "turn-ending" in path.name:
+            reads.append(path)
+        return read(path, *args, **kwargs)
+
+    def record_write(path, text, *args, **kwargs):
+        if "turn-ending" in path.name:
+            writes.append(len(text.encode()))
+        return write(path, text, *args, **kwargs)
+
+    def record_encode(value, *args, **kwargs):
+        text = dumps(value, *args, **kwargs)
+        if '"old-' in text:
+            historical_encodes.append(len(text))
+        return text
+
+    monkeypatch.setattr(Path, "read_text", record_read)
+    monkeypatch.setattr(Path, "write_text", record_write)
+    monkeypatch.setattr(json, "dumps", record_encode)
+    asyncio.run(runtime._checkpoint())
+    assert name not in entries[-1]["files"]
+    assert (len(reads), len(historical_encodes), sum(writes)) == (0, 0, 0)
+    ending = runtime._end_turn("new", "interrupted")
+    asyncio.run(runtime._checkpoint())
+    assert entries[-1]["files"][name] == {"new": ending}
+    assert not reads and not historical_encodes
+    assert 0 < sum(writes) < 1024
+
+
+def test_checkpoint_retries_only_a_locally_persisted_ending(tmp_path, monkeypatch):
+    client = LosingClient(control_only=True)
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    with monkeypatch.context() as patch:
+        def fail_replace(*args):
+            raise OSError("disk full")
+
+        patch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(OSError, match="disk full"):
+            runtime._end_turn("new", "failed")
+    name = ".futureagi-turn-endings.json"
+    asyncio.run(runtime._checkpoint())
+    entries = client.sessions["futureagi-coordinator-state"]
+    assert name not in entries[-1]["files"]
+    ending = runtime._end_turn("new", "failed")
+    with monkeypatch.context() as patch:
+        async def fail_append(*args):
+            raise ConversationTransportError("not acknowledged")
+
+        patch.setattr(client, "append_session", fail_append)
+        with pytest.raises(ConversationTransportError, match="not acknowledged"):
+            asyncio.run(runtime._checkpoint())
+    asyncio.run(runtime._checkpoint())
+    assert entries[-1]["files"][name] == {"new": ending}
+    asyncio.run(runtime._checkpoint())
+    assert name not in entries[-1]["files"]
+
+
 def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch):
     from fi.alk.harness import spend
 
@@ -1696,7 +1766,7 @@ def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch)
     assert completed["kind"] == "turn_completed"
     assert completed["payload"]["outcome"] == "success"
     assert completed["payload"]["usage"]["tokens_in"] == 40
-    endings = json.loads((runtime.workspace / ".futureagi-turn-endings.json").read_text())
+    endings = _runtime(tmp_path, client, monkeypatch)._read_turn_endings()
     assert list(endings) == ["m-1"]
 
 
