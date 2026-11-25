@@ -37,6 +37,7 @@ const http = require("node:http");
 const https = require("node:https");
 const nodeModule = require("node:module");
 const nodePath = require("node:path");
+const nodeUrl = require("node:url");
 const zlib = require("node:zlib");
 
 const CALL_FILE = "FI_SIMULATION_CALL_FILE";
@@ -407,15 +408,17 @@ function install() {
         }
         const options = args[index] && typeof args[index] === "object" ? args[index] : null;
         const opts = options || {};
-        const protocol = opts.protocol || (url && url.protocol) || defaultProtocol;
-        const host =
-          opts.hostname ||
-          (opts.host && String(opts.host).replace(/:\d+$/, "")) ||
-          (url && url.hostname) ||
-          "localhost";
-        const port = opts.port || (url && url.port) || null;
-        const path = opts.path || (url && url.pathname) || "/";
-        if (aimedAtUs(opts.method, protocol, host, port, path)) {
+        // Where Node sends it: the options over the URL's, the host and port as ClientRequest
+        // reads them. A socket the caller supplies goes wherever it leads, so it is never ours.
+        const target = url ? { ...nodeUrl.urlToHttpOptions(url), ...opts } : opts;
+        const host = target.hostname || target.host || "localhost";
+        const port =
+          target.port || target.defaultPort || (target.agent && target.agent.defaultPort) || null;
+        if (
+          !target.socketPath &&
+          typeof target.createConnection !== "function" &&
+          aimedAtUs(target.method, target.protocol || defaultProtocol, host, port, target.path)
+        ) {
           ourRequest = true;
           const headers = opts.headers;
           let swapped;

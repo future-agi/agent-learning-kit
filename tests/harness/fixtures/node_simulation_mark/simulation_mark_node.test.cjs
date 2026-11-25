@@ -423,3 +423,38 @@ test("a buffer the caller reuses after its write is acknowledged does not change
     assert.equal(attributes(exported.resourceSpans[0].resource.attributes)["fi.simulation.job_id"], "job-1");
   }
 });
+
+test("a request on a socket the caller chose is not given the key, whatever host it names", async (t) => {
+  const collector = await stub();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-sock-"));
+  const socketPath = path.join(dir, "other.sock");
+  const seen = [];
+  const other = http.createServer((req, res) => {
+    seen.push(req.headers);
+    req.resume();
+    req.on("end", () => res.end("{}"));
+  });
+  await new Promise((resolve) => other.listen(socketPath, resolve));
+  t.after(() => {
+    collector.server.close();
+    other.close();
+  });
+  const script = `
+    import http from "node:http";
+    await new Promise((resolve, reject) => {
+      const req = http.request({
+        socketPath: ${JSON.stringify(socketPath)}, host: "127.0.0.1", port: ${collector.port},
+        path: "/v1/traces", method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": "customer-key" },
+      }, (res) => { res.resume(); res.on("end", resolve); });
+      req.on("error", reject);
+      req.end("{}");
+    });
+  `;
+  const result = await run(script, envFor(collector));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(collector.seen.length, 0);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]["x-api-key"], "customer-key");
+  assert.equal(seen[0]["x-secret-key"], undefined);
+});
