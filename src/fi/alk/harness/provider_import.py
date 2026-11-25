@@ -109,7 +109,7 @@ _SIGNED_ENDINGS = ("sig", "signature", "key", "code", "jwt", "session", "sid")
 _LONGEST_PLAIN_QUERY_VALUE = 15
 # Maps whose names say nothing about whether a value is a credential (`X-Client-Auth`,
 # `X-Tenant`): every value is withheld, and only the names are kept.
-_WITHHELD_MAPS = ("headers", "queryparams", "queryparameters")
+_WITHHELD_MAPS = ("header", "headers", "queryparams", "queryparameters")
 # JSON Schema: the maps that name sub-schemas, what makes a value a schema, and what fixes one.
 _SCHEMA_MAPS = frozenset({"properties", "patternProperties", "$defs", "definitions"})
 _SCHEMA_KEYWORDS = frozenset(
