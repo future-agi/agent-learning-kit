@@ -120,14 +120,39 @@ gets its DevTools address in `ALK_BROWSER_CDP_URL`: a relay in front of the brow
 for the world's life, which counts the clients that attach. The browser's requests go through a
 refusing proxy of its own whose list is the sites and nothing else: never loopback, and never a
 site whose name resolves to loopback; Chromium sends loopback through it too, and QUIC and WebRTC
-are off. A refusal is logged at the world's door as the agent's `egress_blocked` attempt marked
-`via: browser`, and shows in the trial's `blocked` list, only while a client holds the browser;
-the browser's own service traffic is pointed at `kit-browser.invalid` and never logged. A trial
+are off. A refusal is logged as the agent's `egress_blocked` attempt marked `via: browser`, only
+while a client holds the browser: at the world's door where its database keeps the log, else in a
+kit-owned file cut at each trial, capped, cleaned, with the query part of an address removed. The
+browser's own service traffic is pointed at `kit-browser.invalid` and never logged. A trial
 says `browser_not_used` when no client attached, and `browser_not_started` when the job has sites
 for an agent not read as needing a browser. That bound holds for the environment's browser only:
 the agent's own code, or a browser it starts itself, is bound by the sandbox's firewall. It covers
 what the browser is asked to load, not a client that changes the browser's own settings through
 its DevTools address.
+
+**The browser record** (`browser_record.py`). Beside each world's browser the kit runs a recorder
+on the browser's own port, which never counts as the agent's attach. It keeps, in order and with
+times, the pages the agent's tabs opened, what it clicked and typed (the element in words), and
+the sites it was refused, in two lists: a page the agent tried to open off the list, kept whole
+each time, and a request a page made off the list, counted for each host. A DevTools client is
+not told of the clicks and keys another client sends, so a small listener runs in each page, in a
+script world of its own, and reports only trusted events through a binding; the page's own
+scripts can neither write to the record nor read it. Text typed into a password field is never
+kept, only that typing happened, including a field whose kind is changed after the page loads.
+Every text passes the kit's cleaner. Rows are capped (the record then says `truncated`), and a
+screenshot is taken at each page load and at the trial's end, capped in count and bytes with the
+end's always kept, each named by the id it is stored under. The record holds against the page,
+not against a client holding the DevTools address: such a client can do whatever DevTools can,
+so the record says what the browser did, never that nothing else touched it.
+
+The record is the world's, never the agent's tool calls: it lives in the trial's `world_state`
+file, apart from the action log, and the sealed world record carries its counts only. A world
+with a door adds it to the end state it stores; a world with no door still stores the file, under
+`futureagi.browser-world-state.v1`, saying the world's records were not recorded (`not_held`)
+rather than carrying empty tables. With no client attached the record says `not_used`, never an
+empty list, and a refusal list that could not be read says so. Screenshots are uploaded last, as
+the `screenshot` kind, kept from `traces-and-recordings` up; one the platform does not keep, or
+past what an isolated worker's result can carry, never fails the trial: the trial says so.
 
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the

@@ -15,6 +15,9 @@ Two lists of refused sites, because a page asks many hosts for scripts, fonts an
 
 Text typed into a password field is never kept, only that typing happened. Every text in a row passes the kit's
 cleaner.
+
+The record holds against the page, not against a client holding the browser's DevTools address: such a client can
+do whatever DevTools can, so the record says what the browser did, never that nothing else touched it.
 """
 
 from __future__ import annotations
