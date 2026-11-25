@@ -247,6 +247,64 @@ def test_a_refusal_that_keeps_its_writes_still_reads_refused(dsn) -> None:
     assert (call.ok, call.refused) == (False, True)
 
 
+def test_attaching_servers_makes_no_login_and_passes_the_readers_address(tmp_path):
+    from fi.alk.harness.releases import AttachedServer
+    from fi.alk.harness.world_tools import attach_servers
+
+    server = AttachedServer.model_validate(
+        {
+            "id": "sql",
+            "server": "sql",
+            "tools": ["query"],
+            "attach": {"database_reader": {"tables": ["bookings"]}},
+        }
+    )
+    # Nothing listens there: attaching connects to no database.
+    reader = "postgresql://alk_r0:secret@127.0.0.1:1/w0"
+
+    attached = attach_servers([server], reader, cwd=tmp_path)
+
+    assert attached._parameters(server).env["WORLD_READER_URL"] == reader
+    assert attach_servers([], None) is None
+
+
+def test_two_first_calls_start_the_attached_servers_once(monkeypatch):
+    import threading
+    import time
+
+    from fi.alk.harness.world_tools import AttachedServers
+
+    attached = AttachedServers([], reader_url=None, cwd=None)
+    starts = []
+
+    async def serve(self, ready):
+        import asyncio
+
+        starts.append(1)
+        self._stop = asyncio.Event()
+        await asyncio.sleep(0.2)
+        self.definitions.append("ready")
+        ready.set_result(None)
+        await self._stop.wait()
+
+    monkeypatch.setattr(AttachedServers, "_serve", serve)
+    seen = []
+
+    def first():
+        attached.start()
+        seen.append(list(attached.definitions))
+
+    threads = [threading.Thread(target=first) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+        time.sleep(0.01)
+    for thread in threads:
+        thread.join(10)
+    attached.close()
+
+    assert starts == [1] and seen == [["ready"]] * 4
+
+
 def test_a_release_s_world_is_seeded_and_served_without_the_superuser(
     tmp_path, monkeypatch
 ):
@@ -326,6 +384,7 @@ def test_a_release_s_world_is_seeded_and_served_without_the_superuser(
             process_name="world-db",
             isolate=True,
             role=role,
+            reader=pr.reader_role(superuser, index),
         )
 
         def address(user: str, password: str) -> str:
@@ -334,6 +393,20 @@ def test_a_release_s_world_is_seeded_and_served_without_the_superuser(
                 (parts.scheme, f"{at}{host}:{port}", f"/{world}", parts.query, "")
             )
 
+        # The attached servers read the listed tables with a login the harness made: the tool
+        # server's own can make none.
+        reader_login = pr.reader_role(superuser, index)
+        with psycopg.connect(
+            address(reader_login.username, reader_login.password)
+        ) as connection:
+            assert connection.execute("SELECT count(*) FROM bookings").fetchone() == (0,)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("SELECT * FROM _alk_tool_trace")
+        with (
+            psycopg.connect(address(role.username, role.password)) as connection,
+            pytest.raises(psycopg.errors.InsufficientPrivilege),
+        ):
+            connection.execute("CREATE ROLE planted LOGIN")
         as_harness = address(superuser.username, superuser.password)
         tools = _world(address(role.username, role.password))
         tools.call("change_booking", {"id": "B1"})

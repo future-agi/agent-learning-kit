@@ -149,6 +149,13 @@ def test_factory_composes_only_declared_http_and_sealed_catalogue(
     factory = he.ProcessWorldFactory(tmp_path, tmp_path)
     world = asyncio.run(factory.create(runtime, rng=random.Random(0)))
     assert world.capabilities == ("app",)
+    # A submitted agent's bundle: its scenario code runs as it always did.
+    assert world.isolated is False
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"provenance": {"source_kind": "release"}})
+    )
+    released = he.ProcessWorldFactory(tmp_path, tmp_path)
+    assert asyncio.run(released.create(runtime, rng=random.Random(0))).isolated is True
     assert world._execution_state()["observations"]["history"]["path"] == "/read"
     del runtime.endpoints["app"]
     with pytest.raises(WorldUsageError, match="capability_unavailable"):

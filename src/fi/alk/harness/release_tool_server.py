@@ -354,7 +354,9 @@ def main() -> None:
         load_tools(here),
         database_url,
         binding=load_agent_binding(binding_file) if binding_file.is_file() else None,
-        attached=attach_servers(load_servers(here), database_url, cwd=here),
+        attached=attach_servers(
+            load_servers(here), os.environ.get("WORLD_READER_DATABASE_URL"), cwd=here
+        ),
     )
     handler = make_handler(
         world,

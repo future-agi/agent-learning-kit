@@ -69,10 +69,6 @@ class HostedWorld(HttpObservationHandle):
     is the only sanctioned source of randomness scenario code may use.
     """
 
-    # A hosted world comes from a sealed environment release. Its scenario code is authored with
-    # that environment, so setup, ready, and checks use the same isolation boundary as handlers.
-    isolated = True
-
     def __init__(
         self,
         store: PostgresStore,
@@ -85,8 +81,12 @@ class HostedWorld(HttpObservationHandle):
         workspace_channel: WorkspaceClient | None = None,
         endpoints: Mapping[str, str] | None = None,
         observations=None,
+        isolated: bool = False,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
+
+        `isolated` is set for a world of a sealed environment release: its setup, ready and checks
+        are authored with that environment, so they run in the isolated child its handlers do.
 
         In a phase worker, `workspace_channel` stands in for `workspace_roots`: the harness
         process serves the workspace files (`workspace_channel.py`).
@@ -107,6 +107,7 @@ class HostedWorld(HttpObservationHandle):
         self._workspace_channel = workspace_channel
         self.world_index = world_index
         self.rng = rng
+        self.isolated = isolated
         # Row counts as they stood when the baseline was frozen, keyed by table. Never
         # re-measured: a live count would make the cap depend on what a scenario already wrote,
         # and the whole point is that it is decided before any scenario runs.

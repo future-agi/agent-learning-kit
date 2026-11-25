@@ -847,3 +847,17 @@ def test_retell_conversation_flow_is_deleted_if_agent_creation_fails() -> None:
         "DELETE",
         "https://api.retellai.com/delete-conversation-flow/cloned-flow",
     )
+
+
+def test_a_map_of_one_header_is_withheld_as_headers_are() -> None:
+    tool = {"name": "record", "header": {"X-Client": "cust-live-7f3a"}, "customHeader": {"X-T": "9"}}
+
+    assert provider_import._safe_profile_value({"tools": [tool]}) == {
+        "tools": [
+            {
+                "name": "record",
+                "header": {"X-Client": "[redacted]"},
+                "customHeader": {"X-T": "[redacted]"},
+            }
+        ]
+    }

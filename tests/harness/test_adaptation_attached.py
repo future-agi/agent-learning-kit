@@ -145,3 +145,72 @@ def test_a_renamed_agent_is_proved_over_the_attached_servers(release, tmp_path):
         binding=load_agent_binding(out / "binding.json"),
     )
     assert [tool.name for tool in world.tools()] == ["look_up_schedule", "read_guide"]
+
+    # The composed run's tool server gets the address of the reader login the harness makes.
+    import shutil
+
+    from fi.alk.harness.job import HarnessJob
+    from fi.alk.harness.process_preflight import _verify_placeholder_vocabulary
+    from fi.alk.harness.releases import (
+        compose_bundle,
+        environment_directory,
+        seal_run_manifest,
+    )
+    from fi.alk.harness.world_roles import has_world_reader
+
+    releases = tmp_path / "releases"
+    sealed = json.loads((release / "environment" / "release.json").read_text())
+    shutil.copytree(
+        release / "environment", environment_directory(releases, sealed["digest"])
+    )
+    shutil.copytree(release / "suite", releases / "suite")
+    job = tmp_path / "job.json"
+    job.write_text(
+        HarnessJob(
+            job_id="attached",
+            run_id="attached-run",
+            execution="local",
+            source={"kind": "local_repository", "local_path": str(tmp_path)},
+            agent={
+                "connector": "mcp_client",
+                "config": {
+                    key: value
+                    for key, value in json.loads(profile.read_text()).items()
+                    if key != "provider"
+                },
+            },
+            scenario_count=1,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    binding = json.loads((out / "binding.json").read_text())
+    manifest = seal_run_manifest(
+        {
+            "environment": [{"digest": sealed["digest"], "name": sealed["name"]}],
+            "suite": {
+                "digest": json.loads((release / "suite" / "suite.json").read_text())["digest"]
+            },
+            "binding": {"digest": binding["digest"]},
+            "binding_proof": result["binding_proof"],
+            "agent": binding["agent"],
+            "selection": {"scenario_keys": ["first-visit-preparation"], "trials": 1},
+            "simulator": {"llm": {"provider": "openai", "model": "gpt-test"}},
+            "scorer": {"alk_version": "test"},
+            "runtime": {
+                "provider": "test",
+                "image_name": "alk",
+                "image_digest": "sha256:" + "1" * 64,
+            },
+        }
+    )
+    (tmp_path / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
+    bundle = compose_bundle(
+        releases,
+        binding_path=out / "binding.json",
+        binding_proof_path=out / "binding-proof.json",
+        manifest_path=tmp_path / "manifest.json",
+        job_path=job,
+        output=tmp_path / "bundle",
+    )
+    assert has_world_reader(bundle)
+    _verify_placeholder_vocabulary(bundle)

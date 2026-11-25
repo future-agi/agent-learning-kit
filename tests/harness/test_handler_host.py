@@ -9,10 +9,17 @@ from __future__ import annotations
 import datetime
 import decimal
 import sqlite3
+import threading
+import types
 
 import pytest
 
-from fi.alk.harness.world.handler_host import HandlerTimeout, run_handler
+from fi.alk.harness.world import handler_host
+from fi.alk.harness.world.handler_host import (
+    HandlerHostError,
+    HandlerTimeout,
+    run_handler,
+)
 from fi.alk.harness.world.runtime import Db, GeneratedWorld, ToolError
 
 
@@ -228,3 +235,141 @@ def test_a_hung_handler_times_out_and_the_next_call_still_runs():
         mode="process",
     )
     assert value["status"] == "open"
+
+
+def _run(source: str, **extra):
+    return run_handler(source, "t", {}, None, mode="process", **extra)
+
+
+ONE = "def handle(args, db):\n    return 1\n"
+
+
+@pytest.fixture
+def started(monkeypatch):
+    """Every child started in the test, and an empty pool before and after it."""
+    handler_host._close_all()
+    children = []
+
+    class Child(handler_host._Child):
+        def __init__(self, mode):
+            super().__init__(mode)
+            children.append(self)
+
+    monkeypatch.setattr(handler_host, "_Child", Child)
+    yield children
+    handler_host._close_all()
+
+
+def _alive(children) -> int:
+    return sum(child.process.poll() is None for child in children)
+
+
+def test_a_thread_per_call_shares_the_pool_instead_of_keeping_a_child_each(started):
+    for _ in range(6):
+        thread = threading.Thread(target=_run, args=(ONE,))
+        thread.start()
+        thread.join()
+
+    assert len(started) == 1
+    # More at once than the pool keeps: each gets a child, and only the pool's share outlives them.
+    barrier = threading.Barrier(handler_host._MOST_IDLE + 3)
+    threads = [
+        threading.Thread(
+            target=lambda: run_handler(
+                "def handle(args, db):\n    return db.one('SELECT 1')\n",
+                "t",
+                {},
+                types.SimpleNamespace(one=lambda *_args: barrier.wait(20)),
+                mode="process",
+            )
+        )
+        for _ in range(barrier.parties)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(started) == barrier.parties
+    assert _alive(started) == handler_host._MOST_IDLE
+
+
+def test_a_handler_that_prints_answers_and_its_stderr_never_blocks_it(started):
+    noisy = (
+        "import sys\n"
+        "def handle(args, db):\n"
+        "    print('diagnostic' * 1000)\n"
+        "    sys.stderr.write('x' * 1000)\n"
+        "    return 1\n"
+    )
+
+    # Together far more than a pipe holds.
+    assert [_run(noisy, timeout=10) for _ in range(200)] == [1] * 200
+    assert len(started) == 1
+    assert len(started[0].stderr) <= handler_host._STDERR_TAIL_BYTES
+
+
+def test_a_child_that_breaks_the_protocol_is_an_infrastructure_fault(started):
+    with pytest.raises(HandlerHostError, match="malformed"):
+        _run(
+            "import os\n"
+            "def handle(args, db):\n"
+            "    os.write(1, b'not json\\n')\n"
+            "    return 1\n"
+        )
+    with pytest.raises(HandlerHostError, match="last words"):
+        _run(
+            "import os\n"
+            "def handle(args, db):\n"
+            "    os.write(2, b'last words')\n"
+            "    os._exit(3)\n"
+        )
+
+    assert _alive(started) == 0
+    assert _run(ONE) == 1
+
+
+def test_the_mapped_ids_come_from_the_callers_own_range(monkeypatch, tmp_path):
+    subuid, subgid = tmp_path / "subuid", tmp_path / "subgid"
+    subuid.write_text("svc-control:100000:65536\nsvc-tools:524288:1\n")
+    subgid.write_text("svc-control:200000:65536\n2002:265536:1\n")
+    monkeypatch.setattr(handler_host, "_SUBUID", subuid)
+    monkeypatch.setattr(handler_host, "_SUBGID", subgid)
+    users = {2000: "svc-control", 2001: "svc-agent", 2002: "svc-tools"}
+    monkeypatch.setattr(
+        handler_host.pwd,
+        "getpwuid",
+        lambda uid: types.SimpleNamespace(pw_name=users[uid]),
+    )
+
+    def mapped(uid: int) -> list[str]:
+        monkeypatch.setattr(handler_host.os, "getuid", lambda: uid)
+        return [
+            one for one in handler_host._command("namespace") if one.startswith("--map-")
+        ]
+
+    assert mapped(2000) == ["--map-users=0:100000:1", "--map-groups=0:200000:1"]
+    assert mapped(2002) == ["--map-users=0:524288:1", "--map-groups=0:265536:1"]
+    with pytest.raises(HandlerHostError, match="no range"):
+        mapped(2001)
+
+
+def test_the_hosted_image_gives_every_user_that_runs_handlers_a_range_of_its_own():
+    from pathlib import Path
+
+    from fi.alk.harness.bundle_v2 import ProcessUser
+
+    image = (Path(__file__).parents[2] / "Dockerfile.hosted").read_text()
+    for name in ("subuid", "subgid"):
+        (line,) = [one for one in image.splitlines() if f">> /etc/{name}" in one]
+        entries = line.split("printf '")[1].split("'")[0].split("\\n")
+        ranges = {
+            owner: range(int(start), int(start) + int(count))
+            for owner, start, count in (one.split(":") for one in entries if one)
+        }
+        # The builder and prover, and the user `compose_bundle` runs a release's tool server as.
+        assert set(ranges) == {"svc-control", ProcessUser.SVC_TOOLS.value}
+        # useradd gives each user made here 65536 ids of its own from 100000 up, after the base
+        # image's one.
+        handed_out = range(100000, 100000 + 65536 * (1 + image.count("useradd --uid")))
+        assert not set(ranges[ProcessUser.SVC_TOOLS.value]) & set(handed_out)

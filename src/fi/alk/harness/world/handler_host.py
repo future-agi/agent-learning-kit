@@ -16,8 +16,9 @@ round it), so with `ALK_HANDLER_ISOLATION` set the code runs in a child process 
 
 The child reaches a handler's database, or setup and checks' documented world methods, only through
 requests this process answers on the real world. Messages are JSON lines (see `handler_child`);
-nothing the child sends is unpickled. Handlers reuse one child per thread. Each setup or check gets
-a fresh child, so its nested `world.call()` uses a separate handler process and cannot deadlock.
+nothing the child sends is unpickled. Handlers take an idle child from a small pool and put it back,
+so a server with a thread per request keeps only a few. Each setup or check gets a fresh child, so
+its nested `world.call()` uses a separate handler process and cannot deadlock.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import pwd
 import selectors
 import subprocess
 import sys
@@ -36,15 +38,20 @@ from typing import Any
 from .handler_child import AuthoredOutcome, decode, encode
 
 MODES = ("namespace", "process")
-# A uid inside the sandbox user's subordinate range (/etc/subuid in the hosted image): it owns
-# nothing, so the builder's 0700 directories and 0600 files are closed to it.
-_MAPPED_ID = 100000
+# The ranges `newuidmap` lets each user map ids from; the hosted image gives one to every user that
+# runs handlers. An id from it owns nothing, so the builder's 0700 directories are closed to it.
+_SUBUID = Path("/etc/subuid")
+_SUBGID = Path("/etc/subgid")
 _HIDDEN = ("/work", "/run", "/home", "/tmp")
 _CHILD = (Path(__file__).with_name("handler_child.py")).read_text(encoding="utf-8")
 # A handler is a few queries; a proof calls hundreds. Long enough for neither to trip it.
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # What one message from the child may hold, so a handler cannot exhaust the caller's memory.
 _MOST_MESSAGE_BYTES = 32 * 1024 * 1024
+# What is kept of a child's stderr, for the error that says why it exited.
+_STDERR_TAIL_BYTES = 4096
+# Idle handler children kept for the next call; one more concurrent call than this starts its own.
+_MOST_IDLE = 4
 
 
 class HandlerFault(Exception):
@@ -72,6 +79,29 @@ def isolation_mode() -> str | None:
     return mode
 
 
+def _subordinate_id(ranges: Path) -> int:
+    """The first id the current user may map: `newuidmap` refuses one from another user's range,
+    and the sandbox user and a world's tool server are different users."""
+    uid = os.getuid()
+    owners = {str(uid)}
+    try:
+        owners.add(pwd.getpwuid(uid).pw_name)
+    except KeyError:
+        pass
+    try:
+        lines = ranges.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise HandlerHostError(f"could not read {ranges}: {exc}") from exc
+    for line in lines:
+        owner, _, rest = line.strip().partition(":")
+        start, _, count = rest.partition(":")
+        if owner in owners and start.isdigit() and count.isdigit() and int(count) > 0:
+            return int(start)
+    raise HandlerHostError(
+        f"user {uid} has no range in {ranges}, so it cannot isolate handlers"
+    )
+
+
 def _command(mode: str) -> list[str]:
     python = [sys.executable, "-I", "-c", _CHILD]
     if mode == "process":
@@ -82,8 +112,8 @@ def _command(mode: str) -> list[str]:
     return [
         "unshare",
         "--user",
-        f"--map-users=0:{_MAPPED_ID}:1",
-        f"--map-groups=0:{_MAPPED_ID}:1",
+        f"--map-users=0:{_subordinate_id(_SUBUID)}:1",
+        f"--map-groups=0:{_subordinate_id(_SUBGID)}:1",
         "--setuid=0",
         "--setgid=0",
         "--net",
@@ -117,6 +147,16 @@ class _Child:
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
         self.buffer = b""
+        # Drained always: a child blocked on a full stderr pipe would never answer.
+        self.stderr = b""
+        self.drain = threading.Thread(target=self._drain_stderr, daemon=True)
+        self.drain.start()
+
+    def _drain_stderr(self) -> None:
+        stream = self.process.stderr
+        while chunk := os.read(stream.fileno(), 65536):
+            self.stderr = (self.stderr + chunk)[-_STDERR_TAIL_BYTES:]
+        stream.close()
 
     def send(self, message: dict[str, Any]) -> None:
         try:
@@ -129,7 +169,7 @@ class _Child:
         while b"\n" not in self.buffer:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise HandlerTimeout("the handler did not finish in time")
+                raise HandlerTimeout("the isolated process did not finish in time")
             if not self.selector.select(remaining):
                 continue
             chunk = os.read(self.process.stdout.fileno(), 1024 * 1024)
@@ -139,7 +179,10 @@ class _Child:
             if len(self.buffer) > _MOST_MESSAGE_BYTES:
                 raise HandlerHostError("the isolated handler sent an oversized message")
         line, self.buffer = self.buffer.split(b"\n", 1)
-        message = json.loads(line)
+        try:
+            message = json.loads(line)
+        except ValueError:
+            message = None
         if not isinstance(message, dict):
             raise HandlerHostError("the isolated handler sent a malformed message")
         return message
@@ -147,9 +190,10 @@ class _Child:
     def _died(self, exc: BaseException | None) -> str:
         try:
             self.process.wait(timeout=2)
-            stderr = self.process.stderr.read().decode("utf-8", "replace")[-600:]
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            stderr = ""
+            self.drain.join(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        stderr = self.stderr.decode("utf-8", "replace")[-600:]
         return (
             f"the isolated handler process ({self.mode}) exited"
             + (f": {exc}" if exc else "")
@@ -164,44 +208,43 @@ class _Child:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             pass
-        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+        for stream in (self.process.stdin, self.process.stdout):
             try:
                 stream.close()
             except OSError:
                 pass
 
 
-_local = threading.local()
-_children: list[_Child] = []
-_children_lock = threading.Lock()
+_idle: list[_Child] = []
+_idle_lock = threading.Lock()
 
 
-def _child(mode: str) -> _Child:
-    child = getattr(_local, "child", None)
-    if child is not None and (child.mode != mode or child.process.poll() is not None):
-        _discard(child)
-        child = None
+def _take(mode: str) -> _Child:
+    with _idle_lock:
+        child = next((one for one in _idle if one.mode == mode), None)
+        if child is not None:
+            _idle.remove(child)
     if child is None:
-        child = _Child(mode)
-        _local.child = child
-        with _children_lock:
-            _children.append(child)
+        return _Child(mode)
+    if child.process.poll() is not None:
+        child.close()
+        return _take(mode)
     return child
 
 
-def _discard(child: _Child) -> None:
+def _put_back(child: _Child) -> None:
+    with _idle_lock:
+        if len(_idle) < _MOST_IDLE:
+            _idle.append(child)
+            return
     child.close()
-    if getattr(_local, "child", None) is child:
-        _local.child = None
-    with _children_lock:
-        if child in _children:
-            _children.remove(child)
 
 
 @atexit.register
 def _close_all() -> None:
-    with _children_lock:
-        children = list(_children)
+    with _idle_lock:
+        children = list(_idle)
+        _idle.clear()
     for child in children:
         child.close()
 
@@ -232,7 +275,8 @@ def _call_record(value: Any) -> dict[str, Any]:
         "name": str(getattr(value, "name", "") or ""),
         "arguments": dict(getattr(value, "arguments", {}) or {}),
         "result": getattr(value, "result", None),
-        "ok": bool(getattr(value, "ok", True)),
+        # None says the step was recorded without running, which is neither outcome.
+        "ok": None if (ok := getattr(value, "ok", True)) is None else bool(ok),
         "error": str(getattr(value, "error", "") or ""),
         "refused": bool(getattr(value, "refused", False)),
         "at": float(getattr(value, "at", 0.0) or 0.0),
@@ -288,8 +332,10 @@ def run_handler(
 ) -> Any:
     """Run one handler in an isolated child: its value, or the exception it raised (a refusal as
     the world's ToolError, anything else as a HandlerFault named like the original)."""
-    child = _child(mode)
+    child = _take(mode)
     deadline = time.monotonic() + timeout
+    # A child that ran out its time or broke the protocol cannot be trusted with the next call.
+    trusted = False
     try:
         child.send(
             {"call": {"source": source, "name": name, "args": encode(arguments)}}
@@ -299,16 +345,20 @@ def run_handler(
             if "db" in message:
                 child.send(_answer(db, message["db"]))
             elif "result" in message:
-                return decode(message["result"])
+                value = decode(message["result"])
+                trusted = True
+                return value
             elif "raised" in message:
-                raise _rebuild(message["raised"])
+                raised = _rebuild(message["raised"])
+                trusted = True
+                raise raised
             else:
                 raise HandlerHostError("the isolated handler sent a malformed message")
-    except (HandlerTimeout, HandlerHostError, ValueError):
-        # A child that ran out its time or broke the protocol cannot be trusted with the next
-        # call; the next call starts a fresh one.
-        _discard(child)
-        raise
+    finally:
+        if trusted:
+            _put_back(child)
+        else:
+            child.close()
 
 
 def run_authored(
@@ -322,7 +372,10 @@ def run_authored(
     mode: str,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> AuthoredOutcome:
-    """Run environment-authored scenario code in its own isolated child."""
+    """Run environment-authored scenario code in its own isolated child. What that code did is the
+    outcome; a child that could not run it (HandlerHostError) or finish it in time (HandlerTimeout)
+    is raised, because it is no verdict: read as a check that failed, it would also prove a check
+    that has to fail."""
     child = _Child(mode)
     deadline = time.monotonic() + timeout
     try:
@@ -366,7 +419,9 @@ def run_authored(
                 raise HandlerHostError(
                     "the isolated authored-code process sent a malformed message"
                 )
-    except Exception as failed:  # noqa: BLE001 - a broken boundary is broken authored code
+    except (HandlerHostError, HandlerTimeout):
+        raise
+    except Exception as failed:  # noqa: BLE001 - a value the code sent back that cannot be used
         said = (
             f"the check raised {type(failed).__name__}: {str(failed)[:200]}"
             if kind in {"check", "world-check"}
