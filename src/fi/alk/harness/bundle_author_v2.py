@@ -2633,7 +2633,7 @@ def _mcp_toolbox_process() -> SourceProcess:
         environment={
             "PORT": "{{PORT_mcp-toolbox}}",
             "DATABASE_URL": "{{WORLD_DOOR_DATABASE_URL}}",
-        "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
             "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
