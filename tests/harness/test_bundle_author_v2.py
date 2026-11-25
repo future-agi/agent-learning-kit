@@ -9243,6 +9243,91 @@ def test_node_reads_the_dockerfile_in_its_workdir(tmp_path):
     assert agent.run_command == ["node", "server.js"]
 
 
+def _plan_with_workdir(source: Path, runtime: dict):
+    return resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+
+
+@pytest.mark.parametrize("language", ["", "python"])
+@pytest.mark.parametrize(
+    "workdir_dockerfile",
+    [None, 'FROM python:3.12\nCMD ["python", "app_server.py"]\n', "FROM python:3.12\nCMD python x.py\n"],
+    ids=["root-only", "both", "shell-form-workdir"],
+)
+def test_python_with_a_workdir_reads_the_root_dockerfile(tmp_path, language, workdir_dockerfile):
+    """Only Node launches from runtime.workdir: Python reads the root CMD and launches it for the root project."""
+    files = {
+        "Dockerfile": 'FROM python:3.12\nCMD ["python", "root_server.py"]\n',
+        "app/root_server.py": "app = object()\n",
+        "app/app_server.py": "app = object()\n",
+        "app/requirements.txt": "flask\n",
+    }
+    if workdir_dockerfile:
+        files["app/Dockerfile"] = workdir_dockerfile
+    runtime = {"workdir": "app", "interface": {"kind": "http", "port": 8080}}
+    if language:
+        runtime["language"] = language
+
+    plan = _plan_with_workdir(_repo(tmp_path, files), runtime)
+
+    agent = _agent_of(plan)
+    assert plan.packaging == "dockerfile"
+    assert agent.working_directory == "app"
+    assert agent.run_command == ["uv", "run", "--no-sync", "python", "root_server.py"]
+
+
+def test_an_undeclared_python_cmd_in_the_workdir_is_not_read(tmp_path):
+    """With no language, a workdir Dockerfile counts only when its CMD is ``node``."""
+    source = _repo(
+        tmp_path,
+        {
+            "app/server.py": "app = object()\n",
+            "app/Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+        },
+    )
+
+    with pytest.raises(BundleAuthorError, match="runtime_http_command_missing"):
+        _plan_with_workdir(source, {"workdir": "app", "interface": {"kind": "http", "port": 8080}})
+
+
+@pytest.mark.parametrize(
+    "workdir_dockerfile",
+    [None, 'FROM oven/bun:1\nCMD ["bun", "run", "chat.ts"]\n'],
+    ids=["root-only", "both"],
+)
+def test_bun_with_a_workdir_reads_the_root_dockerfile(tmp_path, workdir_dockerfile):
+    """Bun is unchanged by the Node lane: its CMD comes from the root Dockerfile."""
+    server = "Bun.serve({fetch: () => new Response('ok')})"
+    files = {
+        "package.json": json.dumps({"name": "workspace-bot", "packageManager": "bun@1.3.14"}),
+        "bun.lock": '{"lockfileVersion": 1}',
+        "Dockerfile": 'FROM oven/bun:1\nCMD ["bun", "run", "server.ts"]\n',
+        "chat/package.json": '{"name":"chat"}',
+        "chat/server.ts": server,
+        "chat/chat.ts": server,
+    }
+    if workdir_dockerfile:
+        files["chat/Dockerfile"] = workdir_dockerfile
+    runtime = {
+        "language": "bun",
+        "version": "1.3.14",
+        "workdir": "chat",
+        "interface": {"kind": "http", "port": 8001},
+    }
+
+    plan = _plan_with_workdir(_repo(tmp_path, files), runtime)
+
+    agent = _agent_of(plan)
+    assert plan.packaging == "dockerfile"
+    assert agent.working_directory == "."
+    assert agent.run_command == [*_STARTED, "chat", "bun", "run", "server.ts"]
+
+
 def test_a_python_callback_example_does_not_displace_the_declared_node_server(tmp_path):
     """A Python example that exports ``agent_callback`` is not this Node agent's entry point."""
     source = _repo(

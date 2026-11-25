@@ -1845,6 +1845,23 @@ def _dockerfile_run(root: Path, project: Path | None = None) -> list[str] | None
     return argv
 
 
+def _undeclared_node_dockerfile_run(root: Path, workdir: str) -> list[str] | None:
+    """The ``node`` CMD of the Dockerfile in runtime.workdir, for a process that declares no language.
+
+    That CMD can be the only sign of a Node agent. Any other CMD, or one that does not parse, is not
+    read: the root Dockerfile then decides, as it does for Python and Bun.
+    """
+    folder = (root / workdir.strip()).resolve()
+    if folder == root or not folder.is_relative_to(root) or not folder.is_dir():
+        return None
+    try:
+        command = _dockerfile_run(folder)
+    except BundleAuthorError:
+        # Not proven Node, so the root Dockerfile is read next, exactly as before the Node lane.
+        return None
+    return command if command and _is_node("", command) else None
+
+
 # LiveKit's CLI needs a subcommand: `agent.py` alone prints usage and exits without registering.
 _LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
 
@@ -3075,16 +3092,23 @@ def resolve_environment_plan(
     # The repository's exec-form Dockerfile CMD is an explicit source-owned declaration; use it
     # before falling back to a guessed agent.py entrypoint. This works for any HTTP framework.
     if not runtime_command and interface.get("kind") == "http" and not compose:
-        runtime_command = (
-            _dockerfile_run(
-                # The launch folder: runtime.workdir names it when no source subfolder does.
-                run_folder
-                if subfolder
-                else _runtime_component(root, runtime_workdir, python_project=False),
-                project=_runtime_component(root, runtime_workdir),
+        language = runtime_model.language.lower()
+        if subfolder:
+            runtime_command = (
+                _dockerfile_run(run_folder, project=_runtime_component(root, runtime_workdir)) or []
             )
-            or []
-        )
+        elif language in _NODE_LANGUAGES:
+            # A declared Node process launches in runtime.workdir, so that Dockerfile is the one.
+            runtime_command = (
+                _dockerfile_run(_runtime_component(root, runtime_workdir, python_project=False))
+                or []
+            )
+        else:
+            runtime_command = (
+                (not language and _undeclared_node_dockerfile_run(root, runtime_workdir))
+                or _dockerfile_run(run_folder)
+                or []
+            )
     # Node is read after the Dockerfile CMD fill: that CMD can be the only sign of a Node agent.
     js_runtime = (
         "bun"
