@@ -3105,6 +3105,8 @@ def test_a_short_quote_is_held_and_its_lines_asked_about(tmp_path, root):
     assert saved(destination)["system_prompt_excerpt"] == ""
     assert saved(destination)["system_prompt_from"] == []
     assert saved(destination)["unconfirmed_prompt_from"] == imports
+    # The lines were copied before they were set aside, so the record of it goes with them.
+    assert "system_prompt_copied" not in saved(destination)
 
 
 @pytest.mark.parametrize(
@@ -4135,3 +4137,366 @@ def test_a_first_save_whose_command_runs_inline_code_is_refused(tmp_path, root):
     assert result.get("is_error"), result
     assert "program as an argument" in text_of(result)
     assert not (destination / "contract.json").exists()
+
+
+# Whether the prompt was copied whole is recorded by the save, and only by the save
+
+
+def test_prompt_copied_is_recorded_only_when_the_save_copied_the_lines(tmp_path, root):
+    lines = [{"path": "agent.py", "start_line": 1, "end_line": 2}]
+
+    copied = tmp_path / "copied"
+    first = submitter(copied, root)(
+        payload(
+            hard_constraints=["Never share a card number."],
+            system_prompt_excerpt='AGENT = "pair"',
+            system_prompt_from=lines,
+        )
+    )
+    assert not first.get("is_error"), first
+    assert saved(copied)["system_prompt_excerpt"] == 'AGENT = "pair"\nMODEL = "gpt-4o"'
+    assert saved(copied)["system_prompt_copied"] is True
+
+    # With no source the lines are kept as named and the quote stands, so nothing was copied,
+    # whatever the reading claims.
+    quoted = tmp_path / "quoted"
+    second = accept_contract(
+        payload(
+            system_prompt_excerpt="You take orders ... for the cafe.",
+            system_prompt_from=lines,
+            system_prompt_copied=True,
+        ),
+        quoted,
+    )
+    assert not second.get("is_error"), second
+    assert saved(quoted)["system_prompt_from"] == lines
+    assert saved(quoted)["system_prompt_excerpt"] == "You take orders ... for the cafe."
+    assert "system_prompt_copied" not in saved(quoted)
+
+
+def test_lines_set_aside_are_not_recorded_as_copied(tmp_path, root):
+    (root / "prompt.py").write_text('import os\nDB = "x"\n', encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        system_prompt_excerpt="You are pair, a helpful assistant.",
+        system_prompt_from=[{"path": "prompt.py", "start_line": 1, "end_line": 2}],
+    )
+
+    assert submit(wrong).get("is_error")
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["system_prompt_excerpt"] == "You are pair, a helpful assistant."
+    assert "system_prompt_copied" not in saved(destination)
+
+
+# A provider's own definition is the agent's whole prompt where code can take every text of it
+
+
+_VAPI_SYSTEM = [
+    {"role": "system", "content": "You are Ava, the clinic's receptionist."},
+    {"role": "assistant", "content": "Hello, this is Ava."},
+    {"role": "system", "content": "Never give medical advice."},
+]
+
+
+@pytest.mark.parametrize(
+    ("profile", "whole"),
+    [
+        ({"provider": "phone", "system_prompt": "Take bookings."}, "Take bookings."),
+        ({"provider": "livekit", "system_prompt": "Take bookings."}, "Take bookings."),
+        (
+            {
+                "provider": "retell",
+                "response_engine_type": "retell-llm",
+                "general_prompt": "Take bookings.",
+                "states": None,
+            },
+            "Take bookings.",
+        ),
+        (
+            {
+                "provider": "retell",
+                "response_engine_type": "retell-llm",
+                "general_prompt": "Take bookings.",
+                "states": [],
+            },
+            "Take bookings.",
+        ),
+        # Every system message, in order; a seeded assistant line is not an instruction.
+        (
+            {"provider": "vapi", "model": {"messages": _VAPI_SYSTEM}},
+            "You are Ava, the clinic's receptionist.\n\nNever give medical advice.",
+        ),
+        # A general prompt beside states is only a part of what the agent is told.
+        (
+            {
+                "provider": "retell",
+                "response_engine_type": "retell-llm",
+                "general_prompt": "Take bookings.",
+                "states": [{"name": "greet", "state_prompt": "Say hello."}],
+            },
+            None,
+        ),
+        (
+            {
+                "provider": "retell",
+                "response_engine_type": "conversation-flow",
+                "conversation_flow": {"nodes": []},
+            },
+            None,
+        ),
+        # A flow is not one prompt, whatever else the definition carries.
+        (
+            {
+                "provider": "retell",
+                "response_engine_type": "conversation-flow",
+                "general_prompt": "Take bookings.",
+                "conversation_flow": {"nodes": []},
+            },
+            None,
+        ),
+        # A system message whose text can't be taken whole.
+        (
+            {
+                "provider": "vapi",
+                "model": {
+                    "messages": [
+                        {"role": "system", "content": "You are Ava."},
+                        {"role": "system", "content": [{"type": "text", "text": "More."}]},
+                    ]
+                },
+            },
+            None,
+        ),
+        ({"provider": "vapi", "model": {"messages": [{"role": "user", "content": "Hi"}]}}, None),
+        ({"provider": "vapi", "model": None}, None),
+        ({"provider": "phone", "system_prompt": "  \n"}, None),
+        ({"provider": "bland", "system_prompt": "Take bookings."}, None),
+        ({}, None),
+    ],
+)
+def test_the_whole_prompt_is_taken_only_where_code_takes_every_text(profile, whole):
+    from fi.alk.harness.provider_import import whole_prompt
+
+    assert whole_prompt(profile) == whole
+
+
+@pytest.mark.parametrize("provider", ["retell", "vapi"])
+def test_a_prompt_the_profiles_sanitizer_rewrote_is_not_taken(provider):
+    from fi.alk.harness.provider_import import _safe_profile_value, whole_prompt
+
+    def profile(text):
+        if provider == "retell":
+            return {
+                "provider": "retell",
+                "response_engine_type": "retell-llm",
+                "general_prompt": text,
+            }
+        return {"provider": "vapi", "model": {"messages": [{"role": "system", "content": text}]}}
+
+    # A prompt that begins with an address is rewritten as one: cut at its query, its
+    # newlines gone. What is left can't be told from a whole prompt, so none is taken.
+    for text in (
+        "https://acme.example/kb\nYou are Ava. Can you help? Always confirm the date.",
+        "https://acme.example/kb?x=1\nYou are Ava.",
+    ):
+        assert whole_prompt(_safe_profile_value(profile(text))) is None
+    # An address inside the prompt is left as written, and the prompt is whole.
+    inside = "You are Ava. See https://acme.example/kb?x=1 for more."
+    assert whole_prompt(_safe_profile_value(profile(inside))) == inside
+
+
+def test_a_prompt_the_copy_would_cut_is_not_taken():
+    from fi.alk.harness.provider_import import whole_prompt
+
+    at_limit = "a" * (1024 * 1024)
+    assert whole_prompt({"provider": "phone", "system_prompt": at_limit}) == at_limit
+    assert whole_prompt({"provider": "phone", "system_prompt": at_limit + "a"}) is None
+
+
+def provider_submitter(destination: Path, profile: dict, source_root: Path | None = None):
+    server = contract_tools(destination, source_root=source_root, provider_profile=profile)
+    tool = next(one for one in server.tools if one.name == "submit_contract")
+    return lambda arguments: asyncio.run(tool.handler(dict(arguments)))
+
+
+_PHONE = {"provider": "phone", "modality": "voice", "system_prompt": "Take bookings. Be brief."}
+
+
+def test_the_save_copies_a_providers_whole_prompt_and_names_no_repository_lines(tmp_path, root):
+    destination = tmp_path / "out"
+    result = provider_submitter(destination, _PHONE, root)(
+        payload(
+            hard_constraints=["Be brief."],
+            system_prompt_excerpt="Take bookings ...",
+            # Repository lines can't be what ran: the profile is the source.
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}],
+        )
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == "Take bookings. Be brief."
+    assert saved(destination)["system_prompt_copied"] is True
+    assert saved(destination)["system_prompt_from"] == []
+
+
+def test_the_save_copies_a_source_free_providers_whole_prompt(tmp_path):
+    destination = tmp_path / "out"
+    result = provider_submitter(destination, _PHONE)(
+        payload(system_prompt_excerpt="Take bookings ...")
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == "Take bookings. Be brief."
+    assert saved(destination)["system_prompt_copied"] is True
+
+
+def test_a_profile_with_no_whole_prompt_marks_nothing_and_uses_no_repository_lines(
+    tmp_path, root
+):
+    staged = {
+        "provider": "retell",
+        "response_engine_type": "retell-llm",
+        "general_prompt": "Take bookings.",
+        "states": [{"name": "greet", "state_prompt": "Say hello."}],
+    }
+    destination = tmp_path / "out"
+    result = provider_submitter(destination, staged, root)(
+        payload(
+            hard_constraints=["Be brief."],
+            system_prompt_excerpt="Take bookings ...",
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}],
+            system_prompt_copied=True,
+        )
+    )
+
+    assert not result.get("is_error"), result
+    # No fallback: the reading's quote stands, and nothing is marked whole.
+    assert saved(destination)["system_prompt_excerpt"] == "Take bookings ..."
+    assert "system_prompt_copied" not in saved(destination)
+    assert saved(destination)["system_prompt_from"] == []
+
+
+def test_a_copied_profile_prompt_names_no_repository_lines_whatever_the_contract_held():
+    from fi.alk.harness.tools import _provider_prompt_copied
+
+    lines = [{"path": "agent.py", "start_line": 1, "end_line": 2}]
+    contract = AgentContract(
+        agent="pair",
+        system_prompt_excerpt="Take bookings ...",
+        system_prompt_from=lines,
+        unconfirmed_prompt_from=lines,
+    )
+
+    copied = _provider_prompt_copied(contract, _PHONE)
+    assert copied.system_prompt_excerpt == "Take bookings. Be brief."
+    assert copied.system_prompt_copied is True
+    assert copied.system_prompt_from == [] and copied.unconfirmed_prompt_from == []
+    # No profile, or none whole: the contract is left as it was checked.
+    assert _provider_prompt_copied(contract, None) is contract
+    assert _provider_prompt_copied(contract, {"provider": "bland"}) is contract
+
+
+def _stage_submitter(source, destination: Path):
+    from fi.alk.harness.understand import CONTRACT_SERVER, open_stage
+
+    stage, _ = open_stage(source, out=destination)
+    server = stage.spec.servers[CONTRACT_SERVER]
+    tool = next(one for one in server.tools if one.name == "submit_contract")
+    return lambda arguments: asyncio.run(tool.handler(dict(arguments)))
+
+
+def test_a_reading_of_a_source_free_provider_saves_its_whole_prompt(tmp_path, monkeypatch):
+    from fi.alk.harness.sources import resolve
+    from fi.alk.harness.understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
+
+    monkeypatch.delenv(PROVIDER_IMPORT_PROFILE_PATH_ENV, raising=False)
+    destination = tmp_path / "out"
+    source = resolve("provider", name="pair", profile=_PHONE, scratch=str(tmp_path))
+    result = _stage_submitter(source, destination)(
+        payload(hard_constraints=["Be brief."], system_prompt_excerpt="Take bookings ...")
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == "Take bookings. Be brief."
+    assert saved(destination)["system_prompt_copied"] is True
+
+
+def test_a_reading_beside_a_named_profile_saves_its_whole_prompt_not_the_lines(
+    tmp_path, root, monkeypatch
+):
+    from fi.alk.harness.sources import resolve
+    from fi.alk.harness.understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
+
+    named = tmp_path / "provider-import-profile.json"
+    named.write_text(json.dumps(_PHONE), encoding="utf-8")
+    monkeypatch.setenv(PROVIDER_IMPORT_PROFILE_PATH_ENV, str(named))
+    destination = tmp_path / "out"
+    result = _stage_submitter(resolve("repo", name="pair", root=str(root)), destination)(
+        payload(
+            hard_constraints=["Be brief."],
+            system_prompt_excerpt="Take bookings ...",
+            system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}],
+        )
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["system_prompt_excerpt"] == "Take bookings. Be brief."
+    assert saved(destination)["system_prompt_copied"] is True
+    assert saved(destination)["system_prompt_from"] == []
+
+
+def test_a_reading_under_a_profile_is_not_asked_for_prompt_lines(tmp_path, root):
+    destination = tmp_path / "out"
+    staged = {
+        "provider": "retell",
+        "response_engine_type": "retell-llm",
+        "general_prompt": "Take bookings.",
+        "states": [{"name": "greet", "state_prompt": "Say hello."}],
+    }
+    # Lines alone, which can't be the prompt here: saved without them, not sent back.
+    result = provider_submitter(destination, staged, root)(
+        payload(system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}])
+    )
+
+    assert not result.get("is_error"), result
+    assert "system_prompt_from" not in text_of(result)
+    assert saved(destination)["system_prompt_from"] == []
+
+
+def test_the_profile_in_force_is_the_sources_own_or_the_one_the_build_named(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.sources import ProviderSource, RepoSource
+    from fi.alk.harness.understand import PROVIDER_IMPORT_PROFILE_PATH_ENV, profile_in_force
+
+    monkeypatch.delenv(PROVIDER_IMPORT_PROFILE_PATH_ENV, raising=False)
+    repo = RepoSource(name="pair", root=tmp_path)
+    assert profile_in_force(repo) is None
+    assert profile_in_force(ProviderSource(name="pair", profile=_PHONE)) == _PHONE
+
+    named = tmp_path / "provider-import-profile.json"
+    named.write_text(json.dumps(_PHONE), encoding="utf-8")
+    monkeypatch.setenv(PROVIDER_IMPORT_PROFILE_PATH_ENV, str(named))
+    assert profile_in_force(repo) == _PHONE
+    # A source-free provider's own definition is the one the reading is shown.
+    other = {"provider": "livekit", "system_prompt": "Other."}
+    assert profile_in_force(ProviderSource(name="pair", profile=other)) == other
+
+    # A profile the build named but that can't be read is still in force: no fallback to
+    # repository lines, and nothing to take whole.
+    for broken in ("not json", "[1, 2]"):
+        named.write_text(broken, encoding="utf-8")
+        assert profile_in_force(repo) == {}
+    named.unlink()
+    assert profile_in_force(repo) == {}
+
+
+def test_a_contract_not_copied_dumps_without_the_record():
+    assert "system_prompt_copied" not in AgentContract(agent="pair").model_dump()
+    assert AgentContract(agent="pair", system_prompt_copied=True).model_dump()[
+        "system_prompt_copied"
+    ] is True
