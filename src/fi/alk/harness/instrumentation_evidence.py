@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
+import stat
 from pathlib import Path
 from typing import Iterable
 
@@ -29,15 +31,40 @@ _NAMES = (b"fi_instrumentation", b"traceai_", b"opentelemetry")
 _OTEL_SDK_TRACE = "opentelemetry.sdk.trace"
 _OTEL_OTLP_EXPORTER = "opentelemetry.exporter.otlp"
 _OTEL_GRPC_EXPORTER = "opentelemetry.exporter.otlp.proto.grpc"
+# A Node agent names its tracing in its package.json. Only a folder with no Python file is read
+# so, so a Python agent beside a JavaScript frontend keeps the answer its imports give.
+_PACKAGE_JSON = "package.json"
+# An honest manifest is a few KB; a larger one is read as no manifest.
+_LARGEST_PACKAGE_JSON = 64 * 1024
+_DEPENDENCY_FIELDS = ("dependencies", "devDependencies", "optionalDependencies")
+_TRACEAI_SCOPE = "@traceai/"
+# Runtimes whose built-in Future AGI sink emits traceAI's spans (`fi.span.kind`, the model, the
+# token counts), named one by one.
+_TRACEAI_PACKAGES = frozenset({"@future-agi/omega-runtime"})
+# The Node SDKs whose spans an exporter sends; the web SDK traces a browser, not the agent.
+_NODE_OTEL_SDKS = frozenset(
+    {
+        "@opentelemetry/sdk-trace-base",
+        "@opentelemetry/sdk-trace-node",
+        "@opentelemetry/sdk-node",
+    }
+)
+# The OTLP exporter whose body the sandbox's Node hook can mark: JSON over HTTP. The protobuf and
+# gRPC exporters would send spans no call is stamped on, so they read as untraced, as gRPC does
+# for Python.
+_NODE_JSON_EXPORTER = "@opentelemetry/exporter-trace-otlp-http"
 
 
 def detect_instrumentation(source_root: Path | None, reached: Iterable[Path] = ()) -> str:
     """How the agent is traced, from its imports: the files in ``source_root``, and the Python
     files in ``reached``, the code it imports from elsewhere in the repository, under one budget.
+    With no Python file to read, from the packages the folder's package.json depends on.
     """
     if source_root is None:
         return "none"
-    imported = _python_imports(source_root.resolve(), reached)
+    imported, python_read = _python_imports(source_root.resolve(), reached)
+    if not python_read:
+        return _node_instrumentation(source_root.resolve())
     if any(
         name.split(".")[0] == "fi_instrumentation"
         or name.split(".")[0].startswith("traceai_")
@@ -59,7 +86,43 @@ def detect_instrumentation(source_root: Path | None, reached: Iterable[Path] = (
     return "opentelemetry"
 
 
-def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
+def _node_instrumentation(root: Path) -> str:
+    """How a Node agent is traced, from the packages its package.json depends on."""
+    dependencies = _package_dependencies(root / _PACKAGE_JSON)
+    if dependencies & _TRACEAI_PACKAGES or any(
+        name.startswith(_TRACEAI_SCOPE) for name in dependencies
+    ):
+        return "traceai"
+    if dependencies & _NODE_OTEL_SDKS and _NODE_JSON_EXPORTER in dependencies:
+        return "opentelemetry"
+    return "none"
+
+
+def _package_dependencies(path: Path) -> set[str]:
+    """The package names a manifest depends on; none for a link, a non-file, or one too large to read."""
+    try:
+        if not stat.S_ISREG(path.lstat().st_mode):
+            return set()
+        with path.open("rb") as handle:
+            raw = handle.read(_LARGEST_PACKAGE_JSON + 1)
+        if len(raw) > _LARGEST_PACKAGE_JSON:
+            return set()
+        manifest = json.loads(raw)
+    except (OSError, ValueError, RecursionError):
+        return set()
+    if not isinstance(manifest, dict):
+        return set()
+    names: set[str] = set()
+    for field in _DEPENDENCY_FIELDS:
+        declared = manifest.get(field)
+        if isinstance(declared, dict):
+            names.update(name for name in declared if isinstance(name, str))
+    return names
+
+
+def _python_imports(root: Path, reached: Iterable[Path] = ()) -> tuple[set[str], bool]:
+    """The modules the Python files import, and whether there was any Python file to read."""
+    python_read = False
     imported: set[str] = set()
     local: set[str] = set()
     budget = ParseBudget()
@@ -81,6 +144,7 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
         for file_name in sorted(files):
             if not file_name.endswith(".py"):
                 continue
+            python_read = True
             if Path(directory) == root:
                 # Only a module at the top of the repository sits ahead of the
                 # installed package on the import path.
@@ -89,8 +153,9 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> set[str]:
     for path in sorted(reached):
         # The folder's own files were read above.
         if path.suffix == ".py" and not is_within(path, root):
+            python_read = True
             _read_imports(path, budget, escapes, imported)
-    return {name for name in imported if name.split(".")[0] not in local}
+    return {name for name in imported if name.split(".")[0] not in local}, python_read
 
 
 def _read_imports(

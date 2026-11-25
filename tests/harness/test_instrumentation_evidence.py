@@ -144,7 +144,8 @@ def _repository(root: Path, files: dict[str, str]) -> Path:
                 "package.json": '{"dependencies": {"@traceai/langchain": "1.0.0"}}\n',
                 "index.js": "require('@opentelemetry/sdk-trace-node')\n",
             },
-            "none",
+            # A Node agent is read from its package.json, not its code.
+            "traceai",
         ),
         ({"agent.py": "print('hello')\n"}, "none"),
         ({".venv/lib/vendored.py": "import fi_instrumentation\n"}, "none"),
@@ -515,3 +516,135 @@ def test_an_import_spelled_in_escapes_is_found_under_unicode_escape(tmp_path: Pa
     # Python decodes the file before it reads it, so this runs `import traceai_openai`.
     (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\nimport \\x74raceai_openai\n")
     assert detect_instrumentation(tmp_path) == "traceai"
+
+
+def _package(dependencies: dict[str, str], field: str = "dependencies") -> str:
+    return json.dumps({"name": "agent", field: dependencies})
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        ({"package.json": _package({"@traceai/fi-core": "^1.4.1"})}, "traceai"),
+        ({"package.json": _package({"@traceai/openai": "1.0.0"}, "devDependencies")}, "traceai"),
+        (
+            {
+                "package.json": _package(
+                    {"@future-agi/omega-runtime": "file:./vendor/omega-runtime-0.0.2.tgz"}
+                )
+            },
+            "traceai",
+        ),
+        ({"package.json": _package({"@future-agi/other": "1.0.0"})}, "none"),
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-trace-node": "^2.0.0",
+                        "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+                    }
+                )
+            },
+            "opentelemetry",
+        ),
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-node": "^0.200.0",
+                        "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+                    }
+                )
+            },
+            "opentelemetry",
+        ),
+        # Spans the hook cannot stamp with a call: protobuf, gRPC, or the SDK's default exporter.
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-trace-node": "^2.0.0",
+                        "@opentelemetry/exporter-trace-otlp-proto": "^0.200.0",
+                        "@opentelemetry/exporter-trace-otlp-grpc": "^0.200.0",
+                    }
+                )
+            },
+            "none",
+        ),
+        ({"package.json": _package({"@opentelemetry/sdk-node": "^0.200.0"})}, "none"),
+        # The browser SDK traces a page, not the agent.
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-trace-web": "^2.0.0",
+                        "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+                    }
+                )
+            },
+            "none",
+        ),
+        ({"package.json": _package({"openai": "^4.0.0"})}, "none"),
+        ({"package.json": "{not json"}, "none"),
+        ({"package.json": "[]"}, "none"),
+        ({"package.json": json.dumps({"dependencies": ["@traceai/fi-core"]})}, "none"),
+        # Only the folder's own manifest counts, never an installed package's.
+        (
+            {"node_modules/x/package.json": _package({"@traceai/fi-core": "1.0.0"})},
+            "none",
+        ),
+    ],
+    ids=[
+        "traceai",
+        "traceai_dev_dependency",
+        "omega_runtime_tarball",
+        "other_future_agi_package",
+        "opentelemetry_json",
+        "opentelemetry_sdk_node_json",
+        "protobuf_and_grpc_only",
+        "sdk_node_default_exporter",
+        "web_sdk",
+        "untraced",
+        "unparseable",
+        "not_an_object",
+        "dependencies_not_a_map",
+        "installed_package",
+    ],
+)
+def test_a_folder_without_python_is_read_from_its_package_json(
+    tmp_path: Path, files: dict[str, str], expected: str
+) -> None:
+    assert detect_instrumentation(_repository(tmp_path, files)) == expected
+
+
+def test_a_python_agent_beside_a_traced_frontend_keeps_its_answer(tmp_path: Path) -> None:
+    traced_frontend = _package({"@traceai/fi-core": "^1.4.1"})
+    untraced = _repository(
+        tmp_path / "untraced", {"agent.py": "import openai\n", "package.json": traced_frontend}
+    )
+    assert detect_instrumentation(untraced) == "none"
+    otel = _repository(
+        tmp_path / "otel",
+        {
+            "agent.py": "from opentelemetry.sdk.trace import TracerProvider\n",
+            "package.json": traced_frontend,
+        },
+    )
+    assert detect_instrumentation(otel) == "opentelemetry"
+
+
+def test_a_package_json_that_is_a_link_or_too_large_is_not_read(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(_package({"@traceai/fi-core": "1.0.0"}), encoding="utf-8")
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "package.json").symlink_to(elsewhere)
+    assert detect_instrumentation(linked) == "none"
+
+    large = tmp_path / "large"
+    large.mkdir()
+    padding = " " * (instrumentation_evidence._LARGEST_PACKAGE_JSON)
+    (large / "package.json").write_text(
+        _package({"@traceai/fi-core": "1.0.0"}) + padding, encoding="utf-8"
+    )
+    assert detect_instrumentation(large) == "none"
