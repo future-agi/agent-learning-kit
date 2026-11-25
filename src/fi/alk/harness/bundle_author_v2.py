@@ -3077,8 +3077,11 @@ def resolve_environment_plan(
     if not runtime_command and interface.get("kind") == "http" and not compose:
         runtime_command = (
             _dockerfile_run(
-                run_folder,
-                project=_runtime_component(root, runtime_workdir) if subfolder else None,
+                # The launch folder: runtime.workdir names it when no source subfolder does.
+                run_folder
+                if subfolder
+                else _runtime_component(root, runtime_workdir, python_project=False),
+                project=_runtime_component(root, runtime_workdir),
             )
             or []
         )

@@ -9218,6 +9218,31 @@ def test_subfolder_node_from_its_dockerfile_cmd_starts_in_its_folder(tmp_path):
     assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
 
 
+def test_node_reads_the_dockerfile_in_its_workdir(tmp_path):
+    """With no subfolder, the launch folder is runtime.workdir, so its Dockerfile CMD is the one read."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "agent/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+        },
+    )
+    _node_package(source / "agent")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={"workdir": "agent", "interface": _NODE_JSON_INTERFACE},
+    )
+
+    agent = _agent_of(plan)
+    assert plan.packaging == "generated_node"
+    assert agent.working_directory == "agent"
+    assert agent.run_command == ["node", "server.js"]
+
+
 def test_a_python_callback_example_does_not_displace_the_declared_node_server(tmp_path):
     """A Python example that exports ``agent_callback`` is not this Node agent's entry point."""
     source = _repo(
