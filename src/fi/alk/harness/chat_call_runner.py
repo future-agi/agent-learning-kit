@@ -50,7 +50,7 @@ from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handl
 from . import tool_evidence as evidence
 from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
 from .world.stores.postgres import AttachedPostgresStore
-from .world_door import world_action
+from .world_door import door_failure, world_action
 
 logger = logging.getLogger(__name__)
 
@@ -732,11 +732,16 @@ def _record_completed_tool_call(
         if declared_success is not None
         else not error and not refused
     )
+    result = _tool_response_result(response)
+    # The proxy's failure answer the agent's tool handed back as its value is a failed call of ours, never a result.
+    failed = door_failure(result)
+    if failed is not None:
+        ok, error, result = False, failed, None
     world.calls.append(
         Call(
             name=name,
             arguments=dict(arguments),
-            result=_tool_response_result(response),
+            result=result,
             ok=ok,
             refused=refused,
             error=error,
@@ -1355,6 +1360,7 @@ class HostedChatCallRunner:
             sealed_without_door,
             unenforced_deadline_notices,
             unmeasured_reasons,
+            world_failure_reasons,
             worker_stop_outcomes,
         )
 
@@ -1436,6 +1442,7 @@ class HostedChatCallRunner:
             in_process_tools,
             repeated_untimed_notices,
             tool_span_notices,
+            world_failure_notices,
         )
 
         said = list(deadline_notices)
@@ -1464,7 +1471,7 @@ class HostedChatCallRunner:
         # Such a worker's own checks are not graded; the rest of the trial is.
         said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
-        said += tool_span_notices(runtime, transcript.calls)
+        said += tool_span_notices(runtime, transcript.calls) + world_failure_notices(trial_log)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)
@@ -1499,6 +1506,7 @@ class HostedChatCallRunner:
             world_actions=tuple((world_record or {}).get("actions") or ()),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(transcript.notices or ()),
+            world_failures=world_failure_reasons(transcript.notices or ()),
             missing_evidence=missing_evidence(transcript.notices or (), world_record),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},

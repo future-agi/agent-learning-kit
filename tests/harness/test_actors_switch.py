@@ -34,7 +34,7 @@ ON = {"enabled": True, "share": [0.5, 0.6]}
 OFF = {"enabled": False, "share": [0.0, 0.0]}
 PLACED = {axis: "plain" for axis in CANONICAL_AXES}
 ACTOR = [{"id": "second", "instruction": "Take over when asked."}]
-SHARE_REFUSAL = "include an actor who speaks"
+SHARE_REFUSAL = "include an actor or a fault"
 
 
 # --- reading the switch ---------------------------------------------------------------------------------------------
@@ -94,6 +94,12 @@ def test_the_published_switch_is_what_the_process_reads():
 
 
 # --- authoring ------------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _a_plan_that_holds_the_count(monkeypatch):
+    """The one-level grid here is a placeholder, not a plan too thin for the count."""
+    monkeypatch.setenv("ALK_HARNESS_CASES_PER_CELL", "1000")
 
 
 def _environment(root: Path) -> AgentContract:

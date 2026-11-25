@@ -42,6 +42,57 @@ IDENTITY_HEADER = "X-ALK-Actor-Identity"
 # HTTP methods that only read: a call made with one changes nothing in the world.
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+# What the tool proxy answers when the door held a call before the world saw it, or the world did not answer: never a
+# result. An agent's tool may hand that answer back as its value instead of failing (`door_failure`).
+UPSTREAM_UNAVAILABLE = "tool_upstream_unavailable"
+UPSTREAM_TIMEOUT = "tool_upstream_timeout"
+# What the proxy answers a keyed retry held because its first try's answer was lost: never a result.
+KEY_OUTCOME_UNKNOWN = "tool_key_outcome_unknown"
+# What the proxy answers when the world or its door failed on a call no test condition held: ours, never the agent's.
+WORLD_FAILED = "tool_world_failed"
+# A keyed retry whose first try a test condition lost the answer to: held so it never runs twice, the agent's to handle.
+KEY_UNKNOWN = "key_outcome_unknown"
+# The door's own failures, on the row of the call they held: the door itself, the world it calls (unreachable), the
+# action log (a key it could not check), a keyed retry whose first try one of these lost. Never an answer the world
+# gave: a tools server answering 5xx is the agent's world, graded as it is.
+DOOR_FAILED = "door_failed"
+WORLD_UNREACHABLE = "world_unreachable"
+LOG_UNKNOWN = "log_unknown"
+# The agent's own tools server not answering (a timeout, a refused or reset connection): its world, graded like a 5xx.
+UPSTREAM_UNREACHABLE = "upstream_unreachable"
+
+
+# The refusal codes of the door's own failures, on the row of the call they held.
+OUR_FAILURES = frozenset({DOOR_FAILED, WORLD_UNREACHABLE, LOG_UNKNOWN, FAULTS_UNKNOWN, APPROVAL_UNKNOWN})
+
+
+class UpstreamUnreachable(Exception):
+    """The agent's own tools server did not answer: its world failing, never the door's."""
+
+
+def world_failed(row: Mapping[str, Any]) -> bool:
+    """Whether a row of the action log is the door failing on the agent's call by its own fault: ours, never the
+    agent's. Read from the row's refusal code, which every log keeps."""
+    return (
+        (row.get("actor_id") or AGENT) == AGENT
+        and row.get("outcome") == "faulted"
+        and row.get("refusal_code") in OUR_FAILURES
+    )
+
+
+def door_failure(result: Any) -> str | None:
+    """The proxy's own failure answer when `result` is it (`{"detail": <code>}`, with anything the agent's tool kept
+    beside it), else None."""
+    if isinstance(result, Mapping) and result.get("detail") in (
+        UPSTREAM_UNAVAILABLE,
+        UPSTREAM_TIMEOUT,
+        KEY_OUTCOME_UNKNOWN,
+        WORLD_FAILED,
+    ):
+        return str(result["detail"])
+    return None
+
+
 # The code of a row that marks a call of the agent's which ran without the door deciding or recording it: the trial's
 # evidence is incomplete. Never a call or a change itself.
 EVIDENCE_INCOMPLETE = "evidence_incomplete"
@@ -309,6 +360,37 @@ def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
         action = fault_action(str(one.get("action") or ""), contract)
         routed.append({**one, "action": action, **routes.get(action, {})} if action else dict(one))
     return routed
+
+
+def faults_named(
+    faults: Sequence[Any], *, action: str, name: str = "", tool: str = "", method: str = "", by_tool: bool = False
+) -> list[dict[str, Any]]:
+    """The faults that hold this call, whichever call of its action they name: by its world action (a route with a
+    part, `orders.{id}.cancel`, holding every call of it), by its logged name too when `by_tool`, and by the agent's
+    own tool name for it. A fault that names its method holds only calls made with that method."""
+    names = {action, name} if by_tool else {action}
+    if tool:
+        names.add(tool)
+    names.discard("")
+    return [
+        one
+        for one in faults or []
+        if isinstance(one, dict)
+        and any(action_matches(called, str(one.get("action") or "")) for called in names)
+        and (not one.get("method") or str(one["method"]).upper() == (method or "").upper())
+    ]
+
+
+def fault_slot(named: Sequence[Mapping[str, Any]], action: str, method: str = "") -> tuple[str, str | None]:
+    """What a fault's `on_call` counts: the calls of the action the first fault names (else the call's own), and only
+    those made with the call's method when any of the faults names one."""
+    by_method = any(one.get("method") for one in named)
+    return str(named[0].get("action") or action), (method or "").upper() if by_method else None
+
+
+def fault_numbered(named: Sequence[Mapping[str, Any]], made: int) -> dict[str, Any] | None:
+    """The fault set on the next call when `made` calls of its slot have been made already."""
+    return next((dict(one) for one in named if _int(one.get("on_call"), 1) == made + 1), None)
 
 
 def same_action(row: Mapping[str, Any], action: str) -> bool:
@@ -721,7 +803,7 @@ class WorldDoor:
             return self._enter(call)
         except Exception as exc:  # noqa: BLE001 - the door adds no error of its own to any caller
             outcome = Outcome(
-                "faulted", 502, reason=f"{type(exc).__name__}: the world's door failed"
+                "faulted", 502, reason=f"{type(exc).__name__}: the world's door failed", refusal_code=DOOR_FAILED
             )
             self._write(call, outcome)
             return outcome
@@ -829,11 +911,13 @@ class WorldDoor:
                     # failed after the world applied it) leaves the key claimed for any door after it.
                     claimed = self.log.claim(key, call.actor) if earlier is None else None
                 except Exception:  # noqa: BLE001 - the log cannot say: running again could apply the action twice
-                    return self._key_unknown(call, key, on_behalf_of)
+                    return self._key_unknown(call, key, on_behalf_of, LOG_UNKNOWN)
                 if earlier is not None:
                     known = ("committed", *earlier)
                 elif claimed is not None:
-                    return self._key_unknown(call, key, on_behalf_of)
+                    # Left `unknown` after a test condition lost its answer: the agent's to handle. Left `pending` by a
+                    # door that never recorded its answer, or `failed` by our own failure: ours.
+                    return self._key_unknown(call, key, on_behalf_of, KEY_UNKNOWN if claimed == "unknown" else LOG_UNKNOWN)
             if known is None:
                 self._keyed[slot] = ("pending", call.action, call.arguments, None, None)
                 outcome = self._attempt(call, key, on_behalf_of)
@@ -851,8 +935,11 @@ class WorldDoor:
                 ):
                     # The world failed mid-action, or the call ran and its answer was lost: whether it applied it is
                     # unknown, so the key is never run again.
-                    self._keyed[slot] = ("unknown", call.action, call.arguments, None, None)
-                    self._settle(key, call.actor, "unknown", logged)
+                    # Lost to our own failure (the first try's code says), else to the agent's world or the test
+                    # condition: a retry is held either way, and is ours only in the first case.
+                    lost_to = LOG_UNKNOWN if outcome.refusal_code in OUR_FAILURES else KEY_UNKNOWN
+                    self._keyed[slot] = ("unknown", call.action, call.arguments, None, lost_to)
+                    self._settle(key, call.actor, "failed" if lost_to == LOG_UNKNOWN else "unknown", logged)
                 else:
                     # Refused, or held by the scenario's fault before the world saw it: nothing took effect, and a
                     # retry is a new attempt.
@@ -861,7 +948,7 @@ class WorldDoor:
                 return outcome
             state, action, arguments, result, answered = known
             if state != "committed":
-                return self._key_unknown(call, key, on_behalf_of)
+                return self._key_unknown(call, key, on_behalf_of, answered if state == "unknown" else KEY_UNKNOWN)
             if (action is not None and action != call.action) or not same_json(arguments, call.arguments):
                 outcome = Outcome(
                     "refused",
@@ -982,12 +1069,13 @@ class WorldDoor:
         except Exception:  # noqa: BLE001 - a key left pending is never run again: the safe side
             pass
 
-    def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None) -> Outcome:
+    def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None, code: str = KEY_UNKNOWN) -> Outcome:
         """A keyed action whose first attempt may have taken effect without a recorded answer: never run again."""
         outcome = Outcome(
             "faulted",
             503,
             reason="whether this idempotency key's first action took effect is unknown; it is not run again",
+            refusal_code=code,
         )
         self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
         return outcome
@@ -1007,20 +1095,16 @@ class WorldDoor:
     def _named_faults(self, call: ToolCall) -> list[dict[str, Any]]:
         """The faults this trial sets on this action of the agent's, whichever call of it they name; raises when the
         trial's faults cannot be read."""
-        faults = [one for one in self.faults() or [] if isinstance(one, dict)]
-        names = {call.action, call.name} if self.faults_by_tool else {call.action}
-        if call.tool:
-            # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
-            # surface, a worker's channel included.
-            names.add(call.tool)
-        # A fault on a route with a part (`orders.{id}.cancel`) holds every call of it (`orders.1043.cancel`); one that
-        # names its method holds only calls made with it.
-        return [
-            one
-            for one in faults
-            if any(action_matches(name, str(one.get("action") or "")) for name in names)
-            and (not one.get("method") or str(one["method"]).upper() == (call.method or "").upper())
-        ]
+        # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
+        # surface, a worker's channel included.
+        return faults_named(
+            self.faults() or [],
+            action=call.action,
+            name=call.name,
+            tool=call.tool or "",
+            method=call.method or "",
+            by_tool=self.faults_by_tool,
+        )
 
     def _approved(self, fault: Mapping[str, Any]) -> bool:
         """Whether an actor has committed the fault's `approval` action in this trial, with arguments that include its
@@ -1047,13 +1131,10 @@ class WorldDoor:
         """The fault set on this call of the action, by which call of it this is. A fault that names its method counts
         only the calls made with that method (a GET of the route is not a call of its DELETE), which the log, keeping
         no method, cannot tell apart: this door's own count numbers them."""
-        by_method = any(one.get("method") for one in named)
         # A fault on a route with a part counts every call of the route (`orders.1043`, then `orders.1044`).
-        counted = str(named[0].get("action") or call.action)
+        counted, by_method = fault_slot(named, call.action, call.method or "")
         try:
-            made = self.log.agent_calls(
-                counted, call.name, (call.method or "").upper() if by_method else None
-            )
+            made = self.log.agent_calls(counted, call.name, by_method)
         except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
             return None
         if self.trial is not None:
@@ -1061,12 +1142,10 @@ class WorldDoor:
             if current != self._numbered_trial:
                 self._numbered.clear()
                 self._numbered_trial = current
-        slot = f"{counted}\x00{(call.method or '').upper()}" if by_method else counted
+        slot = f"{counted}\x00{by_method}" if by_method is not None else counted
         made = max(made, self._numbered.get(slot, 0))
         self._numbered[slot] = made + 1
-        return next(
-            (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
-        )
+        return fault_numbered(named, made)
 
     def _faulted(self, call: ToolCall, fault: dict[str, Any], key: str | None = None) -> Outcome:
         """The fault the scenario sets on this call; only after a commit does the world see it. A retry with the first
@@ -1106,8 +1185,11 @@ class WorldDoor:
     def _execute(self, call: ToolCall) -> Outcome:
         try:
             ran = self.executor.run(call)
-        except Exception as exc:  # noqa: BLE001 - the world failing is a fault of its own
-            return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable")
+        except UpstreamUnreachable as exc:
+            # The agent's own tools server did not answer: its world, graded like a 5xx it answered.
+            return Outcome("faulted", 502, reason=f"{exc}: unavailable", refusal_code=UPSTREAM_UNREACHABLE)
+        except Exception as exc:  # noqa: BLE001 - our own executor failing is a fault of ours
+            return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable", refusal_code=WORLD_UNREACHABLE)
         if ran.status < 400:
             return Outcome(
                 "committed", ran.status, ran.result, ran.body, ran.content_type
@@ -1255,6 +1337,9 @@ class HttpExecutor:
                 None,
                 content.decode("utf-8", errors="replace")[:2000],
             )
+        except (OSError, error.URLError) as exc:
+            # A timeout, a refused or reset connection: the agent's tools server, never the door.
+            raise UpstreamUnreachable(type(exc).__name__) from exc
         try:
             result = json.loads(content) if content else None
         except ValueError:

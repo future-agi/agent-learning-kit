@@ -21,6 +21,13 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         Routed,
         SHARED_ADDRESS,
         ToolCall,
+        KEY_OUTCOME_UNKNOWN,
+        KEY_UNKNOWN,
+        OUR_FAILURES,
+        UPSTREAM_TIMEOUT,
+        UPSTREAM_UNREACHABLE,
+        UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -40,6 +47,13 @@ except ImportError:  # pragma: no cover - imported as part of the package
         Routed,
         SHARED_ADDRESS,
         ToolCall,
+        KEY_OUTCOME_UNKNOWN,
+        KEY_UNKNOWN,
+        OUR_FAILURES,
+        UPSTREAM_TIMEOUT,
+        UPSTREAM_UNREACHABLE,
+        UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -264,17 +278,26 @@ class Handler(BaseHTTPRequestHandler):
         if outcome.fault is not None and is_timeout(outcome.fault):
             # The agent waits, then hears its call timed out, and may retry.
             time.sleep(outcome.delay_seconds)
-            self._reply(504, {"detail": "tool_upstream_timeout"})
+            self._reply(504, {"detail": UPSTREAM_TIMEOUT})
             return
         if outcome.fault is not None:
             # Unavailable or the scenario's error: answered at once, the world never saw the call.
             if outcome.body is not None:
                 self._reply_raw(outcome.status, outcome.body)
             else:
-                self._reply(outcome.status, {"detail": "tool_upstream_unavailable"})
+                self._reply(outcome.status, {"detail": UPSTREAM_UNAVAILABLE})
             return
         if outcome.outcome == "faulted" and outcome.body is None:
-            self._reply(outcome.status, {"detail": "tool_upstream_unavailable" if outcome.status == 502 else outcome.reason})
+            if outcome.refusal_code in OUR_FAILURES:
+                # The door failed by its own fault: ours.
+                self._reply(outcome.status, {"detail": WORLD_FAILED})
+            elif outcome.refusal_code in (UPSTREAM_UNREACHABLE, KEY_UNKNOWN):
+                # The agent's world (its tools server not answering) or a keyed retry after a lost answer: a fixed
+                # code a tool handing it back is still read failed by, with why beside it.
+                code = UPSTREAM_UNAVAILABLE if outcome.refusal_code == UPSTREAM_UNREACHABLE else KEY_OUTCOME_UNKNOWN
+                self._reply(outcome.status, {"detail": code, "reason": outcome.reason})
+            else:
+                self._reply(outcome.status, {"detail": outcome.reason})
             return
         content = outcome.answer()
         self.send_response(outcome.status)

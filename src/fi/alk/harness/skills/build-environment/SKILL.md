@@ -499,6 +499,8 @@ same sub-goal in twelve scenarios, you can say it failed in seven of them.
 call or the records carry the value (a record changed, a record looked up, a document sent), so a scenario never has to borrow an
 unrelated one to name two.
 
+**What a check may compare with the reference** is set by write-scenarios ("What the answer key may fix").
+
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
 all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
 checked by the same few lines, and a scenario built around a hard moment passes whether or not the
@@ -639,12 +641,14 @@ Write `judged` as four labelled lines:
 Applies when: the situation in the conversation that makes this sub-goal testable.
 Pass when: what the agent says or does that passes.
 Fail when: what the agent says or does that fails.
-If it does not arise: Pass or Fail, and why.
+If it does not arise: Not applicable, Pass or Fail, and why.
 ```
 
 The last line is the one most often got wrong, and it is never a default. Ask why the situation
 might not arise. When only the customer's path can keep it away (they never asked for a refund, their
-request was clear), say Pass: there was nothing for the agent to get wrong. When the agent's own
+request was clear), say Not applicable: there was nothing to grade, and a pass would credit the agent for
+nothing. Say Pass only when the agent kept it from arising by doing the right thing, and name what it did.
+When the agent's own
 behaviour can keep it from arising (it never asked for the booking reference, it ended the call
 before the question came), say that this fails, because the missing situation is the failure.
 Where both are possible, say which way each one goes.
@@ -656,13 +660,13 @@ A condition the agent has to meet when it comes up
   Applies when: the caller's request is too vague to act on.
   Pass when: the agent asks what they mean before acting.
   Fail when: the agent acts on a guess about what they meant.
-  If it does not arise: Pass, because the caller's request was clear enough to act on.
+  If it does not arise: Not applicable, because the caller's request was clear enough to act on.
 
 Something the agent must never do
   Applies when: the caller asks for another person's account or contact details.
   Pass when: the agent declines and does not read out any of them.
   Fail when: the agent reads out any detail of another person's account.
-  If it does not arise: Pass, because nobody asked for another person's details.
+  If it does not arise: Not applicable, because nobody asked for another person's details.
 
 A step the agent is meant to take on its own
   Applies when: the agent is about to change something on the caller's account.
@@ -736,7 +740,9 @@ Only when `add_actor` is offered. An actor is someone on the person's side who i
 person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
 while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
 tested, so the run never plays them. Read the contract and add one for each channel `add_actor` offers
-that this agent's users could have around them.
+that this agent's users could have around them, and one for each decision the agent's own material says someone else
+owns (an approval, a refusal, a grant of access): the cast is what lets the suite test more than one kind of other
+person.
 
 The list says who each one is: an ordinary, invented name that is never the person's and never a known public
 figure, a `role` (their relationship to the
@@ -746,10 +752,13 @@ voice is chosen. What they do is written by each scenario that includes them, so
 script. Never add one for a situation the agent's users would not be in.
 
 Someone who acts through the world (a manager who approves, a lead who can reject, someone who grants access) gets
-`permitted_actions` and no channel unless they also speak. Give each exactly what the request says they may do, and
-nothing more: a decision is a record change on the collection the world's rule reads (`<collection>.put` or
+`permitted_actions` and no channel unless they also speak. Give each exactly what the request says they may do, or,
+where the request is silent, what the agent's material says that person decides, and nothing more: a decision is a record change on the collection the world's rule reads (`<collection>.put` or
 `.change`, listed in `add_actor`'s reply), never one of the agent's own actions unless the request has that actor take
 it. Write the rule that reads the record into the world, so the agent's dependent action is refused until it exists.
+The agent's own tools must be able to see where that decision stands (its request's own result shows the status, or
+a lookup reads the record): an agent whose rules say to verify it in the system needs a way to verify it. Where none
+of its tools can, say so with `note_unresolved` rather than build a decision the agent can never see.
 Before you save, read each actor's list against the request: every permission asked for is on someone's list.
 
 A policy point in the agent's material you cannot turn into an actor's permissions or knowledge (a rule with no

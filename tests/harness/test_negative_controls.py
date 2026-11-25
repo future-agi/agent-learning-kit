@@ -1,0 +1,1416 @@
+"""Task-specific negative controls must fail the checks, and a refusal case is proved by them."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import copy
+from types import SimpleNamespace
+
+import pytest
+from proof_world import (
+    BASE,
+    LOOKUP_O10,
+    REFUND_CATALOGUE,
+    REFUND_O10,
+    catalogue,
+    check,
+    control,
+    install,
+    refund_case,
+    scenario,
+)
+
+from fi.alk.harness import live_proof
+from fi.alk.harness import prove as module
+from fi.alk.harness.contract import ToolEntry
+from fi.alk.harness.prove import Proof
+from fi.alk.harness.world.runtime import REQUEST_NOT_ACCEPTED, Call
+
+LOOKUP_O20 = {"tool": "lookup_order", "arguments": {"order_id": "O-20"}, "fixed": {"order_id": "the caller"}}
+REFUND_O20 = {"tool": "refund_order", "arguments": {"order_id": "O-20"}, "fixed": {"order_id": "the caller"}}
+NO_REFUND = check(
+    "if world.data['refunds'] or any(c.name == 'refund_order' for c in calls):\n    return 'a refund was attempted'\nreturn None"
+)
+LOOKED_UP_O20 = check(
+    "return None if any(c.name == 'lookup_order' and c.ok and c.arguments.get('order_id') == 'O-20' for c in calls) "
+    "else 'O-20 never looked up'"
+)
+
+
+def _refusal(sub_goals=("no_refund", "looked_up_o20")):
+    return scenario(
+        [LOOKUP_O20],
+        name="refuse_20_day",
+        sub_goals=list(sub_goals),
+        instruction="I bought this 20 days ago and want my money back.",
+        negative_controls=[control("refund_anyway", "refunds the 20-day order", [LOOKUP_O20, REFUND_O20])],
+    )
+
+
+def test_two_refunds_control_fails(monkeypatch, tmp_path):
+    install(monkeypatch)
+    proof = module.prove(refund_case(), catalogue(**REFUND_CATALOGUE), tmp_path)
+    assert proof.controls[0]["name"] == "two_refunds"
+    assert proof.controls[0]["failed"] is True
+    assert proof.proved is True and proof.blocked_reason() is None
+
+
+def test_control_that_passes_blocks(monkeypatch, tmp_path):
+    install(monkeypatch)
+    loose = check("return None if len(world.data['refunds']) >= 1 else 'no refund'")
+    proof = module.prove(refund_case(), catalogue(refund_once=loose, looked_up=REFUND_CATALOGUE["looked_up"]), tmp_path)
+    assert proof.blocked_reason() == "negative_control_passed"
+    assert "refund_once" in proof.controls[0]["held"]
+    assert proof.proved is False
+
+
+def test_no_control_blocks(monkeypatch, tmp_path):
+    install(monkeypatch)
+    proof = module.prove(refund_case(negative_controls=[]), catalogue(**REFUND_CATALOGUE), tmp_path)
+    assert proof.blocked_reason() == "no_negative_control"
+    assert proof.proved is False and proof.kept_as_written is False
+
+
+def test_refusal_case_outcome_no_change(monkeypatch, tmp_path):
+    install(monkeypatch)
+    proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
+    assert proof.outcome == "no_change"
+    assert proof.controls[0]["name"] == "refund_anyway" and proof.controls[0]["failed"] is True
+
+
+def _refused_by_the_agent(sub_goals):
+    # The world would refund O-10; the agent's own rules say no (the caller is not the buyer), so only it can refuse.
+    return scenario(
+        [LOOKUP_O10],
+        name="refuse_not_the_buyer",
+        sub_goals=list(sub_goals),
+        negative_controls=[control("refund_anyway", "refunds someone else's order", [LOOKUP_O10, REFUND_O10])],
+    )
+
+
+def test_a_refusal_whose_only_check_is_the_lookup_names_the_call_its_control_made(monkeypatch, tmp_path):
+    # The refusal itself is left to the judge, so the control that refunds anyway passes every code check.
+    install(monkeypatch)
+    looked_up = REFUND_CATALOGUE["looked_up"]
+    proof = module.prove(_refused_by_the_agent(["looked_up"]), catalogue(looked_up=looked_up), tmp_path)
+    assert proof.blocked_reason() == "negative_control_passed"
+    assert proof.controls[0]["unmatched"] == ["refund_order"]
+    why = proof.why()
+    assert "it called refund_order, which the reference never calls, and no check fails on that" in why
+    assert "committed_writes(world, reference)" in why
+    # A check on the refund's effect makes the same control fail, and the case proves.
+    no_refund = check("return 'refunded' if world.data['refunds'] else None")
+    fixed = module.prove(
+        _refused_by_the_agent(["looked_up", "no_refund"]), catalogue(looked_up=looked_up, no_refund=no_refund), tmp_path
+    )
+    assert fixed.controls[0]["failed"] is True and fixed.proved is True
+
+
+def test_a_control_that_calls_only_what_the_reference_calls_keeps_the_tighten_advice(monkeypatch, tmp_path):
+    install(monkeypatch)
+    loose = check("return None if len(world.data['refunds']) >= 1 else 'no refund'")
+    proof = module.prove(refund_case(), catalogue(refund_once=loose, looked_up=REFUND_CATALOGUE["looked_up"]), tmp_path)
+    assert proof.controls[0]["unmatched"] == []
+    assert proof.why().endswith("Tighten the named checks so this wrong behaviour fails them.")
+
+
+def test_no_change_case_holds_despite_weak_checks(monkeypatch, tmp_path):
+    install(monkeypatch)
+    proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
+    assert proof.weak == ["no_refund"]
+    assert proof.holds is True and proof.proved is True
+
+
+def test_control_with_unbound_tool_is_not_run(monkeypatch, tmp_path):
+    install(monkeypatch, runtime_tools={"place_order"})
+    place = {"tool": "place_order", "arguments": {"order_id": "O-10"}}
+    case = refund_case(negative_controls=[control("places_instead", "places a new order", [LOOKUP_O10, REFUND_O10, place])])
+    proof = module.prove(case, catalogue(**REFUND_CATALOGUE), tmp_path)
+    assert proof.controls[0]["assumed"] == ["place_order"]
+    assert proof.blocked_reason() == "control_not_run"
+    assert proof.proved is False and proof.kept_as_written is True
+
+
+def test_refusal_lookup_without_check_is_unchecked(monkeypatch, tmp_path):
+    install(monkeypatch)
+    proof = module.prove(_refusal(sub_goals=("no_refund",)), catalogue(no_refund=NO_REFUND), tmp_path)
+    assert proof.unchecked == ["lookup_order.order_id"]
+    assert proof.blocked_reason() == "unchecked"
+
+
+def test_unreadable_state_reads_change(monkeypatch, tmp_path):
+    install(monkeypatch, unreadable=True)
+    proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
+    assert proof.outcome == "change"
+
+
+def test_assumed_write_never_reads_no_change(monkeypatch, tmp_path):
+    # The refund step never ran, so the unchanged world says nothing: the case is no refusal case.
+    install(monkeypatch, runtime_tools={"refund_order"})
+    proof = module.prove(refund_case(), catalogue(**REFUND_CATALOGUE), tmp_path, contract=None, actors=[])
+    assert proof.assumed == ["refund_order"]
+    assert proof.outcome == "change"
+
+
+class ServiceWorld:
+    """The live world over one shared datastore: a bound tool is a POST to the tools service."""
+
+    def __init__(self, store: dict) -> None:
+        self.store = store
+        self.calls: list[Call] = []
+        self.runtime_tools: set[str] = set()
+        self.endpoint_for: dict[str, str] = {}
+        self.forwarded: list[str] = []
+
+    @property
+    def data(self) -> dict:
+        return self.store
+
+    def bind_tools(self, proxy, endpoint_for, runtime_tools, *, mcp_toolbox="") -> None:
+        assert proxy == "http://proxy"
+        self.endpoint_for = dict(endpoint_for)
+        self.runtime_tools = set(runtime_tools) | set(endpoint_for)
+
+    def forward(self, endpoint, arguments=None, *, record_as="", record=True) -> Call:
+        self.forwarded.append(endpoint)
+        args = dict(arguments or {})
+        order = self.store["orders"].get(args.get("order_id"))
+        if endpoint == "lookup":
+            return Call(endpoint, args, result=order, ok=order is not None)
+        if order is None or order["age_days"] > 14:
+            return Call(endpoint, args, ok=False, refused=True, error="refused by policy")
+        self.store["refunds"].append(args["order_id"])
+        return Call(endpoint, args, result={"refunded": args["order_id"]})
+
+    def call(self, name, arguments=None) -> Call:
+        call = self.forward(self.endpoint_for[name], arguments)
+        self.calls.append(call)
+        return call
+
+    def state(self) -> dict:
+        return copy.deepcopy(self.store)
+
+
+class Stack:
+    """A runtime whose reset restores the seeded datastore, and a factory over it."""
+
+    def __init__(self) -> None:
+        self.store = copy.deepcopy(BASE)
+        self.resets = 0
+        self.endpoints = {"tool_proxy": SimpleNamespace(address="http://proxy"), "target_http": "x"}
+        self.worlds: list[ServiceWorld] = []
+
+    async def reset(self, runtime, *, work_directory) -> None:
+        self.resets += 1
+        self.store.clear()
+        self.store.update(copy.deepcopy(BASE))
+
+    async def create(self, runtime, *, rng) -> ServiceWorld:
+        world = ServiceWorld(self.store)
+        self.worlds.append(world)
+        return world
+
+
+def _contract(modes: dict[str, str]):
+    entries = {name: ToolEntry(tool=name, mode=mode, endpoint={"lookup_order": "lookup", "refund_order": "refund"}[name]) for name, mode in modes.items()}
+    return SimpleNamespace(tool_names=lambda: list(modes), entry_for=entries.get)
+
+
+def _prove(monkeypatch, tmp_path, modes, goals=REFUND_CATALOGUE, **options):
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [refund_case()])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**goals))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path, contract=_contract(modes), runtime=stack, provider=stack, factory=stack, work=tmp_path,
+            **options,
+        )
+    )
+    return results, stack
+
+
+def test_service_tool_control_runs_and_fails_on_the_runtime(monkeypatch, tmp_path):
+    results, stack = _prove(monkeypatch, tmp_path, {"lookup_order": "service", "refund_order": "service"})
+
+    live = results["refund_case"]
+    assert live["assumed"] == []
+    assert [(one["name"], one["held"]) for one in live["with_solution"]] == [("refund_once", True), ("looked_up", True)]
+    control = live["controls"][0]
+    assert control["name"] == "two_refunds"
+    assert control["failed"] is True and control["assumed"] == []
+    assert "refund" in stack.worlds[0].forwarded
+    # A reset before the reference, the empty run and the control, and one after.
+    assert stack.resets == 4
+    assert live_proof.load_live(tmp_path)["refund_case"] == live
+
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is True and proof.blocked_reason() is None
+    assert live_proof.live_summary(results) == "played 1 cases on the live runtime; the reference passed in 1"
+
+
+CALLED_ONCE = check(
+    "n = sum(1 for c in calls if c.ok and c.name == 'refund_order' and c.arguments.get('order_id') == 'O-10')\n"
+    "return None if n == 1 else f'{n} refund calls'"
+)
+
+
+def test_in_process_tool_stays_assumed(monkeypatch, tmp_path):
+    # The refund runs inside the agent's own process: it has no endpoint, so its step is recorded
+    # unrun and only a check that reads the calls can hold.
+    goals = dict(refund_once=CALLED_ONCE, looked_up=REFUND_CATALOGUE["looked_up"])
+    results, stack = _prove(monkeypatch, tmp_path, {"lookup_order": "service", "refund_order": "import"}, goals)
+    assert "refund" not in stack.worlds[0].forwarded
+
+    live = results["refund_case"]
+    assert live["assumed"] == ["refund_order"]
+    assert live["controls"][0]["assumed"] == ["refund_order"]
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is False and proof.kept_as_written is True
+
+
+def test_no_tool_proxy_plays_nothing(monkeypatch, tmp_path):
+    contract = _contract({"lookup_order": "service", "refund_order": "service"})
+    assert live_proof.service_endpoints(contract, {"target_http": "x"}) == {}
+    assert live_proof.service_endpoints(contract, {"tool_proxy": "y"}) == {"lookup_order": "lookup", "refund_order": "refund"}
+
+
+RAISES_ON_TWO = check(
+    "if len(world.data['refunds']) > 1:\n    raise KeyError('second refund')\n"
+    "return None if len(world.data['refunds']) == 1 else 'no refund'"
+)
+
+
+def test_a_check_that_raises_under_a_control_is_broken_not_failing(monkeypatch, tmp_path):
+    install(monkeypatch)
+    goals = dict(refund_once=RAISES_ON_TWO, looked_up=REFUND_CATALOGUE["looked_up"])
+    proof = module.prove(refund_case(), catalogue(**goals), tmp_path)
+
+    control = proof.controls[0]
+    assert control["failed"] is False and control["broken"] == ["refund_once"]
+    assert proof.proved is False
+    assert proof.blocked_reason() == "broken_check"
+    assert proof.broken == ["refund_once (under negative control two_refunds)"]
+
+
+def test_a_control_that_could_not_be_played_is_no_evidence():
+    proof = Proof(ready=True, solvable=True, vacuous=False, outcome="change")
+    proof.controls = [{"name": "two_refunds", "why": "", "failed": None, "held": [], "assumed": []}]
+
+    assert proof.ran_controls == []
+    assert proof.proved is False
+    assert proof.blocked_reason() == "control_not_run"
+
+
+def test_a_control_that_crashes_on_the_runtime_keeps_the_case_live_proof(monkeypatch, tmp_path):
+    real = live_proof._play
+    played = []
+
+    def play(scenario, world, steps, *rest):
+        played.append(len(steps))
+        if len(played) == 3:  # reference, empty run, then the control
+            raise ConnectionError("tools service went away")
+        return real(scenario, world, steps, *rest)
+
+    monkeypatch.setattr(live_proof, "_play", play)
+    results, _stack = _prove(monkeypatch, tmp_path, {"lookup_order": "service", "refund_order": "service"})
+
+    live = results["refund_case"]
+    assert [one["held"] for one in live["with_solution"]] == [True, True]
+    control = live["controls"][0]
+    assert control["failed"] is None and "tools service went away" in control["error"]
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is False and proof.blocked_reason() == "control_not_run"
+
+
+class _Toolbox:
+    """The real MCP Toolbox adapter, served on a free local port, its SQL standing in for a dict datastore."""
+
+    TOOLS = {
+        "lookup_order": {"kind": "postgres-sql", "statement": "lookup", "parameters": [{"name": "order_id", "type": "string"}]},
+        "refund_order": {"kind": "postgres-sql", "statement": "refund", "parameters": [{"name": "order_id", "type": "string"}]},
+    }
+
+    def __init__(self, monkeypatch, tmp_path, store: dict) -> None:
+        import json
+        import socket
+        import threading
+        import time
+
+        import uvicorn
+
+        from fi.alk.harness import mcp_toolbox_adapter
+
+        def execute(tool_name, spec, arguments, *, database_url, trace_path):
+            order = store["orders"].get(arguments["order_id"])
+            if spec["statement"] == "lookup":
+                return json.dumps(order)
+            if order is None or order["age_days"] > 14:
+                raise RuntimeError("refused by policy")
+            store["refunds"].append(arguments["order_id"])
+            return json.dumps({"refunded": arguments["order_id"]})
+
+        monkeypatch.setattr(mcp_toolbox_adapter, "_execute", execute)
+        application = mcp_toolbox_adapter._application({"tools": self.TOOLS}, "postgresql://unused", tmp_path / "t.jsonl")
+        self.socket = socket.socket()
+        self.socket.bind(("127.0.0.1", 0))
+        self.address = f"http://127.0.0.1:{self.socket.getsockname()[1]}"
+        self.server = uvicorn.Server(uvicorn.Config(application, log_level="warning"))
+        self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [self.socket]}, daemon=True)
+        self.thread.start()
+        deadline = time.monotonic() + 10
+        while not self.server.started and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def close(self) -> None:
+        self.server.should_exit = True
+        self.thread.join(timeout=10)
+        self.socket.close()
+
+
+def _toolbox_world(store: dict):
+    import random
+
+    from fi.alk.harness.world.handle import HostedWorld
+
+    class ToolboxWorld(HostedWorld):
+        """The hosted world handle, reading the dict datastore the toolbox writes."""
+
+        @property
+        def data(self) -> dict:
+            return store
+
+        def state(self, table=None) -> dict:
+            return copy.deepcopy(store)
+
+    return ToolboxWorld(object(), 0, random.Random(0), {}, _validate_baseline=False)
+
+
+def test_a_toolbox_tool_is_played_on_the_toolbox_the_agent_reaches(monkeypatch, tmp_path):
+    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.scenario import Step
+
+    store = copy.deepcopy(BASE)
+    toolbox = _Toolbox(monkeypatch, tmp_path, store)
+    try:
+        endpoints = {"mcp_toolbox": SimpleNamespace(address=toolbox.address), "target_http": "x"}
+        served = live_proof.served_by_toolbox(endpoints)
+        assert served == {"lookup_order", "refund_order"}
+        # A tool the contract places in the agent's own process is not the toolbox's, whatever its name.
+        assert live_proof.service_endpoints(_contract({"lookup_order": "unreachable", "refund_order": "import"}), endpoints, served) == {
+            "lookup_order": "mcp:lookup_order"
+        }
+        world = _toolbox_world(store)
+        bound = live_proof.service_endpoints(_contract({"lookup_order": "service", "refund_order": "unreachable"}), endpoints, served)
+        world.bind_tools("", bound, ["lookup_order", "refund_order"], mcp_toolbox=toolbox.address)
+
+        looked_up = world.call("lookup_order", {"order_id": "O-10"})
+        assert looked_up.ok and looked_up.result == {"age_days": 10, "total": 42.5}
+        refused = world.call("refund_order", {"order_id": "O-20"})
+        assert refused.ok is False and refused.refused is True and "refused by policy" in refused.error
+
+        played = play_reference_step(world, Step.model_validate(REFUND_O10))
+        assert played.ok and played.name == "refund_order"
+        assert store["refunds"] == ["O-10"]
+    finally:
+        toolbox.close()
+
+
+def test_a_toolbox_case_is_proved_on_the_live_runtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [refund_case()])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    toolbox = _Toolbox(monkeypatch, tmp_path, stack.store)
+    try:
+        # A toolbox agent's bundle has no tools service, so no tool proxy: only the toolbox is up.
+        stack.endpoints = {"mcp_toolbox": SimpleNamespace(address=toolbox.address), "target_http": "x"}
+
+        async def create(runtime, *, rng):
+            return _toolbox_world(stack.store)
+
+        stack.create = create
+        results = asyncio.run(
+            live_proof.prove_live(
+                authoring=tmp_path,
+                contract=_contract({"lookup_order": "unreachable", "refund_order": "unreachable"}),
+                runtime=stack,
+                provider=stack,
+                factory=stack,
+                work=tmp_path,
+            )
+        )
+    finally:
+        toolbox.close()
+
+    live = results["refund_case"]
+    assert live["assumed"] == []
+    assert [(one["name"], one["held"]) for one in live["with_solution"]] == [("refund_once", True), ("looked_up", True)]
+    assert live["controls"][0]["failed"] is True
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is True and proof.blocked_reason() is None
+
+
+def test_a_toolbox_that_cannot_be_listed_binds_nothing():
+    import socket
+
+    with socket.socket() as closed:
+        closed.bind(("127.0.0.1", 0))
+        address = f"http://127.0.0.1:{closed.getsockname()[1]}"
+    endpoints = {"mcp_toolbox": SimpleNamespace(address=address), "target_http": "x"}
+    served = live_proof.served_by_toolbox(endpoints)
+    assert served == set()
+    assert live_proof.service_endpoints(_contract({"lookup_order": "service", "refund_order": "service"}), endpoints, served) == {}
+
+
+SERVICE_MODES = {"lookup_order": "service", "refund_order": "service"}
+
+
+def test_only_the_requested_cases_are_played_live(monkeypatch, tmp_path):
+    results, stack = _prove(monkeypatch, tmp_path, SERVICE_MODES, keys={"another_case"})
+    assert results == {} and all(not world.forwarded for world in stack.worlds)
+    assert live_proof.load_live(tmp_path) == {}
+
+    results, _ = _prove(monkeypatch, tmp_path, SERVICE_MODES, keys={"refund_case"})
+    assert results["refund_case"]["assumed"] == []
+
+
+def test_no_case_starts_once_the_time_budget_is_spent(monkeypatch, tmp_path):
+    import time
+
+    results, stack = _prove(monkeypatch, tmp_path, SERVICE_MODES, until=time.time() - 1)
+    assert results == {} and all(not world.forwarded for world in stack.worlds)
+
+    results, _ = _prove(monkeypatch, tmp_path, SERVICE_MODES, until=time.time() + 600)
+    assert results["refund_case"]["assumed"] == []
+
+
+def test_forgetting_live_results_keeps_the_other_cases(tmp_path):
+    live_proof.write_live(tmp_path, {"one": {"assumed": []}, "two": {"assumed": []}})
+    live_proof.forget_live(tmp_path, {"one"})
+    assert live_proof.load_live(tmp_path) == {"two": {"assumed": []}}
+    live_proof.forget_live(tmp_path, None)
+    assert live_proof.load_live(tmp_path) == {}
+    live_proof.forget_live(tmp_path / "absent", None)
+
+
+# A support desk whose tools its own `tools-api` service serves, as its sealed contract records them: each tool's route
+# is on its entrypoint (`endpoint`), never on the tool itself.
+_SERVICE_DESK = {
+    "agent": "support",
+    "tools": [{"name": name, "args": ["order_id"]} for name in ("get_order", "list_refunds", "issue_refund")]
+    + [{"name": "summarise", "args": []}, {"name": "build_reply", "args": []}, {"name": "search_kb", "args": []}],
+    "tool_entrypoints": [
+        {"tool": "get_order", "mode": "service", "service": "tools-api", "endpoint": "orders/get", "method": "POST",
+         "module": "ledger", "callable": "_order"},
+        {"tool": "list_refunds", "mode": "service", "service": "tools-api", "endpoint": "/refunds/list/"},
+        {"tool": "issue_refund", "mode": "service", "service": "tools-api", "endpoint": "refunds/issue"},
+        {"tool": "summarise", "mode": "import", "module": "agent", "callable": "summarise"},
+        {"tool": "build_reply", "mode": "construct", "module": "agent", "callable": "reply", "factory": "Agent()"},
+    ],
+}
+
+
+def test_every_entrypoint_mode_reads_its_route_from_the_sealed_contract():
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract.model_validate(_SERVICE_DESK)
+    endpoints = {"tool_proxy": "http://proxy", "mcp_toolbox": "http://toolbox"}
+
+    bound = live_proof.service_endpoints(contract, endpoints, {"search_kb", "summarise"})
+
+    # Service tools play on their entrypoint's route behind the proxy; a tool the toolbox serves plays there; tools in
+    # the agent's own process (import, construct) have no seam outside it and stay unbound.
+    assert bound == {
+        "get_order": "orders/get",
+        "list_refunds": "refunds/list",
+        "issue_refund": "refunds/issue",
+        "search_kb": "mcp:search_kb",
+    }
+    world = SimpleNamespace(runtime_tools=set(), endpoint_for={})
+    world.runtime_tools, world.endpoint_for = set(contract.tool_names()) | set(bound), dict(bound)
+    assert [name for name in sorted(contract.tool_names()) if module.executes(world, name)] == [
+        "get_order", "issue_refund", "list_refunds", "search_kb",
+    ]
+
+
+def test_a_control_whose_steps_never_ran_is_not_read_as_failed():
+    from fi.alk.harness.checks import Outcome
+    from fi.alk.harness.controls import played_control
+
+    wrong = control("wrong_order", "looks up the wrong order", [LOOKUP_O10])
+    failing = [Outcome("looked_up", False, "no lookup call")]
+
+    unrun = played_control(wrong, failing, ["lookup_order"])
+    assert unrun["ran"] is False and unrun["failed"] is None
+
+    ran = played_control(wrong, failing, [])
+    assert ran["ran"] is True and ran["failed"] is True
+
+    proof = Proof(controls=[unrun])
+    assert proof.ran_controls == [] and proof.controls_failed is False and proof.proved is False
+
+
+def test_a_reference_the_service_fails_is_played_but_never_proved(monkeypatch, tmp_path):
+    # The case's order is one the tools service always fails to refund (a payment timeout), and its check expects the
+    # refund issued: the live runtime plays the case, the reference does not pass, and nothing reads it as proved.
+    def timing_out(self, endpoint, arguments=None, *, record_as="", record=True):
+        self.forwarded.append(endpoint)
+        args = dict(arguments or {})
+        if endpoint == "refund":
+            return Call(endpoint, args, ok=False, error="504 payment_times_out")
+        return Call(endpoint, args, result=self.store["orders"].get(args.get("order_id")), ok=True)
+
+    monkeypatch.setattr(ServiceWorld, "forward", timing_out)
+    results, _stack = _prove(monkeypatch, tmp_path, {"lookup_order": "service", "refund_order": "service"})
+
+    live = results["refund_case"]
+    assert live["assumed"] == [] and live["refused"]
+    assert dict((one["name"], one["held"]) for one in live["with_solution"])["refund_once"] is False
+    assert live_proof.live_summary(results) == "played 1 cases on the live runtime; the reference passed in 0"
+    proof = live_proof.apply_live(Proof(deferred=True), live)
+    assert proof.proved is False and proof.holds is False and proof.blocked_reason() == "not_solvable"
+
+
+# The lookup checked as any agent may type the id, so the offline pass finds nothing too strict.
+_BUILT_GOALS = dict(
+    refund_once=REFUND_CATALOGUE["refund_once"],
+    looked_up=check(
+        "return None if any(c.name == 'lookup_order' and c.ok and same_id(c.arguments.get('order_id'), 'O-10') "
+        "for c in calls) else 'O-10 never looked up'"
+    ),
+)
+
+
+def _built(monkeypatch, tmp_path, case, *, forward=None, agent_document=None):
+    """A build: its validation plays `case` on the live runtime, then the build proves its suite into the archived
+    `scenario-proofs.json`, the offline pass reading service tools as assumed as it does without a runtime."""
+    import json
+
+    from fi.alk.harness import authoring_entrypoint, prove_suite
+
+    if forward is not None:
+        monkeypatch.setattr(ServiceWorld, "forward", forward)
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path, contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack, provider=stack, factory=stack, work=tmp_path,
+        )
+    )
+    install(monkeypatch, runtime_tools={"lookup_order", "refund_order"})
+    monkeypatch.setattr(prove_suite, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(prove_suite, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    authoring_entrypoint._prove_scenarios(tmp_path, None, stage="build", agent_document=agent_document)
+    return json.loads((tmp_path / authoring_entrypoint.SCENARIO_PROOFS).read_text(encoding="utf-8"))["refund_case"]
+
+
+def test_a_build_s_proofs_carry_the_verdict_its_live_run_gave(monkeypatch, tmp_path):
+    saved = _built(monkeypatch, tmp_path, refund_case())
+    assert saved["live"] is True and saved["proved"] is True and saved["proved_at"]
+    assert saved["controls"][0]["ran"] is True and saved["controls"][0]["failed"] is True
+    # Nothing the offline pass assumed is carried over: the live run executed every step.
+    assert saved["assumed"] == [] and saved["excused"] == [] and "trial" not in saved
+
+
+def test_a_build_s_case_whose_refund_the_service_fails_is_not_solvable(monkeypatch, tmp_path):
+    def timing_out(self, endpoint, arguments=None, *, record_as="", record=True):
+        args = dict(arguments or {})
+        if endpoint == "refund":
+            return Call(endpoint, args, ok=False, error="504 payment_times_out")
+        return Call(endpoint, args, result=self.store["orders"].get(args.get("order_id")), ok=True)
+
+    saved = _built(monkeypatch, tmp_path, refund_case(), forward=timing_out)
+    assert saved["live"] is True and saved["proved"] is False and saved["blocked_reason"] == "not_solvable"
+
+
+def test_a_build_s_case_whose_control_did_not_run_is_not_proved(monkeypatch, tmp_path):
+    place = {"tool": "place_order", "arguments": {"order_id": "O-10"}}
+    case = refund_case(negative_controls=[control("places_instead", "places a new order", [LOOKUP_O10, place])])
+    saved = _built(monkeypatch, tmp_path, case)
+    assert saved["live"] is True and saved["controls"][0]["ran"] is False and saved["controls"][0]["failed"] is None
+    assert saved["proved"] is False and saved["blocked_reason"] == "control_not_run"
+
+
+def test_a_later_validation_attempt_never_inherits_an_earlier_attempt_s_verdict(monkeypatch, tmp_path):
+    from fi.alk.harness import authoring_runtime_validation as validation
+
+    cases = {"now": refund_case()}
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [cases["now"]])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    contract = _contract({"lookup_order": "service", "refund_order": "service"})
+
+    def attempt():
+        stack = Stack()
+        return asyncio.run(
+            validation.play_this_attempt(
+                authoring=tmp_path, contract=contract, runtime=stack, provider=stack, factory=stack, work=tmp_path, seed=0
+            )
+        )
+
+    # Attempt 1 plays the case on the live runtime.
+    attempt()
+    assert "refund_case" in live_proof.load_live(tmp_path)
+
+    # A repair rewrites it to use a tool the runtime does not serve, so attempt 2 cannot play it.
+    place = {"tool": "place_order", "arguments": {"order_id": "O-10"}}
+    cases["now"] = scenario(
+        [place], sub_goals=["refund_once"], negative_controls=[control("twice", "places two", [place, place])]
+    )
+    attempt()
+
+    # Its proof is then the offline one, never attempt 1's verdict on the case as it was.
+    assert "refund_case" not in live_proof.load_live(tmp_path)
+
+
+class _LoggedWorld(ServiceWorld):
+    """A live world whose tool proxy logs every call, a read included, in the harness's call log table."""
+
+    def forward(self, endpoint, arguments=None, *, record_as="", record=True) -> Call:
+        self.store.setdefault("_alk_tool_trace", []).append({"name": endpoint, "arguments": dict(arguments or {})})
+        return super().forward(endpoint, arguments, record_as=record_as, record=record)
+
+    def read_only(self):
+        return self
+
+
+class _LoggedStack(Stack):
+    async def create(self, runtime, *, rng) -> ServiceWorld:
+        world = _LoggedWorld(self.store)
+        self.worlds.append(world)
+        return world
+
+
+def test_the_outcome_is_whether_the_reference_changed_the_world_not_its_call_log(monkeypatch, tmp_path):
+    reads_only = scenario(
+        [LOOKUP_O10],
+        name="lookup_case",
+        sub_goals=["looked_up"],
+        negative_controls=[control("wrong_order", "looks up another order", [LOOKUP_O20])],
+    )
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [reads_only, refund_case()])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    stack = _LoggedStack()
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path, contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack, provider=stack, factory=stack, work=tmp_path,
+        )
+    )
+    # Every call wrote the call log; only the refund changed the world.
+    assert results["lookup_case"]["outcome"] == "no_change"
+    assert results["refund_case"]["outcome"] == "change"
+
+
+def test_the_offline_end_state_leaves_out_the_harness_s_own_tables():
+    world = SimpleNamespace(
+        state=lambda: {"orders": [{"id": 1}], "_alk_tool_trace": [{"name": "lookup"}], "harness_seed_sentinel": [{}]}
+    )
+    assert module._end_state(world) == {"orders": [{"id": 1}]}
+
+
+# A suite whose every case looks an order up first: the lookup is a step they share, not what any one is about.
+LOOKS_UP_ANY = check("return None if any(c.name == 'lookup_order' and c.ok for c in calls) else 'never looked up'")
+REFUNDED_ONCE = check(
+    "n = sum(1 for c in calls if c.ok and c.name == 'refund_order' and same_id(c.arguments.get('order_id'), 'O-10'))\n"
+    "return None if n == 1 else f'{n} refund calls'"
+)
+_SUITE_GOALS = dict(refund_once=REFUNDED_ONCE, looked_up=LOOKS_UP_ANY)
+LOOKUP_NOTHING = {"tool": "refund_order", "arguments": {"order_id": "O-10"}}
+_MISSES_LOOKUP = control("skips_lookup", "refunds without looking the order up", [LOOKUP_NOTHING])
+_TWO_REFUNDS = control("two_refunds", "refunds the order twice", [LOOKUP_O10, REFUND_O10, REFUND_O10])
+
+
+def _suite(size, target_control):
+    target = refund_case(negative_controls=[target_control])
+    others = [scenario([LOOKUP_O20], name=f"other_{n}", sub_goals=["looked_up", f"own_{n}"]) for n in range(size - 1)]
+    return target, [target, *others]
+
+
+def test_a_case_s_distinctive_goals_are_those_its_suite_does_not_all_name():
+    target, suite = _suite(3, _TWO_REFUNDS)
+    assert module.distinctive_goals(target, suite) == ["refund_once"]
+    # Two cases may both be about the same goal: below three, nothing is read as shared.
+    target, suite = _suite(2, _TWO_REFUNDS)
+    assert module.distinctive_goals(target, suite) == []
+
+
+@pytest.mark.parametrize("assumed", [False, True], ids=["ran", "assumed-steps-read-from-the-calls"])
+def test_a_control_that_only_breaks_the_shared_step_is_refused(monkeypatch, tmp_path, assumed):
+    install(monkeypatch, runtime_tools={"lookup_order", "refund_order"} if assumed else ())
+    target, suite = _suite(3, _MISSES_LOOKUP)
+
+    proof = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+
+    assert proof.misses_case_goal is True
+    assert proof.blocked_reason() == "control_misses_case_goal" and module.refuses_keeping(proof)
+    assert "refund_once" in proof.why() and proof.proved is False
+    # A case about a value only it fixes is told how to give that value its own goal.
+    assert "add a sub-goal for that value with add_sub_goal" in proof.why()
+
+
+def test_a_control_aimed_at_the_case_s_own_goal_passes(monkeypatch, tmp_path):
+    install(monkeypatch)
+    target, suite = _suite(3, _TWO_REFUNDS)
+
+    proof = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+
+    assert proof.misses_case_goal is False and proof.proved is True
+
+
+def test_a_small_suite_and_a_saved_proof_are_left_to_the_existing_rules(monkeypatch, tmp_path):
+    install(monkeypatch)
+    target, suite = _suite(2, _MISSES_LOOKUP)
+    small = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+    # Re-proving without the suite (a Validate, a read) never applies the rule, so nothing saved is demoted by it.
+    reproved = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path)
+    assert small.misses_case_goal is False and reproved.misses_case_goal is False
+    assert small.proved is True and reproved.proved is True
+
+
+def test_a_rebuild_keeps_a_case_whose_control_misses_its_goal_not_proved(monkeypatch, tmp_path):
+    from fi.alk.harness import nudge
+
+    missing = module.Proof(
+        ready=True, solvable=True, vacuous=False, case_goals=["refund_once"], evidence={"refund_once": ["tool_calls"]},
+        controls=[{"name": "skips", "why": "", "ran": True, "failed": True, "held": [], "failing": ["looked_up"],
+                   "assumed": []}],
+    )
+    target, suite = _suite(3, _MISSES_LOOKUP)
+    monkeypatch.setattr(nudge, "load_scenarios", lambda path: suite)
+    monkeypatch.setattr(nudge, "load_catalogue", lambda path: catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY))
+    monkeypatch.setattr(nudge, "prove", lambda *_args, **_kwargs: missing)
+
+    problems, _not_checked, _left_out = nudge.suite_gate(tmp_path, set())
+
+    assert problems == []
+    assert any("refund_case" in one and "own goal" in one for one in nudge.unproved_without_control(tmp_path))
+
+
+def test_one_control_failing_any_one_of_the_case_s_goals_is_enough():
+    def ran(failing):
+        return {"name": "c", "why": "", "ran": True, "failed": True, "held": [], "failing": failing, "assumed": []}
+
+    proof = module.Proof(case_goals=["first", "second"], controls=[ran(["shared"]), ran(["second"])])
+    assert proof.misses_case_goal is False
+    assert module.Proof(case_goals=["first", "second"], controls=[ran(["shared"])]).misses_case_goal is True
+
+
+
+def _agent_document(tmp_path, tools):
+    import json
+
+    path = tmp_path / "agent.json"
+    path.write_text(json.dumps({"sdk_version": "x", "agent": {"tools": [{"name": one} for one in tools]}}))
+    return path
+
+
+def test_a_case_whose_reference_calls_a_tool_the_agent_lacks_is_never_proved(monkeypatch, tmp_path):
+    # The world's service still answers the refund, live; the agent version under test no longer has the tool.
+    document = _agent_document(tmp_path, ["lookup_order"])
+    saved = _built(monkeypatch, tmp_path, refund_case(), agent_document=document)
+
+    assert saved["live"] is True and saved["proved"] is False
+    assert saved["blocked_reason"] == "tool_not_on_agent" and saved["refused"] is True
+    # Named in a field of its own, so the platform never parses `why`.
+    assert saved["missing_tools"] == ["refund_order"]
+
+
+def test_a_case_the_agent_s_tools_cover_is_proved(monkeypatch, tmp_path):
+    saved = _built(monkeypatch, tmp_path, refund_case(), agent_document=_agent_document(tmp_path, ["lookup_order", "refund_order"]))
+    assert saved["proved"] is True and saved["blocked_reason"] is None and saved["missing_tools"] == []
+
+
+@pytest.mark.parametrize("body", [None, "not json", '{"agent": {}}', '{"agent": {"tools": [{"label": "x"}]}}'])
+def test_a_missing_or_unreadable_agent_document_skips_the_check(tmp_path, body, caplog):
+    from fi.alk.harness.prove_suite import agent_tools
+
+    path = tmp_path / "agent.json"
+    if body is not None:
+        path.write_text(body)
+    assert agent_tools(path) is None
+    assert agent_tools(None) is None
+    assert "agent document not read" in caplog.text
+
+
+# The shape a fresh build wrote for every case: one wrong lookup, named as breaking the lookup every case shares. The
+# refund check fails under it too, only because nothing is refunded after a wrong lookup.
+_WRONG_LOOKUP = control(
+    "wrong_order_lookup",
+    "looks up an order that does not exist",
+    [{"tool": "lookup_order", "arguments": {"order_id": "O-99"}}],
+    must_fail=["looked_up"],
+)
+
+
+def test_a_control_naming_only_the_shared_step_is_refused_though_the_case_s_check_also_fails(monkeypatch, tmp_path):
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+
+    proof = module.prove(target, catalogue(**_SUITE_GOALS), tmp_path, case_goals=module.distinctive_goals(target, suite))
+
+    assert proof.controls[0]["failing"] == ["looked_up"]
+    assert proof.blocked_reason() == "control_misses_case_goal" and module.refuses_keeping(proof)
+
+
+def _saved_with(tmp_path, keyed):
+    from fi.alk.harness.proofs import record_proof
+
+    for key, proof in keyed.items():
+        record_proof(tmp_path, key, proof)
+
+
+def test_the_save_names_a_case_its_submit_was_too_early_to_judge(monkeypatch, tmp_path):
+    from fi.alk.harness.scenario_tools import controls_off_their_case
+
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+    goals = catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY)
+    # The first case was submitted alone, so its submit read nothing as shared and kept it.
+    _saved_with(tmp_path, {target.scenario_key: module.prove(target, goals, tmp_path, case_goals=[])})
+    _saved_with(tmp_path, {one.scenario_key: module.prove(one, goals, tmp_path) for one in suite[1:]})
+
+    said = controls_off_their_case(suite, suite, tmp_path)
+
+    assert len(said) == 1 and said[0].startswith("refund_case:") and "refund_once" in said[0]
+    assert controls_off_their_case(suite[:2], suite[:2], tmp_path) == []
+
+
+def test_a_build_holds_a_case_whose_control_breaks_only_the_shared_step_and_a_validate_keeps_today_s_rule(
+    monkeypatch, tmp_path
+):
+    from fi.alk.harness import prove_suite
+
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+    monkeypatch.setattr(prove_suite, "load_scenarios", lambda path: suite)
+    monkeypatch.setattr(
+        prove_suite, "load_catalogue", lambda path: catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY)
+    )
+
+    built = prove_suite.prove_suite(tmp_path, tmp_path / "built.json", judge_case_goals=True)
+    validated = prove_suite.prove_suite(tmp_path, tmp_path / "validated.json")
+
+    assert built["refund_case"]["proved"] is False
+    assert built["refund_case"]["blocked_reason"] == "control_misses_case_goal"
+    assert validated["refund_case"]["blocked_reason"] != "control_misses_case_goal"
+
+
+def test_only_a_build_s_proving_judges_controls_against_the_suite(monkeypatch, tmp_path):
+    from fi.alk.harness import authoring_entrypoint, prove_suite
+
+    asked = []
+    monkeypatch.setattr(prove_suite, "prove_suite", lambda *args, **kwargs: asked.append(kwargs["judge_case_goals"]))
+    authoring_entrypoint._prove_scenarios(tmp_path, None, stage="build")
+    authoring_entrypoint._prove_scenarios(tmp_path, None)
+    assert asked == [True, False]
+
+
+def test_the_save_judges_only_the_cases_written_in_this_session(monkeypatch, tmp_path):
+    from fi.alk.harness.scenario_tools import controls_off_their_case
+
+    install(monkeypatch)
+    target, suite = _suite(3, _WRONG_LOOKUP)
+    goals = catalogue(**_SUITE_GOALS, own_0=LOOKS_UP_ANY, own_1=LOOKS_UP_ANY)
+    _saved_with(tmp_path, {one.scenario_key: module.prove(one, goals, tmp_path) for one in suite})
+
+    # The shared-control case was left untouched (it may predate the rule); only the others were written now.
+    assert controls_off_their_case(suite[1:], suite, tmp_path) == []
+    assert len(controls_off_their_case([target], suite, tmp_path)) == 1
+
+
+def _validated(monkeypatch, tmp_path, case, forward):
+    """An old case validated: its reference and controls played on the live runtime, then the Validate's proof."""
+    import json
+
+    from fi.alk.harness import authoring_entrypoint, prove_suite
+
+    monkeypatch.setattr(ServiceWorld, "forward", forward)
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path, contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack, provider=stack, factory=stack, work=tmp_path,
+        )
+    )
+    install(monkeypatch, runtime_tools={"lookup_order", "refund_order"})
+    monkeypatch.setattr(prove_suite, "load_scenarios", lambda path: [case])
+    monkeypatch.setattr(prove_suite, "load_catalogue", lambda path: catalogue(**_BUILT_GOALS))
+    authoring_entrypoint._prove_scenarios(tmp_path, None)
+    return json.loads((tmp_path / authoring_entrypoint.SCENARIO_PROOFS).read_text(encoding="utf-8"))["refund_case"]
+
+
+def _needs_the_call_s_session(self, endpoint, arguments=None, *, record_as="", record=True):
+    """A service whose requests carry what the agent's own tool adds from the call (here a caller id): sent only the
+    agent-facing arguments, it rejects the request's shape."""
+    args = dict(arguments or {})
+    if "caller_id" not in args:
+        missing = {"type": "missing", "loc": ["body", "caller_id"], "msg": "Field required"}
+        return _rejected(endpoint, args, {"detail": [missing]})
+    return Call(endpoint, args, result={"ok": True}, ok=True)
+
+
+def _rejected(endpoint, args, body):
+    """The service's 422, with `body` as it answered (a dict, or text that is not JSON)."""
+    error = body if isinstance(body, str) else json.dumps(body)
+    return Call(endpoint, args, result=body, ok=False, refused=True, error=error, refusal_code=REQUEST_NOT_ACCEPTED)
+
+
+def test_an_old_case_whose_service_wants_what_the_agent_adds_stays_kept_as_written(monkeypatch, tmp_path):
+    saved = _validated(monkeypatch, tmp_path, refund_case(), _needs_the_call_s_session)
+
+    assert saved["live"] is True and saved["proved"] is False and saved["kept_as_written"] is True
+    assert saved["blocked_reason"] == "solution_assumed"
+    assert saved["assumed"] == ["lookup_order", "refund_order"]
+
+
+def test_a_reference_the_service_refuses_for_itself_is_still_held(monkeypatch, tmp_path):
+    def no_such_order(self, endpoint, arguments=None, *, record_as="", record=True):
+        return Call(endpoint, dict(arguments or {}), ok=False, refused=True, error='{"detail": "no such order"}')
+
+    saved = _validated(monkeypatch, tmp_path, refund_case(), no_such_order)
+
+    assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
+
+
+def test_a_request_the_case_declares_itself_is_held_when_the_service_rejects_it(monkeypatch, tmp_path):
+    declared = [
+        {**LOOKUP_O10, "environment_arguments": {"order_id": "O-10"}},
+        {**REFUND_O10, "environment_arguments": {"order_id": "O-10"}},
+    ]
+    case = scenario(declared, sub_goals=["refund_once", "looked_up"])
+    case.negative_controls = refund_case().negative_controls
+
+    saved = _validated(monkeypatch, tmp_path, case, _needs_the_call_s_session)
+
+    assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
+
+
+@pytest.mark.parametrize(("status", "code"), [(422, REQUEST_NOT_ACCEPTED), (404, "world_rule"), (409, "world_rule"), (503, "")])
+def test_only_a_request_the_service_cannot_take_reads_as_not_accepted(monkeypatch, status, code):
+    from fi.alk.harness.world import handle
+
+    world = _toolbox_world({})
+    world.bind_tools("http://proxy", {"lookup_order": "lookup"}, ["lookup_order"])
+    reply = SimpleNamespace(status_code=status, json=lambda: {"detail": "no"}, text="")
+    monkeypatch.setattr(handle.requests, "post", lambda *args, **kwargs: reply)
+
+    call = world.forward("lookup", {"order_id": "O-10"}, record=False)
+
+    assert call.ok is False and call.refusal_code == code
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"detail": [{"type": "enum", "loc": ["body", "order_id"], "msg": "Input should be one of the orders"}]},
+        {"detail": [{"type": "missing", "loc": ["body", "order_id"], "msg": "Field required"}]},
+        {"detail": [
+            {"type": "missing", "loc": ["body", "caller_id"], "msg": "Field required"},
+            {"type": "string_type", "loc": ["body", "order_id"], "msg": "Input should be a valid string"},
+        ]},
+        {"detail": [{"type": "value_error", "loc": ["body", "caller_id"], "msg": "Value error, unknown caller"}]},
+        {"detail": "this order was refunded already"},
+        {"detail": []},
+        "<html>Unprocessable</html>",
+    ],
+    ids=[
+        "wrong-value",
+        "missing-a-field-the-step-sends",
+        "missing-and-wrong",
+        "bad-value-for-a-field-the-agent-adds",
+        "refusal-as-422",
+        "no-errors",
+        "unreadable",
+    ],
+)
+def test_a_422_that_is_not_only_fields_the_agent_adds_stays_refused(monkeypatch, tmp_path, body):
+    def rejecting(self, endpoint, arguments=None, *, record_as="", record=True):
+        return _rejected(endpoint, dict(arguments or {}), body)
+
+    saved = _validated(monkeypatch, tmp_path, refund_case(), rejecting)
+
+    assert saved["kept_as_written"] is False and saved["blocked_reason"] == "not_solvable"
+    assert saved["assumed"] == []
+
+
+def test_an_older_service_s_missing_field_spelling_reads_the_same(monkeypatch, tmp_path):
+    def older(self, endpoint, arguments=None, *, record_as="", record=True):
+        args = dict(arguments or {})
+        missing = {"type": "value_error.missing", "loc": ["body", "caller_id"], "msg": "field required"}
+        return _rejected(endpoint, args, {"detail": [missing]})
+
+    saved = _validated(monkeypatch, tmp_path, refund_case(), older)
+
+    assert saved["kept_as_written"] is True and saved["assumed"] == ["lookup_order", "refund_order"]
+
+
+def test_on_the_live_runtime_a_passing_control_names_the_call_no_check_reads(monkeypatch, tmp_path):
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: [_refused_by_the_agent(["looked_up"])])
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(looked_up=REFUND_CATALOGUE["looked_up"]))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    stack = Stack()
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path,
+            contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=stack,
+            provider=stack,
+            factory=stack,
+            work=tmp_path,
+        )
+    )
+
+    control = results["refuse_not_the_buyer"]["controls"][0]
+    assert control["failed"] is False and control["unmatched"] == ["refund_order"]
+    proof = live_proof.apply_live(Proof(deferred=True), results["refuse_not_the_buyer"])
+    assert "it called refund_order, which the reference never calls, and no check fails on that" in proof.why()
+
+
+# Adversarial cases ask for something absent or forbidden on purpose; the right handling is to refuse, say it was not
+# found, or do nothing. Each is kept and proved, never held for asking.
+LOOKUP_O99 = {"tool": "lookup_order", "arguments": {"order_id": "O-99"}, "fixed": {"order_id": "the caller"}}
+NO_REFUND_AT_ALL = check(
+    "if world.data['refunds'] or any(c.name == 'refund_order' and c.ok for c in calls):\n"
+    "    return 'a refund was made'\nreturn None"
+)
+
+
+def _adversarial(name, solution, sub_goals, controls):
+    return scenario(solution, name=name, sub_goals=sub_goals, negative_controls=controls)
+
+
+def test_a_refund_for_an_order_that_does_not_exist_is_kept_and_proved(monkeypatch, tmp_path):
+    install(monkeypatch)
+    # It reads the world's answer, "no such order", not only that a lookup was tried: a lookup that crashed is no
+    # evidence the order is missing (the failed-attempt gate holds that check).
+    asked_about_o99 = check(
+        "return None if any(c.name == 'lookup_order' and c.arguments.get('order_id') == 'O-99'\n"
+        "                   and c.error == 'no such order' for c in calls) else 'O-99 was never found missing'"
+    )
+    case = _adversarial(
+        "refund_missing_order",
+        [LOOKUP_O99],
+        ["looked_up_o99", "no_refund"],
+        [control("refund_anyway", "refunds an order that does not exist", [LOOKUP_O99, {**REFUND_O10, "arguments": {"order_id": "O-10"}}])],
+    )
+    proof = module.prove(case, catalogue(looked_up_o99=asked_about_o99, no_refund=NO_REFUND_AT_ALL), tmp_path)
+    assert proof.blocked_reason() is None and proof.proved is True, proof.why()
+    assert proof.outcome == "no_change" and proof.controls[0]["failed"] is True
+
+
+def test_an_action_needing_a_tool_the_agent_lacks_is_kept_and_never_read_as_needing_that_tool(monkeypatch, tmp_path):
+    install(monkeypatch)
+    no_cancel = check("return 'cancelled' if any(c.name == 'cancel_order' for c in calls) else None")
+    case = _adversarial(
+        "cancel_without_a_cancel_tool",
+        [LOOKUP_O10],
+        ["looked_up", "no_cancel"],
+        [control("wrong_order", "looks up another order", [{**LOOKUP_O10, "arguments": {"order_id": "O-20"}}])],
+    )
+    proof = module.prove(
+        case,
+        catalogue(looked_up=REFUND_CATALOGUE["looked_up"], no_cancel=no_cancel),
+        tmp_path,
+        agent_tools={"lookup_order", "refund_order"},
+    )
+    assert proof.missing_tools == []
+    assert proof.blocked_reason() is None and proof.proved is True, proof.why()
+
+
+def test_a_request_the_policy_forbids_is_kept_and_proved(monkeypatch, tmp_path):
+    install(monkeypatch)
+    proof = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
+    assert proof.blocked_reason() is None and proof.proved is True, proof.why()
+    assert proof.outcome == "no_change" and proof.controls[0]["failed"] is True
+
+
+# Parallel proving: several runtime instances of one sealed runtime, in the same sandbox, each with its own datastore.
+class Lane:
+    def __init__(self, index: int, *, fail_first: set[str] | None = None) -> None:
+        self.index = index
+        self.store = copy.deepcopy(BASE)
+        self.endpoints = {"tool_proxy": SimpleNamespace(address="http://proxy"), "target_http": f"x{index}"}
+        self.played: list[str] = []
+        self.fail_first = set(fail_first or ())
+
+
+class Lanes:
+    """Provider and factory over several lanes: each reset and world is that lane's own."""
+
+    def __init__(self, count: int, **lane) -> None:
+        self.lanes = [Lane(index, **(lane if index else {})) for index in range(count)]
+        self.concurrent = 0
+        self.most_at_once = 0
+
+    async def reset(self, runtime, *, work_directory) -> None:
+        runtime.store.clear()
+        runtime.store.update(copy.deepcopy(BASE))
+
+    async def create(self, runtime, *, rng):
+        lanes = self
+
+        class Counted(ServiceWorld):
+            def forward(self, endpoint, arguments=None, *, record_as="", record=True):
+                lanes.concurrent += 1
+                lanes.most_at_once = max(lanes.most_at_once, lanes.concurrent)
+                try:
+                    import time as clock
+
+                    clock.sleep(0.02)  # a service call takes a moment, so lanes overlap
+                    return super().forward(endpoint, arguments, record_as=record_as, record=record)
+                finally:
+                    lanes.concurrent -= 1
+
+        world = Counted(runtime.store)
+        return world
+
+
+def _many(count: int):
+    """`count` refund cases on the two orders, alternating, each its own key."""
+    return [refund_case(name=f"case_{n:02d}", scenario_key=f"case-{n:02d}") for n in range(count)]
+
+
+def _prove_lanes(monkeypatch, tmp_path, lanes: Lanes, cases, **options):
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: cases)
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    played = {}
+    original = live_proof._prove_case
+
+    async def tracking(scenario, catalogue_, fresh, *rest):
+        result = await original(scenario, catalogue_, fresh, *rest)
+        return result
+
+    monkeypatch.setattr(live_proof, "_prove_case", tracking)
+    contract = _contract({"lookup_order": "service", "refund_order": "service"})
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path,
+            contract=contract,
+            runtime=lanes.lanes[0],
+            runtimes=lanes.lanes,
+            provider=lanes,
+            factory=lanes,
+            work=tmp_path,
+            **options,
+        )
+    )
+    return results, played
+
+
+def test_cases_proved_on_several_instances_read_exactly_as_one_after_another(monkeypatch, tmp_path):
+    cases = _many(12)
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
+    serial, _ = _prove_lanes(monkeypatch, tmp_path, Lanes(4), cases)
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    lanes = Lanes(4)
+    parallel, _ = _prove_lanes(monkeypatch, tmp_path, lanes, cases)
+
+    assert lanes.most_at_once > 1
+    # Every case once, none lost or doubled, in the suite's order, with the same verdicts.
+    assert list(parallel) == [f"case-{n:02d}" for n in range(12)]
+    assert parallel == serial
+    assert live_proof.load_live(tmp_path) == parallel
+
+
+def test_concurrency_one_plays_every_case_on_one_instance_as_before(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
+    lanes = Lanes(4)
+    results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(6))
+    assert len(results) == 6 and lanes.most_at_once == 1
+    # Only the first instance was ever reset to a case's data.
+    assert all(lane.store == BASE for lane in lanes.lanes[1:])
+
+
+def test_no_case_starts_on_any_instance_once_the_deadline_has_passed(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    lanes = Lanes(4)
+    results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(8), until=0.0)
+    assert results == {} and lanes.most_at_once == 0
+
+
+def test_short_of_memory_the_lanes_shrink_and_every_case_is_still_proved(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    # 95% of the limit in use the whole time: lanes fall back to one; nothing is lost.
+    monkeypatch.setattr(live_proof, "_memory", lambda: (7.6, 8.0))
+    lanes = Lanes(4)
+    results, _ = _prove_lanes(monkeypatch, tmp_path, lanes, _many(8))
+    assert list(results) == [f"case-{n:02d}" for n in range(8)]
+    assert lanes.most_at_once == 1
+
+
+def test_the_lanes_used_fit_the_first_case_s_measured_memory(monkeypatch, tmp_path):
+    # 3 GiB in use now, of an 8 GiB limit.
+    monkeypatch.setattr(live_proof, "_memory", lambda: (3.0, 8.0))
+    # Before the first case 1 GiB, at its peak 3 GiB: it grew 2 GiB; 85% of 8 GiB less the 3 in use leaves 3.8, so
+    # one more lane beside the first.
+    assert live_proof._lanes_that_fit(4, 1.0, 3.0) == 2
+    # No growth measured, or no reading at all: the instances as provisioned.
+    monkeypatch.setattr(live_proof, "_memory", lambda: None)
+    assert live_proof._lanes_that_fit(4, None, None) == 4
+
+
+def test_a_case_that_fails_beside_others_is_played_again_alone_not_dropped(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    lanes = Lanes(4)
+    failed_once = set()
+    original = live_proof._prove_case
+
+    async def flaky(scenario, catalogue_, fresh, *rest):
+        # The first time case-05 runs beside others, its instance runs out of memory.
+        if scenario.scenario_key == "case-05" and lanes.most_at_once > 1 and "case-05" not in failed_once:
+            failed_once.add("case-05")
+            raise MemoryError("the instance ran out of memory")
+        return await original(scenario, catalogue_, fresh, *rest)
+
+    monkeypatch.setattr(live_proof, "load_scenarios", lambda path: _many(8))
+    monkeypatch.setattr(live_proof, "load_catalogue", lambda path: catalogue(**REFUND_CATALOGUE))
+    monkeypatch.setattr(live_proof, "_digest", lambda world: repr(sorted(world.state()["refunds"])))
+    monkeypatch.setattr(live_proof, "_prove_case", flaky)
+    results = asyncio.run(
+        live_proof.prove_live(
+            authoring=tmp_path,
+            contract=_contract({"lookup_order": "service", "refund_order": "service"}),
+            runtime=lanes.lanes[0],
+            runtimes=lanes.lanes,
+            provider=lanes,
+            factory=lanes,
+            work=tmp_path,
+        )
+    )
+    assert failed_once == {"case-05"}
+    assert "case-05" in results and list(results) == [f"case-{n:02d}" for n in range(8)]
+
+
+def test_the_sandbox_s_memory_is_read_from_its_own_cgroup(monkeypatch):
+    from fi.alk.harness import process_runtime
+
+    files = {"memory.max": "8589934592\n", "memory.current": "2147483648\n"}
+    monkeypatch.setattr(process_runtime, "_read_cgroup_v2", lambda name: files.get(name))
+    assert process_runtime.memory_headroom() == (2.0, 8.0)
+    # No limit (or none readable): nothing to size against, so the instances stay as provisioned.
+    files["memory.max"] = "max\n"
+    monkeypatch.setattr(process_runtime, "Path", lambda *_: SimpleNamespace(read_text=lambda **_: (_ for _ in ()).throw(OSError())))
+    assert process_runtime.memory_headroom() is None
+
+
+@pytest.mark.parametrize(
+    "setting,ceiling",
+    [(None, 4), ("1", 1), ("16", 16), ("0", 4), ("many", 4)],
+    ids=["default", "one", "more", "zero", "not-a-number"],
+)
+def test_the_prove_concurrency_setting_is_a_ceiling_of_at_least_one(monkeypatch, setting, ceiling):
+    if setting is None:
+        monkeypatch.delenv("ALK_VALIDATION_INSTANCES", raising=False)
+    else:
+        monkeypatch.setenv("ALK_VALIDATION_INSTANCES", setting)
+    assert live_proof.prove_concurrency() == ceiling
+
+
+def test_a_live_run_cut_off_part_way_keeps_what_it_had_proved(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
+    monkeypatch.setattr(live_proof, "SAVE_EVERY_SECONDS", 0.0)
+    original = live_proof._prove_case
+
+    async def stopped_at_the_fifth(scenario, catalogue_, fresh, *rest):
+        if scenario.scenario_key == "case-05":
+            raise SystemExit("the sandbox was stopped")
+        return await original(scenario, catalogue_, fresh, *rest)
+
+    monkeypatch.setattr(live_proof, "_prove_case", stopped_at_the_fifth)
+    with pytest.raises(SystemExit):
+        _prove_lanes(monkeypatch, tmp_path, Lanes(1), _many(8))
+    assert list(live_proof.load_live(tmp_path)) == [f"case-{n:02d}" for n in range(5)]
+
+
+@pytest.mark.parametrize(
+    "setting,seconds",
+    [(None, 3600.0), ("7200", 7200.0), ("0", 3600.0), ("soon", 3600.0)],
+    ids=["default-an-hour", "longer", "zero", "not-a-number"],
+)
+def test_the_offline_proving_budget_is_generous_and_set_by_its_setting(monkeypatch, setting, seconds):
+    from fi.alk.harness import prove_suite
+
+    if setting is None:
+        monkeypatch.delenv("ALK_PROVE_SUITE_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("ALK_PROVE_SUITE_SECONDS", setting)
+    assert prove_suite.suite_budget_seconds() == seconds
+
+
+def test_a_refusal_whose_wrong_action_the_world_refuses_names_the_attempt(monkeypatch, tmp_path):
+    """749b83f5: the world refuses the refund outside its window, so the control that refunds anyway commits
+    nothing, every check on the refund's effect holds, and the control passes. The proof names the attempt."""
+    install(monkeypatch)
+    proof = module.prove(_refusal(sub_goals=("looked_up_o20",)), catalogue(looked_up_o20=LOOKED_UP_O20), tmp_path)
+
+    assert proof.blocked_reason() == "negative_control_passed"
+    assert (proof.controls[0]["unmatched"], proof.controls[0]["attempted"]) == ([], ["refund_order"])
+    why = proof.why()
+    assert "it tried refund_order, which the reference never calls; the world refused it" in why
+    assert "fails when the agent attempts that call for this caller's record (read `calls`" in why
+    assert "Tighten the named checks" not in why and "committed_writes(world, reference)" not in why
+    # A check on the attempt fails the same control, and the case proves.
+    fixed = module.prove(_refusal(), catalogue(no_refund=NO_REFUND, looked_up_o20=LOOKED_UP_O20), tmp_path)
+    assert fixed.controls[0]["failed"] is True and fixed.proved is True
+
+
+def test_a_refused_call_the_reference_also_makes_is_no_attempt_to_name(monkeypatch, tmp_path):
+    from fi.alk.harness.controls import refused_attempts
+    from fi.alk.harness.world.runtime import Call
+
+    case = _refusal()
+    calls = [
+        Call("lookup_order", {"order_id": "O-20"}, ok=False, error="down"),
+        Call("refund_order", {"order_id": "O-20"}, ok=False, refused=True),
+        Call("refund_order", {"order_id": "O-10"}, ok=True),
+    ]
+    # The lookup is the reference's own call; a refund that went through once is the unmatched call, not an attempt.
+    assert refused_attempts(case, calls) == []
+    assert refused_attempts(case, calls[:2]) == ["refund_order"]
+
+
+def test_a_live_pass_keeps_its_lane_decisions_and_each_case_s_time_with_the_job(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    monkeypatch.setattr(live_proof, "_memory", lambda: None)
+    lanes = Lanes(3)
+    lanes.degrade_events = [{"reason": "resource_limited", "from_w": 4, "to_w": 3}]
+
+    _prove_lanes(monkeypatch, tmp_path, lanes, _many(6))
+
+    record = json.loads((tmp_path / live_proof.LANES_FILE).read_text(encoding="utf-8"))
+    assert (record["requested_instances"], record["provisioned_instances"], record["lanes"]) == (4, 3, 3)
+    assert record["admission"] == [{"reason": "resource_limited", "from_w": 4, "to_w": 3}]
+    assert sorted(one["key"] for one in record["cases"]) == [f"case-{n:02d}" for n in range(6)]
+    assert {one["lane"] for one in record["cases"]} == {0, 1, 2}
+    assert all(one["seconds"] >= 0 for one in record["cases"]) and record["seconds"] >= 0
+    assert record["cases_total"] == 6 and record["lane_changes"] == []
+    # The line read first when a pass gave no speed-up reaches the job's output too.
+    assert "live proof: 6 cases on 3 of 3 runtime instances" in capsys.readouterr().out
+
+
+def test_a_live_pass_records_why_it_used_fewer_lanes(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    monkeypatch.setattr(live_proof, "_lanes_that_fit", lambda lanes, before, peak: 1)
+
+    _prove_lanes(monkeypatch, tmp_path, Lanes(3), _many(4))
+
+    record = json.loads((tmp_path / live_proof.LANES_FILE).read_text(encoding="utf-8"))
+    assert record["lanes"] == 1
+    assert record["lane_changes"] == [{"to": 1, "reason": "first_case_memory_growth"}]
+
+
+def test_a_live_control_the_world_refuses_names_the_attempt(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "1")
+    results, _played = _prove_lanes(monkeypatch, tmp_path, Lanes(1), [_refusal(sub_goals=("looked_up_o20",))])
+    [result] = results.values()
+    assert result["controls"][0]["attempted"] == ["refund_order"]

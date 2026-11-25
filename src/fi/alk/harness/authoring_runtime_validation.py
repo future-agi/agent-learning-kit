@@ -17,14 +17,29 @@ import re
 import shutil
 import tempfile
 import time
+from collections import Counter
+from collections.abc import Collection, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import fi.alk
 
-from . import call_runner, failure_record, judge, tool_routing
+from . import (
+    bundle_v2,
+    call_runner,
+    failure_record,
+    hosted_entrypoint,
+    judge,
+    live_proof,
+    outbound,
+    process_runtime,
+    tool_routing,
+)
+from .contract import AgentContract
+from .prove import JUDGED_CODES
+from .world.snapshot import world_state_digest
 from .catalogue import load_catalogue
 from .certification import CheckStatus
 from .generated_runtime import installed_frameworks
@@ -273,52 +288,6 @@ def _database_lanes() -> int:
     )
     quota = _cgroup_cpu_quota()
     return max(1, min(cpus, int(quota)) if quota else cpus)
-
-
-def _world_state_digest(world) -> str:
-    """Return a value-level baseline fingerprint without persisting world contents."""
-
-    state = world.read_only().state()
-    canonical = {
-        table: sorted(
-            rows,
-            key=lambda row: json.dumps(
-                row,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                default=str,
-            ),
-        )
-        for table, rows in sorted(state.items())
-    }
-    workspace_snapshot = getattr(world, "_workspace_snapshot", None)
-    if workspace_snapshot is not None:
-        workspaces = workspace_snapshot()
-        if workspaces:
-            canonical = {
-                "database": canonical,
-                "workspaces": {
-                    name: {
-                        path: {
-                            "mode": entry.mode,
-                            "digest": hashlib.sha256(entry.data).hexdigest()
-                            if entry.data is not None
-                            else None,
-                        }
-                        for path, entry in sorted(entries.items())
-                    }
-                    for name, entries in sorted(workspaces.items())
-                },
-            }
-    encoded = json.dumps(
-        canonical,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _freeze_certified_bundle(bundle: Path, authoring: Path) -> None:
@@ -718,6 +687,36 @@ class RuntimeValidationError(RuntimeError):
         super().__init__(detail)
 
 
+# The largest log the platform keeps from a failed attempt (`process_diagnostics.upload_process_logs`).
+_KEPT_LOG_BYTES = 32768
+
+
+def keep_rejected_certification(process_logs: Path, contract: AgentContract, rejected: Mapping[str, str]) -> None:
+    """Write each rejected tool's reason and the parts of the contract certification read (its tools, their
+    entrypoints, its workers and the runtime's tool service) as a log beside the process logs, which the platform
+    keeps with a failed attempt; bounded to what it keeps, credentials masked. Never raises: the failure is reported
+    either way."""
+    try:
+        record = {
+            "rejected": dict(sorted(rejected.items())),
+            "tools": [tool.name for tool in contract.tools],
+            "tool_entrypoints": [entry.model_dump(mode="json") for entry in contract.tool_entrypoints],
+            "workers": [worker.model_dump(mode="json") for worker in contract.workers],
+            "tool_service": (
+                contract.runtime.tool_service.model_dump(mode="json")
+                if contract.runtime is not None and contract.runtime.tool_service is not None
+                else None
+            ),
+        }
+        text = outbound.redact_outbound_text(json.dumps(record, indent=1, default=str))
+        # Cut to what is kept, never through a character: the log reads as text.
+        body = text.encode("utf-8")[: _KEPT_LOG_BYTES - 128].decode("utf-8", errors="ignore")
+        process_logs.mkdir(parents=True, exist_ok=True)
+        (process_logs / "tool-certification-rejected.log").write_text(body, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - the error message still names each tool and its reason
+        print(f"runtime validation: rejected certification not kept: {type(exc).__name__}", flush=True)
+
+
 class _GeneratedWorldActionAdapter:
     """Expose the generated world through the generic action-probe boundary."""
 
@@ -746,7 +745,7 @@ class _GeneratedWorldActionAdapter:
         )
 
     def checkpoint(self) -> str:
-        return _world_state_digest(self.world)
+        return world_state_digest(self.world)
 
     def reset(self) -> None:
         self.world.revert(self.baseline)
@@ -767,7 +766,7 @@ async def _probe_runtime_readiness(
             "runtime", "generated_runtime_plan_invalid: unsupported chat ingress"
         )
     baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-    baseline_digest = _world_state_digest(baseline) if compare_baseline else None
+    baseline_digest = world_state_digest(baseline) if compare_baseline else None
     receipt = {
         "status": "failed",
         "candidate_hash": _generic_candidate_hash(source, authoring),
@@ -794,7 +793,7 @@ async def _probe_runtime_readiness(
                 await provider.reset(runtime, work_directory=work)
                 if compare_baseline:
                     restored = await factory.create(runtime, rng=random.Random(job.seed or 0))
-                    if _world_state_digest(restored) != baseline_digest:
+                    if world_state_digest(restored) != baseline_digest:
                         raise RuntimeValidationError(
                             "environment", "Readiness reset did not restore the baseline"
                         )
@@ -815,6 +814,59 @@ async def _probe_runtime_readiness(
         path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
 
+def _prepare_runtime_work(job, work: Path, secrets_path: Path, *, local_runtime: bool) -> Path:
+    """Lay out a disposable runtime workspace: the job's sizes and a private copy of the secrets."""
+    runtime = getattr(job, "runtime", None)
+    (work / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": getattr(job, "job_id", ""),
+                "runtime": {
+                    "cpu_units": getattr(runtime, "cpu_units", 1),
+                    "memory_mb": getattr(runtime, "memory_mb", 512),
+                }
+            }
+        )
+    )
+    if local_runtime:
+        # Child processes drop to svc-* identities. They need search permission on the
+        # disposable workspace parent in order to reach their individually chowned trees;
+        # secrets below retain mode 0600 and are injected by the controller.
+        work.chmod(0o755)
+    secrets = work / "secrets.json"
+    secrets.write_bytes(secrets_path.read_bytes())
+    secrets.chmod(0o600)
+    return secrets
+
+
+def _runtime_provider(job, secrets: Path, authoring: Path, *, local_runtime: bool, generic: bool):
+    """The process runtime provider validation starts the bundle with."""
+    capabilities = None if local_runtime else outbound.load_capabilities(unlink=False)
+    transport = outbound.RequestsTransport()
+    return process_runtime.ProcessRuntimeProvider(
+        secrets_path=secrets,
+        secret_purpose_map=hosted_entrypoint.job_secret_purposes(job),
+        # A local parity run shares the host/container process namespace and must resolve
+        # the same unprivileged identities installed in its image. A hosted sandbox runs
+        # each declared user only when the platform granted per-user isolation.
+        **(
+            {"user_resolver": process_runtime.default_user_resolver, "require_declared_user": False}
+            if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
+            else process_runtime.hosted_user_resolution()
+        ),
+        public_url_resolver=(
+            None
+            if capabilities is None
+            else lambda port, ttl: hosted_entrypoint.resolve_hosted_public_url(
+                capabilities, transport, port=port, expires_in_seconds=ttl
+            )
+        ),
+        provider_attempt_id=(capabilities.attempt_id if capabilities is not None else None),
+        provider_expires_at=(capabilities.expires_at if capabilities is not None else None),
+        generic_artifact_root=(authoring / "generic-harness") if generic else None,
+    )
+
+
 async def validate_once(
     job,
     source: Path,
@@ -826,25 +878,15 @@ async def validate_once(
     review=None,
     readiness_only: bool = False,
 ) -> int:
-    from . import outbound
     from .bundle_author_v2 import author_bundle_v2
     from .compose_integration import enabled as compose_enabled
     from .hosted_compose_bootstrap import initialize_hosted_compose
     from .contract import AgentContract
-    from .hosted_entrypoint import (
-        ProcessWorldFactory,
-        _resolve_hosted_public_url,
-        job_secret_purposes,
-    )
+    from .hosted_entrypoint import ProcessWorldFactory, job_secret_purposes
     from .hosted_scheduler import _classify_ready, _run_phase
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
-    from .process_runtime import (
-        ProcessRuntimeError,
-        ProcessRuntimeProvider,
-        default_user_resolver,
-        hosted_user_resolution,
-    )
+    from .process_runtime import ProcessRuntimeError
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
@@ -915,26 +957,7 @@ async def validate_once(
         prefix="runtime-validation-", dir=temporary_parent
     ) as root:
         work = Path(root)
-        runtime = getattr(job, "runtime", None)
-        (work / "job.json").write_text(
-            json.dumps(
-                {
-                    "job_id": getattr(job, "job_id", ""),
-                    "runtime": {
-                        "cpu_units": getattr(runtime, "cpu_units", 1),
-                        "memory_mb": getattr(runtime, "memory_mb", 512),
-                    }
-                }
-            )
-        )
-        if local_runtime:
-            # Child processes drop to svc-* identities. They need search permission on the
-            # disposable workspace parent in order to reach their individually chowned trees;
-            # secrets below retain mode 0600 and are injected by the controller.
-            work.chmod(0o755)
-        secrets = work / "secrets.json"
-        secrets.write_bytes(secrets_path.read_bytes())
-        secrets.chmod(0o600)
+        secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
         redaction_values = json.loads(secrets.read_text())
         process_logs = authoring / "generic-harness" / "process-logs"
         logs_before = set(process_logs.glob("*.log"))
@@ -948,38 +971,12 @@ async def validate_once(
         secret_values = tuple(
             str(value) for value in json.loads(secrets.read_text()).values()
         )
-        capabilities = (
-            None if local_runtime else outbound.load_capabilities(unlink=False)
-        )
-        transport = outbound.RequestsTransport()
-        provider = ProcessRuntimeProvider(
-            secrets_path=secrets,
-            secret_purpose_map=job_secret_purposes(job),
-            # A local parity run shares the host/container process namespace and must resolve
-            # the same unprivileged identities installed in its image. A hosted sandbox runs
-            # each declared user only when the platform granted per-user isolation.
-            **(
-                {"user_resolver": default_user_resolver, "require_declared_user": False}
-                if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
-                else hosted_user_resolution()
-            ),
-            public_url_resolver=(
-                None
-                if capabilities is None
-                else lambda port, ttl: _resolve_hosted_public_url(
-                    capabilities, transport, port=port, expires_in_seconds=ttl
-                )
-            ),
-            provider_attempt_id=(
-                capabilities.attempt_id if capabilities is not None else None
-            ),
-            provider_expires_at=(
-                capabilities.expires_at if capabilities is not None else None
-            ),
-            generic_artifact_root=(authoring / "generic-harness") if generic else None,
+        provider = _runtime_provider(
+            job, secrets, authoring, local_runtime=local_runtime, generic=generic
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
-        requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
+        # One setting for a build's validation and a Validate's proof (`live_proof.prove_concurrency`).
+        requested_lanes = live_proof.prove_concurrency()
         # Setup checks touch only the world's database, so a single-database world checks each
         # scenario on its own clone of the sealed baseline instead of a whole agent stack.
         database_lanes = _database_lanes()
@@ -1082,10 +1079,14 @@ async def validate_once(
                         )
                         for name in sorted(rejected)
                     )
+                    # The contract it was certified from, with each tool's reason, kept among the process logs the
+                    # platform stores with a failed attempt's diagnostics.
+                    keep_rejected_certification(authoring / "generic-harness" / "process-logs", contract, rejected)
+                    # Each tool with its reason, in the message the platform keeps: the diagnostics alone are not stored.
                     raise RuntimeValidationError(
                         "environment",
                         "Tool contract certification rejected: "
-                        + ", ".join(sorted(rejected)),
+                        + "; ".join(f"{name} ({rejected[name][:200]})" for name in sorted(rejected))[:2000],
                         diagnostics=diagnostics,
                     )
                 source_model = GenericHarnessArtifactStore(
@@ -1196,7 +1197,7 @@ async def validate_once(
                     )
                 world = await factory.create(against, rng=random.Random(job.seed or 0))
                 if generic and not external_provider:
-                    current_digest = _world_state_digest(world)
+                    current_digest = world_state_digest(world)
                     if baseline_state_digest is None:
                         baseline_state_digest = current_digest
                     elif current_digest != baseline_state_digest:
@@ -1452,7 +1453,7 @@ async def validate_once(
             if generic:
                 # A scenario that already passed against this exact baseline, bundle and
                 # invariants passes again, so a repair re-checks only what failed or changed.
-                baseline_state_digest = _world_state_digest(baseline)
+                baseline_state_digest = world_state_digest(baseline)
                 passed_path = authoring / "generic-harness" / "setup-checks-passed.json"
                 passed = (
                     set(json.loads(passed_path.read_text(encoding="utf-8")))
@@ -1480,6 +1481,30 @@ async def validate_once(
                 f"invariants, complete in {time.monotonic() - started:.0f}s",
                 flush=True,
             )
+            if not readiness_only:
+                # While the stack is up, play each case's reference and controls through the
+                # service-backed and MCP Toolbox tools for real; never fails validation.
+                try:
+                    await play_this_attempt(
+                        runtimes=runtimes,
+                        authoring=authoring,
+                        contract=AgentContract.model_validate_json(
+                            (bundle / "contract.json").read_text(encoding="utf-8")
+                        ),
+                        runtime=runtime,
+                        provider=provider,
+                        factory=factory,
+                        work=work,
+                        seed=job.seed or 0,
+                    )
+                except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
+                    why = outbound.redact_outbound_text(f"{type(exc).__name__}: {exc}").splitlines()[0][:300]
+                    print(f"runtime validation: live proofs not run: {why}", flush=True)
+                    # No case was played: those whose steps only the live runtime could run are not proved.
+                    from .proofs import proof_key
+                    from .scenario_tools import load_scenarios
+
+                    live_proof.write_unplayed(authoring, {proof_key(one): why for one in load_scenarios(authoring)})
             if generic:
                 await provider.reset(runtime, work_directory=work)
                 reset_world = await factory.create(
@@ -1487,7 +1512,7 @@ async def validate_once(
                 )
                 if (
                     baseline_state_digest is None
-                    or _world_state_digest(reset_world) != baseline_state_digest
+                    or world_state_digest(reset_world) != baseline_state_digest
                 ):
                     raise RuntimeValidationError(
                         "environment",
@@ -1610,6 +1635,411 @@ async def _source_masks(source: Path) -> frozenset[str]:
     return masks
 
 
+async def prove_on_sealed_runtime(
+    job,
+    source: Path,
+    authoring: Path,
+    *,
+    keys: set[str] | None = None,
+    until: float | None = None,
+    secrets_path: Path = Path("/run/futureagi/secrets.json"),
+    local_runtime: bool = False,
+) -> dict[str, live_proof.LiveResult]:
+    """Start the pair's sealed bundle and play its cases on it, as certification does, without
+    certifying again: no compile, no setup pass, no repair. `{}` when the bundle serves no tool a
+    case could be played on; the cases then keep their offline proofs."""
+    bundle = authoring / "environment-bundle"
+    manifest = bundle_v2.load_bundle_v2(bundle)
+    if manifest.runtime.kind is bundle_v2.RuntimeKindV2.COMPOSE or not {
+        live_proof.TOOL_PROXY,
+        live_proof.MCP_TOOLBOX,
+    } & set(manifest.capabilities):
+        return {}
+    contract = AgentContract.model_validate_json((bundle / "contract.json").read_text(encoding="utf-8"))
+    generic = bool(isinstance(getattr(job, "metadata", None), dict) and job.metadata.get("generic_harness_v1") is True)
+    with tempfile.TemporaryDirectory(prefix="live-proof-", dir=authoring.parent) as root:
+        work = Path(root)
+        secrets = _prepare_runtime_work(job, work, secrets_path, local_runtime=local_runtime)
+        # Inside the runtime's own work directory, as certification lays it: per-user isolation lets declared users
+        # pass through that directory only, so a seed file under the private authoring tree is out of their reach.
+        bundle = Path(shutil.copytree(bundle, work / "bundle", symlinks=True))
+        provider = _runtime_provider(job, secrets, authoring, local_runtime=local_runtime, generic=generic)
+        try:
+            # Up to `prove_concurrency()` instances in this one sandbox; provisioning admits only what its own CPU and
+            # memory limits fit (`admit_parallelism`), and one when the agent holds a fixed port.
+            from .scenario_tools import load_scenarios
+            from .proofs import proof_key
+
+            cases = sum(1 for one in load_scenarios(authoring) if keys is None or proof_key(one) in keys)
+            runtimes = await provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle,
+                work_directory=work,
+                # Never more instances than cases: each one costs its start-up.
+                instances=max(1, min(live_proof.prove_concurrency(), cases)),
+            )
+            return await live_proof.prove_live(
+                authoring=authoring,
+                contract=contract,
+                runtime=runtimes[0],
+                runtimes=runtimes,
+                provider=provider,
+                factory=hosted_entrypoint.ProcessWorldFactory(work, bundle),
+                work=work,
+                seed=job.seed or 0,
+                keys=keys,
+                until=until,
+            )
+        finally:
+            await provider.close(work_directory=work)
+
+
+# Held after the live proof for a reason the scenario writer can fix (a check, a control, a reference), never a limit of
+# the lane it was proved on. After a passing validation these cases go back to the writer this many times, each round
+# replayed live, before the build keeps them held.
+WRITER_FIXABLE = frozenset(
+    {
+        "broken_check",
+        "not_solvable",
+        "vacuous",
+        "weak_check",
+        "credits_failed_attempt",
+        "too_strict",
+        "unchecked",
+        "no_negative_control",
+        "negative_control_passed",
+        "control_misses_case_goal",
+        # Kept as written when it stands, but handed back first: a model's judgment the writer can answer.
+        "policy_conflict",
+    }
+)
+# The held-case rounds' own clock, so their time budget can be read apart from the event loop's, and the wall clock
+# a build's deadline is read against.
+_held_clock = time.monotonic
+_wall_clock = time.time
+
+
+# Holds that say the case cannot be passed as it is grounded (a record the world cannot serve, a tool the agent lacks):
+# only these may be replaced by a new case in the same plan cell. Every other hold is repaired, never swapped.
+REPLACEABLE = frozenset({"not_solvable", "not_ready", "tool_not_on_agent"})
+
+
+def hands_back(entry: Mapping[str, Any]) -> bool:
+    """Whether a repair round hands this case back to its writer: held for a reason the writer can fix, and not kept as
+    written, except where a model's judgment alone keeps it (a possible rule conflict), which the writer answers
+    first."""
+    reason = entry.get("blocked_reason")
+    judged = reason in {str(code) for code in JUDGED_CODES}
+    return reason in WRITER_FIXABLE | REPLACEABLE and (entry.get("kept_as_written") is not True or judged)
+
+
+
+def read_held(authoring: Path, *, budget: float = 300) -> tuple[dict[str, str], dict[str, Any] | None]:
+    """Prove the suite with this attempt's live plays, as a build judges it (`judge_case_goals`), and return the cases
+    held for a reason its writer can fix, in the proof's own words, with the tally: how many cases are runnable
+    (proved, or kept as written, `proof_counts`), how many there are, and how many are held for each reason. The tally
+    is None when the suite could not be proved."""
+    from .prove_suite import prove_suite
+    from .proofs import proof_counts
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="held-cases-") as root:
+            proofs = prove_suite(authoring, Path(root) / "proofs.json", budget=budget, judge_case_goals=True)
+    except Exception as error:  # noqa: BLE001 - only adds a chance to repair; the build's proofs decide the rest
+        print(f"runtime validation: held cases not read ({type(error).__name__})", flush=True)
+        return {}, None
+    counts = proof_counts(proofs, list(proofs))
+    reasons = Counter(
+        str(entry.get("blocked_reason") or "not_proved")
+        for entry in proofs.values()
+        if entry.get("proved") is not True and entry.get("kept_as_written") is not True
+    )
+    handed = {key: str(entry.get("blocked_reason")) for key, entry in proofs.items() if hands_back(entry)}
+    held = {key: str(proofs[key].get("why") or code) for key, code in handed.items()}
+    tally = {
+        "runnable": counts["proved"] + counts["kept_as_written"],
+        "cases": len(proofs),
+        "held": dict(reasons),
+        # Each handed-back case's hold, which decides whether it may be replaced (`REPLACEABLE`).
+        "held_cases": handed,
+    }
+    return held, tally
+
+
+def held_for_the_writer(authoring: Path, *, budget: float = 300) -> dict[str, str]:
+    """The cases `read_held` hands back to the writer."""
+    return read_held(authoring, budget=budget)[0]
+
+
+# What each hold means, in plain words, for the build's yield line. Read from the proof's code, never from case text.
+HELD_WORDS = {
+    "negative_control_passed": "no check fails the wrong behaviour its control plays",
+    "control_misses_case_goal": "its wrong behaviour never breaks the goal the case is about",
+    "no_negative_control": "it has no wrong behaviour to fail",
+    "not_solvable": "its reference solution does not pass on the world",
+    "broken_check": "a check fails to run",
+    "vacuous": "its checks pass before the agent does anything",
+    "weak_check": "a check only tests that a call was made",
+    "too_strict": "a check fails a right answer written another way",
+    "unchecked": "no check reads what it tests",
+    "credits_failed_attempt": "a check counts a failed attempt as done",
+    "not_ready": "the world does not hold what it needs",
+    "validation_incomplete": "the validation ran out of time before reaching it",
+    "tool_not_on_agent": "it calls a tool this agent does not have",
+}
+YIELD_FILE = "yield.json"
+
+
+def yield_line(asked: int, tally: dict[str, Any]) -> str:
+    """`X of N runnable; held: 3 because ..., 1 because ...`, N being what the build asked for (else the cases)."""
+    wanted = asked or int(tally.get("cases") or 0)
+    held = sorted((tally.get("held") or {}).items(), key=lambda pair: (-pair[1], pair[0]))
+    reasons = ", ".join(f"{count} because {HELD_WORDS.get(code, code.replace('_', ' '))}" for code, count in held)
+    return f"{tally.get('runnable', 0)} of {wanted} runnable" + (f"; held: {reasons}" if reasons else "")
+
+
+def write_yield(authoring: Path, asked: int, tally: dict[str, Any] | None, rounds: list[dict[str, Any]]) -> None:
+    """The build's yield, kept beside its repair history: what was asked, what is runnable, what is held and why, and
+    each round that handed held cases back."""
+    if tally is None:
+        return
+    body = {"asked": asked, **tally, "line": yield_line(asked, tally), "rounds": rounds}
+    path = authoring / "generic-harness" / YIELD_FILE
+    from .json_file import write_json_atomic
+
+    # What the plan supports was recorded while the suite was written, and outlives every validation round.
+    if supports := _read_yield(authoring).get("supports"):
+        body["supports"] = supports
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(path, body)
+
+
+def _read_yield(authoring: Path) -> dict[str, Any]:
+    try:
+        found = json.loads((Path(authoring) / "generic-harness" / YIELD_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def record_capacity(authoring: Path, supports: int, written: int, asked: int, why: str = "") -> None:
+    """Record in the yield that the plan holds about `supports` distinct cases of the `asked`, with the plain line
+    the build reports and `why` the plan could not be widened; `supports` 0 clears it, once a wider plan holds what
+    was asked."""
+    from .json_file import write_json_atomic
+    from .scenario_tools import capacity_line
+
+    body = _read_yield(authoring)
+    if not supports and "supports" not in body:
+        return
+    if supports:
+        body["supports"] = {
+            "cases": supports,
+            "asked": asked,
+            "written": written,
+            "line": capacity_line(supports, written, asked),
+            "why": why,
+        }
+    else:
+        body.pop("supports", None)
+    write_json_atomic(Path(authoring) / "generic-harness" / YIELD_FILE, body)
+
+
+def supported_count(authoring: Path, asked: int) -> int:
+    """What the build has to finish with: what it asked for, or fewer when its plan supports only that many."""
+    supports = int((_read_yield(authoring).get("supports") or {}).get("cases") or 0)
+    return min(asked, supports) if asked and supports else asked
+
+
+def held_case_guidance(held: dict[str, str], replaceable: Collection[str] = ()) -> str:
+    """What the writer is told about the cases the proof held: each to repair, and those `replaceable` (held for how
+    they are grounded) that it may instead replace."""
+    replaceable = set(replaceable)
+    lines = [
+        f"- {key}: {why}" + (" [may be replaced]" if key in replaceable else "") for key, why in sorted(held.items())
+    ]
+    return (
+        "The live proof held these cases, each for the reason given. Rewrite each so it proves: fix its checks, its "
+        "negative controls or its reference solution as the reason says, and add or amend a sub-goal with "
+        "add_sub_goal where it says so. Keep its name and intent, and never drop a sub-goal it names. Only a case "
+        "marked [may be replaced] is held for how it is grounded (a record the world cannot serve, a tool the "
+        "agent lacks); you may replace it instead: write a new case for the same plan cell, with the same "
+        "coverage and every sub-goal it names, and remove the held one with drop_scenario. Never replace any other "
+        "case. Every other case stays as it is, and the number of cases stays the same.\n" + "\n".join(lines)
+    )
+
+
+# Which cases the next live pass re-proves after a held-case round, decided from file digests (`mark_replay`).
+REPLAY_FILE = "generic-harness/live-replay.json"
+# Files that record what a run did or derive from the cases, never an input a case is proved on.
+_NOT_AN_INPUT = frozenset(
+    {
+        "proofs.json",
+        "scenario-proofs.json",
+        "runtime-validation.json",
+        "coverage.json",
+        "written.jsonl",
+        "scenarios.json",
+        "sub_goals.json",
+    }
+)
+# The harness's own run records under generic-harness/: what a validation wrote, never what a case is proved on. Any
+# other file there counts as an input the cases share, so a file nobody listed here makes every case proved again.
+_RUN_RECORDS = (
+    "process-logs/",
+    "phase-observations/",
+    "compose-logs/",
+    "chat-readiness/",
+    "certified-bundle/",
+    "runtime-readiness.json",
+    "readiness-repair-history.json",
+    "repair-history.json",
+    "runtime-evidence.json",
+    "certification.json",
+    "tool-certification.json",
+    "action-certification.json",
+    "tool-requests.json",
+    "tool-routing-observations.json",
+    "setup-checks-passed.json",
+    "live-proof-lanes.json",
+    "live-replay.json",
+    YIELD_FILE,
+    "source-data-review-",
+    "runtime-plan-repair-",
+)
+
+
+def _run_record(relative: str) -> bool:
+    """Whether a file under the authoring tree is one of the harness's run records under generic-harness/."""
+    inside = relative.removeprefix("generic-harness/")
+    return inside != relative and inside.startswith(_RUN_RECORDS)
+
+
+def _digest_files(paths: list[Path], root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\n")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def proof_inputs(authoring: Path) -> dict[str, Any]:
+    """What a live proof is made from, as digests: each case's own folder by its key, each sub-goal by name, the
+    sub-goals each case names, and one digest of everything the cases share (contract, world and seed files,
+    attached files, actors, the source model). The bundle is sealed from these files, and run records are left out."""
+    from .proofs import proof_key
+    from .scenario_tools import load_scenarios
+
+    authoring = Path(authoring)
+    cases: dict[str, str] = {}
+    uses: dict[str, list[str]] = {}
+    for one in load_scenarios(authoring):
+        folder = authoring / "scenarios" / one.name
+        files = sorted(path for path in folder.rglob("*") if path.is_file()) if folder.is_dir() else []
+        cases[proof_key(one)] = _digest_files(files, authoring)
+        uses[proof_key(one)] = sorted(str(name) for name in one.sub_goals or ())
+    try:
+        listed = json.loads((authoring / "sub_goals.json").read_text(encoding="utf-8")).get("sub_goals") or []
+    except (OSError, ValueError, AttributeError):
+        listed = []
+    goals = {
+        str(goal.get("name")): hashlib.sha256(json.dumps(goal, sort_keys=True).encode("utf-8")).hexdigest()
+        for goal in listed
+        if isinstance(goal, dict) and goal.get("name")
+    }
+    shared = [
+        path
+        for path in sorted(authoring.rglob("*"))
+        if path.is_file()
+        and (relative := path.relative_to(authoring).as_posix()) not in _NOT_AN_INPUT
+        and not relative.startswith(("scenarios/", "environment-bundle/"))
+        and not path.name.startswith(".futureagi-")
+        and not _run_record(relative)
+    ]
+    return {"cases": cases, "uses": uses, "goals": goals, "shared": _digest_files(shared, authoring)}
+
+
+def cases_to_replay(before: Mapping[str, Any], after: Mapping[str, Any]) -> set[str] | None:
+    """The cases a held-case round changed, added or replaced, which alone need proving again; None when an input the
+    cases share changed (a shared file, or a sub-goal a case the round left alone names), so every case does."""
+    if before.get("shared") != after.get("shared"):
+        return None
+    goals_before, goals_after = before.get("goals") or {}, after.get("goals") or {}
+    moved = {name for name in {*goals_before, *goals_after} if goals_before.get(name) != goals_after.get(name)}
+    cases_before, cases_after = before.get("cases") or {}, after.get("cases") or {}
+    changed = {key for key, digest in cases_after.items() if cases_before.get(key) != digest}
+    uses = after.get("uses") or {}
+    if any(set(uses.get(key) or ()) & moved for key in cases_after if key not in changed):
+        return None
+    return changed
+
+
+def mark_replay(authoring: Path, before: Mapping[str, Any]) -> None:
+    """After a held-case round, say which cases the next live pass proves again (`REPLAY_FILE`); with nothing to
+    narrow it to, every case is proved, as before."""
+    after = proof_inputs(authoring)
+    keys = cases_to_replay(before, after)
+    path = Path(authoring) / REPLAY_FILE
+    if keys is None:
+        path.unlink(missing_ok=True)
+        return
+    removed = sorted(set(before.get("cases") or {}) - set(after["cases"]))
+    from .json_file import write_json_atomic
+
+    write_json_atomic(path, {"keys": sorted(keys), "removed": removed, "shared": after["shared"]})
+
+
+def _replay_keys(authoring: Path) -> tuple[set[str] | None, set[str]]:
+    """The cases this live pass proves again and the ones it drops, from the round before it: (None, ∅) to prove every
+    case, as when no round narrowed it or an input the cases share has changed since."""
+    path = Path(authoring) / REPLAY_FILE
+    try:
+        marked = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, set()
+    finally:
+        path.unlink(missing_ok=True)
+    if not isinstance(marked, dict) or marked.get("shared") != proof_inputs(authoring)["shared"]:
+        return None, set()
+    return {str(key) for key in marked.get("keys") or ()}, {str(key) for key in marked.get("removed") or ()}
+
+
+async def play_this_attempt(
+    *,
+    runtimes: list | None = None,
+    authoring: Path,
+    contract: AgentContract,
+    runtime,
+    provider,
+    factory,
+    work: Path,
+    seed: int,
+) -> dict[str, live_proof.LiveResult]:
+    """Play this validation attempt's cases on its live runtime. Only this attempt's plays count: an earlier attempt's
+    results are dropped first, since a repair between attempts may have changed the cases they were played on. After a
+    held-case round that changed only some cases and nothing they share (`mark_replay`), only those are played again
+    and the rest keep their results."""
+    keys, removed = _replay_keys(authoring)
+    live_proof.forget_live(authoring, None if keys is None else keys | removed)
+    if keys is not None:
+        print(f"runtime validation: proving again only the {len(keys)} cases the round changed", flush=True)
+    live = await live_proof.prove_live(
+        authoring=authoring,
+        contract=contract,
+        runtime=runtime,
+        runtimes=runtimes,
+        provider=provider,
+        factory=factory,
+        work=work,
+        seed=seed,
+        keys=keys,
+    )
+    if live:
+        print(f"runtime validation: {live_proof.live_summary(live)}", flush=True)
+    return live
+
+
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
     """Declared invariants the patched rows still violate, judged without building anything."""
     from .source_data_invariants import ARTIFACT, violations_in_ir
@@ -1645,6 +2075,148 @@ def _promote_data_store(contract, authoring: Path, candidate_dir: Path) -> int:
     return 0
 
 
+async def _rewrite_held_cases(
+    held: dict[str, str],
+    authoring: Path,
+    *,
+    repair,
+    guidance: str,
+    expected_count: int,
+    seconds: float = 300,
+    replaceable: Collection[str] = (),
+) -> bool:
+    """Hand the held cases back to the writer once. True when it changed something and kept every case, its name and
+    its sub-goals; otherwise the suite is left as it was and the cases stay held, never failing the build."""
+    from .scenario_repair import certify_scenario_repair
+    from .scenario_tools import load_scenarios, write_scenarios
+
+    print(f"runtime validation: {len(held)} cases held after the live proof, back to the writer", flush=True)
+    before = load_scenarios(authoring)
+    catalogue_before = load_catalogue(authoring)
+    before_tree = _authoring_digest(authoring)
+    passing_files = _passing_case_files(held, before, authoring)
+    suite_files = _suite_files(authoring)
+    if seconds <= 0:
+        return False
+    try:
+        status = await asyncio.wait_for(
+            repair("scenarios", held_case_guidance(held, replaceable) + "\n\n" + guidance), timeout=seconds
+        )
+    except Exception as error:  # noqa: BLE001 - a writer that cannot repair, or runs out of time, leaves them held
+        print(f"runtime validation: held cases not rewritten ({type(error).__name__})", flush=True)
+        # Whatever a writer stopped part-way left is undone, file for file.
+        _put_back_suite(authoring, suite_files)
+        return False
+    if status:
+        return False
+    if restored := _keep_shared_checks(held, catalogue_before, authoring):
+        print(f"runtime validation: checks other cases rely on put back: {', '.join(restored)}", flush=True)
+    if restored := _put_back_files(passing_files):
+        print(f"runtime validation: cases that were not held put back: {', '.join(restored)}", flush=True)
+    if _authoring_digest(authoring) == before_tree:
+        return False
+    try:
+        certify_scenario_repair(
+            before,
+            load_scenarios(authoring),
+            expected_count=expected_count,
+            diagnostic_codes=set(),
+            replaceable=set(replaceable),
+        )
+    except ValueError as rejected:
+        # A rewrite of the catalogue alone (a check added to a shared sub-goal) changes no scenario file.
+        if not str(rejected).startswith("scenario_repair_no_material_change"):
+            write_scenarios(before, authoring)
+            print(f"runtime validation: held-case rewrite undone: {rejected}", flush=True)
+            return False
+    return True
+
+
+def _keep_shared_checks(held: dict[str, str], catalogue_before, authoring: Path) -> list[str]:
+    """Put back each sub-goal a case that was not held names whose check the rewrite changed or removed: rewriting a
+    held case may add sub-goals or change those only held cases name, never loosen a check a passing case relies on."""
+    from .catalogue import save_catalogue
+    from .proofs import proof_key
+    from .scenario_tools import load_scenarios, write_scenarios
+
+    scenarios = load_scenarios(authoring)
+    catalogue = load_catalogue(authoring)
+    shared = {goal for one in scenarios if proof_key(one) not in held for goal in one.sub_goals}
+    now = {goal.name: goal for goal in catalogue.sub_goals}
+    restored = sorted(
+        goal.name
+        for goal in catalogue_before.sub_goals
+        if goal.name in shared and (goal.name not in now or now[goal.name].check != goal.check)
+    )
+    if restored:
+        previous = {goal.name: goal for goal in catalogue_before.sub_goals if goal.name in restored}
+        catalogue.sub_goals = [previous.get(one.name, one) for one in catalogue.sub_goals] + [
+            goal for name, goal in previous.items() if name not in now
+        ]
+        save_catalogue(catalogue, authoring)
+        # A scenario folder carries the checks it names: rewrite them from the catalogue as put back.
+        write_scenarios(scenarios, authoring, catalogue)
+    return restored
+
+
+def _passing_case_files(held: dict[str, str], scenarios, authoring: Path) -> dict[Path, dict[Path, bytes]]:
+    """Every file of each case that was not held, as it is now, by its folder."""
+    from .folder import folder_for
+    from .proofs import proof_key
+
+    folders = [folder_for(authoring, one.name) for one in scenarios if proof_key(one) not in held]
+    return {folder: {path: path.read_bytes() for path in folder.rglob("*") if path.is_file()} for folder in folders}
+
+
+def _put_back_files(files: dict[Path, dict[Path, bytes]]) -> list[str]:
+    """Each folder given back exactly as it was (its reference, fixed values, expected outcome and checks): a rewrite
+    of the held cases never changes a case that was not held. The folders it touched, by name."""
+    touched = []
+    for folder, kept in files.items():
+        now = {path for path in folder.rglob("*") if path.is_file()} if folder.is_dir() else set()
+        changed = [path for path in kept if path not in now or path.read_bytes() != kept[path]] + sorted(now - set(kept))
+        if not changed:
+            continue
+        for path in now - set(kept):
+            path.unlink()
+        for path, body in kept.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+        touched.append(folder.name)
+    return touched
+
+
+def _suite_paths(authoring: Path) -> set[Path]:
+    """The suite as written: every scenario folder's files, the index and the sub-goal catalogue."""
+    from .folder import INDEX
+
+    root = Path(authoring)
+    paths = {path for path in (root / "scenarios").rglob("*") if path.is_file()} if (root / "scenarios").is_dir() else set()
+    return paths | {path for path in (root / INDEX, root / "sub_goals.json") if path.is_file()}
+
+
+def _suite_files(authoring: Path) -> dict[Path, bytes]:
+    return {path: path.read_bytes() for path in _suite_paths(authoring)}
+
+
+def _put_back_suite(authoring: Path, files: dict[Path, bytes]) -> None:
+    """The suite exactly as `files` holds it: a file written since is removed, every other one written back."""
+    for path in _suite_paths(authoring) - set(files):
+        path.unlink()
+    for path, body in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+
+
+def _authoring_digest(authoring: Path) -> str:
+    """The scenarios and the sub-goal catalogue as written, so a rewrite that changed neither is seen as none."""
+    digest = hashlib.sha256()
+    for path in sorted([*Path(authoring).glob("scenarios/**/*"), Path(authoring) / "sub_goals.json"]):
+        if path.is_file():
+            digest.update(str(path.relative_to(authoring)).encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()
+
+
 async def validate_and_repair(
     job,
     source: Path,
@@ -1655,8 +2227,10 @@ async def validate_and_repair(
     controller=None,
     sleeper=asyncio.sleep,
     readiness_only: bool = False,
+    deadline_at: float | None = None,
 ) -> None:
-    """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
+    """Two repairs per phase; environment repairs cannot exhaust setup's budget. `deadline_at` (epoch seconds) is when
+    the build is stopped, when known: handing held cases back never runs into it."""
     token = _SOURCE_MASKS.set({})
     try:
         await _validate_and_repair(
@@ -1668,6 +2242,7 @@ async def validate_and_repair(
             controller=controller,
             sleeper=sleeper,
             readiness_only=readiness_only,
+            deadline_at=deadline_at,
         )
     finally:
         _SOURCE_MASKS.reset(token)
@@ -1683,6 +2258,7 @@ async def _validate_and_repair(
     controller,
     sleeper,
     readiness_only: bool,
+    deadline_at: float | None = None,
 ) -> None:
     from .job import HarnessJob
 
@@ -1860,12 +2436,16 @@ async def _validate_and_repair(
         from .repair_controller import (
             CandidateObservation,
             RepairAction,
+            RepairBudgets,
             RepairController,
             RepairOutcome,
             RepairPhase,
+            held_case_repair_seconds,
         )
 
-        repair_controller = controller or RepairController()
+        repair_controller = controller or RepairController(
+            RepairBudgets(held_case_seconds=held_case_repair_seconds(int(getattr(job, "scenario_count", 0) or 0)))
+        )
         artifacts = GenericHarnessArtifactStore(authoring / "generic-harness")
 
         def write_history():
@@ -1892,11 +2472,19 @@ async def _validate_and_repair(
             + (candidate_repairs + 1) * budgets.infrastructure_retries_per_candidate
         )
         candidate_hash = _generic_candidate_hash(source, authoring)
-        for _attempt in range(decision_bound):
+        held_rounds = 0
+        yield_rounds: list[dict[str, Any]] = []
+        asked = int(getattr(job, "scenario_count", 0) or 0)
+        held_since: float | None = None
+        last_validation = 0.0
+        for _attempt in range(decision_bound + budgets.held_case_rounds):
             # A record left by an earlier attempt must never speak for this one.
             failure_record.clear()
             try:
+                validation_started = _held_clock()
                 count = await validate(job, source, authoring)
+                # How long one more validation takes, so a held-case round leaves room for it before the deadline.
+                last_validation = _held_clock() - validation_started
             except RuntimeValidationError as exc:
                 if readiness_only and exc.phase == "scenarios":
                     raise
@@ -2130,6 +2718,82 @@ async def _validate_and_repair(
                     raise
                 candidate_hash = after_hash
             else:
+                # A validation that may not repair scenarios (certify-only) never reads or hands back held cases, and
+                # every round, with the validation it causes, fits in one time budget from the first round.
+                round_started = _held_clock()
+                held_since = round_started if held_since is None else held_since
+                left = budgets.held_case_seconds - (round_started - held_since)
+                if deadline_at is not None:
+                    from .prove_suite import DEADLINE_MARGIN_SECONDS
+
+                    # Never past the build's own deadline: one more validation and the sealing after it still fit.
+                    left = min(left, deadline_at - _wall_clock() - last_validation - DEADLINE_MARGIN_SECONDS)
+                held, tally = (
+                    read_held(authoring, budget=left)
+                    if not readiness_only
+                    and budgets.scenario_patches
+                    and held_rounds < budgets.held_case_rounds
+                    and left > 0
+                    else ({}, None)
+                )
+                if tally is not None:
+                    write_yield(authoring, asked, tally, yield_rounds)
+                    print(f"runtime validation: {yield_line(asked, tally)}", flush=True)
+                    # The build asked for this many runnable cases and has them: nothing more to hand back but what a
+                    # model's judgment alone keeps as written, which its writer answers first.
+                    if asked and tally["runnable"] >= asked:
+                        judged = {str(code) for code in JUDGED_CODES}
+                        held = {
+                            key: why
+                            for key, why in held.items()
+                            if (tally.get("held_cases") or {}).get(key) in judged
+                        }
+                from .scenario_tools import load_scenarios
+
+                keys_before = {one.scenario_key for one in load_scenarios(authoring)} if held else set()
+                codes = (tally or {}).get("held_cases") or {}
+                replaceable = {key for key in held if codes.get(key) in REPLACEABLE}
+                inputs_before = proof_inputs(authoring) if held else None
+                rewritten = bool(held) and await _rewrite_held_cases(
+                    held,
+                    authoring,
+                    repair=repair,
+                    guidance=base_guidance,
+                    expected_count=job.scenario_count,
+                    seconds=left - (_held_clock() - round_started),
+                    replaceable=replaceable,
+                )
+                if held:
+                    print(
+                        f"runtime validation: held-case round {held_rounds + 1} took "
+                        f"{_held_clock() - round_started:.0f}s; {_held_clock() - held_since:.0f}s of "
+                        f"{budgets.held_case_seconds:.0f}s spent",
+                        flush=True,
+                    )
+                if held:
+                    kept_keys = {one.scenario_key for one in load_scenarios(authoring)}
+                    yield_rounds.append(
+                        {
+                            "round": held_rounds + 1,
+                            "held": len(held),
+                            "rewritten": rewritten,
+                            "replaced": [
+                                {"removed": key, "reason": codes.get(key)} for key in sorted(keys_before - kept_keys)
+                            ]
+                            if rewritten
+                            else [],
+                            "added": sorted(kept_keys - keys_before) if rewritten else [],
+                            "seconds": round(_held_clock() - round_started, 1),
+                        }
+                    )
+                    write_yield(authoring, asked, tally, yield_rounds)
+                if rewritten and inputs_before is not None:
+                    mark_replay(authoring, inputs_before)
+                if rewritten:
+                    held_rounds += 1
+                    candidate_hash = _generic_candidate_hash(source, authoring)
+                    # Validated again: the live proof replays every case, the rewritten ones included.
+                    continue
                 decision = repair_controller.decide(
                     CandidateObservation(
                         candidate_hash=candidate_hash,

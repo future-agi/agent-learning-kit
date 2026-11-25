@@ -26,6 +26,13 @@ from fi.alk.harness.world.runtime import Call
             Call("select", {"method": "card"}, ok=False, refused=True),
             False,
         ),
+        # A lookup the world answered with a not-found, read with `answered`: a crash is no answer, so nothing is
+        # credited for one.
+        (
+            "answered([c], 'select', method='card')",
+            Call("select", {"method": "card"}, ok=False, refused=True, refusal_code="world_rule"),
+            True,
+        ),
     ],
 )
 def test_proof_requires_outcome_not_just_attempt(
@@ -36,8 +43,8 @@ def test_proof_requires_outcome_not_just_attempt(
     monkeypatch.setattr(module, "prepared", lambda *a: (world, outcome, outcome))
     monkeypatch.setattr(
         module,
-        "_run",
-        lambda *a, with_solution: (world, [call] if with_solution else [], [], []),
+        "run_steps",
+        lambda *a, with_solution, **_: (world, [call] if with_solution else [], [], []),
     )
     catalogue = Catalogue(
         sub_goals=[

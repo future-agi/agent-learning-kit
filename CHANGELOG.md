@@ -47,6 +47,9 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- A native agent whose tools are a separate HTTP server in its source records it as `runtime.tool_service`;
+  the bundle starts that server behind the tool proxy, so its tools run and are recorded like a Compose
+  `tools-api`.
 - Actors: one list, `actors.json`, of everyone the agent deals with
   who is not the agent: the caller, someone with the caller, a manager, a coworker, a system. Every actor has
   the same record (parent, goal, constraints, behaviour, knowledge, permitted actions, activation), and one

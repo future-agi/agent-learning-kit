@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Collection
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -16,6 +17,8 @@ SCENARIO_REPAIR_SCHEMA_VERSION = "futureagi.scenario-repair.v1"
 class ScenarioChangeKind(str, Enum):
     ADDED = "added"
     REPLACED = "replaced"
+    # A held case given up for a new case in the same plan cell (`replaceable`).
+    REMOVED = "removed"
 
 
 class ScenarioChange(BaseModel):
@@ -74,8 +77,11 @@ def certify_scenario_repair(
     *,
     expected_count: int,
     diagnostic_codes: set[str],
+    replaceable: Collection[str] = (),
 ) -> ScenarioRepairReceipt:
-    """Reject deletions, renamed tests, reduced checks, count drift, and no-op repair."""
+    """Reject deletions, renamed tests, reduced checks, count drift, and no-op repair. A case named in `replaceable`
+    (a held case) may be removed when a case added in the same repair covers the same plan cell (`coverage`) and names
+    every sub-goal it named, one added case for each one removed."""
 
     if len(after) != expected_count:
         raise ValueError("scenario_repair_count_mismatch")
@@ -84,9 +90,18 @@ def certify_scenario_repair(
     if len(before_by_key) != len(before) or len(after_by_key) != len(after):
         raise ValueError("scenario_repair_key_duplicate")
     removed = sorted(set(before_by_key) - set(after_by_key))
-    if removed:
-        raise ValueError("scenario_repair_deleted_scenarios: " + ", ".join(removed))
-    changes: list[ScenarioChange] = []
+    unreplaced = _unreplaced(removed, before_by_key, after_by_key, set(replaceable))
+    if unreplaced:
+        raise ValueError("scenario_repair_deleted_scenarios: " + ", ".join(unreplaced))
+    changes: list[ScenarioChange] = [
+        ScenarioChange(
+            scenario_key=key,
+            kind=ScenarioChangeKind.REMOVED,
+            before_hash=_scenario_hash(before_by_key[key]),
+            after_hash="",
+        )
+        for key in removed
+    ]
     for key, current in sorted(after_by_key.items()):
         previous = before_by_key.get(key)
         after_hash = _scenario_hash(current)
@@ -124,10 +139,38 @@ def certify_scenario_repair(
         "diagnostic_codes": tuple(sorted(diagnostic_codes)),
         "before_suite_hash": _suite_hash(before),
         "after_suite_hash": _suite_hash(after),
-        "changes": tuple(changes),
+        "changes": tuple(sorted(changes, key=lambda item: item.scenario_key)),
     }
     raw["fingerprint"] = _fingerprint(raw)
     return ScenarioRepairReceipt.model_validate(raw)
+
+
+def _cell(scenario: Scenario) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((str(axis), str(value)) for axis, value in (scenario.coverage or {}).items()))
+
+
+def _unreplaced(
+    removed: list[str], before: dict[str, Scenario], after: dict[str, Scenario], replaceable: set[str]
+) -> list[str]:
+    """The removed cases nothing stands in for, each with why: not replaceable, or no added case left in its cell that
+    names every sub-goal it named."""
+    added = [one for key, one in after.items() if key not in before]
+    unreplaced = []
+    for key in removed:
+        held = before[key]
+        cell = _cell(held)
+        if key not in replaceable:
+            unreplaced.append(key)
+            continue
+        stand_in = next(
+            (one for one in added if cell and _cell(one) == cell and set(held.sub_goals) <= set(one.sub_goals)),
+            None,
+        )
+        if stand_in is None:
+            unreplaced.append(f"{key} (a replacement covers its plan cell and names its sub-goals)")
+        else:
+            added.remove(stand_in)
+    return unreplaced
 
 
 def _fingerprint(value: object) -> str:
