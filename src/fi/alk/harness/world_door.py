@@ -438,9 +438,20 @@ def logged_ok(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() in {"true", "t"}
 
 
+def logged_outcome(row: Mapping[str, Any]) -> str:
+    """What came of a logged call: committed only when it both says so (or says nothing, as a row from before
+    outcomes were logged) and succeeded; a row that says committed but failed, as a column's default would leave a
+    failed call, is faulted. Never committed by default."""
+    outcome = row.get("outcome")
+    ok = logged_ok(row.get("ok", True))
+    if outcome in (None, "", "committed"):
+        return "committed" if ok else ("faulted" if outcome else "refused")
+    return str(outcome)
+
+
 def is_committed(row: Mapping[str, Any]) -> bool:
-    """Whether a log row is a committed action; a row from before outcomes were logged says so by `ok`."""
-    return (row.get("outcome") or ("committed" if logged_ok(row.get("ok", True)) else "")) == "committed"
+    """Whether a log row is a committed action (`logged_outcome`)."""
+    return logged_outcome(row) == "committed"
 
 
 def named_alike(action: str, name: str) -> bool:
@@ -1576,6 +1587,7 @@ _EFFECT = "effect"
 # Likewise: why a call with no worker is the coordinator's while workers had channels.
 _ATTRIBUTION = "attribution"
 _BASIC = "name, arguments, result, ok, error, at"
+_OUTCOME = "outcome"
 # Written when the table has them: how a call was made, the path it went to, and the scenario's fault the door applied on it.
 _CALL_COLUMNS = ("method", "fault", "endpoint")
 _CALL_COLUMNS_DDL = (
@@ -1664,10 +1676,11 @@ class PostgresLog:
         if extended and self._records_action():
             columns += ", " + _ACTION
         optional_columns = (*_WORKER_COLUMNS, _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS) if extended else (
-            _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS
+            # An older log that keeps outcomes is told this call's, never left to the column's default.
+            _OUTCOME, _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS
         )
         for optional in optional_columns:
-            if optional in self._table_columns():
+            if optional in self._table_columns() and (optional != _OUTCOME or row.get(_OUTCOME)):
                 columns += ", " + optional
         keys = [one.strip() for one in columns.split(",")]
         values = [

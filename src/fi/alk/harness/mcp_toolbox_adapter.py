@@ -109,19 +109,29 @@ def _execute(
         try:
             # The world's own call log, as the tool proxy keeps it: what reached the world.
             # The door's role, on the system's own search path (`world_door.PINNED_SEARCH_PATH`; this file ships alone).
+            # Whose call it was and what came of it are written, never left to a column's default: a failed call
+            # is faulted. A log made before those columns were kept takes the basic row.
+            basic = (
+                tool_name,
+                json.dumps(arguments, default=str),
+                json.dumps(result, default=str),
+                error is None,
+                error or "",
+                started,
+            )
             with psycopg.connect(database_url, autocommit=True, options="-c search_path=pg_catalog,pg_temp") as log:
-                log.execute(
-                    "INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (
-                        tool_name,
-                        json.dumps(arguments, default=str),
-                        json.dumps(result, default=str),
-                        error is None,
-                        error or "",
-                        started,
-                    ),
-                )
+                try:
+                    log.execute(
+                        "INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at, outcome, actor_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        (*basic, "committed" if error is None else "faulted", "agent"),
+                    )
+                except psycopg.errors.UndefinedColumn:
+                    log.execute(
+                        "INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        basic,
+                    )
         except Exception as unlogged:  # noqa: BLE001 - the log must never change the tool's response
             logger.warning("call log not written: %s", type(unlogged).__name__)
             logger.debug("the failure in full", exc_info=True)

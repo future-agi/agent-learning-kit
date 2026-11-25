@@ -381,6 +381,13 @@ class PostgresStore(ContainerStore):
             tables = self._tables(connection)
             if not tables:
                 return
+            firing = connection.execute(_TRIGGERS_FIRING_ANYWAY).fetchall()
+            if firing:
+                raise StoreError(
+                    "a reset would run the world's own triggers: "
+                    + ", ".join(sorted(f"{table}.{trigger}" for table, trigger in firing))
+                    + " are set to fire in replica mode (ENABLE ALWAYS or ENABLE REPLICA)"
+                )
             parents: dict[str, set[str]] = {table: set() for table in tables}
             for child, parent in connection.execute(_FOREIGN_KEYS).fetchall():
                 if child in parents and parent in parents and child != parent:

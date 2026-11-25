@@ -72,6 +72,7 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_ac
 from .actor_meter import ActorMeter
 from .world_door import (
     logged_ok,
+    logged_outcome,
     pinned_options,
     NOT_STOPPED,
     door_failure,
@@ -1527,7 +1528,7 @@ def trial_state_changes(
                 same["count"] += 1
             continue
         entry["attempted"] += 1
-        outcome = row.get("outcome") or (
+        outcome = logged_outcome(row) if row.get("outcome") else (
             "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
@@ -1660,7 +1661,7 @@ def trial_shared_record_fields(
         if not isinstance(arguments, Mapping):
             continue
         tool = str(row.get("agent_tool") or row.get("name") or "")
-        outcome = row.get("outcome") or (
+        outcome = logged_outcome(row) if row.get("outcome") else (
             "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
         for argument, value in arguments.items():

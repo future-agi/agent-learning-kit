@@ -917,7 +917,7 @@ def test_a_migration_that_needs_a_superuser_says_where_the_statement_belongs(tmp
         )
 
     said = str(raised.value)
-    assert "must be superuser" in said and "use a trusted extension instead" in said
+    assert "must be superuser" in said and "Drop the event trigger" in said
     assert said.count("seed/seed_failed") == 1
 
 
@@ -1387,31 +1387,32 @@ def test_a_domain_typed_shadow_a_migration_planted_never_runs_in_the_harness_s_o
 
 
 @real_postgres
-def test_harness_tables_in_a_schema_named_after_the_superuser_never_stand_in_for_the_harness_s_own():
-    """E1-b: a migration makes a schema named as the superuser (first on its default path, `$user`) and harness
-    tables in it. The harness still makes and writes its own in `public`."""
+@pytest.mark.parametrize(
+    ("planted", "refused"),
+    (
+        # E1-b: a schema named as the superuser (first on its own default path) holding harness-named tables.
+        (lambda name: f'CREATE SCHEMA "{name}"; CREATE TABLE "{name}"._alk_tool_trace (id bigserial PRIMARY KEY, '
+         "name text NOT NULL)", "is named like a harness table outside public"),
+        # Auditor B, item 3: a schema named like the store role, first on that role's path, holding the log.
+        (lambda name: "CREATE SCHEMA alk_s0; CREATE TABLE alk_s0._alk_tool_trace (name text, outcome text)",
+         "schema alk_s0 is named like one of the harness's roles"),
+        (lambda name: "CREATE SCHEMA alk_w3", "schema alk_w3 is named like one of the harness's roles"),
+    ),
+)
+def test_harness_names_anywhere_but_public_and_role_named_schemas_refuse_the_build(planted, refused):
+    """Every harness read and write names `public`; a harness-named relation anywhere else, or a schema named like one
+    of the harness's roles (first on that role's own path), refuses the build so nothing can stand in for them."""
     name = urlsplit(_REAL).username
-    planted = (
-        f'CREATE SCHEMA "{name}"; '
-        f'CREATE TABLE "{name}"._alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL); '
-        f'CREATE TABLE "{name}"._alk_tool_trace (id bigserial PRIMARY KEY, name text)'
+    superuser, _migrator, baseline, checked, _before, run = _migrated(
+        planted(name) + ";\n" + _full_prefix(), "", adopt=False
     )
-    superuser, _migrator, baseline, checked, before, run = _migrated(planted + ";\n" + author._TOOL_TRACE_DDL, "")
     try:
-        pr._refuse_seed_escalation(**checked, before_seed=before)
-        pr._make_harness_tables(**checked)
-        made = run(superuser, baseline, "SELECT to_regclass('public._alk_trial_faults') IS NOT NULL")
-        assert made == [(True,)]
-        url = urlunsplit(urlsplit(_REAL)._replace(path=f"/{baseline}"))
-        world_door.PostgresLog(url).write(
-            {"name": "x", "arguments": {}, "result": None, "ok": True, "error": "", "at": 1.0, "action_id": "a1",
-             "outcome": "committed", "actor_id": "agent"}
-        )
-        counts = run(superuser, baseline, f'SELECT (SELECT count(*) FROM public._alk_tool_trace), '
-                     f'(SELECT count(*) FROM "{name}"._alk_tool_trace)')
-        assert counts == [(1, 0)]
+        with pytest.raises(pr.ProcessRuntimeError) as raised:
+            pr._adopt_harness_tables(**checked)
+        assert refused in str(raised.value)
     finally:
-        run(superuser, baseline, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+        run(superuser, baseline, f'DROP SCHEMA IF EXISTS "{name}" CASCADE; DROP SCHEMA IF EXISTS alk_s0 CASCADE; '
+            "DROP SCHEMA IF EXISTS alk_w3 CASCADE")
         _dropped(superuser, baseline, run)
 
 
@@ -1554,12 +1555,17 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
     assert store._store.query("SELECT format('who %s', name) AS who FROM riders") == [{"who": reader}]
     snapshot = store._store.freeze()
     store.execute("INSERT INTO riders (name) VALUES ('bo')")
+    # Auditor B, item 14: a trigger set to fire even in replica mode refuses the store role's reset.
+    with pytest.raises(StoreError, match="riders.noted"):
+        store._store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("ALTER TABLE riders ENABLE TRIGGER noted")
     store._store.restore(snapshot)
     assert [row["name"] for row in store.records("riders")] == ["ada"]
     with psycopg.connect(superuser, autocommit=True) as connection:
         ran = {row[0] for row in connection.execute("SELECT who FROM audit.ran_as").fetchall()}
-    # The handler's insert fires as the world's role; the reset's ALWAYS trigger as the store role, never the harness.
-    assert ran == {role, reader} and urlsplit(superuser).username not in ran
+    # The handler's insert fires as the world's role; the reset runs none of the world's triggers.
+    assert ran == {role}
     with pytest.raises(StoreError, match="no_world_role"):
         attached_world_store(SimpleNamespace(address=superuser, tool_address=None, store_address=None))
 
@@ -1740,6 +1746,10 @@ _UNLIKE_THE_HARNESS = {
     # Auditor A, item 2: a failed call never logged, and a second call of a name lost.
     "check ok": "ALTER TABLE public._alk_tool_trace ADD CONSTRAINT logged_ok CHECK (ok)",
     "unique name": "ALTER TABLE public._alk_tool_trace ADD CONSTRAINT one_name UNIQUE (name)",
+    # Auditor B, items 5-6: the log's sequence owned by no column stays the world's to set; one that cycles at 2
+    # collides every third write.
+    "sequence unowned": "ALTER SEQUENCE public._alk_tool_trace_id_seq OWNED BY NONE",
+    "sequence cycles": "ALTER SEQUENCE public._alk_tool_trace_id_seq MAXVALUE 2 CYCLE",
 }
 
 
@@ -2034,6 +2044,149 @@ def test_checks_read_a_door_bundle_s_log_as_the_store_role(door_worlds, monkeypa
     assert [(row["name"], row["outcome"]) for row in events] == [("refund", "committed")]
     with pytest.raises(Exception):
         store.query("INSERT INTO public._alk_tool_trace (name, arguments, ok, at) VALUES ('x', '{}', true, 0)")
+
+
+@real_postgres
+def test_a_failed_mcp_toolbox_call_is_logged_faulted_never_committed(door_worlds, tmp_path: Path):
+    """Auditor B, item 7: the MCP Toolbox's log row says what came of the call; a failed statement is faulted, and
+    no column's default makes it committed."""
+    from fi.alk.harness import mcp_toolbox_adapter
+
+    superuser, world, door, _reset = door_worlds(True)
+    with pytest.raises(Exception):
+        mcp_toolbox_adapter._execute(
+            "divide", {"statement": "SELECT 1 / 0", "parameters": []}, {}, database_url=door,
+            trace_path=tmp_path / "trace.jsonl", records_url=world,
+        )
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        cursor = connection.execute("SELECT name, ok, outcome, actor_id FROM public._alk_tool_trace")
+        rows = [dict(zip([one[0] for one in cursor.description], row, strict=True)) for row in cursor.fetchall()]
+    assert [(row["name"], row["ok"], row["outcome"]) for row in rows] == [("divide", False, "faulted")]
+    assert not world_door.is_committed(rows[0])
+    assert not world_door.is_committed({"ok": False, "outcome": "committed"})
+    assert world_door.logged_outcome({"ok": False, "outcome": "committed"}) == "faulted"
+
+
+@real_postgres
+def test_an_older_log_keeps_each_call_s_own_outcome_not_its_default():
+    """Auditor B, item 8: a log from before actors were recorded (no actor_id) that keeps outcomes, with the
+    harness's own default of committed: the door writes each call's outcome, so a refused call stays refused."""
+    parts = urlsplit(_REAL)
+    database = f"alk_log_{uuid.uuid4().hex[:8]}"
+    admin = dict(host=parts.hostname or "localhost", port=parts.port or 5432, user=parts.username,
+                 password=parts.password or "", dbname="postgres")
+    _customer_sql(**admin, statement=f'CREATE DATABASE "{database}"')
+    try:
+        _customer_sql(**{**admin, "dbname": database}, statement=(
+            "CREATE TABLE public._alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+            "outcome text NOT NULL DEFAULT 'committed')"))
+        url = urlunsplit(parts._replace(path=f"/{database}"))
+        world_door.PostgresLog(url).write(
+            {"name": "refund", "arguments": {}, "result": None, "ok": False, "error": "refused", "at": 1.0,
+             "outcome": "refused", "actor_id": "agent"}
+        )
+        rows = world_door.PostgresLog(url).rows()
+        assert [(row["name"], row["outcome"]) for row in rows] == [("refund", "refused")]
+        assert not world_door.is_committed(rows[0])
+    finally:
+        _customer_sql(**admin, statement=f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+_SHOUTING = (
+    "CREATE TABLE public.parent (id serial PRIMARY KEY, name text);\n"
+    "CREATE TABLE public.child (id serial PRIMARY KEY, parent_id int REFERENCES public.parent (id));\n"
+    "CREATE TABLE public.audit (what text);\n"
+    "CREATE FUNCTION public.shout() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.name := upper(NEW.name); "
+    "INSERT INTO public.audit VALUES (NEW.name); RETURN NEW; END $$;\n"
+    "CREATE TRIGGER shouted BEFORE INSERT ON public.parent FOR EACH ROW EXECUTE FUNCTION public.shout();\n"
+)
+_TOGGLED = (
+    "INSERT INTO public.parent (id, name) VALUES (1, 'alpha');\n"
+    "ALTER TABLE public.child DISABLE TRIGGER ALL;\n"
+    "INSERT INTO public.child (id, parent_id) VALUES (10, 1);\n"
+    "ALTER TABLE public.child ENABLE TRIGGER ALL;\n"
+    "INSERT INTO public.parent (id, name) VALUES (2, 'beta');\n"
+)
+
+
+@real_postgres
+def test_replica_mode_covers_only_the_dump_s_own_toggled_lines(tmp_path: Path):
+    """Auditor B, item 9: each DISABLE / ENABLE TRIGGER ALL line becomes a replica-mode switch where it stands, so the
+    customer's triggers fire before and after the dump's block, and a foreign key outside it is still enforced."""
+    build, run, baseline = _seeded(tmp_path, _SHOUTING, _TOGGLED)
+    try:
+        build()
+        assert run(baseline, "SELECT name FROM public.parent ORDER BY id") == [("ALPHA",), ("BETA",)]
+        assert run(baseline, "SELECT count(*) FROM public.audit") == [(2,)]
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+    orphan, run, baseline = _seeded(tmp_path, _SHOUTING, _TOGGLED + "INSERT INTO public.child VALUES (11, 42);\n")
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            orphan()
+        assert "foreign key" in str(refused.value)
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    ("schema", "seed"),
+    (
+        # Auditor B, item 10: a table that forces row security still takes the seed's rows.
+        ("CREATE TABLE public.profiles (id int PRIMARY KEY, owner text); ALTER TABLE public.profiles ENABLE ROW LEVEL "
+         "SECURITY; ALTER TABLE public.profiles FORCE ROW LEVEL SECURITY; CREATE POLICY own ON public.profiles "
+         "USING (owner = current_user);\n", "INSERT INTO public.profiles VALUES (1, 'someone');\n"),
+        # Item 11: a full dump used as a seed keeps its OWNER TO lines.
+        ("CREATE TABLE public.items (id int PRIMARY KEY);\n",
+         "INSERT INTO public.items VALUES (1);\nALTER TABLE public.items OWNER TO postgres;\n"),
+    ),
+)
+def test_seeds_a_superuser_load_took_still_build_as_the_restricted_login(tmp_path: Path, schema, seed):
+    build, run, baseline = _seeded(tmp_path, schema, seed)
+    try:
+        build()
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    ("seed", "said"),
+    (
+        ("CREATE ROLE anon NOLOGIN;\n", "Roles are the harness's own"),
+        ("COPY public.items FROM '/etc/hostname';\n", "COPY ... FROM STDIN"),
+        ("SELECT 1;\n\\! touch /tmp/alk-meta\n", "psql meta-commands are not run (line 2: \\!)"),
+    ),
+)
+def test_a_seed_the_login_cannot_run_says_what_to_change_and_nothing_else(tmp_path: Path, seed, said):
+    """Auditor B, item 12 and the meta-commands: a refusal names the bundle's file, what was refused and what to
+    change; never psql's own output or a scratch path of the harness's."""
+    build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n", seed)
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            build()
+        message = str(refused.value)
+        assert said in message and "seed.sql" in message
+        assert "/var/folders" not in message and "/tmp/tmp" not in message and "\nSET" not in message
+        assert not Path("/tmp/alk-meta").exists()
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_the_restricted_login_cannot_log_in_once_retired():
+    parts = urlsplit(_REAL)
+    superuser = pr.EngineCredentials(parts.username, parts.password or "")
+    checked = {"port": parts.port or 5432, "credentials": superuser, "sql_runner": pr.default_sql_runner,
+               "process_name": "db"}
+    login = pr.migrator_credentials(**checked, baseline_db="postgres")
+    pr.retire_login(login, **checked)
+    roles = _customer_sql(host=parts.hostname or "localhost", port=checked["port"], user=superuser.username,
+                          password=superuser.password, dbname="postgres",
+                          statement=f"SELECT rolcanlogin, rolbypassrls FROM pg_roles WHERE rolname = '{login.username}'")
+    assert roles == [(False, True)] or roles == [(False, False)]
 
 
 def _pg_dump_schema(owner: str) -> str:
