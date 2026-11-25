@@ -36,21 +36,6 @@
       }
     },
     {
-      "id": "seat_floor_policy",
-      "text": "Enforces minimum seat requirements per plan tier.",
-      "class": "configurable_environment_policy",
-      "parameters": {
-        "enforce_floor": {
-          "type": "boolean",
-          "default": true,
-          "allowed": [
-            true,
-            false
-          ]
-        }
-      }
-    },
-    {
       "id": "confirmation_gate",
       "text": "Requires explicit user confirmation before executing subscription mutations.",
       "class": "configurable_environment_policy",

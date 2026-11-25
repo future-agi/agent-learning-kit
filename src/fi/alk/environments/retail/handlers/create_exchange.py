@@ -13,6 +13,7 @@ def _for_caller(db, customer_id, what):
 
 
 import json
+from calendar import monthrange
 from datetime import datetime
 
 def handle(args, db):
@@ -100,6 +101,8 @@ def handle(args, db):
     db.execute("UPDATE order_items SET returned_quantity = returned_quantity + ? WHERE item_id = ?", [quantity, line["item_id"]])
     if difference < 0:
         credit_count = db.one("SELECT COUNT(*) AS c FROM store_credits")["c"]
-        db.execute("INSERT INTO store_credits (credit_id, customer_id, amount_cents, source, issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)", [f"SCR{credit_count + 1:02d}", customer_id, -difference, f"price difference on exchange {exchange_id}", clock, clock[:4].replace(clock[:4], str(int(clock[:4]) + 1)) + clock[4:]])
+        year, month = divmod(now.year * 12 + now.month - 1 + int(policy.get("store_credit_expiry_months", 12)), 12)
+        expires = f"{year:04d}-{month + 1:02d}-{min(now.day, monthrange(year, month + 1)[1]):02d}{clock[10:]}"
+        db.execute("INSERT INTO store_credits (credit_id, customer_id, amount_cents, source, issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)", [f"SCR{credit_count + 1:02d}", customer_id, -difference, f"price difference on exchange {exchange_id}", clock, expires])
         db.execute("UPDATE customers SET store_credit_cents = store_credit_cents + ? WHERE customer_id = ?", [-difference, customer_id])
     return {"exchange_id": exchange_id, "order_id": order_id, "original_sku": original_sku, "original_size": original_size, "replacement_sku": replacement_sku, "replacement_size": replacement_size, "quantity": quantity, "price_difference_cents": difference, "difference_note": ("charged before the replacement ships" if difference > 0 else "issued as store credit" if difference < 0 else "no difference"), "status": "authorized", "idempotent": False}

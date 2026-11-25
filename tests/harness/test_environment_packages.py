@@ -63,6 +63,15 @@ def test_inventory_lists_every_package() -> None:
         assert f"`{package}`" in inventory, package
 
 
+@pytest.mark.parametrize("package", sorted(set(VERTICALS) - {"banking"}))
+def test_every_policy_parameter_is_read_by_a_handler(package: str) -> None:
+    """A parameter nothing reads is a setting that changes nothing."""
+    rules = json.loads((ROOT / package / "policy.json").read_text(encoding="utf-8"))["rules"]
+    handlers = "".join(path.read_text(encoding="utf-8") for path in (ROOT / package / "handlers").glob("*.py"))
+    unread = [name for rule in rules for name in rule.get("parameters", {}) if name not in handlers]
+    assert not unread, unread
+
+
 def test_renamed_scenarios_seal(tmp_path: Path) -> None:
     here = ROOT / "saas_subscriptions"
     environment = designed.build_environment(here, tmp_path / "environment")

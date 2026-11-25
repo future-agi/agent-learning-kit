@@ -24,7 +24,7 @@ def handle(args, db):
         prior = db.one("SELECT * FROM lead_request_keys WHERE request_key = ?", [key])
         if prior:
             if prior["email_normalized"] != norm or json.loads(prior["facts"]) != facts:
-                raise ToolError(f"request_key {key!r} was already used for another request ({prior['email_normalized']}, {prior['facts']}); use a new key for a new request.", category="conflict")
+                raise ToolError(f"request_key {key!r} was already used for another request; use a new key for a new request.", category="conflict")
             lead = db.one("SELECT * FROM leads WHERE lead_id = ?", [prior["lead_id"]])
             return dict(_lead_view(lead), created=False, idempotent_replay=True)
     created_contact = False

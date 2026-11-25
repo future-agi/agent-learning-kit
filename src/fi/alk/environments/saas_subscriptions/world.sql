@@ -7,7 +7,6 @@ CREATE TABLE clock (
 INSERT INTO "clock" VALUES('2026-10-15T12:00:00Z');
 CREATE TABLE environment_policy (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO "environment_policy" VALUES('timing_mode','"end_of_period"');
-INSERT INTO "environment_policy" VALUES('enforce_floor','true');
 INSERT INTO "environment_policy" VALUES('require_confirmation','true');
 INSERT INTO "environment_policy" VALUES('allowed_destinations','"CH_BILLESC"');
 INSERT INTO "environment_policy" VALUES('mode','"approval_gated"');

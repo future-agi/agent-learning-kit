@@ -58,20 +58,9 @@
       }
     },
     {
-      "id": "demo_length_policy",
-      "text": "The length of a demo slot in minutes.",
-      "class": "configurable_environment_policy",
-      "parameters": {
-        "demo_minutes": {
-          "type": "integer",
-          "default": 30,
-          "allowed": [
-            30,
-            45,
-            60
-          ]
-        }
-      }
+      "id": "demo_length",
+      "text": "A demo slot is 30 minutes.",
+      "class": "system_invariant"
     },
     {
       "id": "slack_posting_policy",

@@ -144,7 +144,6 @@ CREATE TABLE session_caller (
 INSERT INTO "clock" VALUES('2026-11-10T15:00:00Z');
 INSERT INTO "environment_policy" VALUES('fallback_queue','"Q-SDR-FALLBACK"');
 INSERT INTO "environment_policy" VALUES('min_qualifying_seats','20');
-INSERT INTO "environment_policy" VALUES('demo_minutes','30');
 INSERT INTO "environment_policy" VALUES('allowed_destinations','"CH_SALESHANDOFF"');
 INSERT INTO "environment_policy" VALUES('mode','"approval_gated"');
 INSERT INTO "environment_policy" VALUES('max_length','4000');
