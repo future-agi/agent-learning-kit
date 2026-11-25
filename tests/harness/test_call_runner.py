@@ -2234,14 +2234,14 @@ def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
         pytest.param(['{"arguments": {}}'], True, [], id="no-name"),
         pytest.param(
             ['{"name": "lookup", "arguments": {}}', '{"name": "book", "argu'],
-            False,
+            True,
             ["lookup"],
             id="one-bad-line-among-good",
         ),
         pytest.param(["", "   "], False, [], id="blank-lines-only"),
     ],
 )
-def test_a_trace_file_with_no_readable_record_is_a_failed_capture(
+def test_a_trace_file_with_an_unreadable_record_is_a_failed_capture(
     tmp_path: Path, lines: list[str], failed: bool, names: list[str]
 ) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
@@ -2251,7 +2251,7 @@ def test_a_trace_file_with_no_readable_record_is_a_failed_capture(
     # Lenient reads drop what they cannot parse, as before.
     assert [call.name for call in cr._collect_file_tool_calls(runtime)] == names
     if failed:
-        with pytest.raises(cr.ToolCaptureFailed, match="no readable record"):
+        with pytest.raises(cr.ToolCaptureFailed, match="unreadable record"):
             cr._collect_file_tool_calls(runtime, strict=True)
     else:
         calls = cr._collect_file_tool_calls(runtime, strict=True)
@@ -2317,7 +2317,7 @@ class _NoTablePsycopg:
             EvidenceSeam.TOOL_TRACE,
             "unreadable",
             "rows",
-            False,
+            True,
             ["lookup"],
             id="trace-file-unreadable-but-the-seam-captured",
         ),
@@ -2347,6 +2347,8 @@ class _NoTablePsycopg:
             ["Draft checker"],
             id="handoff-only-with-the-database-read",
         ),
+        pytest.param(EvidenceSeam.HTTP_TOOL, "cut-handoff", None, True, ["Draft checker"]),
+        pytest.param(EvidenceSeam.HTTP_TOOL, "cut-call", None, True, ["lookup"]),
         pytest.param(
             EvidenceSeam.HTTP_TOOL, "cut", None, True, [], id="trace-file-of-cut-lines"
         ),
@@ -2388,6 +2390,10 @@ def test_a_completed_call_says_whether_its_tool_capture_failed(
             _trace_lines(trace_path, *_SPAN_LINES)
         elif trace == "handoff":
             _trace_lines(trace_path, _HANDOFF_LINE)
+        elif trace in {"cut-handoff", "cut-call"}:
+            _trace_lines(trace_path, _HANDOFF_LINE if trace == "cut-handoff" else {"name": "lookup"})
+            with trace_path.open("a", encoding="utf-8") as stream:
+                stream.write("{\n")
         elif trace == "cut":
             trace_path.write_text('{"name": "lookup", "argu\n', encoding="utf-8")
         return _report()

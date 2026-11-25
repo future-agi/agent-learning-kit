@@ -445,15 +445,16 @@ def test_a_chat_trial_says_its_workers_were_held_on_their_channels_only_behind_a
 
 
 @pytest.mark.parametrize(
-    "written,readable,failed",
+    "written,readable,http_call,failed",
     [
-        pytest.param(False, True, False, id="agent-wrote-no-trace"),
-        pytest.param(True, True, False, id="trace-read"),
-        pytest.param(True, False, True, id="trace-unreadable"),
+        pytest.param(False, True, False, False, id="agent-wrote-no-trace"),
+        pytest.param(True, False, True, True, id="unreadable-trace-with-http-call"),
+        pytest.param(True, True, False, False, id="trace-read"),
+        pytest.param(True, False, False, True, id="trace-unreadable"),
     ],
 )
 def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
-    tmp_path: Path, monkeypatch: Any, written: bool, readable: bool, failed: bool
+    tmp_path: Path, monkeypatch: Any, written: bool, readable: bool, http_call: bool, failed: bool
 ) -> None:
     monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
@@ -461,7 +462,7 @@ def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
 
     class Wrapper:
         def __init__(self, **_kwargs: Any) -> None:
-            pass
+            self.called = False
 
         async def call(self, _request: Any) -> AgentResponse:
             # The agent runs its tools in its own process and writes them to the trace file.
@@ -470,6 +471,11 @@ def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
                     json.dumps({"name": "lookup_account", "arguments": {}}) + "\n",
                     encoding="utf-8",
                 )
+            if http_call and not self.called:
+                self.called = True
+                return AgentResponse(content="", tool_calls=[{
+                    "id": "tool-1", "function": {"name": "lookup_account", "arguments": '{"account_id":"ACC-2048"}'}
+                }])
             return AgentResponse(content="I can't share that account.")
 
     monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
@@ -503,7 +509,7 @@ def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
     )
 
     assert [call.name for call in outcome.calls] == (
-        ["lookup_account"] if written and readable else []
+        ["lookup_account"] if http_call or (written and readable) else []
     )
     assert outcome.tool_capture_failed is failed
 
