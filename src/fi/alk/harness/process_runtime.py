@@ -48,7 +48,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Iterator, Protocol, Sequence
 from urllib.parse import quote as urlquote, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue, PrivateAttr, ValidationError
@@ -4485,22 +4485,176 @@ def _without_trigger_toggles(file: Path) -> tuple[Path, int]:
 
 
 # A bundle's own SQL files run as the restricted login in this process (psycopg), never through psql: nothing in them
-# is a client command, so a file can run SQL as that login and nothing else. pg_dump's own `COPY ... FROM stdin` data
-# blocks are loaded through the driver's COPY, and pg_dump's own restriction lines are skipped; any other line starting
-# with a backslash (a psql command) fails the build. A misread line can only fail the build: it reaches the server as
-# SQL, as the same login.
-_PG_DUMP_COPY = re.compile(r"^(COPY\s+\S.*\s+FROM\s+stdin)\s*;\s*$")
-_PG_DUMP_RESTRICT = re.compile(r"^\\(?:un)?restrict [A-Za-z0-9]+\s*$")
+# is a client command, so a file can run SQL as that login and nothing else. The file is read into statements the way
+# psql reads it (strings, E'' strings, quoted names, dollar quotes, comments, parentheses, BEGIN ATOMIC bodies) and
+# each runs on its own, as psql runs it; a `COPY ... FROM STDIN` statement takes the data that follows it up to `\.`.
+# pg_dump's own restriction lines are skipped, and a psql command (a backslash where a statement would start) fails
+# the build. A misread can only fail the build: whatever reaches the server is SQL, as the same login.
+_PG_DUMP_RESTRICT = re.compile(r"\\(?:un)?restrict [A-Za-z0-9]+[ \t]*$")
+_COPY_FROM_STDIN = re.compile(r"^\s*COPY\b.*\bFROM\s+STDIN\b", re.IGNORECASE | re.DOTALL)
+_SCS_OFF = re.compile(r"^\s*SET\s+(?:SESSION\s+)?standard_conforming_strings\s*(?:=|TO)\s*'?off'?", re.IGNORECASE)
+_SCS_ON = re.compile(r"^\s*SET\s+(?:SESSION\s+)?standard_conforming_strings\s*(?:=|TO)\s*'?on'?", re.IGNORECASE)
+_DOLLAR = re.compile(r"\$(?:[^\W\d]\w*)?\$")
+_WORD = re.compile(r"[A-Za-z_]\w*")
+
+
+def _bundle_statements(text: str) -> Iterator[tuple[str, str, str, int]]:
+    """A bundle SQL file as psql reads it: ("sql", statement, "", line), ("copy", statement, data, line), or
+    ("command", text, "", line) for a backslash where a statement would start (pg_dump's restriction lines are left
+    out). Raises ValueError for a COPY with no end-of-data line."""
+    i, n, line = 0, len(text), 1
+    start, start_line = 0, 1
+    started = False  # anything but whitespace and comments since the last statement
+    state: str | None = None
+    parens = 0
+    atomic = 0
+    escapes = False  # standard_conforming_strings off: '' strings take backslash escapes
+    while i < n:
+        char = text[i]
+        if state is None:
+            if char == "\n":
+                line += 1
+                i += 1
+                continue
+            if text.startswith("--", i):
+                end = text.find("\n", i)
+                i = n if end < 0 else end
+                continue
+            if text.startswith("/*", i):
+                state, i = "/*1", i + 2
+                continue
+            if not started:
+                if char.isspace():
+                    i += 1
+                    continue
+                if char == "\\":
+                    end = text.find("\n", i)
+                    end = n if end < 0 else end
+                    command = text[i:end]
+                    if not _PG_DUMP_RESTRICT.fullmatch(command):
+                        yield "command", command, "", line
+                    i = end
+                    start = i
+                    continue
+                started, start, start_line = True, i, line
+            if char == "'":
+                before = text[i - 1] if i else " "
+                earlier = text[i - 2] if i > 1 else " "
+                prefixed = before in "eE" and not (earlier.isalnum() or earlier in "_$")
+                state, i = ("E'" if prefixed or escapes else "'"), i + 1
+                continue
+            if char == '"':
+                state, i = '"', i + 1
+                continue
+            if char == "$":
+                tag = _DOLLAR.match(text, i)
+                before = text[i - 1] if i else " "
+                if tag and not (before.isalnum() or before in "_$"):
+                    state, i = tag.group(), tag.end()
+                    continue
+            if char == "(":
+                parens += 1
+            elif char == ")":
+                parens = max(0, parens - 1)
+            elif char.isalpha() or char == "_":
+                word = _WORD.match(text, i)
+                token = word.group().upper()
+                if token == "ATOMIC" and re.search(r"\bBEGIN\s*$", text[start:i], re.IGNORECASE):
+                    atomic += 1
+                elif atomic and token == "CASE":
+                    atomic += 1
+                elif atomic and token == "END":
+                    atomic -= 1
+                i = word.end()
+                continue
+            elif char == ";" and parens == 0 and atomic == 0:
+                statement = text[start : i + 1]
+                i += 1
+                started = False
+                if _SCS_OFF.match(statement):
+                    escapes = True
+                elif _SCS_ON.match(statement):
+                    escapes = False
+                if _COPY_FROM_STDIN.match(statement):
+                    newline = text.find("\n", i)
+                    data_start = n if newline < 0 else newline + 1
+                    line += text.count("\n", i, data_start)
+                    data_lines: list[str] = []
+                    position = data_start
+                    while True:
+                        if position >= n:
+                            raise ValueError(f"line {start_line}: a COPY ... FROM STDIN has no \\. line to end its data")
+                        end = text.find("\n", position)
+                        end = n if end < 0 else end
+                        row = text[position:end]
+                        line += 1
+                        position = end + 1
+                        if row == "\\.":
+                            break
+                        data_lines.append(row + "\n")
+                    yield "copy", statement[:-1], "".join(data_lines), start_line
+                    i, start = position, position
+                else:
+                    yield "sql", statement, "", start_line
+                    start = i
+                continue
+            i += 1
+        elif state == "E'":
+            if char == "\\":
+                if i + 1 < n and text[i + 1] == "\n":
+                    line += 1
+                i += 2
+            elif char == "'":
+                if text.startswith("''", i):
+                    i += 2
+                else:
+                    state, i = None, i + 1
+            else:
+                line += char == "\n"
+                i += 1
+        elif state in ("'", '"'):
+            closing = text.find(state, i)
+            if closing < 0:
+                line += text.count("\n", i)
+                i = n
+                break
+            line += text.count("\n", i, closing)
+            if text.startswith(state * 2, closing):
+                i = closing + 2
+                continue
+            state, i = None, closing + 1
+        elif state.startswith("/*"):
+            depth = int(state[2:])
+            opening, closing = text.find("/*", i), text.find("*/", i)
+            if closing < 0:
+                line += text.count("\n", i)
+                i = n
+                break
+            if 0 <= opening < closing:
+                line += text.count("\n", i, opening)
+                state, i = f"/*{depth + 1}", opening + 2
+            else:
+                line += text.count("\n", i, closing)
+                state, i = (f"/*{depth - 1}" if depth > 1 else None), closing + 2
+        else:
+            closing = text.find(state, i)
+            if closing < 0:
+                line += text.count("\n", i)
+                i = n
+                break
+            line += text.count("\n", i, closing)
+            i, state = closing + len(state), None
+    rest = text[start:]
+    if rest.strip() and started:
+        yield "sql", rest, "", start_line
 
 
 def _run_sql_as_login(
     file: Path, *, relative_path: str, port: int, dbname: str, login: EngineCredentials, process_name: str
 ) -> None:
-    """Run one of a bundle's SQL files as the restricted login, as psql would run pg_dump's output: the SQL between
-    COPY blocks as one execution each (no parameters), each COPY block through the driver."""
+    """Run one of a bundle's SQL files as the restricted login, statement by statement as psql runs it (autocommit,
+    no parameters), each COPY FROM STDIN through the driver."""
     import psycopg
-
-    lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
 
     def refused(said: str) -> ProcessRuntimeError:
         return ProcessRuntimeError(
@@ -4511,49 +4665,29 @@ def _run_sql_as_login(
             domain=FailureDomain.ENVIRONMENT,
         )
 
+    text = file.read_text(encoding="utf-8")
     with psycopg.connect(
         host="localhost", port=port, user=login.username, password=login.password, dbname=dbname, autocommit=True
     ) as connection:
-        sql: list[str] = []
-
-        def flush() -> None:
-            text = "".join(sql)
-            sql.clear()
-            if text.strip():
-                connection.execute(text.encode("utf-8"))
-
-        index = 0
+        at = 0
         try:
-            while index < len(lines):
-                line = lines[index]
-                stripped = line.rstrip("\n")
-                header = _PG_DUMP_COPY.match(stripped)
-                if header:
-                    flush()
-                    data: list[str] = []
-                    index += 1
-                    while index < len(lines) and lines[index].rstrip("\n") != "\\.":
-                        data.append(lines[index])
-                        index += 1
-                    if index >= len(lines):
-                        raise refused(f"line {index}: a COPY ... FROM stdin block has no \\. line to end it")
-                    with connection.cursor().copy(header.group(1).encode("utf-8")) as copy:
-                        copy.write("".join(data).encode("utf-8"))
-                elif _PG_DUMP_RESTRICT.match(stripped):
-                    pass
-                elif stripped.lstrip().startswith("\\"):
+            for kind, statement, data, at in _bundle_statements(text):
+                if kind == "command":
                     raise refused(
-                        f"line {index + 1}: {stripped.split()[0]} is a psql command, not SQL; psql commands are not "
-                        "run. Inline a file's rows as COPY ... FROM STDIN, and list another SQL file in the store's "
+                        f"line {at}: {statement.split()[0]} is a psql command, not SQL; psql commands are not run. "
+                        "Inline a file's rows as COPY ... FROM STDIN, and list another SQL file in the store's "
                         "migrations or seed files instead of \\i"
                     )
+                if kind == "copy":
+                    with connection.cursor().copy(statement.encode("utf-8")) as copy:
+                        copy.write(data.encode("utf-8"))
                 else:
-                    sql.append(line)
-                index += 1
-            flush()
+                    connection.execute(statement.encode("utf-8"))
+        except ValueError as error:
+            raise refused(str(error)) from error
         except psycopg.Error as error:
             said = getattr(getattr(error, "diag", None), "message_primary", None) or str(error)
-            raise refused(said) from error
+            raise refused(f"line {at}: {said}" if at else said) from error
 
 
 # What a file run as the restricted login asked for that only a superuser may do, and what to change instead.
@@ -6388,6 +6522,20 @@ def _settle_harness_rows(
         )
 
 
+# Every membership of a per-world role but its own group (a store role may also become the tables' owner, never
+# inheriting its rights), revoked.
+_NORMALISE_MEMBERSHIPS = (
+    "DO $$ DECLARE r record; BEGIN FOR r IN SELECT m.rolname AS member, g.rolname AS grp FROM pg_auth_members a "
+    "JOIN pg_roles m ON m.oid = a.member JOIN pg_roles g ON g.oid = a.roleid WHERE "
+    f"(m.rolname ~ '^{WORLD_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{WORLD_ROLE_GROUP}') "
+    f"OR (m.rolname ~ '^{STORE_ROLE_PREFIX}[0-9]+$' AND NOT (g.rolname = '{WORLD_ROLE_GROUP}' "
+    f"OR (g.rolname = 'alk_migrator' AND NOT a.inherit_option))) "
+    f"OR (m.rolname ~ '^{LOG_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{LOG_ROLE_GROUP}') "
+    f"OR (m.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{DOOR_ROLE_GROUP}') "
+    "LOOP EXECUTE format('REVOKE %I FROM %I', r.grp, r.member); END LOOP; END $$"
+)
+
+
 def seed_store_safely(
     store: StoreEntry,
     *,
@@ -6411,6 +6559,20 @@ def seed_store_safely(
     the migrations ran, and the seed is checked (`_refuse_seed_escalation`) before anything else reads the database.
     Other engines apply their files as before. Returns the restricted login, for any other SQL of the bundle's."""
     postgres = engine is ManagedEngine.POSTGRES and credentials is not None
+    if postgres:
+        # Roles outlive a build: before anything is checked, every per-world role is in its own group and no other,
+        # whatever an older harness granted it.
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname="postgres",
+            statement=_NORMALISE_MEMBERSHIPS,
+        )
     login = store_login(
         store,
         engine=engine,
@@ -6844,7 +7006,8 @@ def _grant_log_role_group(run: Callable[[str, str], None], baseline_db: str) -> 
 
 
 def _no_notify(run: Callable[[str, str], None], baseline_db: str) -> None:
-    """No world role may signal another session through `pg_notify` from its world's code."""
+    """No world role may call the `pg_notify` function from its world's code. (The NOTIFY statement needs no grant
+    and cannot be revoked; no world role can read the harness's log, so it carries only what that role may read.)"""
     run(baseline_db, "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_notify(text, text) FROM PUBLIC")
 
 
