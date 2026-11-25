@@ -346,10 +346,10 @@ function install() {
     return Object.fromEntries([...kept, ...AUTH_HEADERS.map((name) => [name, ""])]);
   }
 
+  /** A copy of the chunk: its write is acknowledged at once, after which the caller may reuse it. */
   function chunkBuffer(chunk, encoding) {
     if (chunk === undefined || chunk === null) return null;
-    if (Buffer.isBuffer(chunk)) return chunk;
-    if (chunk instanceof Uint8Array) return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    if (chunk instanceof Uint8Array) return Buffer.from(chunk);
     return Buffer.from(String(chunk), typeof encoding === "string" ? encoding : "utf8");
   }
 

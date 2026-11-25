@@ -391,3 +391,35 @@ test("a span that starts after the call file is removed, before the hook looks, 
   );
   assert.deepEqual(stamps, { a: "call-a", after: null });
 });
+
+test("a buffer the caller reuses after its write is acknowledged does not change the export", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const body = JSON.stringify(otlp([span("llm", 1n)]));
+  const script = `
+    import http from "node:http";
+    const body = ${JSON.stringify(body)};
+    for (const make of [(text) => Buffer.from(text), (text) => new Uint8Array(Buffer.from(text))]) {
+      await new Promise((resolve, reject) => {
+        const req = http.request("http://127.0.0.1:${collector.port}/v1/traces", {
+          method: "POST", headers: { "content-type": "application/json" },
+        }, (res) => { res.resume(); res.on("end", resolve); });
+        req.on("error", reject);
+        const chunk = make(body);
+        req.write(chunk, () => {
+          chunk.fill(0x78);
+          req.end();
+        });
+      });
+    }
+  `;
+  const result = await run(script, envFor(collector));
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /failed/);
+  assert.equal(collector.seen.length, 2);
+  for (const sent of collector.seen) {
+    const exported = JSON.parse(sent.body.toString());
+    assert.equal(exported.resourceSpans[0].scopeSpans[0].spans[0].name, "llm");
+    assert.equal(attributes(exported.resourceSpans[0].resource.attributes)["fi.simulation.job_id"], "job-1");
+  }
+});
