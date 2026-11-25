@@ -70,6 +70,11 @@ class Judgement:
     # Which eval decided this, when it was decided by one rather than here.
     by: str = ""
     grading_error: bool = False
+    # Why this was not measured, when the agent's whole instructions were not there to send:
+    # "no_whole_instructions" when some were read, "no_instructions" when none were. Empty when
+    # it was measured. Not measured is neither a pass nor a fail, so it is no
+    # checkpoint and no failure: it is listed apart, with its reason.
+    unmeasured: str = ""
 
 
 @dataclass
@@ -112,11 +117,15 @@ class Result:
 
     @property
     def conduct_failures(self) -> list[Judgement]:
-        return [item for item in self.conduct if not item.holds]
+        return [item for item in self.conduct if not item.holds and not item.unmeasured]
 
     @property
     def grading_failures(self) -> list[Judgement]:
         return [item for item in self.conduct if item.grading_error]
+
+    @property
+    def not_measured(self) -> list[Judgement]:
+        return [item for item in self.conduct if item.unmeasured]
 
     @property
     def passed(self) -> bool:
@@ -145,6 +154,8 @@ class Result:
             if self.checkpoints
             else "nothing checked"
         )
+        if self.not_measured:
+            scored += f", {len(self.not_measured)} not measured"
         return (
             f"{mark}  {self.scenario}  {scored}  "
             f"({self.turns} turns, {self.calls} calls, {self.ended})"
@@ -298,15 +309,28 @@ def judge_suite_evals(
             for suite_eval in suite_evals
         ]
     verdicts: list[Judgement] = []
+    # Only instructions the save copied whole are sent: the lines named in the source, or a
+    # provider's whole prompt. A quote may leave text out, and an eval graded on part of the
+    # instructions reads as a verdict on all of them, so without whole instructions the eval is
+    # reported as not measured rather than run on them.
+    whole = contract.system_prompt_copied and bool(contract.system_prompt_excerpt.strip())
     # Sent to the platform, so cleaned once here for an older bundle's contract.
-    agent_prompt = _redact(contract.system_prompt_excerpt)
+    agent_prompt = _redact(contract.system_prompt_excerpt) if whole else ""
     for suite_eval in suite_evals:
         inputs = {
             "conversation": transcript.spoken() or "(nothing was said)",
             "agent_prompt": agent_prompt,
         }
         missing = [name for name in suite_eval.required_inputs if not inputs.get(name)]
+        if missing == ["agent_prompt"]:
+            logging.getLogger(__name__).warning(
+                "platform suite eval %s not measured: missing agent_prompt", suite_eval.name
+            )
+            verdicts.append(_not_measured(suite_eval.name, contract))
+            continue
         if missing:
+            # Any other name is one this function never builds: a setup error that repeats on
+            # every run, not a value this run happened to lack.
             logging.getLogger(__name__).warning(
                 "platform suite eval %s skipped: missing %s",
                 suite_eval.name,
@@ -363,6 +387,27 @@ def judge_suite_evals(
     return verdicts
 
 
+def _not_measured(name: str, contract: AgentContract) -> Judgement:
+    """An eval that was not run because the agent's whole instructions were not there to send."""
+    # Only what is known: the lines were not copied, so the text may or may not be complete.
+    if contract.system_prompt_excerpt.strip():
+        cause = "no_whole_instructions"
+        reason = (
+            "agent_prompt was not sent, since the instructions were not copied from the "
+            "agent's source and may be incomplete"
+        )
+    else:
+        cause = "no_instructions"
+        reason = "agent_prompt was not sent, since the agent's instructions were not read"
+    return Judgement(
+        claim=name,
+        kind=name,
+        holds=False,
+        why=f"Not measured: {reason}.",
+        unmeasured=cause,
+    )
+
+
 def reconcile_task_completion(
     suite_verdicts: list[Judgement],
     settled: list[Outcome],
@@ -384,6 +429,9 @@ def reconcile_task_completion(
     completed = all(authoritative)
     for verdict in suite_verdicts:
         if verdict.kind != "customer_agent_task_completion":
+            continue
+        # Not measured is not a verdict to correct: nothing was judged.
+        if verdict.unmeasured:
             continue
         if verdict.holds == completed:
             continue
@@ -529,6 +577,9 @@ def checkpoints(settled: list[Outcome], judged: list[Judgement]) -> list[Checkpo
             grading_error=item.grading_error,
         )
         for item in judged
+        # Not measured is neither a pass nor a fail, so it is no checkpoint: counted as one it
+        # would read as a failure, and a result measured by nothing would have something.
+        if not item.unmeasured
     )
     return checks
 
@@ -544,6 +595,10 @@ def summarise(results: list[Result]) -> str:
     for result in results:
         lines.append(result.line())
         lines.extend(check.line() for check in result.checkpoints)
+        lines.extend(
+            f"  not measured ({item.unmeasured}): {item.kind}: {item.why}"
+            for item in result.not_measured
+        )
     failing = [result for result in results if not result.passed]
     if failing:
         lines.append("")
@@ -587,6 +642,7 @@ def as_json(results: list[Result]) -> str:
                         "kind": item.kind,
                         "holds": item.holds,
                         "why": item.why,
+                        **({"unmeasured": item.unmeasured} if item.unmeasured else {}),
                     }
                     for item in result.conduct
                 ],
