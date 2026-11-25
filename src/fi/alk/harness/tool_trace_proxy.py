@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:  # Beside the proxy in a bundle; the harness package when run from source.
     from world_door import (
+        pinned_options,
         AGENT,
         HttpExecutor,
         PostgresLog,
@@ -21,6 +22,13 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         Routed,
         SHARED_ADDRESS,
         ToolCall,
+        KEY_OUTCOME_UNKNOWN,
+        KEY_UNKNOWN,
+        OUR_FAILURES,
+        UPSTREAM_TIMEOUT,
+        UPSTREAM_UNREACHABLE,
+        UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -31,6 +39,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
     )
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
+        pinned_options,
         AGENT,
         HttpExecutor,
         PostgresLog,
@@ -40,6 +49,13 @@ except ImportError:  # pragma: no cover - imported as part of the package
         Routed,
         SHARED_ADDRESS,
         ToolCall,
+        KEY_OUTCOME_UNKNOWN,
+        KEY_UNKNOWN,
+        OUR_FAILURES,
+        UPSTREAM_TIMEOUT,
+        UPSTREAM_UNREACHABLE,
+        UPSTREAM_UNAVAILABLE,
+        WORLD_FAILED,
         WorldDoor,
         action_tool,
         declared_read,
@@ -51,6 +67,9 @@ except ImportError:  # pragma: no cover - imported as part of the package
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# The world's rows are written with the world's own role, never the door's (`world_roles.WORLD_RECORDS_DATABASE_URL`);
+# a bundle sealed before it has only the door's.
+RECORDS_DATABASE_URL = os.environ.get("WORLD_RECORDS_DATABASE_URL", "") or DATABASE_URL
 # This trial's worker channels, {token: worker id}: a worker reaches the world under /w/<token>/.
 WORKER_CHANNELS_FILE = os.environ.get("WORKER_CHANNELS_FILE", "")
 # The sealed per-worker allow-lists beside this file, {"worker:<id>": {"allow": [...]}}; a bundle without it does not
@@ -83,9 +102,11 @@ def _trial_row(column: str, *, strict: bool = False) -> tuple | None:
             if _FAULTS_CONNECTION is None or _FAULTS_CONNECTION.closed:
                 import psycopg
 
-                _FAULTS_CONNECTION = psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=5)
+                _FAULTS_CONNECTION = psycopg.connect(
+                    DATABASE_URL, autocommit=True, connect_timeout=5, options=pinned_options()
+                )
             return _FAULTS_CONNECTION.execute(
-                f"SELECT {column} FROM _alk_trial_faults WHERE id = 1"  # noqa: S608 - a fixed column name
+                f"SELECT {column} FROM public._alk_trial_faults WHERE id = 1"  # noqa: S608 - a fixed column name
             ).fetchone()
         except Exception as exc:  # noqa: BLE001 - no table or column: nothing was ever set this trial
             if strict and type(exc).__name__ not in {"UndefinedTable", "UndefinedColumn"}:
@@ -174,7 +195,7 @@ def _channel_worker(token: str) -> str:
 
 def door() -> WorldDoor:
     return WorldDoor(
-        Routed(HttpExecutor(UPSTREAM), RecordExecutor(PostgresRecords(DATABASE_URL))),
+        Routed(HttpExecutor(UPSTREAM), RecordExecutor(PostgresRecords(RECORDS_DATABASE_URL))),
         PostgresLog(DATABASE_URL),
         PostgresRoster(DATABASE_URL),
         faults=_trial_faults,
@@ -264,17 +285,26 @@ class Handler(BaseHTTPRequestHandler):
         if outcome.fault is not None and is_timeout(outcome.fault):
             # The agent waits, then hears its call timed out, and may retry.
             time.sleep(outcome.delay_seconds)
-            self._reply(504, {"detail": "tool_upstream_timeout"})
+            self._reply(504, {"detail": UPSTREAM_TIMEOUT})
             return
         if outcome.fault is not None:
             # Unavailable or the scenario's error: answered at once, the world never saw the call.
             if outcome.body is not None:
                 self._reply_raw(outcome.status, outcome.body)
             else:
-                self._reply(outcome.status, {"detail": "tool_upstream_unavailable"})
+                self._reply(outcome.status, {"detail": UPSTREAM_UNAVAILABLE})
             return
         if outcome.outcome == "faulted" and outcome.body is None:
-            self._reply(outcome.status, {"detail": "tool_upstream_unavailable" if outcome.status == 502 else outcome.reason})
+            if outcome.refusal_code in OUR_FAILURES:
+                # The door failed by its own fault: ours.
+                self._reply(outcome.status, {"detail": WORLD_FAILED})
+            elif outcome.refusal_code in (UPSTREAM_UNREACHABLE, KEY_UNKNOWN):
+                # The agent's world (its tools server not answering) or a keyed retry after a lost answer: a fixed
+                # code a tool handing it back is still read failed by, never the internal reason.
+                code = UPSTREAM_UNAVAILABLE if outcome.refusal_code == UPSTREAM_UNREACHABLE else KEY_OUTCOME_UNKNOWN
+                self._reply(outcome.status, {"detail": code})
+            else:
+                self._reply(outcome.status, {"detail": outcome.detail})
             return
         content = outcome.answer()
         self.send_response(outcome.status)

@@ -49,8 +49,9 @@ from .usage import (
 from .handler_child import ChildWorld, HandlerChannel, HandlerChild, start_handler_child
 from . import tool_evidence as evidence
 from .world.runtime import Call, GeneratedWorld, graded_calls, trace_row
-from .world.stores.postgres import AttachedPostgresStore
-from .world_door import world_action
+from .world.stores import StoreError
+from .world.stores.postgres import AttachedPostgresStore, attached_world_store
+from .world_door import door_failure, world_action
 
 logger = logging.getLogger(__name__)
 
@@ -282,8 +283,11 @@ class _HostedToolStore:
 
     key = "hosted-postgres"
 
-    def __init__(self, dsn: str) -> None:
-        self._store = AttachedPostgresStore(dsn)
+    def __init__(self, target: str | AttachedPostgresStore) -> None:
+        # A store already chosen for the world (`attached_world_store`), or the world role's address (a handler child).
+        self._store = (
+            target if isinstance(target, AttachedPostgresStore) else AttachedPostgresStore(target, restore_as_role=True)
+        )
 
     def start(self) -> None:
         self._store.start()
@@ -292,7 +296,8 @@ class _HostedToolStore:
         return
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
-        return self._store.query(_qmark_to_postgres(sql), params)
+        # A handler's read: the agent's tools' own role, under the world's row security.
+        return self._store.query_as_world(_qmark_to_postgres(sql), params)
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
         return self._store.execute(_qmark_to_postgres(sql), params)
@@ -376,6 +381,7 @@ def chat_door(
     tools_url: str | None = None,
     service_actions: set[str] | None = None,
     bundle_dir: Any = None,
+    records_dsn: str | None = None,
 ) -> Any:
     """The world's door for a chat run: the agent's own tools service runs its service actions and every actor's tool
     action when it has one, the world's own handlers the rest; the trial's action log is kept in memory (mirrored to the world's table when it keeps actors), and
@@ -405,10 +411,14 @@ def chat_door(
         return bool(getattr(result, "success", True)), getattr(result, "result", None), str(result.content)
 
     records = None
-    if mirror_dsn:
+    from .privilege import IsolationMode, isolation_mode
+
+    if mirror_dsn and (records_dsn or isolation_mode() is not IsolationMode.PER_USER):
         from .world_door import PostgresRecords
 
-        records = RecordExecutor(PostgresRecords(mirror_dsn))
+        # Record changes run as the world's own role; the mirror's superuser only keeps the log. With world roles and
+        # none given, the door has no record changes at all rather than make them as the superuser.
+        records = RecordExecutor(PostgresRecords(records_dsn or mirror_dsn))
     tools = (
         _ServiceTools(world, HttpExecutor(tools_url), HandlerExecutor(handle), set(service_actions or ()))
         if tools_url
@@ -565,17 +575,22 @@ def tool_world(
             "chat_world_unavailable: world_db postgres endpoint is absent"
         )
     tools = [tool.model_dump(mode="json") for tool in contract.tools]
+    # The world's own SQL (a handler's, a check's read) runs as its role, never as the harness.
+    try:
+        attached = attached_world_store(endpoint)
+    except StoreError as error:
+        raise CallAborted(str(error)) from error
     if handler_channel is not None:
         # Under per-user isolation the handlers, and the agent code they import, run in the
         # handler child; nothing of the agent's code is imported into this process. State is
         # read as the harness, as with one fixed user, so checks grade the same rows.
         return ChildWorld(
-            store=_HostedToolStore(endpoint.address),
+            store=_HostedToolStore(attached),
             channel=handler_channel,
             tools=tools,
             refusal_signature=contract.refusal_signature,
         )
-    world = GeneratedWorld(store=_HostedToolStore(endpoint.address))
+    world = GeneratedWorld(store=_HostedToolStore(attached))
     world.tools = tools
     world.handlers = handler_sources(bundle_dir, contract)
     world.refusal_signature = contract.refusal_signature
@@ -732,11 +747,16 @@ def _record_completed_tool_call(
         if declared_success is not None
         else not error and not refused
     )
+    result = _tool_response_result(response)
+    # The proxy's failure answer the agent's tool handed back as its value is a failed call of ours, never a result.
+    failed = door_failure(result)
+    if failed is not None:
+        ok, error, result = False, failed, None
     world.calls.append(
         Call(
             name=name,
             arguments=dict(arguments),
-            result=_tool_response_result(response),
+            result=result,
             ok=ok,
             refused=refused,
             error=error,
@@ -1138,6 +1158,7 @@ class HostedChatCallRunner:
             tools_url=service.address if service is not None else None,
             service_actions=service_actions(self._contract),
             bundle_dir=self._context.bundle_dir,
+            records_dsn=world_db.tool_address if world_db is not None else None,
         )
         acts = DoorActs(door, self._contract.model_dump())
         meter = ActorMeter()
@@ -1355,6 +1376,7 @@ class HostedChatCallRunner:
             sealed_without_door,
             unenforced_deadline_notices,
             unmeasured_reasons,
+            world_failure_reasons,
             worker_stop_outcomes,
         )
 
@@ -1436,6 +1458,7 @@ class HostedChatCallRunner:
             in_process_tools,
             repeated_untimed_notices,
             tool_span_notices,
+            world_failure_notices,
         )
 
         said = list(deadline_notices)
@@ -1464,7 +1487,7 @@ class HostedChatCallRunner:
         # Such a worker's own checks are not graded; the rest of the trial is.
         said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
-        said += tool_span_notices(runtime, transcript.calls)
+        said += tool_span_notices(runtime, transcript.calls) + world_failure_notices(trial_log)
         if said:
             transcript.notices = said
         ended = datetime.now(timezone.utc)
@@ -1499,6 +1522,7 @@ class HostedChatCallRunner:
             world_actions=tuple((world_record or {}).get("actions") or ()),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(transcript.notices or ()),
+            world_failures=world_failure_reasons(transcript.notices or ()),
             missing_evidence=missing_evidence(transcript.notices or (), world_record),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},

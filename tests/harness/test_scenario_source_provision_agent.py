@@ -687,7 +687,7 @@ def test_a_compiled_scenario_carries_the_fields_to_send() -> None:
 
     assert (
         "presented_fields=_presented(body, scenario_key=scenario_key, fields=True)"
-        in inspect.getsource(ss._load_one)
+        in inspect.getsource(ss.load_one)
     )
 
 

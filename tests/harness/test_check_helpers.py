@@ -175,3 +175,87 @@ def test_the_proof_world_s_log_carries_what_the_helpers_read() -> None:
     rows = proof.events(actor_id="agent")
     assert [row["error"] for row in rows] == ["timeout", None]
     assert len({row["action_id"] for row in rows}) == 2
+
+
+SAME = "def check(world, calls):\n    return None if same_value(calls[0].arguments['v'], calls[0].arguments['w']) else 'differ'\n"
+
+
+def test_a_value_is_the_same_however_it_was_written() -> None:
+    from fi.alk.harness.checks import same_value
+
+    for one, two in [
+        (89, "89.00"),
+        # A bare number matches an amount in one currency: the world holds 89, the person said "$89".
+        (89, "$89.00"),
+        ("89", "$89"),
+        ("$89.00", "89 USD"),
+        ("€1,250.50", "EUR 1250.5"),
+        ("£12", "GBP 12"),
+        ("₹500", "500 INR"),
+        ("EUR 40", "€40"),
+        # A symbol and its ISO code are one currency.
+        ("US$89", "$89"),
+        ("USD 89", "$89"),
+        ("EUR 40", "€40"),
+        ("GBP 12", "£12"),
+        ("1,250.50", 1250.5),
+        (1043, "1043"),
+        # ISO 8601 dates and times, read by the standard library.
+        ("14:00", "14:00:00"),
+        ("2026-11-20T14:00:00+00:00", "2026-11-20T14:00Z"),
+        ("2026-11-20", "2026-11-20"),
+        ("CLM-88213", "clm88213"),
+        ("#1043", "1043"),
+        ({"order": "O-1", "items": [1, "2"]}, {"order": "o1", "items": ["1", 2.0]}),
+        (None, None),
+    ]:
+        assert same_value(one, two), (one, two)
+        assert same_value(two, one), (two, one)
+
+
+def test_a_different_value_is_never_the_same() -> None:
+    from fi.alk.harness.checks import same_value
+
+    for one, two in [
+        (89, 90),
+        ("$89.00", "$89.01"),
+        # Two different currencies are never the same amount, however each is written.
+        ("$89", "€89"),
+        ("89 USD", "£89.00"),
+        ("89 USD", "89 EUR"),
+        ("₹500", "500 USD"),
+        ("US$89", "€89"),
+        ("GBP 12", "12 EUR"),
+        # A currency said in words is text, never an amount: no word list reads it.
+        ("$89", "89 dollars"),
+        ("₹500", "500 rupees"),
+        ("Rs 500", "₹500"),
+        # A word that names no currency makes it no amount.
+        ("89 items", 89),
+        ("007", 7),
+        ("2026-11-20", "2026-11-21"),
+        ("11/12/2026", "2026-11-12"),
+        ("14:00", "14:30:00"),
+        ("2026-11-20T14:00:00+00:00", "2026-11-20T14:00:00+05:30"),
+        ("2", "14:00"),
+        ("14", "14:00"),
+        ("2026-11-20", "2026-11-20T00:00:00"),
+        # A date or time said in words is text: no parser reads it, so it matches only itself.
+        ("2026-11-20", "20 November 2026"),
+        ("14:00", "2 pm"),
+        ("CLM-88213", "CLM-88214"),
+        (True, 1),
+        (None, ""),
+        ("Callum", "Calum"),
+        ({"a": 1}, {"a": 1, "b": 2}),
+        ([1, 2], [1]),
+    ]:
+        assert not same_value(one, two), (one, two)
+        assert not same_value(two, one), (two, one)
+
+
+def test_every_check_is_given_same_value() -> None:
+    from fi.alk.harness.world.runtime import Call
+
+    assert run_check(SAME, _World(), [Call("pay", {"v": "$89.00", "w": 89})]).held
+    assert not run_check(SAME, _World(), [Call("pay", {"v": "$89.00", "w": "€89"})]).held

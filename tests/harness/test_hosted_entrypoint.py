@@ -5971,3 +5971,186 @@ def test_the_job_masks_every_value_in_spans_but_the_platform_settings(
     assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
     assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
     assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"
+
+
+def test_a_transcript_upload_the_platform_did_not_take_is_tried_again_before_the_receipt_drops_it() -> None:
+    # A backend restarted mid-run refused a transcript upload; the receipt used to drop the transcript at once.
+    from types import SimpleNamespace
+
+    class Flaky:
+        def __init__(self, real: Any, fails: int) -> None:
+            self.real, self.fails = real, fails
+
+        def upload(self, digest: str, data: bytes, **kwargs: Any) -> Any:
+            if self.fails > 0:
+                self.fails -= 1
+                down = ob.ChannelError(ob.ChannelOutcome.CHANNEL_FAILED, None, "channel_failed", "backend restarting")
+                return SimpleNamespace(error=down)
+            return self.real.upload(digest, data, **kwargs)
+
+    async def receipt_after(fails: int) -> tuple[dict[str, Any], FakeTransport]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter._artifacts = Flaky(adapter._artifacts, fails)
+        adapter._upload_retry_backoff = (0.0, 0.0)
+        transcript = await adapter.upload_artifact(
+            b'{"messages": []}', kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1"
+        )
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        await adapter.receipt(
+            ResultReceipt(
+                scenario_key="s1",
+                scenario_id="platform-s1",
+                scenario_attempt=1,
+                world_index=0,
+                status="passed",
+                sub_goals=(),
+                evaluations=(),
+                call=Call(),
+                failure=None,
+            )
+        )
+        return transport.receipts[("job-1", "s1")], transport
+
+    body, transport = asyncio.run(receipt_after(fails=2))
+    assert body["call"]["transcript_artifact"] is not None
+    assert body["call"]["transcript_artifact"].split(":", 1)[1] in transport.artifacts
+    # Refused through every retry: only then is it left out of the receipt.
+    body, _ = asyncio.run(receipt_after(fails=10))
+    assert body["call"]["transcript_artifact"] is None
+
+    # A refusal that is final (an item the platform will never take) is not queued to try again.
+    async def refused_for_good() -> tuple[str | None, int]:
+        adapter = _build_adapter(FakeTransport())
+
+        class Refusing:
+            def upload(self, *_args: Any, **_kwargs: Any) -> Any:
+                final = ob.ChannelError(ob.ChannelOutcome.PERMANENT_ITEM, None, "artifact_budget_exceeded", "too big")
+                return SimpleNamespace(error=final)
+
+        adapter._artifacts = Refusing()
+        said = await adapter.upload_artifact(b"x", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+        return said, len(adapter._failed_uploads)
+
+    assert asyncio.run(refused_for_good()) == (None, 0)
+
+
+def test_a_receipt_retries_only_within_the_best_effort_window_and_skips_an_upload_another_retry_took() -> None:
+    from types import SimpleNamespace
+
+    down = ob.ChannelError(ob.ChannelOutcome.CHANNEL_FAILED, None, "channel_failed", "backend restarting")
+
+    class Down:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def upload(self, *_args: Any, **_kwargs: Any) -> Any:
+            self.calls += 1
+            return SimpleNamespace(error=down)
+
+    async def window_spent() -> tuple[dict[str, Any], int]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter._artifacts = Down()
+        adapter._upload_retry_backoff = (600.0,)
+        adapter.best_effort_deadline = lambda: time.monotonic() - 1
+        transcript = await adapter.upload_artifact(b"{}", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="passed",
+            sub_goals=(), evaluations=(), call=Call(), failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")], len(adapter._failed_uploads)
+
+    body, still_queued = asyncio.run(window_spent())
+    # No wait past the window: dropped from this receipt, still queued for the final flush.
+    assert body["call"]["transcript_artifact"] is None and still_queued == 1
+
+    # Mid-run, before any flush window, a receipt waits at most one backoff step, never the whole ladder.
+    async def mid_run() -> tuple[dict[str, Any], int]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        down_now = Down()
+        adapter._artifacts = down_now
+        adapter._upload_retry_backoff = (0.05, 600.0)
+        assert adapter.best_effort_deadline() is None
+        transcript = await adapter.upload_artifact(b"{}", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="passed",
+            sub_goals=(), evaluations=(), call=Call(), failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")], down_now.calls
+
+    body, tries = asyncio.run(mid_run())
+    # The first upload, a try at once and one after the first step: never the 600 s one.
+    assert body["call"]["transcript_artifact"] is None and tries == 3
+
+    async def taken_meanwhile() -> set[str]:
+        adapter = _build_adapter(FakeTransport())
+        adapter._upload_retry_backoff = ()
+        adapter._failed_uploads = {
+            "a": (b"a", ob.ArtifactKind.TRANSCRIPT, "s1"),
+            "b": (b"b", ob.ArtifactKind.TRANSCRIPT, "s1"),
+        }
+
+        class TakesTheOther:
+            def upload(self, digest: str, *_args: Any, **_kwargs: Any) -> Any:
+                adapter._failed_uploads.pop("b", None)
+                return SimpleNamespace(error=None)
+
+        adapter._artifacts = TakesTheOther()
+        await adapter.retry_failed_uploads()
+        return set(adapter._failed_uploads)
+
+    assert asyncio.run(taken_meanwhile()) == set()
+
+
+def test_a_receipt_s_duplicate_commits_reach_the_platform_as_a_field() -> None:
+    from fi.alk.harness.hosted_scheduler import CallSummary
+
+    async def sent(duplicates: int) -> dict[str, Any]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        call = CallSummary(
+            started_at="2026-01-01T00:00:00.000Z",
+            ended_at="2026-01-01T00:00:01.000Z",
+            duration_ms=1000,
+            turns=1,
+            duplicate_commits=duplicates,
+        )
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="failed",
+            sub_goals=(), evaluations=(), call=call, failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")]
+
+    assert asyncio.run(sent(2))["call"]["duplicate_commits"] == 2
+    assert "duplicate_commits" not in asyncio.run(sent(0))["call"]

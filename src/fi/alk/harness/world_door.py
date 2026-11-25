@@ -42,6 +42,57 @@ IDENTITY_HEADER = "X-ALK-Actor-Identity"
 # HTTP methods that only read: a call made with one changes nothing in the world.
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+# What the tool proxy answers when the door held a call before the world saw it, or the world did not answer: never a
+# result. An agent's tool may hand that answer back as its value instead of failing (`door_failure`).
+UPSTREAM_UNAVAILABLE = "tool_upstream_unavailable"
+UPSTREAM_TIMEOUT = "tool_upstream_timeout"
+# What the proxy answers a keyed retry held because its first try's answer was lost: never a result.
+KEY_OUTCOME_UNKNOWN = "tool_key_outcome_unknown"
+# What the proxy answers when the world or its door failed on a call no test condition held: ours, never the agent's.
+WORLD_FAILED = "tool_world_failed"
+# A keyed retry whose first try a test condition lost the answer to: held so it never runs twice, the agent's to handle.
+KEY_UNKNOWN = "key_outcome_unknown"
+# The door's own failures, on the row of the call they held: the door itself, the world it calls (unreachable), the
+# action log (a key it could not check), a keyed retry whose first try one of these lost. Never an answer the world
+# gave: a tools server answering 5xx is the agent's world, graded as it is.
+DOOR_FAILED = "door_failed"
+WORLD_UNREACHABLE = "world_unreachable"
+LOG_UNKNOWN = "log_unknown"
+# The agent's own tools server not answering (a timeout, a refused or reset connection): its world, graded like a 5xx.
+UPSTREAM_UNREACHABLE = "upstream_unreachable"
+
+
+# The refusal codes of the door's own failures, on the row of the call they held.
+OUR_FAILURES = frozenset({DOOR_FAILED, WORLD_UNREACHABLE, LOG_UNKNOWN, FAULTS_UNKNOWN, APPROVAL_UNKNOWN})
+
+
+class UpstreamUnreachable(Exception):
+    """The agent's own tools server did not answer: its world failing, never the door's."""
+
+
+def world_failed(row: Mapping[str, Any]) -> bool:
+    """Whether a row of the action log is the door failing on the agent's call by its own fault: ours, never the
+    agent's. Read from the row's refusal code, which every log keeps."""
+    return (
+        (row.get("actor_id") or AGENT) == AGENT
+        and row.get("outcome") == "faulted"
+        and row.get("refusal_code") in OUR_FAILURES
+    )
+
+
+def door_failure(result: Any) -> str | None:
+    """The proxy's own failure answer when `result` is it (`{"detail": <code>}`, with anything the agent's tool kept
+    beside it), else None."""
+    if isinstance(result, Mapping) and result.get("detail") in (
+        UPSTREAM_UNAVAILABLE,
+        UPSTREAM_TIMEOUT,
+        KEY_OUTCOME_UNKNOWN,
+        WORLD_FAILED,
+    ):
+        return str(result["detail"])
+    return None
+
+
 # The code of a row that marks a call of the agent's which ran without the door deciding or recording it: the trial's
 # evidence is incomplete. Never a call or a change itself.
 EVIDENCE_INCOMPLETE = "evidence_incomplete"
@@ -110,6 +161,17 @@ class Executed:
     error: str = ""
 
 
+# What the agent hears when the door answers for the world: a plain word by status. Why stays in the log row, which
+# only the door writes and grading reads; the reply never says how the call is being watched.
+_PLAIN_DETAIL = {401: "forbidden", 403: "forbidden", 404: "not found", 408: "timeout", 409: "conflict", 504: "timeout"}
+
+
+def plain_detail(status: int) -> str:
+    if status in _PLAIN_DETAIL:
+        return _PLAIN_DETAIL[status]
+    return "invalid request" if 400 <= status < 500 else "unavailable"
+
+
 @dataclass
 class Outcome:
     """What the door made of one call. `fault` is the scenario's timeout when one applied: the surface holds the
@@ -139,13 +201,21 @@ class Outcome:
         except (TypeError, ValueError):
             return MAX_FAULT_SECONDS
 
+    @property
+    def detail(self) -> str:
+        """The reply's detail when the world gave none: the outcome of a call that went through, else a plain word.
+        A write the scenario holds for an approval says so, since asking for one is what the agent should do."""
+        if self.refusal_code == APPROVAL_MISSING:
+            return "approval required"
+        return self.outcome if 0 < self.status < 400 else plain_detail(self.status)
+
     def answer(self) -> bytes:
-        """The answer's bytes for a surface that speaks HTTP: the executor's own, else the result or the reason."""
+        """The answer's bytes for a surface that speaks HTTP: the executor's own, else the result or a plain word."""
         if self.body is not None:
             return self.body
         if self.outcome in ("committed", "duplicate") and self.result is not None:
             return json.dumps(self.result).encode()
-        return json.dumps({"detail": self.reason or self.outcome}).encode()
+        return json.dumps({"detail": self.detail}).encode()
 
 
 class Executor(Protocol):
@@ -311,6 +381,37 @@ def routed_faults(faults: Sequence[Any], contract: Any) -> list[dict[str, Any]]:
     return routed
 
 
+def faults_named(
+    faults: Sequence[Any], *, action: str, name: str = "", tool: str = "", method: str = "", by_tool: bool = False
+) -> list[dict[str, Any]]:
+    """The faults that hold this call, whichever call of its action they name: by its world action (a route with a
+    part, `orders.{id}.cancel`, holding every call of it), by its logged name too when `by_tool`, and by the agent's
+    own tool name for it. A fault that names its method holds only calls made with that method."""
+    names = {action, name} if by_tool else {action}
+    if tool:
+        names.add(tool)
+    names.discard("")
+    return [
+        one
+        for one in faults or []
+        if isinstance(one, dict)
+        and any(action_matches(called, str(one.get("action") or "")) for called in names)
+        and (not one.get("method") or str(one["method"]).upper() == (method or "").upper())
+    ]
+
+
+def fault_slot(named: Sequence[Mapping[str, Any]], action: str, method: str = "") -> tuple[str, str | None]:
+    """What a fault's `on_call` counts: the calls of the action the first fault names (else the call's own), and only
+    those made with the call's method when any of the faults names one."""
+    by_method = any(one.get("method") for one in named)
+    return str(named[0].get("action") or action), (method or "").upper() if by_method else None
+
+
+def fault_numbered(named: Sequence[Mapping[str, Any]], made: int) -> dict[str, Any] | None:
+    """The fault set on the next call when `made` calls of its slot have been made already."""
+    return next((dict(one) for one in named if _int(one.get("on_call"), 1) == made + 1), None)
+
+
 def same_action(row: Mapping[str, Any], action: str) -> bool:
     """Whether a log row is a call of this world action. A row names its action in full (`service_a.update`), so
     `ticket.update` is never taken for it; one written before actions were recorded has only its name, the action
@@ -330,9 +431,27 @@ def row_arguments(value: Any) -> Any:
     return value
 
 
+def logged_ok(value: Any) -> bool:
+    """`ok` as a boolean: a table that keeps it as text holds 'false' for a failed call, which is no pass."""
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value.strip().lower() in {"true", "t"}
+
+
+def logged_outcome(row: Mapping[str, Any]) -> str:
+    """What came of a logged call: committed only when it both says so (or says nothing, as a row from before
+    outcomes were logged) and succeeded; a row that says committed but failed, as a column's default would leave a
+    failed call, is faulted. Never committed by default."""
+    outcome = row.get("outcome")
+    ok = logged_ok(row.get("ok", True))
+    if outcome in (None, "", "committed"):
+        return "committed" if ok else ("faulted" if outcome else "refused")
+    return str(outcome)
+
+
 def is_committed(row: Mapping[str, Any]) -> bool:
-    """Whether a log row is a committed action; a row from before outcomes were logged says so by `ok`."""
-    return (row.get("outcome") or ("committed" if row.get("ok", True) else "")) == "committed"
+    """Whether a log row is a committed action (`logged_outcome`)."""
+    return logged_outcome(row) == "committed"
 
 
 def named_alike(action: str, name: str) -> bool:
@@ -426,28 +545,98 @@ SHARED_ADDRESS = "shared_address"
 
 # Kept in the world's database, never in a file the agent's process could read or rewrite.
 # Known limit: a connection with the world's role can write it until per-user database isolation is on.
-TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
+TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS public._alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 # When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
-TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
+TRIAL_DEADLINE_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
 # Each named worker's own deadline, {worker id: epoch seconds}, when the scenario gives a budget per worker.
-TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
+TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
 # When this trial's call read its stopped workers to seal them; a worker's process is never ended after it, so a stop
 # is sealed or never made. Null until then, and again at each trial's start.
-TRIAL_SEALED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
+TRIAL_SEALED_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
 # When this trial started: a stop row from before it is an earlier trial's, left by a clear that failed.
-TRIAL_STARTED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS started_at DOUBLE PRECISION"
+TRIAL_STARTED_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS started_at DOUBLE PRECISION"
 
 
 # The workers the harness stopped in this trial, written by whoever ended a worker past its deadline (the scheduler ends
 # its process, the in-process door its task); cleared at each trial's start.
 WORKER_STOPS_DDL = (
-    "CREATE TABLE IF NOT EXISTS _alk_worker_stops "
+    "CREATE TABLE IF NOT EXISTS public._alk_worker_stops "
     "(worker TEXT PRIMARY KEY, process TEXT NOT NULL, at DOUBLE PRECISION NOT NULL, reason TEXT NOT NULL)"
 )
 
 # The workers the in-process door saw run as a task of their own this trial, so ones it could stop at their deadline;
 # only the run shows how the framework runs a worker. Cleared at each trial's start.
-WORKER_RUNS_DDL = "CREATE TABLE IF NOT EXISTS _alk_worker_runs (worker TEXT PRIMARY KEY, at DOUBLE PRECISION NOT NULL)"
+WORKER_RUNS_DDL = "CREATE TABLE IF NOT EXISTS public._alk_worker_runs (worker TEXT PRIMARY KEY, at DOUBLE PRECISION NOT NULL)"
+
+# This trial's tables in the order they are made, and the columns they then have.
+TRIAL_TABLES_DDL = (
+    TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL, TRIAL_STARTED_DDL,
+    WORKER_STOPS_DDL, WORKER_RUNS_DDL,
+)
+
+
+def ddl_columns(*statements: str) -> dict[str, tuple[str, ...]]:
+    """The columns each table has once ``statements`` (`CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`, as
+    this module writes them) have run, read from the statements themselves so no list is kept beside them."""
+    columns: dict[str, list[str]] = {}
+    for statement in (one.strip() for text in statements for one in text.split(";") if one.strip()):
+        created = re.match(r"CREATE TABLE IF NOT EXISTS (?:public\.)?(\w+)\s*\((.*)\)\s*$", statement, re.S)
+        if created:
+            depth, part, parts = 0, "", []
+            for char in created.group(2):
+                depth += {"(": 1, ")": -1}.get(char, 0)
+                if char == "," and depth == 0:
+                    parts.append(part)
+                    part = ""
+                else:
+                    part += char
+            parts.append(part)
+            names = [one.split()[0] for one in parts if one.split() and one.split()[0].upper() not in _TABLE_CONSTRAINTS]
+            columns.setdefault(created.group(1), []).extend(names)
+            continue
+        for table, column in re.findall(
+            r"ALTER TABLE (?:public\.)?(\w+) ADD COLUMN IF NOT EXISTS (\w+)", statement
+        ):
+            columns.setdefault(table, []).append(column)
+    return {table: tuple(names) for table, names in columns.items()}
+
+
+_TABLE_CONSTRAINTS = frozenset({"PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN", "CHECK", "EXCLUDE"})
+_TRIAL_TABLE_COLUMNS = ddl_columns(*TRIAL_TABLES_DDL)
+
+
+# Every session the harness or the door opens as the superuser or the door's role: nothing a source or seed defines
+# in `public` (a function, operator or table named like one of ours) can stand in for the system's own, so every
+# harness table is named with its schema (`public._alk_*`).
+PINNED_SEARCH_PATH = "-c search_path=pg_catalog,pg_temp"
+
+
+def pinned_options(options: str = "") -> str:
+    """Connection options with the pinned search path added."""
+    return f"{options} {PINNED_SEARCH_PATH}".strip()
+
+
+# A bundle whose migration makes every harness table with every column says so in its metadata; one sealed before may
+# lack columns the harness adds later.
+HARNESS_TABLES_KEY = "harness_tables"
+HARNESS_TABLES_COMPLETE = "complete"
+
+# The baseline's seed sentinel, the harness's own table, named with its schema.
+SEED_SENTINEL_QUERY = "SELECT id FROM public.harness_seed_sentinel WHERE id='ready'"
+
+
+def _tables_made(connection: Any, tables: Mapping[str, Sequence[str]]) -> bool:
+    """Whether each table already exists with its columns. Read from the catalog, which any role may read: Postgres
+    refuses even `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` to a role that does not own the table."""
+    rows = connection.execute(
+        "SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+        "WHERE c.oid IN (SELECT to_regclass('public.' || t) FROM unnest(%s::text[]) AS t) AND a.attnum > 0 AND NOT a.attisdropped",
+        (list(tables),),
+    ).fetchall()
+    found: dict[str, set[str]] = {}
+    for table, column in rows:
+        found.setdefault(table, set()).add(column)
+    return all(set(columns) <= found.get(table, set()) for table, columns in tables.items())
 
 
 # The world databases whose trial tables this process has made, so the schema is changed once per world, never at
@@ -456,7 +645,6 @@ _TRIAL_SCHEMA_MADE: set[str] = set()
 _TRIAL_SCHEMA_LOCK = threading.Lock()
 
 
-_TRIAL_COLUMNS = frozenset({"worker_deadline_at", "worker_deadlines", "sealed_at", "started_at"})
 
 
 def _trial_schema(address: str) -> None:
@@ -467,17 +655,10 @@ def _trial_schema(address: str) -> None:
             return
         import psycopg
 
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
-            present = connection.execute(
-                "SELECT to_regclass('_alk_worker_stops') IS NOT NULL AND to_regclass('_alk_worker_runs') IS NOT NULL, "
-                "ARRAY(SELECT attname::text FROM pg_attribute WHERE attrelid = to_regclass('_alk_trial_faults') "
-                "AND NOT attisdropped)"
-            ).fetchone()
-            if not (present[0] and _TRIAL_COLUMNS <= set(present[1])):
-                for statement in (
-                    TRIAL_FAULTS_DDL, TRIAL_DEADLINE_DDL, TRIAL_WORKER_DEADLINES_DDL, TRIAL_SEALED_DDL,
-                    TRIAL_STARTED_DDL, WORKER_STOPS_DDL, WORKER_RUNS_DDL,
-                ):
+        with psycopg.connect(address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            # Made in the world's template: a door's own role, which owns none of them, uses them as they are.
+            if not _tables_made(connection, _TRIAL_TABLE_COLUMNS):
+                for statement in TRIAL_TABLES_DDL:
                     connection.execute(statement)
         _TRIAL_SCHEMA_MADE.add(address)
 
@@ -517,10 +698,10 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
     import psycopg
 
     def claim() -> bool:
-        with psycopg.connect(address, connect_timeout=5) as connection:
+        with psycopg.connect(address, connect_timeout=5, options=pinned_options()) as connection:
             with connection.transaction():
                 row = connection.execute(
-                    "SELECT sealed_at, worker_deadline_at, worker_deadlines, started_at FROM _alk_trial_faults WHERE id = 1 "
+                    "SELECT sealed_at, worker_deadline_at, worker_deadlines, started_at FROM public._alk_trial_faults WHERE id = 1 "
                     "FOR UPDATE"
                 ).fetchone()
                 if row is None or row[0] is not None:
@@ -537,7 +718,7 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
                 # an earlier trial's row (left by a clear that failed, so from before this trial started) is replaced
                 # whole by this stop, so this trial's seal reads only what happened in it.
                 connection.execute(
-                    "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
+                    "INSERT INTO public._alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
                     "ON CONFLICT (worker) DO UPDATE SET process = EXCLUDED.process, at = EXCLUDED.at, reason = CASE "
                     "WHEN _alk_worker_stops.reason = %s AND _alk_worker_stops.at >= %s THEN _alk_worker_stops.reason "
                     "ELSE EXCLUDED.reason END",
@@ -553,10 +734,10 @@ def mark_worker_run(address: str, worker: str) -> None:
     import psycopg
 
     def mark() -> None:
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             connection.execute(
                 # An earlier trial's row, left by a clear that failed, takes this run's time, so this trial reads it.
-                "INSERT INTO _alk_worker_runs (worker, at) VALUES (%s, %s) "
+                "INSERT INTO public._alk_worker_runs (worker, at) VALUES (%s, %s) "
                 "ON CONFLICT (worker) DO UPDATE SET at = EXCLUDED.at",
                 (worker, time.time()),
             )
@@ -721,7 +902,7 @@ class WorldDoor:
             return self._enter(call)
         except Exception as exc:  # noqa: BLE001 - the door adds no error of its own to any caller
             outcome = Outcome(
-                "faulted", 502, reason=f"{type(exc).__name__}: the world's door failed"
+                "faulted", 502, reason=f"{type(exc).__name__}: the world's door failed", refusal_code=DOOR_FAILED
             )
             self._write(call, outcome)
             return outcome
@@ -829,11 +1010,13 @@ class WorldDoor:
                     # failed after the world applied it) leaves the key claimed for any door after it.
                     claimed = self.log.claim(key, call.actor) if earlier is None else None
                 except Exception:  # noqa: BLE001 - the log cannot say: running again could apply the action twice
-                    return self._key_unknown(call, key, on_behalf_of)
+                    return self._key_unknown(call, key, on_behalf_of, LOG_UNKNOWN)
                 if earlier is not None:
                     known = ("committed", *earlier)
                 elif claimed is not None:
-                    return self._key_unknown(call, key, on_behalf_of)
+                    # Left `unknown` after a test condition lost its answer: the agent's to handle. Left `pending` by a
+                    # door that never recorded its answer, or `failed` by our own failure: ours.
+                    return self._key_unknown(call, key, on_behalf_of, KEY_UNKNOWN if claimed == "unknown" else LOG_UNKNOWN)
             if known is None:
                 self._keyed[slot] = ("pending", call.action, call.arguments, None, None)
                 outcome = self._attempt(call, key, on_behalf_of)
@@ -851,8 +1034,11 @@ class WorldDoor:
                 ):
                     # The world failed mid-action, or the call ran and its answer was lost: whether it applied it is
                     # unknown, so the key is never run again.
-                    self._keyed[slot] = ("unknown", call.action, call.arguments, None, None)
-                    self._settle(key, call.actor, "unknown", logged)
+                    # Lost to our own failure (the first try's code says), else to the agent's world or the test
+                    # condition: a retry is held either way, and is ours only in the first case.
+                    lost_to = LOG_UNKNOWN if outcome.refusal_code in OUR_FAILURES else KEY_UNKNOWN
+                    self._keyed[slot] = ("unknown", call.action, call.arguments, None, lost_to)
+                    self._settle(key, call.actor, "failed" if lost_to == LOG_UNKNOWN else "unknown", logged)
                 else:
                     # Refused, or held by the scenario's fault before the world saw it: nothing took effect, and a
                     # retry is a new attempt.
@@ -861,7 +1047,7 @@ class WorldDoor:
                 return outcome
             state, action, arguments, result, answered = known
             if state != "committed":
-                return self._key_unknown(call, key, on_behalf_of)
+                return self._key_unknown(call, key, on_behalf_of, answered if state == "unknown" else KEY_UNKNOWN)
             if (action is not None and action != call.action) or not same_json(arguments, call.arguments):
                 outcome = Outcome(
                     "refused",
@@ -982,12 +1168,13 @@ class WorldDoor:
         except Exception:  # noqa: BLE001 - a key left pending is never run again: the safe side
             pass
 
-    def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None) -> Outcome:
+    def _key_unknown(self, call: ToolCall, key: str, on_behalf_of: str | None, code: str = KEY_UNKNOWN) -> Outcome:
         """A keyed action whose first attempt may have taken effect without a recorded answer: never run again."""
         outcome = Outcome(
             "faulted",
             503,
             reason="whether this idempotency key's first action took effect is unknown; it is not run again",
+            refusal_code=code,
         )
         self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
         return outcome
@@ -1007,20 +1194,16 @@ class WorldDoor:
     def _named_faults(self, call: ToolCall) -> list[dict[str, Any]]:
         """The faults this trial sets on this action of the agent's, whichever call of it they name; raises when the
         trial's faults cannot be read."""
-        faults = [one for one in self.faults() or [] if isinstance(one, dict)]
-        names = {call.action, call.name} if self.faults_by_tool else {call.action}
-        if call.tool:
-            # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
-            # surface, a worker's channel included.
-            names.add(call.tool)
-        # A fault on a route with a part (`orders.{id}.cancel`) holds every call of it (`orders.1043.cancel`); one that
-        # names its method holds only calls made with it.
-        return [
-            one
-            for one in faults
-            if any(action_matches(name, str(one.get("action") or "")) for name in names)
-            and (not one.get("method") or str(one["method"]).upper() == (call.method or "").upper())
-        ]
+        # A route's sealed tool is the agent's own name for it: a fault naming the tool holds its call on every
+        # surface, a worker's channel included.
+        return faults_named(
+            self.faults() or [],
+            action=call.action,
+            name=call.name,
+            tool=call.tool or "",
+            method=call.method or "",
+            by_tool=self.faults_by_tool,
+        )
 
     def _approved(self, fault: Mapping[str, Any]) -> bool:
         """Whether an actor has committed the fault's `approval` action in this trial, with arguments that include its
@@ -1047,13 +1230,10 @@ class WorldDoor:
         """The fault set on this call of the action, by which call of it this is. A fault that names its method counts
         only the calls made with that method (a GET of the route is not a call of its DELETE), which the log, keeping
         no method, cannot tell apart: this door's own count numbers them."""
-        by_method = any(one.get("method") for one in named)
         # A fault on a route with a part counts every call of the route (`orders.1043`, then `orders.1044`).
-        counted = str(named[0].get("action") or call.action)
+        counted, by_method = fault_slot(named, call.action, call.method or "")
         try:
-            made = self.log.agent_calls(
-                counted, call.name, (call.method or "").upper() if by_method else None
-            )
+            made = self.log.agent_calls(counted, call.name, by_method)
         except Exception:  # noqa: BLE001 - which call this is is unknown: a guess would fault every call as the first
             return None
         if self.trial is not None:
@@ -1061,12 +1241,10 @@ class WorldDoor:
             if current != self._numbered_trial:
                 self._numbered.clear()
                 self._numbered_trial = current
-        slot = f"{counted}\x00{(call.method or '').upper()}" if by_method else counted
+        slot = f"{counted}\x00{by_method}" if by_method is not None else counted
         made = max(made, self._numbered.get(slot, 0))
         self._numbered[slot] = made + 1
-        return next(
-            (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
-        )
+        return fault_numbered(named, made)
 
     def _faulted(self, call: ToolCall, fault: dict[str, Any], key: str | None = None) -> Outcome:
         """The fault the scenario sets on this call; only after a commit does the world see it. A retry with the first
@@ -1106,8 +1284,11 @@ class WorldDoor:
     def _execute(self, call: ToolCall) -> Outcome:
         try:
             ran = self.executor.run(call)
-        except Exception as exc:  # noqa: BLE001 - the world failing is a fault of its own
-            return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable")
+        except UpstreamUnreachable as exc:
+            # The agent's own tools server did not answer: its world, graded like a 5xx it answered.
+            return Outcome("faulted", 502, reason=f"{exc}: unavailable", refusal_code=UPSTREAM_UNREACHABLE)
+        except Exception as exc:  # noqa: BLE001 - our own executor failing is a fault of ours
+            return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable", refusal_code=WORLD_UNREACHABLE)
         if ran.status < 400:
             return Outcome(
                 "committed", ran.status, ran.result, ran.body, ran.content_type
@@ -1255,6 +1436,9 @@ class HttpExecutor:
                 None,
                 content.decode("utf-8", errors="replace")[:2000],
             )
+        except (OSError, error.URLError) as exc:
+            # A timeout, a refused or reset connection: the agent's tools server, never the door.
+            raise UpstreamUnreachable(type(exc).__name__) from exc
         try:
             result = json.loads(content) if content else None
         except ValueError:
@@ -1403,34 +1587,30 @@ _EFFECT = "effect"
 # Likewise: why a call with no worker is the coordinator's while workers had channels.
 _ATTRIBUTION = "attribution"
 _BASIC = "name, arguments, result, ok, error, at"
+_OUTCOME = "outcome"
 # Written when the table has them: how a call was made, the path it went to, and the scenario's fault the door applied on it.
 _CALL_COLUMNS = ("method", "fault", "endpoint")
 _CALL_COLUMNS_DDL = (
-    "ALTER TABLE IF EXISTS _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
+    "ALTER TABLE IF EXISTS public._alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
     "ADD COLUMN IF NOT EXISTS endpoint text"
 )
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
 _KEYS_TABLE_DDL = (
-    "CREATE TABLE IF NOT EXISTS _alk_action_keys "
+    "CREATE TABLE IF NOT EXISTS public._alk_action_keys "
     "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key))"
 )
-_KEYS_RESPONSE_DDL = "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
+_KEYS_RESPONSE_DDL = "ALTER TABLE public._alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
 _KEYS_DDL = f"{_KEYS_TABLE_DDL};{_KEYS_RESPONSE_DDL}"
 # The harness's own tables in a world, made on the baseline before the world role's grant: the grant then covers them
 # and every world copy has them. A world role can neither create a table nor alter one it does not own.
 HARNESS_TABLES_DDL = (
-    TRIAL_FAULTS_DDL,
-    TRIAL_DEADLINE_DDL,
-    TRIAL_WORKER_DEADLINES_DDL,
-    TRIAL_SEALED_DDL,
-    TRIAL_STARTED_DDL,
-    WORKER_STOPS_DDL,
-    WORKER_RUNS_DDL,
+    *TRIAL_TABLES_DDL,
     _KEYS_TABLE_DDL,
     _KEYS_RESPONSE_DDL,
     _CALL_COLUMNS_DDL,
 )
+_KEYS_COLUMNS = ddl_columns(_KEYS_DDL)
 
 
 class PostgresLog:
@@ -1444,11 +1624,11 @@ class PostgresLog:
         self._call_columns_tried = False
         self._keys_made = False
 
-    def _connect(self, **options: Any) -> Any:
+    def _connect(self, options: str = "") -> Any:
         import psycopg
 
         return psycopg.connect(
-            self.dsn, autocommit=True, connect_timeout=self.connect_seconds, **options
+            self.dsn, autocommit=True, connect_timeout=self.connect_seconds, options=pinned_options(options)
         )
 
     def _table_columns(self) -> frozenset[str]:
@@ -1456,7 +1636,7 @@ class PostgresLog:
         if self._columns is None:
             try:
                 with self._connect() as connection:
-                    cursor = connection.execute("SELECT * FROM _alk_tool_trace LIMIT 0")
+                    cursor = connection.execute("SELECT * FROM public._alk_tool_trace LIMIT 0")
                     self._columns = frozenset(one[0] for one in cursor.description or [])
             except Exception:  # noqa: BLE001 - unknown this time, asked again next time
                 return frozenset()
@@ -1496,10 +1676,11 @@ class PostgresLog:
         if extended and self._records_action():
             columns += ", " + _ACTION
         optional_columns = (*_WORKER_COLUMNS, _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS) if extended else (
-            _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS
+            # An older log that keeps outcomes is told this call's, never left to the column's default.
+            _OUTCOME, _EFFECT, _ATTRIBUTION, *_CALL_COLUMNS
         )
         for optional in optional_columns:
-            if optional in self._table_columns():
+            if optional in self._table_columns() and (optional != _OUTCOME or row.get(_OUTCOME)):
                 columns += ", " + optional
         keys = [one.strip() for one in columns.split(",")]
         values = [
@@ -1510,13 +1691,13 @@ class PostgresLog:
         ]
         with self._connect() as connection:
             connection.execute(
-                f"INSERT INTO _alk_tool_trace({columns}) VALUES ({', '.join('%s' for _ in keys)})",  # noqa: S608 - fixed columns
+                f"INSERT INTO public._alk_tool_trace({columns}) VALUES ({', '.join('%s' for _ in keys)})",  # noqa: S608 - fixed columns
                 values,
             )
 
     def rows(self) -> list[dict[str, Any]]:
         with self._connect(options="-c default_transaction_read_only=on") as connection:
-            cursor = connection.execute("SELECT * FROM _alk_tool_trace ORDER BY at ASC")
+            cursor = connection.execute("SELECT * FROM public._alk_tool_trace ORDER BY at ASC")
             columns = [one[0] for one in cursor.description or []]
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
@@ -1524,7 +1705,7 @@ class PostgresLog:
         action = _ACTION if self._records_action() else "NULL"
         with self._connect() as connection:
             row = connection.execute(
-                f"SELECT {action}, arguments, result FROM _alk_tool_trace "  # noqa: S608 - a fixed column name
+                f"SELECT {action}, arguments, result FROM public._alk_tool_trace "  # noqa: S608 - a fixed column name
                 "WHERE idempotency_key = %s AND actor_id = %s AND outcome = 'committed' ORDER BY at LIMIT 1",
                 (key, actor),
             ).fetchone()
@@ -1532,7 +1713,7 @@ class PostgresLog:
                 return None
             self._keys_table(connection)
             kept = connection.execute(
-                "SELECT response FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+                "SELECT response FROM public._alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
             ).fetchone()
         return (row[0], row[1], row[2], kept[0] if kept and isinstance(kept[0], dict) else None)
 
@@ -1541,11 +1722,7 @@ class PostgresLog:
         made."""
         if self._keys_made:
             return
-        if connection.execute(
-            "SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('_alk_action_keys') "
-            "AND attname = 'response' AND NOT attisdropped"
-        ).fetchone():
-            # Made on the baseline: a world role may use it but can neither create it nor alter it.
+        if _tables_made(connection, _KEYS_COLUMNS):
             self._keys_made = True
             return
         try:
@@ -1558,14 +1735,14 @@ class PostgresLog:
         with self._connect() as connection:
             self._keys_table(connection)
             row = connection.execute(
-                "INSERT INTO _alk_action_keys (actor_id, idempotency_key, state) VALUES (%s, %s, 'pending') "
+                "INSERT INTO public._alk_action_keys (actor_id, idempotency_key, state) VALUES (%s, %s, 'pending') "
                 "ON CONFLICT DO NOTHING RETURNING state",
                 (actor, key),
             ).fetchone()
             if row is not None:
                 return None
             found = connection.execute(
-                "SELECT state FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+                "SELECT state FROM public._alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
             ).fetchone()
         return str(found[0]) if found else "pending"
 
@@ -1573,12 +1750,12 @@ class PostgresLog:
         with self._connect() as connection:
             if state is None:
                 connection.execute(
-                    "DELETE FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+                    "DELETE FROM public._alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
                 )
             else:
                 self._keys_table(connection)
                 connection.execute(
-                    "UPDATE _alk_action_keys SET state = %s, response = %s::jsonb "
+                    "UPDATE public._alk_action_keys SET state = %s, response = %s::jsonb "
                     "WHERE actor_id = %s AND idempotency_key = %s",
                     (state, json.dumps(response) if response is not None else None, actor, key),
                 )
@@ -1606,7 +1783,7 @@ class PostgresLog:
             row = connection.execute(
                 "SELECT COALESCE(SUM(CASE WHEN error = %s AND jsonb_typeof(arguments -> 'count') = 'number' "
                 "THEN GREATEST((arguments ->> 'count')::numeric::int, 1) ELSE 1 END), 0) "
-                f"FROM _alk_tool_trace WHERE {match}{clause}",
+                f"FROM public._alk_tool_trace WHERE {match}{clause}",
                 (DOOR_OUT_OF_REACH, *params, *extra),
             ).fetchone()
         return int(row[0]) if row else 0
@@ -1622,10 +1799,10 @@ class PostgresRoster:
         import psycopg
 
         with psycopg.connect(
-            self.dsn, autocommit=True, connect_timeout=5
+            self.dsn, autocommit=True, connect_timeout=5, options=pinned_options()
         ) as connection:
             row = connection.execute(
-                "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s",
+                "SELECT permitted_actions, on_behalf_of FROM public._alk_actors WHERE id = %s",
                 (actor_id,),
             ).fetchone()
         return {"permitted_actions": row[0], "on_behalf_of": row[1]} if row else None

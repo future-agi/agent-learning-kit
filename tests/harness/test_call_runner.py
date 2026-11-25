@@ -2057,8 +2057,8 @@ class _FakeConnection:
     def execute(self, statement: str, params: Any = None) -> _FakeCursor:
         self.executed.append(statement)
         if "to_regclass" in statement:
-            # A world without the trial tables yet: the presence read finds none of them.
-            return _FakeCursor([(False, [])], ["present", "columns"])
+            # A world without the trial tables yet: the catalog read finds none of their columns.
+            return _FakeCursor([], ["relname", "attname"])
         if "_alk_worker_stops" in statement:
             # No worker was stopped: the rows are the door's log, not stops.
             return _FakeCursor([], self._columns)
@@ -5660,3 +5660,53 @@ def test_a_voice_lost_answer_is_one_done_call_with_the_tools_own_result(tmp_path
     assert graded == ["start_return"]
     (call,) = calls
     assert (call["ok"], call["error"], call["answer_lost"], call["result"]) == (True, "", True, "started")
+
+
+def test_a_tool_that_hands_back_the_proxy_s_failure_answer_made_a_failed_call_not_a_successful_one(
+    tmp_path: Path,
+) -> None:
+    # The door held the call (a test condition, or the world did not answer); the agent's tool returned the proxy's
+    # answer as its value instead of failing. A check must never read it as a call that went through.
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {"name": "file_request", "arguments": {"id": 7}, "output": {"detail": "tool_upstream_unavailable", "status": 502},
+         "is_error": False},
+        {"name": "file_request", "arguments": {"id": 7}, "output": '{"detail": "tool_upstream_timeout"}',
+         "is_error": False},
+        {"name": "file_request", "arguments": {"id": 7}, "is_error": False,
+         "output": {"detail": "tool_key_outcome_unknown", "reason": "first try unknown"}},
+        {"name": "file_request", "arguments": {"id": 7}, "output": {"detail": "pending"}, "is_error": False},
+    )
+
+    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert [(call.ok, call.result) for call in written] == [
+        (False, None),
+        (False, None),
+        (False, None),
+        (True, {"detail": "pending"}),
+    ]
+
+
+def test_a_call_the_world_failed_on_with_no_test_condition_makes_the_trial_ours_not_the_agent_s() -> None:
+    from fi.alk.harness.world_door import DOOR_FAILED, KEY_UNKNOWN, LOG_UNKNOWN, WORLD_UNREACHABLE
+
+    def row(**fields):
+        return {"name": "file_request", "actor_id": "agent", "outcome": "faulted", "refusal_code": None, **fields}
+
+    log = [
+        row(refusal_code=DOOR_FAILED),  # the door itself failed: ours
+        row(refusal_code=WORLD_UNREACHABLE),  # the world it calls could not be reached: ours
+        row(refusal_code=LOG_UNKNOWN),  # a key the action log could not check: ours
+        row(),  # the agent's tools server answered 5xx: the agent's world, graded
+        row(fault={"mode": "unavailable"}),  # the scenario's test condition
+        row(fault=None),  # the same on a log with no `fault` column: still never ours
+        row(refusal_code=KEY_UNKNOWN),  # a keyed retry after a test condition lost the answer
+        row(actor_id="approver", refusal_code=DOOR_FAILED),  # an actor's own call
+        row(outcome="committed"),
+    ]
+
+    reasons = cr.world_failure_reasons(cr.world_failure_notices(log))
+
+    assert reasons == ("The world failed on the agent's file_request call, so this trial cannot be graded.",) * 3
+    assert cr.world_failure_notices(None) == []

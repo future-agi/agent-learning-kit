@@ -1156,6 +1156,9 @@ def test_only_with_one_fixed_user_a_tool_world_imports_customer_code_from_the_up
                 capability="world_db",
                 protocol="postgres",
                 address="postgresql://unused",
+                tool_address="postgresql://world-role@unused",
+                store_address="postgresql://store-role@unused",
+                log_address="postgresql://log-reader@unused",
             )
         },
     )

@@ -93,7 +93,7 @@ from .scenario_source import (
 )
 from .usage import UsageJournal, UsageReporter
 from .world.handle import HostedWorld
-from .world.stores.postgres import AttachedPostgresStore
+from .world.stores.postgres import attached_world_store
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,10 @@ logger = logging.getLogger(__name__)
 # genuinely abandoned mailbox produces a typed failure instead of hanging the sandbox forever.
 DEFAULT_OFFLINE_CONTROL_TIMEOUT_SECONDS = 15 * 60.0
 
+
+
+# How long to wait before each further try of an artifact upload the platform did not take.
+UPLOAD_RETRY_BACKOFF_SECONDS = (5.0, 15.0, 40.0)
 
 class _JobIdFilter(logging.Filter):
     """Stamp every log record with the job this runner is serving.
@@ -748,7 +752,8 @@ class ProcessWorldFactory:
         endpoint = _find_postgres_endpoint(runtime)
         build_output = await asyncio.to_thread(load_build_output, self._work_directory)
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
-        store = AttachedPostgresStore(endpoint.address)
+        # The world's own SQL runs as its role; the harness keeps its own address for a snapshot and a restore.
+        store = attached_world_store(endpoint)
         return await asyncio.to_thread(
             HostedWorld,
             store,
@@ -1230,6 +1235,10 @@ class OutboundAdapter:
         self._stage_started = False
         self._current_stage = HarnessStage.QUEUED
         self._uploaded_digests: set[str] = set()
+        # Uploads the platform did not take, kept (as the offline mirror keeps them) to be tried again before a
+        # receipt drops one and before the final manifest: a backend restarted mid-run comes back within a minute.
+        self._failed_uploads: dict[str, tuple[bytes, ob.ArtifactKind, str | None]] = {}
+        self._upload_retry_backoff: tuple[float, ...] = UPLOAD_RETRY_BACKOFF_SECONDS
         self._offline_artifact_digests: set[str] = set()
         self._manifest_entries: list[dict[str, Any]] = []
         self._terminal_emitted = False
@@ -1599,6 +1608,19 @@ class OutboundAdapter:
         call: dict[str, Any] | None = None
         if receipt.call is not None and receipt.call.started_at is not None:
             transcript_artifact = receipt.call.transcript_artifact
+            # A transcript or recording the platform did not take is tried again before the receipt drops it.
+            queued = {
+                one.split(":", 1)[-1]
+                for one in (transcript_artifact, *receipt.call.recording_artifacts)
+                if one and one.split(":", 1)[-1] in self._failed_uploads
+            }
+            if queued:
+                # Within the best-effort share of the flush window, or mid-run one backoff step; what is still refused
+                # is left to the final flush.
+                window = self.best_effort_deadline()
+                if window is None:
+                    window = time.monotonic() + (self._upload_retry_backoff[:1] or (0.0,))[0] + 1.0
+                await self.retry_failed_uploads(queued, deadline=window)
             if transcript_artifact is not None:
                 bare = transcript_artifact.split(":", 1)[-1]
                 if bare not in self._uploaded_digests:
@@ -1654,6 +1676,9 @@ class OutboundAdapter:
             target_metrics = getattr(receipt.call, "target_metrics", None)
             if target_metrics:
                 call["target_metrics"] = target_metrics
+            duplicate_commits = getattr(receipt.call, "duplicate_commits", 0)
+            if duplicate_commits:
+                call["duplicate_commits"] = duplicate_commits
         elif receipt.call is not None:
             # `hosted_scheduler.CallSummary.started_at` is `str | None`, but
             # `outbound.CallSummary.started_at` requires a real timestamp -- per the contract a
@@ -1727,7 +1752,8 @@ class OutboundAdapter:
     ) -> str | None:
         """Returns the `sha256:<64-hex>` id form the wire uses (`CallSummary.transcript_artifact`,
         `ArtifactManifestEntry.artifact_id`) — never the bare hex `ArtifactsClient.upload` itself
-        takes, which is a different, easy-to-mix-up shape (this module's own report notes it)."""
+        takes, which is a different, easy-to-mix-up shape (this module's own report notes it). An upload the platform
+        did not take still returns its id and is queued (`retry_failed_uploads`); it is acked only once taken."""
         digest = hashlib.sha256(data).hexdigest()
         if digest in self._uploaded_digests:
             return f"sha256:{digest}"
@@ -1791,18 +1817,58 @@ class OutboundAdapter:
                 if result is not None and result.error is not None
                 else "fenced"
             )
-            await self.log(
-                level="error", message=f"artifact upload failed ({kind.value}): {code}"
+            transient = (
+                result is not None
+                and result.error is not None
+                and result.error.outcome in (ob.ChannelOutcome.RETRYABLE, ob.ChannelOutcome.CHANNEL_FAILED)
             )
-            return None
+            await self.log(
+                level="error",
+                message=f"artifact upload failed ({kind.value}): {code}" + ("; queued to try again" if transient else ""),
+            )
+            if not transient:
+                return None
+            self._failed_uploads[digest] = (data, kind, scenario_key)
+            return f"sha256:{digest}"
         self._uploaded_digests.add(digest)
         return f"sha256:{digest}"
+
+    async def retry_failed_uploads(self, digests: set[str] | None = None, *, deadline: float | None = None) -> None:
+        """Try each queued upload again (`digests` only, when given), waiting `_upload_retry_backoff` between tries
+        and never past `deadline` (`time.monotonic()`); one the platform takes is acked, one it still refuses stays
+        queued."""
+        for digest in [one for one in list(self._failed_uploads) if digests is None or one in digests]:
+            queued = self._failed_uploads.get(digest)
+            if queued is None:
+                # Another receipt's retry took it meanwhile.
+                continue
+            data, kind, scenario_key = queued
+            for wait in (0.0, *self._upload_retry_backoff):
+                if self.is_fenced or (deadline is not None and time.monotonic() + wait >= deadline):
+                    return
+                if wait:
+                    await asyncio.sleep(wait)
+                result = await asyncio.to_thread(
+                    self._guarded,
+                    lambda: self._artifacts.upload(
+                        digest, data, kind=kind, scenario_key=scenario_key, deadline=deadline
+                    ),
+                )
+                if result is not None and result.error is None:
+                    self._uploaded_digests.add(digest)
+                    self._failed_uploads.pop(digest, None)
+                    break
+            else:
+                await self.log(level="error", message=f"artifact upload failed again ({kind.value}) after retries")
 
     async def push_manifest(
         self, *, complete: bool, deadline: float | None = None
     ) -> bool:
         if self.is_fenced:
             return False
+        if complete and self._failed_uploads:
+            # Within the best-effort share of the flush window, so the manifest keeps the time reserved for it.
+            await self.retry_failed_uploads(deadline=self.best_effort_deadline())
         build = functools.partial(
             ob.build_artifact_manifest,
             job_id=self._capabilities.job_id,
@@ -1860,9 +1926,10 @@ class OutboundAdapter:
                 continue
             if hashlib.sha256(data).hexdigest() != digest:
                 continue
+            # Acked, not merely queued: an upload the platform refused returns its id to try again later.
             if await self.upload_artifact(
                 data, kind=kind, scenario_key=entry["scenario_key"], deadline=deadline
-            ):
+            ) and digest in self._uploaded_digests:
                 acknowledged_kinds.add(kind.value)
 
     async def ensure_terminal_artifacts(
@@ -2086,7 +2153,7 @@ def default_install_sigterm_handler(cancel_state: CancelState) -> Callable[[], N
     return install_sigterm_handler(cancel_state)
 
 
-def _resolve_hosted_public_url(
+def resolve_hosted_public_url(
     capabilities: ob.HostedCapabilities,
     transport: ob.Transport,
     *,
@@ -2161,7 +2228,7 @@ class HostedEntrypointDeps:
     ] = field(
         default=lambda capabilities, transport: ProcessRuntimeProvider(
             **hosted_user_resolution(),
-            public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
+            public_url_resolver=lambda port, ttl: resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
             ),
             provider_attempt_id=capabilities.attempt_id,
@@ -3085,6 +3152,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
+    from .grounding import publish_source_root
+
+    # A `file:` source may cite the agent's own source: every proof this process runs reads it from here.
+    publish_source_root(args.source)
     try:
         establish_isolation()
     except IsolationUnavailable as exc:

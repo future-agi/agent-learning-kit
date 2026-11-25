@@ -71,7 +71,12 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
+    logged_ok,
+    logged_outcome,
+    pinned_options,
     NOT_STOPPED,
+    door_failure,
+    world_failed,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     DOOR_FILE,
@@ -379,7 +384,7 @@ def _held_rows(dsn: str) -> list[dict[str, Any]]:
     """The door's latest rows that carry a fault: only what the hold is read from, bounded in rows and time."""
     with _read_only(dsn, timeout_ms=500) as connection:
         cursor = connection.execute(
-            f'SELECT at, fault FROM "{_TOOL_TRACE_TABLE}" WHERE fault IS NOT NULL '  # noqa: S608 - fixed identifier
+            f'SELECT at, fault FROM public."{_TOOL_TRACE_TABLE}" WHERE fault IS NOT NULL '  # noqa: S608 - fixed identifier
             f"ORDER BY at DESC LIMIT {_HOLD_ROWS}"
         )
         return [{"at": at, "fault": fault} for at, fault in cursor.fetchall()]
@@ -895,15 +900,26 @@ def _build_spec(
     )
 
 
+def _world_reader(endpoint: Any) -> Any:
+    """The world's store for the harness's reads (`attached_world_store`): with world roles its store role, and none
+    for a world without one, never the superuser's address."""
+    from .world.stores import StoreError
+    from .world.stores.postgres import attached_world_store
+
+    try:
+        return attached_world_store(endpoint)
+    except StoreError:
+        logger.warning("world records unread: this world has no role of its own to read them with")
+        return None
+
+
 def _world_records(runtime: Any) -> Callable[[str], list[dict[str, Any]]] | None:
     """The trial's world records, one collection at a time, for an actor's knowledge; None where none can be read."""
     endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
     if endpoint is None:
         return None
-    from .world.stores.postgres import AttachedPostgresStore
-
-    store = AttachedPostgresStore(endpoint.address)
-    return store.table
+    store = _world_reader(endpoint)
+    return store.table if store is not None else None
 
 
 def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
@@ -911,9 +927,8 @@ def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
     endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
     if endpoint is None:
         return None
-    from .world.stores.postgres import AttachedPostgresStore
-
-    return AttachedPostgresStore(endpoint.address).columns
+    store = _world_reader(endpoint)
+    return store.columns if store is not None else None
 
 
 def _resolved_call_actors(
@@ -1077,11 +1092,11 @@ def _clear_tool_trace_calls(dsn: str) -> None:
     try:
         import psycopg
 
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
-            connection.execute(f'DELETE FROM "{_TOOL_TRACE_TABLE}"')  # noqa: S608 - fixed identifier, no interpolated user input
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            connection.execute(f'DELETE FROM public."{_TOOL_TRACE_TABLE}"')  # noqa: S608 - fixed identifier, no interpolated user input
             # The keys actors' actions claimed go with the rows they guard.
             connection.execute(
-                "DO $$ BEGIN IF to_regclass('_alk_action_keys') IS NOT NULL THEN DELETE FROM _alk_action_keys; END IF; END $$"
+                "DO $$ BEGIN IF to_regclass('public._alk_action_keys') IS NOT NULL THEN DELETE FROM public._alk_action_keys; END IF; END $$"
             )
     except Exception as exc:  # noqa: BLE001 - best-effort housekeeping only, never a call-blocking failure
         # WHY: never log exc_info / str(exc) here -- a psycopg connection failure embeds the raw
@@ -1228,12 +1243,12 @@ def _read_only(dsn: str, timeout_ms: int | None = None) -> Any:
     options = "-c default_transaction_read_only=on"
     if timeout_ms is not None:
         options += f" -c statement_timeout={timeout_ms}"
-    return psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=options)
+    return psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=pinned_options(options))
 
 
 def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
     cursor = connection.execute(
-        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
+        f'SELECT * FROM public."{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
     )
     columns = [description[0] for description in cursor.description or []]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
@@ -1279,7 +1294,7 @@ def collect_tool_trace_calls(
         arguments = record.get("arguments")
         if not isinstance(arguments, dict):
             arguments = {}
-        ok = bool(record.get("ok", True))
+        ok = logged_ok(record.get("ok", True))
         result = _structured(record.get("result"))
         error = _truncate(str(record.get("error") or ""))
         raw_at = record.get("at")
@@ -1513,8 +1528,8 @@ def trial_state_changes(
                 same["count"] += 1
             continue
         entry["attempted"] += 1
-        outcome = row.get("outcome") or (
-            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+        outcome = logged_outcome(row) if row.get("outcome") else (
+            "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
         name = str(row.get("agent_tool") or row.get("name") or "")
@@ -1646,8 +1661,8 @@ def trial_shared_record_fields(
         if not isinstance(arguments, Mapping):
             continue
         tool = str(row.get("agent_tool") or row.get("name") or "")
-        outcome = row.get("outcome") or (
-            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+        outcome = logged_outcome(row) if row.get("outcome") else (
+            "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
         for argument, value in arguments.items():
             if argument not in key_columns:
@@ -1760,7 +1775,7 @@ def trial_faults_readable(dsn: str) -> bool:
     """Whether the faults this runner wrote for the trial read back as the door reads them: a list of faults."""
     try:
         with _read_only(dsn) as connection:
-            row = connection.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
+            row = connection.execute("SELECT faults FROM public._alk_trial_faults WHERE id = 1").fetchone()
     except Exception as exc:  # noqa: BLE001 - whatever broke, the door could not have read them either
         logger.warning("trial faults unreadable: %s", type(exc).__name__)
         return False
@@ -1885,7 +1900,7 @@ def actor_rows(
                 "name": chosen.name(who, logged_as(row), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
-                "ok": bool(row.get("ok")),
+                "ok": logged_ok(row.get("ok")),
                 "error": _truncate(str(row.get("error") or "")),
                 "refused": row.get("outcome") == "refused",
                 "at": row.get("at"),
@@ -1937,9 +1952,9 @@ def read_trial_deadlines(address: str) -> tuple[float | None, dict[str, float]]:
     import psycopg
 
     try:
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             row = connection.execute(
-                "SELECT worker_deadline_at, worker_deadlines FROM _alk_trial_faults WHERE id = 1"
+                "SELECT worker_deadline_at, worker_deadlines FROM public._alk_trial_faults WHERE id = 1"
             ).fetchone()
     except psycopg.Error:
         return None, {}
@@ -1971,16 +1986,16 @@ def read_worker_stops(runtime: EnvironmentRuntime, since: float | None = None) -
         import psycopg
         from psycopg import errors
 
-        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             connection.execute(f"SET lock_timeout = '{_SEAL_LOCK_TIMEOUT}'")
             try:
                 # No DDL here: an ALTER would lock the table, and the row lock is what orders a stop and the seal.
-                connection.execute("UPDATE _alk_trial_faults SET sealed_at = %s WHERE id = 1", (time.time(),))
+                connection.execute("UPDATE public._alk_trial_faults SET sealed_at = %s WHERE id = 1", (time.time(),))
             except (errors.UndefinedTable, errors.UndefinedColumn):
                 # No trial row this harness wrote (it adds the column with the row): no stop can be claimed either.
                 pass
             rows = connection.execute(
-                "SELECT worker, process, at, reason FROM _alk_worker_stops ORDER BY at ASC"
+                "SELECT worker, process, at, reason FROM public._alk_worker_stops ORDER BY at ASC"
             ).fetchall()
     except Exception as exc:  # noqa: BLE001 - a seal that timed out on a stop under way, or a world out of reach
         logger.warning("worker stops could not be sealed: %s", type(exc).__name__)
@@ -2031,8 +2046,8 @@ def read_worker_runs(runtime: EnvironmentRuntime, since: float | None = None) ->
     def read() -> set[str]:
         import psycopg
 
-        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
-            rows = connection.execute("SELECT worker, at FROM _alk_worker_runs").fetchall()
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            rows = connection.execute("SELECT worker, at FROM public._alk_worker_runs").fetchall()
         return {
             str(worker)
             for worker, at in rows
@@ -2054,9 +2069,9 @@ def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
         def clear() -> None:
             import psycopg
 
-            with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
-                connection.execute("DELETE FROM _alk_worker_stops")
-                connection.execute("DELETE FROM _alk_worker_runs")
+            with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+                connection.execute("DELETE FROM public._alk_worker_stops")
+                connection.execute("DELETE FROM public._alk_worker_runs")
 
         _on_trial_tables(database.address, clear)
     except Exception as exc:  # noqa: BLE001 - a world database out of reach never fails a trial that stops no one
@@ -2084,9 +2099,9 @@ def _write_trial_state(
     import psycopg
 
     def write() -> None:
-        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             connection.execute(
-                "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at, "
+                "INSERT INTO public._alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at, "
                 "started_at) VALUES (1, %s::jsonb, %s, %s::jsonb, NULL, %s) ON CONFLICT (id) DO UPDATE SET "
                 "faults = EXCLUDED.faults, worker_deadline_at = EXCLUDED.worker_deadline_at, "
                 "worker_deadlines = EXCLUDED.worker_deadlines, sealed_at = NULL, started_at = EXCLUDED.started_at",
@@ -2232,6 +2247,24 @@ def _names_action(entry: Mapping[str, Any], action: str) -> bool:
 
 # Notices that make a trial unmeasured, never passed or failed on what it lacked.
 UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
+
+
+def world_failure_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Why the door failed on the agent's calls by its own fault, one reason per `world_failed` notice."""
+    return tuple(str(one.get("message")) for one in notices if one.get("code") == "world_failed")
+
+
+def world_failure_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
+    """One notice for each of the agent's calls the action log shows the world or its door failed on with no test
+    condition holding it: the trial cannot say what the agent would have done with an answer, so it is unmeasured,
+    never the agent's. Read from the log, so every runner and every route sees it."""
+    return [
+        {"code": "world_failed",
+         "message": f"The world failed on the agent's {row.get('name') or row.get('action')} call, so this trial "
+                    "cannot be graded."}
+        for row in log or ()
+        if isinstance(row, Mapping) and world_failed(row)
+    ]
 
 
 def missing_evidence(notices: Sequence[Mapping[str, Any]], records: Mapping[str, Any] | None) -> dict[str, str]:
@@ -2661,9 +2694,22 @@ def sealed_routes(bundle_dir: Any) -> Callable[[], dict[str, Any]]:
     return read
 
 
-def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None) -> Any:
+def _records_address(dsn: str, records_dsn: str | None) -> str:
+    """Where an actor's record change runs: the world's own role. Only without world roles (one fixed user, where the
+    agent's own processes have the same address) is it the given one; with them and no role's address, refused."""
+    from .privilege import IsolationMode, isolation_mode
+
+    if records_dsn:
+        return records_dsn
+    if isolation_mode() is IsolationMode.PER_USER:
+        raise RuntimeError("no_world_role: a world's rows are changed only with its own role, and none was given")
+    return dsn
+
+
+def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None, records_dsn: str | None = None) -> Any:
     """The world's door in the runner's process: the agent's tools service behind it, the world's own action log, actor
-    list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy."""
+    list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy. Record
+    changes run as `records_dsn`, the world's own role, so the log's superuser never writes a customer's rows."""
     from .world_door import (
         HttpExecutor,
         PostgresLog,
@@ -2675,22 +2721,22 @@ def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None
     )
 
     return WorldDoor(
-        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(dsn))),
+        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(_records_address(dsn, records_dsn)))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
         workers=sealed_routes(bundle_dir),
     )
 
 
-def record_door(dsn: str, bundle_dir: Any = None) -> Any:
+def record_door(dsn: str, bundle_dir: Any = None, records_dsn: str | None = None) -> Any:
     """The world's door in the runner's process for an agent whose tools run in its own process: an actor's record
     change runs on the world's database; an action on one of the agent's own tools is refused, since only the agent's
-    process can run it."""
+    process can run it. Record changes run as `records_dsn`, the world's own role."""
     from .in_process_door import _NotHere
     from .world_door import PostgresLog, PostgresRecords, PostgresRoster, RecordExecutor, Routed, WorldDoor
 
     return WorldDoor(
-        Routed(_NotHere(), RecordExecutor(PostgresRecords(dsn))),
+        Routed(_NotHere(), RecordExecutor(PostgresRecords(_records_address(dsn, records_dsn)))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
         workers=sealed_routes(bundle_dir),
@@ -2724,12 +2770,22 @@ def _actor_dispatcher(
         return None
     tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
+    from .privilege import IsolationMode, isolation_mode
+
+    if database is not None and not database.tool_address and isolation_mode() is IsolationMode.PER_USER:
+        logger.warning("actors cannot act: this world has no role of its own to change its rows with")
+        if why_not is not None:
+            why_not.append(("no_world_role", "no world role: an actor's record change would run as the harness"))
+        return None
     if database is not None and runtime.endpoints.get("world_door") is not None and tools is None:
         # An actor acts through record changes there; one of the agent's own tools is refused with why.
         return build_dispatcher(
             dict(doc),
             bundle_dir,
-            act=DoorActs(record_door(database.address, bundle_dir), _bundle_contract(bundle_dir)),
+            act=DoorActs(
+                record_door(database.address, bundle_dir, records_dsn=database.tool_address),
+                _bundle_contract(bundle_dir),
+            ),
             read_log=_ActionLog(database.address),
             records=_world_records(runtime),
             columns=_world_columns(runtime),
@@ -2745,7 +2801,10 @@ def _actor_dispatcher(
     return build_dispatcher(
         dict(doc),
         bundle_dir,
-        act=DoorActs(runner_door(tools.address, database.address, budget, bundle_dir), _bundle_contract(bundle_dir)),
+        act=DoorActs(
+            runner_door(tools.address, database.address, budget, bundle_dir, records_dsn=database.tool_address),
+            _bundle_contract(bundle_dir),
+        ),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
         columns=_world_columns(runtime),
@@ -3068,15 +3127,17 @@ def _read_file_tool_calls(
                 arguments = {"raw": arguments}
         if not isinstance(arguments, dict):
             arguments = {}
-        is_error = bool(record.get("is_error", False))
         output = record.get("output")
+        # The proxy's failure answer the agent's tool handed back as its value is a failed call, never a result.
+        failed = door_failure(_structured(output))
+        is_error = bool(record.get("is_error", False)) or failed is not None
         raw_at = record.get("at")
         call = Call(
             name=name,
             arguments=arguments,
             result=None if is_error else _structured(output),
             ok=not is_error,
-            error=str(output) if is_error and output is not None else None,
+            error=failed or (str(output) if is_error and output is not None else None),
             **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
             handoff=record.get("kind") == "handoff",
@@ -3823,7 +3884,7 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                     arguments = {"raw": arguments}
             if not isinstance(arguments, dict):
                 arguments = {}
-            ok = bool(raw.get("ok", True))
+            ok = logged_ok(raw.get("ok", True))
             raw_at = raw.get("at")
             at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
             calls.append(
@@ -4851,7 +4912,12 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime) + tool_span_notices(runtime, calls, silent=False)
+        trial_notices += (
+            repeated_untimed_notices(calls)
+            + hand_off_notices(runtime)
+            + tool_span_notices(runtime, calls, silent=False)
+            + world_failure_notices(action_log)
+        )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -5013,6 +5079,7 @@ class CallRunnerImpl:
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(trial_notices),
+            world_failures=world_failure_reasons(trial_notices),
             missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},

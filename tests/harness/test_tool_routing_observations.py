@@ -556,7 +556,7 @@ def test_the_action_log_table_writes_the_endpoint_column(monkeypatch):
         description = None
 
         def execute(self, statement, values=None):
-            if statement.startswith("SELECT * FROM _alk_tool_trace LIMIT 0"):
+            if statement.startswith("SELECT * FROM public._alk_tool_trace LIMIT 0"):
                 return SimpleNamespace(
                     description=[(name,) for name in ("name", "arguments", "result", "ok", "error", "at", "endpoint")]
                 )

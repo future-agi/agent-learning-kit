@@ -24,7 +24,9 @@ RUN groupadd --gid 2000 svc-control \
     && groupadd --gid 2002 svc-tools \
     && useradd --uid 2002 --gid 2002 --create-home --shell /usr/sbin/nologin svc-tools \
     && groupadd --gid 2003 svc-data \
-    && useradd --uid 2003 --gid 2003 --create-home --shell /usr/sbin/nologin svc-data
+    && useradd --uid 2003 --gid 2003 --create-home --shell /usr/sbin/nologin svc-data \
+    && groupadd --gid 2004 svc-door \
+    && useradd --uid 2004 --gid 2004 --create-home --shell /usr/sbin/nologin svc-door
 
 WORKDIR /opt/alk
 COPY pyproject.toml README.md ./

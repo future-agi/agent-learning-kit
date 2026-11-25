@@ -16,6 +16,7 @@ from typing import Any
 try:  # Beside the server in a bundle; the harness package when run from source.
     import tool_trace_proxy as _proxy
     from world_door import (
+        DOOR_FAILED,
         DOOR_OUT_OF_REACH,
         EVIDENCE_INCOMPLETE,
         DictRoster,
@@ -36,6 +37,7 @@ try:  # Beside the server in a bundle; the harness package when run from source.
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness import tool_trace_proxy as _proxy  # type: ignore[no-redef]
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
+        DOOR_FAILED,
         DOOR_OUT_OF_REACH,
         EVIDENCE_INCOMPLETE,
         DictRoster,
@@ -55,6 +57,9 @@ except ImportError:  # pragma: no cover - imported as part of the package
     )
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# The world's rows are written with the world's own role, never the door's; a bundle sealed before it has only
+# the door's.
+RECORDS_DATABASE_URL = os.environ.get("WORLD_RECORDS_DATABASE_URL", "") or DATABASE_URL
 # The tools the contract declares read-only, by name: logged as reads.
 READ_TOOLS = frozenset(one for one in os.environ.get("READ_ACTIONS", "").split(",") if one)
 # Longest the door waits for the agent to report a call it let run; the call itself is the agent's.
@@ -126,7 +131,10 @@ class InProcessDoor:
         self.pending: dict[str, _Pending] = {}
         self._lock = threading.Lock()
         self.door = door if door is not None else WorldDoor(
-            Routed(_AgentRuns(self.pending), RecordExecutor(PostgresRecords(DATABASE_URL)) if DATABASE_URL else None),
+            Routed(
+                _AgentRuns(self.pending),
+                RecordExecutor(PostgresRecords(RECORDS_DATABASE_URL)) if RECORDS_DATABASE_URL else None,
+            ),
             PostgresLog(DATABASE_URL),
             PostgresRoster(DATABASE_URL) if DATABASE_URL else DictRoster({}),
             faults=_proxy._trial_faults,
@@ -223,16 +231,19 @@ def _int_or_zero(value: Any) -> int:
 
 
 def _decided(outcome: Outcome | None) -> bool:
-    """Whether the door held the call on purpose, as opposed to failing to decide anything."""
-    return outcome is not None and (
-        outcome.fault is not None or outcome.outcome == "refused" or outcome.refusal_code is not None
+    """Whether the door held the call on purpose, as opposed to failing to decide anything: its own failure, coded
+    `DOOR_FAILED` for grading, decides nothing."""
+    return (
+        outcome is not None
+        and outcome.refusal_code != DOOR_FAILED
+        and (outcome.fault is not None or outcome.outcome == "refused" or outcome.refusal_code is not None)
     )
 
 
 def _held(outcome: Outcome) -> dict[str, Any]:
     """What the agent's tool says instead of running, from the scenario's fault the door applied."""
     fault = outcome.fault or {}
-    detail = outcome.reason or outcome.outcome
+    detail = outcome.detail
     if outcome.body is not None:
         try:
             detail = str(json.loads(outcome.body).get("detail") or detail)

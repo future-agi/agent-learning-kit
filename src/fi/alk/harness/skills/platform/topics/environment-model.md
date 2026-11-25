@@ -29,8 +29,9 @@ A sub-goal has either a **check** or **judged criteria**.
   It settles facts exactly: an action taken with the wrong value is a failure and needs no judgement.
 - **Judged criteria** are for what leaves no trace: words and manner (whether a refusal was explained,
   whether something was invented, tone). They are four labelled lines: `Applies when`, `Pass when`,
-  `Fail when` (agent behaviour only, never the caller's), and `If it does not arise` (Pass or Fail and
-  why: fail when the agent's own behaviour kept the situation away, pass when only the caller's path did).
+  `Fail when` (agent behaviour only, never the caller's), and `If it does not arise` (Not applicable, Pass
+  or Fail and why: fail when the agent's own behaviour kept the situation away, not applicable when only the
+  caller's path did, pass only when the agent's own right behaviour did).
   Criteria may not cite tool calls or world state, because code settles those.
 - Checks come first; judging is only where nothing is observable. A catalogue more than half judged
   is flagged, except on a connect-only agent where judging everything is correct.

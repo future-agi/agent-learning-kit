@@ -24,7 +24,7 @@ from typing import Any
 
 from ..backends import tool, tool_server
 
-from ..catalogue import CHECK_RULES, CONTRACT_FIELDS, CONTRACT_SCHEMA, CRITERIA_RULES
+from ..catalogue import CHECK_RULES, CONTRACT_FIELDS, CONTRACT_SCHEMA, CRITERIA_RULES, settled_by
 from ..contract import AgentContract
 from ..environment import (
     SubGoal,
@@ -337,6 +337,7 @@ def provision_tools(
             overlay=str(args.get("overlay") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
+        one.verifier = settled_by(one)
         problems = validate_sub_goal(one)
         if problems:
             return _err(f"{one.name} not added:\n  - " + "\n  - ".join(problems))
