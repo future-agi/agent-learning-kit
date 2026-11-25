@@ -3039,8 +3039,8 @@ def _read_file_tool_calls(
     # Hand-offs written when the worker started: kept only for a tool call that never wrote its own line.
     opened: list[Call] = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError) as exc:
+        lines = path.read_bytes().splitlines()
+    except OSError as exc:
         if strict:
             raise _TraceFileReadFailed(
                 f"tool_trace file unreadable: {type(exc).__name__}", [], []
@@ -3053,7 +3053,7 @@ def _read_file_tool_calls(
         if not line.strip():
             continue
         try:
-            record = json.loads(line)
+            record = json.loads(line.decode("utf-8"))
         except ValueError:
             unreadable += 1
             continue
@@ -3294,7 +3294,7 @@ def hand_off_notices(runtime: Any) -> list[dict[str, Any]]:
     if path is None or not path.is_file():
         return []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_bytes().splitlines()
     except OSError:
         return [
             {
@@ -3305,7 +3305,7 @@ def hand_off_notices(runtime: Any) -> list[dict[str, Any]]:
         ]
     for line in lines:
         try:
-            record = json.loads(line)
+            record = json.loads(line.decode("utf-8"))
         except ValueError:
             continue
         if isinstance(record, dict) and record.get("kind") == HAND_OFF_UNRECORDED:

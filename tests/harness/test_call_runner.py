@@ -2220,7 +2220,7 @@ def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
     def refuse(*_args: Any, **_kwargs: Any) -> str:
         raise PermissionError("denied")
 
-    monkeypatch.setattr(type(trace), "read_text", refuse)
+    monkeypatch.setattr(type(trace), "read_bytes", refuse)
     assert cr._collect_file_tool_calls(runtime) == ()
     with pytest.raises(cr.ToolCaptureFailed, match="tool_trace file unreadable"):
         cr._collect_file_tool_calls(runtime, strict=True)
@@ -2349,6 +2349,7 @@ class _NoTablePsycopg:
         ),
         pytest.param(EvidenceSeam.HTTP_TOOL, "cut-handoff", None, True, ["Draft checker"]),
         pytest.param(EvidenceSeam.HTTP_TOOL, "cut-call", None, True, ["lookup"]),
+        pytest.param(EvidenceSeam.HTTP_TOOL, "torn-utf8", None, True, ["lookup"]),
         pytest.param(
             EvidenceSeam.HTTP_TOOL, "cut", None, True, [], id="trace-file-of-cut-lines"
         ),
@@ -2374,26 +2375,26 @@ def test_a_completed_call_says_whether_its_tool_capture_failed(
     elif database is not None:
         rows = [("lookup", {}, "ok", True, "", 1.0)] if database == "rows" else []
         monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    read_text = Path.read_text
+    read_bytes = Path.read_bytes
 
-    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> str:
+    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> bytes:
         if self == trace_path:
             raise PermissionError("denied")
-        return read_text(self, *args, **kwargs)
+        return read_bytes(self, *args, **kwargs)
 
     async def place_call(spec):
         # Written during the call, after the runner cleared the previous attempt's file.
         if trace == "unreadable":
             _trace_lines(trace_path, {"name": "lookup", "arguments": {}})
-            monkeypatch.setattr(type(trace_path), "read_text", read_unless_refused)
+            monkeypatch.setattr(type(trace_path), "read_bytes", read_unless_refused)
         elif trace == "spans":
             _trace_lines(trace_path, *_SPAN_LINES)
         elif trace == "handoff":
             _trace_lines(trace_path, _HANDOFF_LINE)
-        elif trace in {"cut-handoff", "cut-call"}:
+        elif trace in {"cut-handoff", "cut-call", "torn-utf8"}:
             _trace_lines(trace_path, _HANDOFF_LINE if trace == "cut-handoff" else {"name": "lookup"})
-            with trace_path.open("a", encoding="utf-8") as stream:
-                stream.write("{\n")
+            with trace_path.open("ab") as stream:
+                stream.write(b'{"name":"\xe2\x82' if trace == "torn-utf8" else b"{\n")
         elif trace == "cut":
             trace_path.write_text('{"name": "lookup", "argu\n', encoding="utf-8")
         return _report()

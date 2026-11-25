@@ -479,14 +479,14 @@ def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
             return AgentResponse(content="I can't share that account.")
 
     monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
-    read_text = Path.read_text
+    read_bytes = Path.read_bytes
 
-    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> str:
+    def read_unless_refused(self: Path, *args: Any, **kwargs: Any) -> bytes:
         if self == trace and not readable:
             raise PermissionError("denied")
-        return read_text(self, *args, **kwargs)
+        return read_bytes(self, *args, **kwargs)
 
-    monkeypatch.setattr(type(trace), "read_text", read_unless_refused)
+    monkeypatch.setattr(type(trace), "read_bytes", read_unless_refused)
     runtime = EnvironmentRuntime(
         runtime_id="runtime-1",
         world_index=0,
