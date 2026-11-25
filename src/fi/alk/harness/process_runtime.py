@@ -5680,6 +5680,9 @@ def _clone_or_reset_world(
             isinstance(p, SourceProcess) and p.workspaces for p in manifest.processes
         )
     )
+    # The last trial's browser goes before the world's records are sealed again, so a page still open in it never
+    # reaches the next trial's world.
+    _stop_browser(context, world_index)
     for name, handle in reversed(list(existing_handles.items())):
         if not in_place and name not in job_shared_handles:
             # M7, p6-review-r1: waits for real exit before `_seal_world_store` below `rmtree`s
@@ -6281,9 +6284,14 @@ def _contract_needs_browser(bundle_dir: Path | None) -> bool:
 
     if bundle_dir is None:
         return False
+    path = Path(bundle_dir) / "contract.json"
     try:
-        contract = AgentContract.model_validate_json((Path(bundle_dir) / "contract.json").read_text(encoding="utf-8"))
+        contract = AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
     except (OSError, ValueError):
+        # Taken for no browser, so the trial will say none was started; the cause is here.
+        logger.warning("browser: the agent's contract at %s could not be read", path, exc_info=True)
         return False
     return "browser" in how_it_runs(contract).needs
 
@@ -6348,7 +6356,8 @@ def _kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
             return context.runner(argv, cwd=cwd, env=env, log_path=log_path, user=uid, group=gid)
 
         def prepare(profile: Path) -> None:
-            # The profile alone is the agent's: the folder around it, and the browser's log there, stay the kit's.
+            # The profile is the agent's, and so is the browser's log, which the runner hands to the user it starts
+            # the browser as. The folder around them, and the browser's state file, stay the kit's.
             if uid is not None:
                 context.chown(profile, uid, gid if gid is not None else -1)
 
@@ -6361,6 +6370,7 @@ def _kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
             launch=launch,
             stop=lambda handle: _terminate_and_wait(handle),
             prepare=prepare,
+            retain_log=context.retain_process_log,
         )
 
     return make
@@ -6374,6 +6384,17 @@ def _browser_metadata(context: SpawnContext, world_index: int) -> dict[str, Any]
         return {"browser": {"state": "not_started"}}
     browser = context.browsers.get(world_index)
     return {"browser": browser.metadata()} if browser is not None else {}
+
+
+def _stop_browser(context: SpawnContext, world_index: int) -> None:
+    """Stop one world's browser, if it has one. Logged, never raised."""
+    browser = context.browsers.get(world_index)
+    if browser is None:
+        return
+    try:
+        browser.stop()
+    except Exception:  # noqa: BLE001 - the world is reset whatever its browser does
+        logger.warning("reset: the browser of world %s did not stop cleanly", world_index, exc_info=True)
 
 
 def _close_browsers(context: SpawnContext, world_index: int | None = None) -> None:

@@ -136,6 +136,18 @@ def test_a_site_whose_name_resolves_to_loopback_is_refused() -> None:
     assert b"loopback" in body
 
 
+@pytest.mark.parametrize("address", ["127.0.0.1", "0.0.0.0", "::"])
+def test_a_site_whose_name_leads_back_to_this_machine_is_refused_and_logged(address) -> None:
+    # 0.0.0.0 connects to a listener on 127.0.0.1, so an unspecified address is loopback too.
+    log = MemoryLog()
+    proxy = BrowserProxy(["shop.test"], log, attached=_Attached(True), resolve=lambda host: address)
+    try:
+        assert _through(proxy, "http://shop.test/")[0] == 403
+    finally:
+        proxy.close()
+    assert [row["arguments"] for row in log.rows()] == [{"host": "shop.test", "method": "GET", "via": "browser"}]
+
+
 def test_the_browser_s_own_housekeeping_is_never_the_agent_s_attempt() -> None:
     log = MemoryLog()
     proxy = BrowserProxy(["shop.test"], log, attached=_Attached(True))
@@ -289,6 +301,14 @@ def devtools():
                 self.send_header("upgrade", "websocket")
                 self.send_header("connection", "Upgrade")
                 self.end_headers()
+                self.wfile.flush()
+                # Held open, as a browser holds a client's websocket, until the client goes.
+                try:
+                    while self.connection.recv(4096):
+                        pass
+                except OSError:
+                    pass
+                self.close_connection = True
                 return
             content = json.dumps(
                 {
@@ -406,6 +426,22 @@ def test_a_browser_state_that_cannot_be_read_is_not_taken_for_an_attached_client
     ] == [BROWSER_NOT_USED]
 
 
+@pytest.mark.parametrize("content", ["{not json", "[1, 2]", '{"attached": "yes"}'])
+def test_a_browser_state_that_is_there_but_unreadable_is_not_taken_for_an_attached_client(tmp_path, content) -> None:
+    state = tmp_path / "browser.json"
+    state.write_text(content)
+    notices = browser_notices(_runtime({"browser": {"state": "started", "state_path": str(state)}}))
+    assert [one["code"] for one in notices] == [BROWSER_NOT_USED]
+
+
+def test_a_browser_state_that_is_a_folder_is_not_taken_for_an_attached_client(tmp_path) -> None:
+    (tmp_path / "browser.json").mkdir()
+    notices = browser_notices(
+        _runtime({"browser": {"state": "started", "state_path": str(tmp_path / "browser.json")}})
+    )
+    assert [one["code"] for one in notices] == [BROWSER_NOT_USED]
+
+
 def test_sites_for_an_agent_not_read_as_a_browser_agent_say_no_browser_was_started() -> (
     None
 ):
@@ -415,3 +451,152 @@ def test_sites_for_an_agent_not_read_as_a_browser_agent_say_no_browser_was_start
 
 def test_a_world_with_no_browser_says_nothing() -> None:
     assert browser_notices(_runtime({})) == []
+
+
+# A browser that stops, or never opens its port
+
+
+class _Handle:
+    def __init__(self, running: bool = True) -> None:
+        self.running = running
+
+    def is_running(self) -> bool:
+        return self.running
+
+
+def _held_kit(tmp_path, devtools, log):
+    """A kit whose browser is the `devtools` stand-in, as a real start would leave it."""
+
+    def launch(argv, cwd, env, log_path):
+        (cwd / "DevToolsActivePort").write_text(f"{devtools.server_port}\n/devtools/browser/1\n")
+        return _Handle()
+
+    stopped: list = []
+    kit = KitBrowser(
+        binary="/opt/alk-chromium",
+        sites=["shop.test"],
+        log=log,
+        directory=tmp_path / "browser",
+        state_path=tmp_path / "state.json",
+        launch=launch,
+        stop=stopped.append,
+    )
+    return kit, stopped
+
+
+def test_a_stopped_browser_s_refusals_are_never_the_next_trial_s(devtools, tmp_path) -> None:
+    log = MemoryLog()
+    kit, _ = _held_kit(tmp_path, devtools, log)
+    try:
+        kit.start()
+        _upgrade(kit.relay.port)
+        assert kit.relay.attached()
+        kit.stop()
+        # The last page, or the next browser's own start, asks for a site off the list before any client attaches.
+        assert not kit.relay.attached()
+        _through(kit.proxy, "http://update.vendor.example/")
+    finally:
+        kit.close()
+    assert log.rows() == []
+    # The trial that ended keeps its count until the next browser is ready, so it can still be read.
+    assert json.loads((tmp_path / "state.json").read_text()) == {"attached": 1}
+
+
+def test_a_browser_that_never_opens_its_port_is_stopped(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(kit_browser, "_START_SECONDS", 0.2)
+    stopped: list = []
+    handle = _Handle()
+    kit = KitBrowser(
+        binary="/opt/alk-chromium", sites=["shop.test"], log=MemoryLog(), directory=tmp_path / "browser",
+        state_path=tmp_path / "state.json", launch=lambda *args: handle, stop=stopped.append,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="within"):
+            kit.start()
+    finally:
+        kit.close()
+    assert stopped == [handle]
+
+
+def test_a_browser_that_exits_at_once_says_so_with_the_end_of_its_output(tmp_path) -> None:
+    from fi.alk.harness.process_runtime import default_process_runner
+
+    binary = tmp_path / "alk-chromium"
+    binary.write_text(
+        "#!/bin/sh\necho 'alk-chromium: error while loading shared libraries: libnss3.so: cannot open shared object "
+        "file'\nexit 127\n"
+    )
+    binary.chmod(0o755)
+    retained: list = []
+    kit = KitBrowser(
+        binary=str(binary), sites=["shop.test"], log=MemoryLog(), directory=tmp_path / "browser",
+        state_path=tmp_path / "state.json",
+        launch=lambda argv, cwd, env, log_path: default_process_runner(argv, cwd=cwd, env=env, log_path=log_path),
+        stop=lambda handle: None, retain_log=retained.append,
+    )
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            kit.start()
+    finally:
+        kit.close()
+    message = str(raised.value)
+    assert "exited" in message and "127" in message
+    assert "libnss3" in message
+    assert "seconds" not in message
+    # The whole log is kept with the run's diagnostics before the next start removes it.
+    assert [path.name for path in retained] == ["browser.log"]
+
+
+# The relay's bounds
+
+
+def test_the_relay_turns_away_a_client_past_its_limit_and_says_so(devtools, tmp_path, monkeypatch, caplog) -> None:
+    monkeypatch.setattr(kit_browser, "_max_clients", lambda: 1)
+    relay = DevToolsRelay(tmp_path / "browser.json")
+    relay.target(devtools.server_port)
+    try:
+        with socket.create_connection(("127.0.0.1", relay.port), timeout=5) as held:
+            held.sendall(
+                b"GET /devtools/browser/1 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+            )
+            assert b" 101 " in held.recv(4096)
+            with socket.create_connection(("127.0.0.1", relay.port), timeout=5) as second:
+                second.sendall(b"GET /json/version HTTP/1.1\r\nHost: x\r\n\r\n")
+                try:
+                    answer = second.recv(4096)
+                except ConnectionResetError:
+                    answer = b""
+                assert answer == b""
+    finally:
+        relay.close()
+    assert "turned away" in caplog.text
+
+
+def test_the_relay_closes_a_connection_idle_both_ways(devtools, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(kit_browser, "_tunnel_seconds", lambda: 0.3)
+    relay = DevToolsRelay(tmp_path / "browser.json")
+    relay.target(devtools.server_port)
+    try:
+        with socket.create_connection(("127.0.0.1", relay.port), timeout=5) as held:
+            held.sendall(
+                b"GET /devtools/browser/1 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+            )
+            assert b" 101 " in held.recv(4096)
+            # Nothing either way: the relay lets it go, as the egress proxy does a tunnel.
+            assert held.recv(4096) == b""
+    finally:
+        relay.close()
+
+
+def test_a_relay_whose_browser_refuses_it_says_so(tmp_path, caplog) -> None:
+    with socket.create_server(("127.0.0.1", 0)) as gone:
+        port = gone.getsockname()[1]
+    relay = DevToolsRelay(tmp_path / "browser.json")
+    relay.target(port)
+    try:
+        with socket.create_connection(("127.0.0.1", relay.port), timeout=5) as client:
+            client.sendall(b"GET /json/version HTTP/1.1\r\nHost: x\r\n\r\n")
+            assert client.recv(4096) == b""
+    finally:
+        relay.close()
+    assert "could not reach the browser" in caplog.text

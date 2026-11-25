@@ -29,6 +29,7 @@ class _FakeBrowser:
         self.world_index = world_index
         self.log = log
         self.starts = 0
+        self.stops = 0
         self.closed = False
 
     def environment(self) -> dict[str, str]:
@@ -42,6 +43,9 @@ class _FakeBrowser:
 
     def start(self) -> None:
         self.starts += 1
+
+    def stop(self) -> None:
+        self.stops += 1
 
     def close(self) -> None:
         self.closed = True
@@ -104,6 +108,40 @@ def test_each_spawn_of_the_world_starts_a_new_browser_and_a_reset_never_keeps_th
     assert browser.starts == 2
     # An agent holding a dead connection to the last browser would start the trial broken.
     assert agent.terminated
+
+
+def test_a_reset_stops_the_last_browser_before_the_world_s_records_are_sealed_again(tmp_path, monkeypatch) -> None:
+    # A page still open in the last trial's browser must not reach the world once its records are sealed again.
+    manifest, freeze, context, made, _ = _browser_world(tmp_path)
+    first = _spawn(manifest, freeze, context)
+    [browser] = made
+    order: list[str] = []
+    stop = browser.stop
+    monkeypatch.setattr(browser, "stop", lambda: (order.append("browser stopped"), stop())[1])
+    seal = pr._seal_world_store
+    monkeypatch.setattr(pr, "_seal_world_store", lambda *a, **k: (order.append("sealed"), seal(*a, **k))[1])
+    _spawn(manifest, freeze, context, first.handles, keep_processes=True)
+    assert order and order[0] == "browser stopped"
+
+
+@pytest.mark.parametrize("error", [OSError("no such file"), RuntimeError("did not open its DevTools port")])
+def test_a_browser_that_does_not_start_fails_the_spawn(tmp_path, error) -> None:
+    manifest, freeze, context, _, _ = _browser_world(tmp_path)
+
+    class _Broken:
+        def start(self) -> None:
+            raise error
+
+    context = dataclasses.replace(context, browser_factory=lambda world_index, log: _Broken())
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        _spawn(manifest, freeze, context)
+    assert (raised.value.code, raised.value.domain) == ("spawn_failed", pr.FailureDomain.INFRASTRUCTURE)
+
+
+def test_a_contract_that_cannot_be_read_is_logged_not_taken_silently_for_no_browser(tmp_path, caplog) -> None:
+    (tmp_path / "contract.json").write_text("{not json")
+    assert pr._contract_needs_browser(tmp_path) is False
+    assert "contract" in caplog.text and caplog.records[-1].exc_info is not None
 
 
 def test_sites_for_an_agent_that_needs_no_browser_start_none(tmp_path) -> None:
