@@ -336,23 +336,27 @@ jobs:
     concurrency:
       group: deployment-bump-${{ github.sha }}
       cancel-in-progress: false
+    # The deployment-bump App's key is stored only in this environment
+    # (deployments limited to main). That App can open pull requests on the
+    # deployment repo and nothing else.
+    environment: deploy-bump
     env:
       RELEASE_JSON: ${{ needs.template-publish.outputs.release }}
     steps:
       - name: Check required credentials
         env:
-          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
-          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          APP_ID: ${{ secrets.DEPLOY_BUMP_APP_ID }}
+          APP_KEY: ${{ secrets.DEPLOY_BUMP_PRIVATE_KEY }}
         run: |
           if [[ -z "$APP_ID" || -z "$APP_KEY" ]]; then
-            echo "::error::Share the RELEASE_BOT_APP_ID and RELEASE_BOT_PRIVATE_KEY organization secrets with this repository to open the deployment pull request."
+            echo "::error::Add DEPLOY_BUMP_APP_ID and DEPLOY_BUMP_PRIVATE_KEY to the deploy-bump environment to open the deployment pull request."
             exit 1
           fi
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
-          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          app-id: ${{ secrets.DEPLOY_BUMP_APP_ID }}
+          private-key: ${{ secrets.DEPLOY_BUMP_PRIVATE_KEY }}
           owner: future-agi
           repositories: deployment
           permission-contents: write
