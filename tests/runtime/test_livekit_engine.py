@@ -4285,6 +4285,7 @@ def _short_call_failure() -> livekit._CaseOutcome:
                 {"name": "to_front_desk", "type": "transfer_call", "ok": True}
             ]
         },
+        {"ended_reason": "customer-ended-call", "tool_calls": [{"name": "endCall"}]},
     ],
 )
 def test_provider_reported_agent_ending_recovers_short_call_for_eval(
@@ -4320,6 +4321,17 @@ def test_provider_reported_agent_ending_recovers_short_call_for_eval(
                 {"name": "to_front_desk", "type": "transfer_call", "ok": False}
             ]
         },
+        *(
+            {"ended_reason": reason, "tool_calls": [{"name": "transferCall"}]}
+            for reason in (
+                "customer-ended-call",
+                "customer-ended-call-during-warm-transfer",
+                "assistant-error",
+                "call.in-progress.transfer-cancelled-by-assistant",
+                "call.in-progress.error-transfer-failed",
+            )
+        ),
+        {"end_reason": "user_hangup", "tool_calls": [{"type": "transfer_call"}]},
     ],
 )
 def test_provider_ending_by_someone_else_keeps_the_short_call_failed(

@@ -5122,6 +5122,7 @@ _AGENT_ENDED_REASONS = frozenset(
     }
 )
 _AGENT_ENDING_TOOLS = frozenset({"endcall", "transfercall"})
+_END_CALL_TOOLS = frozenset({"endcall"})
 
 
 def _recover_successful_provider_end_call(
@@ -5160,17 +5161,18 @@ def _provider_reports_agent_ending(metadata: dict[str, Any]) -> bool:
     )
     if reason in _AGENT_ENDED_REASONS:
         return True
-    if "transfer" in reason and not _caller_or_unfinished_transfer(reason):
+    unfinished = _caller_or_unfinished_transfer(reason)
+    if "transfer" in reason and not unfinished:
         return True
     calls = metadata.get("tool_calls")
     if not isinstance(calls, list):
         return False
+    ending_tools = _END_CALL_TOOLS if unfinished else _AGENT_ENDING_TOOLS
     return any(
         isinstance(call, dict)
         and call.get("ok") is not False
         and any(
-            str(call.get(field) or "").strip().lower().replace("_", "")
-            in _AGENT_ENDING_TOOLS
+            str(call.get(field) or "").strip().lower().replace("_", "") in ending_tools
             for field in ("name", "type")
         )
         for call in calls
