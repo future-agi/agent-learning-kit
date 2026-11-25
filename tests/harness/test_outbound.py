@@ -3455,6 +3455,18 @@ def test_build_event_record_redacts_a_dsn_in_world_unhealthy_cause() -> None:
     assert record["digest"] == event_payload_digest(record["payload"])
 
 
+@pytest.mark.parametrize("cause", [None, "agent_exited_before_ready"])
+def test_terminal_closed_cause_preserves_wire_bytes(cause):
+    failure = {"domain": "agent", "stage": "running", "code": "spawn_failed", "message": "not ready"}
+    if cause is not None:
+        failure["cause"] = cause
+    payload = {"stage": "failed", "reason": None, "failure": failure,
+               "scenario_counts": {"passed": 0, "failed": 0, "errored": 0, "skipped": 0}}
+    expected = canonical_bytes(payload)
+    record = _event(OutboundEventType.TERMINAL, HarnessStage.FAILED, payload)
+    assert canonical_bytes(record["payload"]) == expected
+
+
 def test_build_event_record_redacts_terminal_failure_message() -> None:
     record = _event(
         OutboundEventType.TERMINAL,

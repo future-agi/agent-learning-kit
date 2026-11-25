@@ -7290,6 +7290,26 @@ def _manifest_with_terminal_readiness(
     )
 
 
+def test_standalone_control_exit_ends_readiness_poll(tmp_path):
+    manifest = _manifest_with_terminal_readiness(timeout_seconds=0.3)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    probes = []
+
+    def exit_during_readiness(**kwargs):
+        if kwargs["protocol"] is CapabilityProtocol.HTTP:
+            probes.append(1)
+            provider._world_handles[0]["agent"].handle.terminated = True
+            return False
+        return True
+
+    provider = _sql_spy_provider(prober=exit_during_readiness, secrets_path=tmp_path / "secrets.json")
+    [runtime] = asyncio.run(provider.provision(manifest, source=source, bundle_dir=bundle_dir,
+                                              work_directory=tmp_path, instances=1, require_declared_user=False))
+    assert runtime.state is pr.RuntimeState.UNHEALTHY
+    assert probes == [1]
+    assert runtime.startup_cause is FailureCause.AGENT_EXITED_BEFORE_READY
+
+
 def test_provision_promotion_exhausts_the_poll_and_returns_unhealthy_never_raises(
     tmp_path: Path,
 ) -> None:

@@ -740,6 +740,7 @@ class CustomerFailure(BaseModel):
 
 
 class HarnessFailure(BaseModel):
+    cause: FailureCause | None = None
     domain: FailureDomain
     stage: HarnessStage
     code: str

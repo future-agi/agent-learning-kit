@@ -46,6 +46,7 @@ from fi.alk.harness.job import (
     AgentConnection,
     ArtifactLevel,
     ExecutionMode,
+    FailureCause,
     FailureDomain,
     HarnessArtifactPolicy,
     HarnessJob,
@@ -2417,6 +2418,19 @@ def test_pool_close_backstop_runs_even_when_scenario_source_raises_untyped() -> 
         )  # only the finally backstop could have done this
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cause", [FailureCause.AGENT_NOT_READY_IN_TIME, FailureCause.DEPENDENCY_NOT_READY_IN_TIME])
+def test_start_timeout_carries_closed_cause(cause) -> None:
+    class TimedOut(FakeProvisioner):
+        async def provision(self, *args, **kwargs):
+            raise ProcessRuntimeError("depends_on", "depends_on_timeout", "not ready", cause=cause)
+
+    harness = _build_harness(scenarios=[], instances=1)
+    harness.deps.build_provider = lambda *_: TimedOut(instances=1)
+    assert asyncio.run(he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps)) == he.EXIT_OK
+    [terminal] = harness.transport.terminal_events()
+    assert terminal["payload"]["failure"]["cause"] == cause.value
 
 
 def test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map() -> None:

@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from . import observability
-from .job import FailureDomain, HarnessStage
+from .job import FailureCause, FailureDomain, HarnessStage
 from .checks import check_reads, reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
@@ -432,6 +432,7 @@ class ReceiptFailure:
     stage: str
     code: str
     message: str
+    cause: FailureCause | None = None
 
 
 @dataclass(frozen=True)
@@ -1018,11 +1019,13 @@ class NoWorldsAvailable(RuntimeError):
         message: str,
         *,
         reason: str = "exhausted",
+        cause: FailureCause | None = None,
         code: str | None = None,
         domain: FailureDomain | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason
+        self.cause = cause
         self.code = code
         self.domain = domain
 
@@ -1271,11 +1274,16 @@ class WorldPool:
                                 only_code, only_domain = only
                                 if only_domain in _SECTION_2F_NEVER_RETRIED:
                                     code, domain = only_code, only_domain
+                        causes = {
+                            self._runtimes[index].startup_cause if index not in self._down_codes else None
+                            for index in self._down
+                        }
                         raise NoWorldsAvailable(
                             f"{len(self._down)}/{len(self._runtimes)} worlds unhealthy, "
                             f"none available outside {sorted(exclude)}",
                             code=code,
                             domain=domain,
+                            cause=causes.pop() if len(causes) == 1 else None,
                         )
                     await self._wait_bounded(poll=abandon is not None)
                     continue
@@ -1789,7 +1797,8 @@ def _abort_from_no_worlds(exc: NoWorldsAvailable) -> ReceiptFailure:
             code=exc.code,
             message=_truncate(str(exc)),
         )
-    return _failure("world_pool_exhausted", str(exc))
+    failure = _failure("world_pool_exhausted", str(exc))
+    return replace(failure, cause=exc.cause)
 
 
 @dataclass
