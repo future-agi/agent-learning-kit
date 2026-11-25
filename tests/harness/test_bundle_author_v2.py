@@ -9196,6 +9196,33 @@ def test_subfolder_node_from_its_dockerfile_cmd_starts_in_its_folder(tmp_path):
     assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
 
 
+def test_a_python_callback_example_does_not_displace_the_declared_node_server(tmp_path):
+    """A Python example that exports ``agent_callback`` is not this Node agent's entry point."""
+    source = _repo(
+        tmp_path,
+        {
+            "server.js": _NODE_CHAT_SERVER,
+            "examples/python_client.py": "def agent_callback(message):\n    return message\n",
+        },
+    )
+    _node_package(source)
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "command": ["node", "server.js"],
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    assert plan.packaging == "generated_node"
+    assert _agent_of(plan).run_command == ["node", "server.js"]
+
+
 def test_node_workdir_under_a_python_root_starts_in_its_workdir(tmp_path):
     """A Python marker above a Node workdir must not move the Node process to the Python root."""
     source = _repo(

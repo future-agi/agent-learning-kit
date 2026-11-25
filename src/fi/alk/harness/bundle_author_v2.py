@@ -3406,7 +3406,10 @@ def resolve_environment_plan(
         ) == "callable"
         discovered_callback = (
             None
-            if is_livekit or (runtime_model.execution == "native" and runtime_command)
+            # A Python example's callback is not a declared Node server's entry point.
+            if is_livekit
+            or js_runtime == "node"
+            or (runtime_model.execution == "native" and runtime_command)
             else _discover_callback_entrypoint(run_folder)
         )
         graph_entrypoint = (
