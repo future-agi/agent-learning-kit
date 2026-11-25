@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
@@ -6680,9 +6681,15 @@ _NODE_JSON_INTERFACE = {
 
 
 def _node_package(root: Path, *, manager: str = "npm@10.9.2", **extra) -> None:
+    pnpm = manager.startswith("pnpm@")
+    if pnpm and "workspaces" in extra:
+        # pnpm reads its workspaces from pnpm-workspace.yaml, not package.json.
+        (root / "pnpm-workspace.yaml").write_text(
+            yaml.safe_dump({"packages": extra.pop("workspaces")})
+        )
     manifest = {"name": "order-chat", "packageManager": manager, **extra}
     (root / "package.json").write_text(json.dumps(manifest))
-    lock = "pnpm-lock.yaml" if manager.startswith("pnpm@") else "package-lock.json"
+    lock = "pnpm-lock.yaml" if pnpm else "package-lock.json"
     (root / lock).write_text('{"lockfileVersion": 3}')
 
 
@@ -6704,7 +6711,7 @@ def _node_plan_kwargs(root: Path, **changes):
 def test_native_node_plan_installs_locked_root_and_preserves_child_command(
     tmp_path: Path, child: str, manager: str
 ) -> None:
-    _node_package(tmp_path, manager=manager)
+    _node_package(tmp_path, manager=manager, workspaces=["packages/*"])
     component = tmp_path / child
     component.mkdir(parents=True, exist_ok=True)
     if child != ".":
@@ -6884,6 +6891,55 @@ def test_native_node_requires_node_and_corepack_on_path(tmp_path: Path) -> None:
     assert matching.returncode == 0, matching.stderr
     assert matching.stdout.strip() == "Node toolchain v22.11.0"
 
+
+@pytest.mark.parametrize(
+    "manager,membership",
+    [
+        ("npm@10.9.2", {"workspaces": ["packages/*"]}),
+        ("npm@10.9.2", {"workspaces": {"packages": ["packages/chat"]}}),
+        ("pnpm@9.15.4", {"pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"}),
+    ],
+)
+def test_native_node_installs_the_workspace_that_lists_its_package(
+    tmp_path: Path, manager: str, membership: dict
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    workspace = membership.pop("pnpm-workspace.yaml", None)
+    _node_package(tmp_path, manager=manager, **membership)
+    if workspace:
+        (tmp_path / "pnpm-workspace.yaml").write_text(workspace)
+    member = tmp_path / "packages" / "chat"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text('{"name":"chat"}')
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(member))
+    assert process.working_directory == "."
+    assert process.source_component == "packages/chat"
+
+@pytest.mark.parametrize(
+    "manager,root_manifest",
+    [
+        ("npm@10.9.2", {"workspaces": ["apps/*"]}),
+        ("npm@10.9.2", {}),
+        # pnpm ignores package.json workspaces.
+        ("pnpm@9.15.4", {"workspaces": ["examples/*"]}),
+    ],
+)
+def test_native_node_refuses_a_parent_package_that_does_not_list_it(
+    tmp_path: Path, manager: str, root_manifest: dict
+) -> None:
+    """A parent ``packageManager`` installs only its own workspace, never an unlisted nested package."""
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    manifest = {"name": "root", "packageManager": manager, **root_manifest}
+    (tmp_path / "package.json").write_text(json.dumps(manifest))
+    (tmp_path / ("pnpm-lock.yaml" if manager.startswith("pnpm@") else "package-lock.json")).write_text("{}")
+    member = tmp_path / "examples" / "chat"
+    member.mkdir(parents=True)
+    (member / "package.json").write_text('{"name":"chat"}')
+    (member / "package-lock.json").write_text('{"lockfileVersion": 3}')
+    with pytest.raises(BundleAuthorError, match="runtime_node_package_manager_missing"):
+        _plan_source_process(tmp_path, **_node_plan_kwargs(member))
 
 def test_native_node_probe_ignores_modules_planted_in_the_source(tmp_path: Path) -> None:
     """The probe runs in the source tree, so a submitted ``shutil.py`` must not stand in for the stdlib."""

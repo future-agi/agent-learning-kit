@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import hashlib
 import json
 import logging
@@ -1526,6 +1527,35 @@ _NODE_TOOLCHAIN_PROBE = (
 )
 
 
+def _js_workspace_lists(
+    package_root: Path, manifest: dict[str, Any], member: str, manager: str
+) -> bool:
+    """Whether the root's workspaces list ``member``: ``pnpm-workspace.yaml`` for pnpm, else ``package.json``."""
+    if manager == "pnpm":
+        workspace_file = package_root / "pnpm-workspace.yaml"
+        try:
+            declared = (
+                yaml.safe_load(workspace_file.read_text())
+                if workspace_file.is_file() and not workspace_file.is_symlink()
+                else None
+            )
+        except (yaml.YAMLError, UnicodeError):
+            declared = None
+        patterns = declared.get("packages") if isinstance(declared, dict) else None
+    else:
+        patterns = manifest.get("workspaces")
+        if isinstance(patterns, dict):
+            patterns = patterns.get("packages")
+    globs = [
+        (item.startswith("!"), item.removeprefix("!").removeprefix("./").rstrip("/"))
+        for item in (patterns if isinstance(patterns, list) else [])
+        if isinstance(item, str)
+    ]
+    return any(
+        not negated and fnmatch.fnmatchcase(member, glob) for negated, glob in globs
+    ) and not any(negated and fnmatch.fnmatchcase(member, glob) for negated, glob in globs)
+
+
 def _native_js_runtime(language: str, command: Sequence[str]) -> str:
     """``bun`` or ``node`` when a native process declares that JavaScript runtime, else empty."""
     language = language.lower()
@@ -1558,9 +1588,11 @@ def _plan_source_process(
         raise BundleAuthorError(f"runtime_{lane}_workdir_outside_source")
     package_root = root
     manifest = {}
+    nearest = None
     while True:
         path = package_root / "package.json"
         if path.is_file():
+            nearest = nearest or package_root
             if path.is_symlink():
                 raise BundleAuthorError(f"runtime_{lane}_manifest_unsafe")
             try:
@@ -1610,6 +1642,14 @@ def _plan_source_process(
         )
         if not pinned:
             raise BundleAuthorError("runtime_node_package_manager_unpinned")
+        if nearest != package_root and not _js_workspace_lists(
+            package_root, manifest, nearest.relative_to(package_root).as_posix(), pinned[1]
+        ):
+            # An install at that root would skip this package's own dependencies.
+            raise BundleAuthorError(
+                "runtime_node_package_manager_missing: "
+                f"{nearest.relative_to(source).as_posix()} is not a workspace of the package that pins one"
+            )
         lock_name, install = _NODE_INSTALLS[pinned[1]]
         locks = [
             package_root / name for name in _JS_LOCKS if (package_root / name).is_file()
