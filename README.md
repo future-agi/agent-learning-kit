@@ -4,279 +4,174 @@
 
 <h1 align="center">Agent Learning Kit</h1>
 
-<p align="center">
-  Local-first testing, simulation, red teaming, and optimization for AI agents.
-</p>
+<p align="center">A common framework for creating simulation environments and evaluating AI agents.</p>
 
 <p align="center">
-  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/LICENSE">Apache-2.0</a>
-  ·
-  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/docs/index.md">Docs</a>
-  ·
-  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/CONTRIBUTING.md">Contributing</a>
-  ·
-  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/SECURITY.md">Security</a>
-  ·
-  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/ROADMAP.md">V1 roadmap</a>
-  ·
-  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/LIBRARIES.md">Library inventory</a>
+  <a href="LICENSE">License</a> · <a href="docs/index.md">Docs</a> ·
+  <a href="LIBRARIES.md">Library inventory</a> · <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="SECURITY.md">Security</a>
 </p>
 
-![Agent Learning lifecycle blueprint](https://raw.githubusercontent.com/future-agi/agent-learning-kit/main/docs/assets/hero-agent-blueprint.jpg)
+![Agent Learning lifecycle blueprint](docs/assets/hero-agent-blueprint.jpg)
 
-Agent Learning Kit is the local-first SDK and CLI for testing, simulating,
-red-teaming, and optimizing AI agents.
+Agent Learning Kit (ALK) brings environment creation, simulation, evaluation,
+red teaming, and optimization into one repository. Start with deterministic
+fixtures, inspect their evidence, then move to your own agent and environment.
 
-It brings the three core Future AGI engines into one public developer surface —
-three engines, four workflows: red-teaming rides on the `simulate` and `evals`
-engines rather than being a fourth engine:
+The bundled **open-source reference harness** reads agent source, authors a
+world and scenarios, and runs and grades supported targets. It is a usable
+implementation of the framework, not a requirement to deploy that harness in
+production. Production systems and users can integrate different execution
+systems at the contracts they actually support. Today there are separate seams
+for stage backends, simulation plugins, target adapters, and evidence; there is
+**not** a universal replacement-executor or interchangeable-bundle contract.
+See the [extension matrix](docs/simulate/environment-authoring.md#supported-extension-seams).
 
-- `simulate`: run local worlds, tasks, framework-shaped adapters, replays, and
-  regression artifacts.
-- `evals`: evaluate prompts, task outputs, runtime contracts, traces, memory,
-  retrieval, safety, and robustness evidence.
-- `optimize`: search over prompts, agents, framework adapters, worlds,
-  multi-agent interactions, memory layers, workflows, and red-team scenarios.
+Three included engines support the loop:
 
-Use it when you want one reproducible loop:
-
-1. Simulate an agent or framework workflow.
-2. Evaluate the behavior and runtime evidence.
-3. Optimize the weak layer.
-4. Promote the result into a replayable artifact.
-5. Prove release readiness with local gates.
-
-### The harness: point it at an agent and talk to it
-
-`src/fi/alk/harness/` builds all of the above **for** an agent instead of asking you to write it.
-Point it at an agent's source and it reads what that agent verifiably is, builds a real world its
-tools act on, and writes test scenarios that are each proved before they are kept. It is driven
-as a conversation, in a terminal or on a web page.
-
-- **[Start here](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk/harness/README.md)**: setup from nothing, then how to use it
-- **[The web page](https://github.com/future-agi/agent-learning-kit/blob/main/harness-ui/README.md)**: the same harness as a chat, on `localhost:8777`
-- **[How it works](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk/harness/HOW-IT-WORKS.md)** and
-  **[why it is shaped this way](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk/harness/DESIGN.md)**
-
-OpenEnv/Gymnasium shapes are compatibility inputs, not the product center.
-Agent Learning Kit is the primary runtime and release contract, and the bar is
-the executable `environment_10x_robustness` release gate.
-OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
+- `simulate`: environments, targets, scenarios, runtime reports, and replay.
+- `evals`: suite assertions, artifact/task scoring, local metrics, and opt-in
+  model/platform evaluation.
+- `optimize`: candidate search and evidence-driven improvement. Red teaming uses
+  the simulation and evaluation engines rather than requiring a fourth engine.
 
 ## Install
 
-Install from PyPI:
+Python **3.10 or newer**:
 
 ```bash
 pip install agent-learning-kit
 ```
 
-To develop against source (contributors):
+The installed CLI names are `agent-learn` and `alk` (aliases). `python -m
+fi.alk.cli` also works. The wheel includes `fi.alk`, `fi.simulate`, `fi.evals`,
+and `fi.opt`; **it does not install the repository's `examples/` or
+`harness-ui/` directories**. No separate engine clones are required.
+
+For the checked-in examples below, use a checkout and install it:
 
 ```bash
 git clone https://github.com/future-agi/agent-learning-kit
 cd agent-learning-kit
-uv sync          # or: pip install -e .
+pip install -e .
 ```
 
-(npm publishing of the TypeScript SDK lands at the v1 launch.)
+Installation downloads dependencies; the offline claims below apply to execution
+of the named fixtures after installation, not installation itself. Optional
+integrations have extras, for example `agent-learning-kit[livekit]`,
+`agent-learning-kit[langchain]`, or `agent-learning-kit[harness-ui]`.
+The [library inventory](LIBRARIES.md#dependencies-and-packaging) distinguishes
+these extras from base dependencies.
 
-Optional Python extras:
+## First success: deterministic and credential-free
 
-```bash
-pip install "agent-learning-kit[livekit]"
-pip install "agent-learning-kit[nli]"
-pip install "agent-learning-kit[all]"
-```
-
-TypeScript evaluation package (npm at launch; today build from
-[`typescript/agent-learning-kit`](https://github.com/future-agi/agent-learning-kit/blob/main/typescript/agent-learning-kit)):
-
-```bash
-pnpm add @future-agi/agent-learning-kit
-```
-
-## Quickstart
-
-Everything below runs fully offline — no API key, no network. Start with the
-local doctor:
+Run from the checkout root. Keep this attempt's artifacts and local ledger
+together, and disable automatic account sync even if your shell has keys:
 
 ```bash
-agent-learn doctor
-```
-
-Then run the golden path against the bundled example manifests. The
-`AGENT_LEARNING_*_EXAMPLE_KEY` prefixes satisfy each manifest's
-`required_env` list — that list is CI wiring metadata, not a provider
-credential, so any placeholder value works.
-
-> Prefer the SDK spine over the CLI?
-> [Spec + Runner](https://github.com/future-agi/agent-learning-kit/blob/main/docs/simulate/spec-and-runner.md) runs the same simulation as
-> one `SimulationSpec` fed to one `SimulationRunner` — the plug-and-play surface
-> behind every simulation.
-
-Evaluate a suite:
-
-```bash
+export AGENT_LEARNING_SYNC=local
+export AGENT_LEARNING_LEDGER_PATH="$PWD/artifacts/first-success/ledger"
+agent-learn eval examples/eval_suite.json --dry-run
 agent-learn eval examples/eval_suite.json \
-  --output artifacts/eval.json
+  --output artifacts/first-success/eval.json
 ```
 
-Simulate a run manifest:
+This specific suite uses `echo`, one prompt, and a `contains` assertion. It does
+not call a model, execute an external grader, or require credentials. On success
+the CLI prints `wrote <path>` and returns zero. Inspect the **actual** result:
+
+```bash
+python -c "import json; p=json.load(open('artifacts/first-success/eval.json')); assert p['kind']=='agent-learning.eval.v1'; assert p['exit_code']==0; print(p['summary'])"
+```
+
+Then run the scripted simulation fixture:
 
 ```bash
 AGENT_LEARNING_RUN_EXAMPLE_KEY=offline-demo-key \
-  agent-learn run examples/run_manifest.json \
-  --no-eval \
-  --output artifacts/run.json
+  agent-learn run examples/run_manifest.json --no-eval \
+  --output artifacts/first-success/run.json
+python -c "import json; p=json.load(open('artifacts/first-success/run.json')); assert p['kind']=='agent-learning.run.v1'; assert p['exit_code']==0; print(p['summary'])"
 ```
 
-Optimize an agent workflow:
+That fixture's `required_env` value is a placeholder for wiring validation, not
+a provider credential. `--no-eval` skips grading, not simulation. A completed run
+is not by itself proof that an agent met a behavioral goal. Inspect transcripts,
+tool calls and state before choosing assertions.
+
+For an SDK-first version, run the [Spec + Runner echo example](docs/simulate/spec-and-runner.md):
 
 ```bash
-AGENT_LEARNING_OPTIMIZE_EXAMPLE_KEY=offline-demo-key \
-  agent-learn optimize examples/optimization_manifest.json \
-  --output artifacts/optimization.json
+python examples/sdk_spec_runner_quickstart.py artifacts/first-success/spec.json
 ```
 
-Run a red-team campaign:
+It writes a compact example summary (`status`, `transcript`, registry names),
+not the CLI's `agent-learning.run.v1` envelope.
 
-```bash
-AGENT_LEARNING_REDTEAM_EXAMPLE_KEY=offline-demo-key \
-  agent-learn redteam examples/redteam_manifest.json \
-  --output artifacts/redteam.json
-```
+**Only installed the package?** Use `agent-learn init demo --preset run` to
+create your own scaffold; follow [Golden path: run](docs/quickstart/golden-path-run.md).
+Do not refer to `examples/...` paths until you have the checkout.
 
-Each command prints a `wrote <path>` line; relative `--output` paths resolve
-against your current working directory.
+**Import trouble?** `agent-learn doctor --output artifacts/doctor.json` checks
+package imports and consolidation. It is not a provider-authentication,
+container-readiness, or live-endpoint check. A failed doctor report should be
+read, not replaced with a claimed passing result.
 
-Optional platform mode: to use Future AGI platform-backed evaluation, set
-`AGENT_LEARNING_API_KEY` (it takes precedence over the `FUTURE_AGI_API_KEY`
-and `FI_API_KEY` aliases), or call `configure(api_key="...")` from
-`fi.alk`. See
-[docs/reference/configure.md](https://github.com/future-agi/agent-learning-kit/blob/main/docs/reference/configure.md).
+## Build your toolchain
 
-Cut local release proof:
+| Step | Guide | Execution boundary |
+| --- | --- | --- |
+| Inspect and score evidence | [Evaluation guide](docs/eval/overview.md) · [Eval suites](docs/eval/eval-suites.md) | Echo and selected metrics are local; model/platform modes are not. |
+| Create an environment from source | [Environment authoring](docs/simulate/environment-authoring.md) | Opt-in, model-backed; may provision services and execute generated/submitted code. |
+| Use the reference harness | [Harness README](src/fi/alk/harness/README.md) · [Architecture](src/fi/alk/harness/ARCHITECTURE.md) | `auto` authors and runs; `author` authors without the final run, but is not offline. |
+| Integrate a different execution system | [Supported extension seams](docs/simulate/environment-authoring.md#supported-extension-seams) | Stage sessions, runtime plugins and evidence have different contracts. |
+| Author personas and scenarios | [Persona & Scenario Studio](docs/simulate/persona-scenario-studio.md) | Local typed authoring is distinct from platform generation. |
+| Improve and replay | [Optimization](docs/optimize/optimize-any-agent.md) · [Regression lifecycle](docs/simulate/regression-lifecycle.md) | Choose the relevant local or credentialed lane explicitly. |
+| Find included libraries | [Library inventory](LIBRARIES.md) · [Documentation index](docs/index.md) | Public facades, engine implementations, and internal modules are labeled separately. |
 
-```bash
-agent-learn release-check --project-root .
-agent-learn release-proof \
-  --project-root . \
-  --output /tmp/agent-learning-release-proof.json \
-  --quiet
-```
+`AGENT_LEARNING_SYNC=local` controls telemetry delivery. It does **not** prevent
+model, platform-evaluation, HTTP-hook, or target calls made by a workflow.
+Do not use source authoring as an offline installation smoke test.
 
 ## TypeScript
 
-```typescript
-import { Evaluator } from "@future-agi/agent-learning-kit";
-import { LocalEvaluator } from "@future-agi/agent-learning-kit/evals/local";
-```
+The evaluation SDK source is in [`typescript/agent-learning-kit`](typescript/agent-learning-kit).
+Its package manifest declares root, `/evals`, `/evals/local`, and `/local`
+exports. Build/use the workspace source; this README does not assert npm
+publication or Python harness/runtime parity. See [TypeScript boundaries](LIBRARIES.md#typescript-boundaries).
 
-## What You Can Build
+## Repository map
 
-- Prompt and response evaluations.
-- Local task and world simulations.
-- Framework adapter probes (probe-promoted coverage) for LangChain, LangGraph,
-  LlamaIndex, AutoGen, CrewAI, LiveKit, Pipecat, Browser Use, MCP, A2A, and
-  custom orchestration objects.
-- Runtime-simulated coverage for PydanticAI (multi-framework runtime
-  simulation) and OpenAI Agents (handoff-transcript promotion).
-- Runtime-contract and trace-quality checks.
-- Multi-agent coordination and handoff tests.
-- Retrieval and memory quality checks.
-- Voice, realtime, browser/CUA, workflow, lifecycle, and protocol traces.
-- Red-team corpus, campaign, adaptive-loop, and persistent-state checks.
-- Optimizer governance, candidate lineage, rollback, and release proof.
-
-## Why It Exists
-
-Most agent stacks split testing, simulation, optimization, and safety review
-across separate tools. Agent Learning Kit keeps those steps in one artifact
-model so a developer can inspect what happened, score it, improve it, and replay
-it in CI.
-
-The public SDK is `agent-learning-kit`, the Python namespace is
-`fi.alk`, the CLI is `agent-learn`, and the TypeScript package is
-`@future-agi/agent-learning-kit`.
-
-The active `ai-evaluation` code is included here under `src/fi/evals`, with its
-TypeScript SDK source under `typescript/agent-learning-kit/src`. The
-`simulate-sdk` and `agent-opt` engine code is included under `src/fi/simulate`
-and `src/fi/opt`. See [LIBRARIES.md](https://github.com/future-agi/agent-learning-kit/blob/main/LIBRARIES.md) for the complete source map.
-The ai-evaluation source inventory used by `agent-learn release-check` lives at
-the ai-evaluation source inventory (maintained in the internal-docs repo).
-
-## Repository Map
-
-- [`examples/`](https://github.com/future-agi/agent-learning-kit/blob/main/examples): runnable cookbooks and manifests.
-- [`src/fi/alk`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk): public Python SDK facade and CLI.
-- [`src/fi/evals`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/evals): active `ai-evaluation` engine code.
-- [`src/fi/simulate`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/simulate): migrated `simulate-sdk` engine code.
-- [`src/fi/opt`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/opt): migrated `agent-opt` engine code.
-- [`typescript/agent-learning-kit`](https://github.com/future-agi/agent-learning-kit/blob/main/typescript/agent-learning-kit): public
-  TypeScript package, including the active evaluation SDK source.
-- [`docs/index.md`](https://github.com/future-agi/agent-learning-kit/blob/main/docs/index.md): full documentation index.
-- [`ROADMAP.md`](https://github.com/future-agi/agent-learning-kit/blob/main/ROADMAP.md): public v1 roadmap and post-v1 extensions.
-- [`LIBRARIES.md`](https://github.com/future-agi/agent-learning-kit/blob/main/LIBRARIES.md): source map for the consolidated engines.
-- [`CONTRIBUTING.md`](https://github.com/future-agi/agent-learning-kit/blob/main/CONTRIBUTING.md): local development and PR workflow.
-- [`SECURITY.md`](https://github.com/future-agi/agent-learning-kit/blob/main/SECURITY.md): vulnerability reporting policy.
-- [`LICENSE`](https://github.com/future-agi/agent-learning-kit/blob/main/LICENSE): Apache-2.0 license.
-- [`NOTICE`](https://github.com/future-agi/agent-learning-kit/blob/main/NOTICE): Apache notice metadata.
+- [`src/fi/alk`](src/fi/alk): public facades and CLI, reference harness, studio,
+  benchmarks, loss/practice, episodes and telemetry.
+- [`src/fi/evals`](src/fi/evals): included evaluation engine.
+- [`src/fi/simulate`](src/fi/simulate): included simulation engine and runtime registry.
+- [`src/fi/opt`](src/fi/opt): included optimization engine.
+- [`examples`](examples): checkout-only runnable examples and manifests.
+- [`harness-ui`](harness-ui): checkout-only UI; its own setup is in its README.
+- [`docs/index.md`](docs/index.md): guides and reference navigation.
+- [`LIBRARIES.md`](LIBRARIES.md): contained libraries, dependencies and source ownership.
+- [`DEVELOPMENT.md`](DEVELOPMENT.md): contribution and release boundaries.
+- [`ROADMAP.md`](ROADMAP.md): public roadmap, not a list of shipped commands.
 
 ## Development
 
-New public SDK development belongs here. See [DEVELOPMENT.md](https://github.com/future-agi/agent-learning-kit/blob/main/DEVELOPMENT.md)
-for the boundary between this package and the backing engine repos.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and [DEVELOPMENT.md](DEVELOPMENT.md)
+for the implementation boundary. Source and packaging evidence live in this
+repository: [`pyproject.toml`](pyproject.toml), the module trees above, and
+[`tests`](tests).
 
-```bash
-uv sync
-uv run ruff check .
-uv run pytest -q
-uv run python -m build
-pnpm --dir typescript --filter @future-agi/agent-learning-kit build
-pnpm --dir typescript --filter @future-agi/agent-learning-kit test -- --runInBand
-```
+## Project status
 
-For the heavier release cut, run `agent-learn release-proof --project-root .`.
-It emits `agent-learning.release-proof.v1` with command evidence for the full
-local proof stack.
-
-Before a release:
-
-```bash
-uv run python -m fi.alk.cli release-proof \
-  --project-root . \
-  --output /tmp/agent-learning-release-proof.json \
-  --quiet
-```
-
-`release-proof` includes release-check, full-repo ruff, pytest, Python package
-build, TypeScript package build/test, and `git diff --check`. Use
-`--only <check>` for partial proof during development or `--dry-run` to emit the
-exact command plan without executing commands.
-
-## Project Status
-
-The v1 release gate is local-first and executable. It covers SDK consolidation,
-promptfoo-style CLI usage, native optimizer evidence, docs/examples, schema
-kinds, packaging metadata, red-team corpus/campaign coverage, Future AGI
-UI/action/report artifacts, framework/provider compatibility, environment
-robustness, regression replay, and release proof.
-
-All v1 gates are green on the proved release commit (see the release-proof
-artifact). Roadmap milestones marked "mostly complete" or "in progress" are
-extend-only: the v1 contract those gates assert is frozen and proved; the named
-extensions land post-v1 without weakening any gate.
+The package contains both credential-free fixtures and opt-in integrations.
+A source checkout or a successful import is not evidence that every integration
+has been exercised. Release checks and release proof are separate contributor
+workflows; see [Release checks](docs/prove/release-check-in-your-ci.md).
+Neither is needed for the first success above. Use results from the revision
+and execution lane you actually tested rather than assuming all gates are green.
 
 ## Community
 
-- Contributions: [CONTRIBUTING.md](https://github.com/future-agi/agent-learning-kit/blob/main/CONTRIBUTING.md)
-- Code of conduct: [CODE_OF_CONDUCT.md](https://github.com/future-agi/agent-learning-kit/blob/main/CODE_OF_CONDUCT.md)
-- Security reports: [SECURITY.md](https://github.com/future-agi/agent-learning-kit/blob/main/SECURITY.md)
-- License: [Apache-2.0](https://github.com/future-agi/agent-learning-kit/blob/main/LICENSE)
-
-## Deep Dive
-
-The full documentation set — quickstarts, per-track guides, framework pages,
-and reference material — starts at [docs/index.md](https://github.com/future-agi/agent-learning-kit/blob/main/docs/index.md).
+- [Contributing](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Security reporting](SECURITY.md)
+- [License](LICENSE) and [notice](NOTICE)
