@@ -105,8 +105,23 @@ test("marks fetch and http exports to the collector and leaves every other reque
   const callFile = path.join(dir, "simulation_call_execution_id");
   fs.writeFileSync(callFile, "call-a");
   const start = BigInt(Date.now() + 1000) * 1000000n;
+  // The exporter's own values for our keys lose to ours, and each key is sent once.
   const body = JSON.stringify(
-    otlp([span("llm", start, [{ key: "fi.span.kind", value: { stringValue: "LLM" } }])]),
+    otlp(
+      [
+        span("llm", start, [
+          { key: "fi.span.kind", value: { stringValue: "LLM" } },
+          { key: "fi.simulator.call_execution_id", value: { stringValue: "stale-call" } },
+        ]),
+      ],
+      {
+        attributes: [
+          { key: "service.name", value: { stringValue: "fixed" } },
+          { key: "project_name", value: { stringValue: "their project" } },
+          { key: "fi.simulation.job_id", value: { stringValue: "stale-job" } },
+        ],
+      },
+    ),
   );
   const script = `
     import { request as esmRequest } from "node:http";
@@ -171,6 +186,10 @@ test("marks fetch and http exports to the collector and leaves every other reque
       assert.equal(Number(sent.headers["content-length"]), sent.body.length);
     }
     const exported = JSON.parse(raw.toString());
+    const rawResource = exported.resourceSpans[0].resource.attributes.map((one) => one.key);
+    const rawSpan = exported.resourceSpans[0].scopeSpans[0].spans[0].attributes.map((one) => one.key);
+    assert.equal(new Set(rawResource).size, rawResource.length, rawResource.join());
+    assert.equal(new Set(rawSpan).size, rawSpan.length, rawSpan.join());
     const resource = attributes(exported.resourceSpans[0].resource.attributes);
     assert.deepEqual(resource, {
       "service.name": "fixed",
@@ -305,7 +324,7 @@ test("a body the hook cannot read is sent as written, with our key, and fails on
   const collector = await stub();
   t.after(() => collector.server.close());
   const script = `
-    for (const body of ["{not json", "[]"]) {
+    for (const body of ["{not json", "{nor this", "[]"]) {
       await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
         method: "POST", headers: { "content-type": "application/json", "x-api-key": "customer-key" }, body,
       });
@@ -318,12 +337,13 @@ test("a body the hook cannot read is sent as written, with our key, and fails on
     collector.seen.map((sent) => [sent.headers["x-api-key"], sent.body.toString()]),
     [
       ["ingest-key", "{not json"],
+      ["ingest-key", "{nor this"],
       ["ingest-key", "[]"],
     ],
   );
 });
 
-test("the Future AGI keys in the environment are never set, read or changed", async () => {
+test("the Future AGI keys in the environment are never set or changed", async () => {
   const script = `
     const { FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL } = process.env;
     console.log(JSON.stringify({ FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL }));

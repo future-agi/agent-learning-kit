@@ -2680,6 +2680,8 @@ def spawn_source_process(
     if mark_hook_due:
         # Node loads the hook before the process's own code, in this process and in every Node
         # process it starts; another runtime ignores the name. The process's own options follow.
+        # The process lane admits a Node agent only through the native Node runtime; until that
+        # lands, the hook reaches only Node processes that an admitted agent starts.
         existing_node_options = env.get("NODE_OPTIONS", "").strip()
         env["NODE_OPTIONS"] = " ".join(
             part
