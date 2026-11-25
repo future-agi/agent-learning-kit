@@ -533,12 +533,12 @@ that did the right thing:
   `world_free` is recorded with its arguments and no result, any other is assumed and its case is kept
   as written. Put what the case tests, and every negative control, on steps the proof plays and on the
   agent's reply; never build a case or its only control on such a tool alone, and never check its result.
-- **A faulted call.** Where the scenario makes a tool fail, never require that call to succeed; check
-  what the agent did about it. A write the world committed counts even when its answer was lost. The
-  proof fails the faulted step exactly as the run does, so a reference or a check that expects the
-  change to go through is refused at submit: write both for the failure path (the agent reports the
-  failure honestly, claims nothing it did not do, and retries only where that is safe), and check that
-  the change did not happen.
+- **A faulted call.** Fault a call the reference makes: a correct agent never meets a fault on a write only
+  a wrong agent makes. Never require it to succeed; check what the agent did about it.
+  A committed write counts even when its answer was lost. The proof fails the faulted step as the run does, so
+  a reference or check expecting the change is refused at submit: write both for the failure path (the agent
+  reports it honestly, claims nothing it did not do, retries only where safe) and check the change did not
+  happen.
 - **A record the agent's own tools refuse.** A record that carries a fault in the agent's own data (an
   order whose payment times out, listed in the tool's `refused by its record` line or its `refuses`) is a
   failure path too, with no scenario fault needed: the tool refuses it at submit as it does live. Write the
