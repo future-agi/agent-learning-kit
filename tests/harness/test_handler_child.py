@@ -12,6 +12,7 @@ import json
 import os
 import pwd
 import socket
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -114,6 +115,7 @@ def _runtime(tool_address: str | None = _WORLD_DSN) -> EnvironmentRuntime:
                 protocol="postgres",
                 address=_DSN,
                 tool_address=tool_address,
+                store_address="postgresql://store-role@db/world" if tool_address else None,
             )
         },
     )
@@ -122,18 +124,18 @@ def _runtime(tool_address: str | None = _WORLD_DSN) -> EnvironmentRuntime:
 class _FakeProcess:
     pid = 424242
 
-    def __init__(self) -> None:
-        self.stdin = io.BytesIO()
-        self.stdin.close = lambda: None  # keep what was written readable
+    def __init__(self, directory: Path) -> None:
+        self.init_file = directory / "init.json"
+        self.stdin = self.init_file.open("wb")
 
 
 @pytest.fixture
-def spawned(monkeypatch) -> list[dict[str, Any]]:
+def spawned(monkeypatch, tmp_path) -> list[dict[str, Any]]:
     """Every handler child the code starts, as Popen saw it, with nothing real spawned."""
     calls: list[dict[str, Any]] = []
 
     def popen(argv, **kwargs):
-        process = _FakeProcess()
+        process = _FakeProcess(tmp_path)
         calls.append({"argv": argv, "kwargs": kwargs, "process": process})
         return process
 
@@ -189,7 +191,7 @@ def test_under_isolation_the_handlers_run_as_their_user_and_the_worker_never_get
     assert kwargs["start_new_session"] is True
     # No model credentials and no target secrets reach the child; the DSN arrives on stdin.
     assert set(kwargs["env"]) <= {"PATH", "HOME", "TMPDIR", "LANG", "PYTHONPATH"}
-    init = json.loads(child["process"].stdin.getvalue())
+    init = json.loads(child["process"].init_file.read_bytes())
     # The world's own role, never the superuser, and only on stdin.
     assert init["dsn"] == _WORLD_DSN
     assert _WORLD_DSN not in json.dumps(kwargs["env"]) + str(child["argv"])
@@ -326,7 +328,7 @@ def test_the_handler_child_starts_in_a_leaf_of_its_own_and_the_leaf_goes_with_it
 
     def contained_popen(argv, **kwargs):
         contained.append(kwargs)
-        return _FakeProcess(), leaf
+        return _FakeProcess(tmp_path), leaf
 
     monkeypatch.setattr(handler_child.containment, "popen", contained_popen)
     context, source = _bundle(tmp_path)
@@ -344,6 +346,55 @@ def test_the_handler_child_starts_in_a_leaf_of_its_own_and_the_leaf_goes_with_it
 
     assert len(contained) == 1 and spawned == []  # no spawn around the containment
     assert child.leaf is leaf and leaf.closed == 1
+
+
+def test_initialization_preserves_partial_writes(tmp_path, monkeypatch, spawned):
+    write = os.write
+    monkeypatch.setattr(handler_child.os, "write", lambda fd, data: write(fd, data[:7]))
+    child = start_handler_child(
+        handlers={"probe": "a" * 256}, tools=[], refusal_signature="", dsn=_DSN,
+        source=None, work_directory=tmp_path, world_index=0,
+    )
+    try:
+        assert json.loads(spawned[0]["process"].init_file.read_bytes())["handlers"] == {
+            "probe": "a" * 256
+        }
+    finally:
+        child.close()
+
+
+@pytest.mark.parametrize("reads_nothing", [True, False], ids=["deadline", "pipe-close"])
+def test_initialization_failure_releases_resources(tmp_path, monkeypatch, reads_nothing):
+    monkeypatch.setattr(handler_child, "default_user_resolver", lambda _: pwd.getpwuid(os.getuid()))
+    monkeypatch.setattr(handler_child, "INIT_WRITE_TIMEOUT_SECONDS", 0.25, raising=False)
+    ends = socket.socketpair()
+    monkeypatch.setattr(handler_child.socket, "socketpair", lambda: ends)
+    leaf_closed = []
+    leaf = SimpleNamespace(close=lambda: leaf_closed.append(True))
+    # Even on the old code, the reader exits on its own rather than hanging the suite.
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(2)" if reads_nothing else "pass"],
+        stdin=subprocess.PIPE, start_new_session=True,
+    )
+    if not reads_nothing:
+        child.wait(timeout=5)
+    monkeypatch.setattr(handler_child.containment, "popen", lambda *a, **kw: (child, leaf))
+    try:
+        with pytest.raises(TimeoutError if reads_nothing else BrokenPipeError):
+            start_handler_child(
+                handlers={"probe": "a" * (2 * 1024 * 1024)}, tools=[], refusal_signature="",
+                dsn=_DSN, source=None, work_directory=tmp_path, world_index=0,
+            )
+        assert child.returncode is not None
+        assert child.stdin.closed
+        assert all(end.fileno() == -1 for end in ends)
+        assert leaf_closed == [True]
+    finally:
+        child.kill()
+        child.wait()
+        child.stdin.close()
+        for end in ends:
+            end.close()
 
 
 def test_a_world_without_its_own_role_starts_no_handler_child(
@@ -375,6 +426,9 @@ def test_a_world_with_a_handler_channel_never_imports_the_agent_code(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(chat, "_HostedToolStore", _Store)
+    from fi.alk.harness import privilege
+
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     context, source = _bundle(tmp_path)
     contract = AgentContract.model_validate_json(
         (context.bundle_dir / "contract.json").read_text()
@@ -384,15 +438,15 @@ def test_a_world_with_a_handler_channel_never_imports_the_agent_code(
         def call(self, name, arguments):
             return Call(name=name, arguments=dict(arguments), result={"from": "child"})
 
-    world = chat._tool_world(
+    world = chat.tool_world(
         context.bundle_dir, contract, _runtime(), source, Channel()
     )
     call = world.call("lookup_account", {"account_id": "A-1"})
 
     assert isinstance(world, ChildWorld)
     assert call.result == {"from": "child"} and world.calls == [call]
-    # Checks grade the rows the harness reads, as with one fixed user.
-    assert _Store.dsns[-1] == _DSN
+    # Checks read the rows as the world's own role: nothing of the world's runs with the harness's rights.
+    assert _Store.dsns[-1].dsn() == _WORLD_DSN
     assert _AGENT_MODULE not in sys.modules
     assert str(source) not in sys.path
     with pytest.raises(RuntimeError):
@@ -588,7 +642,7 @@ def test_under_isolation_a_folder_build_s_handler_imports_its_sibling_by_flat_na
 
     _run_chat(context, monkeypatch)
 
-    init = json.loads(spawned[0]["process"].stdin.getvalue())
+    init = json.loads(spawned[0]["process"].init_file.read_bytes())
     assert init["import_subfolder"] == "agents/a"
     # The child, as the spawned process runs it (the switch to its user aside), fed that init.
     monkeypatch.setattr(

@@ -3461,6 +3461,7 @@ def test_postgres_seed_argv_shape() -> None:
         "alk_baseline_postgres",
         "-v",
         "ON_ERROR_STOP=1",
+        "-X",
         "-f",
         "db/schema.sql",
     ]

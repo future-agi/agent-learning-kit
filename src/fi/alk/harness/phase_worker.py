@@ -52,7 +52,13 @@ async def main() -> None:
             channel_fd = os.environ.get(CHANNEL_FD_ENV)
             workspaces = WorkspaceClient(int(channel_fd)) if channel_fd else None
             world = HostedWorld(
-                AttachedPostgresStore(state["dsn"]),
+                AttachedPostgresStore(
+                    state["dsn"],
+                    admin_dsn=state.get("admin_dsn"),
+                    restore_as_role=bool(state.get("restore_as_role")),
+                    reader_dsn=state.get("reader_dsn"),
+                    log_dsn=state.get("log_dsn"),
+                ),
                 state["world_index"],
                 rng,
                 state["baseline"],

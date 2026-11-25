@@ -154,6 +154,45 @@ def test_submitting_reads_each_tool_s_effect_from_its_entrypoint(tmp_path):
     assert "only reads" not in said("ledger.lookup")
 
 
+def test_an_approval_on_a_read_written_as_its_route_s_path_is_refused_too(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, save_catalogue
+    from fi.alk.harness.contract import ToolEntry
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class Ledger(GeneratedWorld):
+        name = "ledger"
+        tools = [{"name": "lookup"}, {"name": "update"}]
+        handle = "def handle(args, db):\n    return {}\n"
+        handlers = {"lookup": handle, "update": handle}
+
+    world = Ledger(":memory:")
+    world.connection.executescript("CREATE TABLE entry(id TEXT);")
+    save(world, tmp_path, notes="test", sequences=[])
+    save_catalogue(Catalogue(sub_goals=[]), tmp_path)
+    save_actors(tmp_path, ActorList(actors=[Actor(id="approver", name="Ari", permitted_actions=["approvals.change"])]))
+    contract = AgentContract(
+        agent="ledger",
+        tools=[ToolSpec(name="lookup"), ToolSpec(name="update")],
+        tool_entrypoints=[
+            ToolEntry(tool="lookup", mode="service", method="GET", endpoint="/ledger/lookup"),
+            ToolEntry(tool="update", mode="service", method="POST", endpoint="/ledger/update"),
+        ],
+    )
+    (tmp_path / "contract.json").write_text(contract.model_dump_json())
+    server, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=1, can_save=False, start_from=[])
+    submit = next(one.handler for one in server.tools if one.name == "submit_scenario")
+
+    def said(action):
+        hold = {**HOLD, "action": action}
+        args = {"name": "s", "instruction": "x", "actors": [{"id": "approver"}], "faults": [hold]}
+        return asyncio.run(submit(args))["content"][0]["text"]
+
+    assert "only reads" in said("ledger/lookup")
+    assert "only reads" not in said("ledger/update")
+
+
 def _dispatcher_brief(tmp_path, goal: str) -> str:
     from fi.alk.harness.actor_dispatch import build_dispatcher
 

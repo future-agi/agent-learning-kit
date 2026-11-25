@@ -37,9 +37,9 @@ All notable release changes for Agent Learning Kit are tracked here.
   platform could not tell it from the agent's own slow start. The process's name stays out of
   the cause, since the user's manifest names it.
 
-- `fi-instrumentation-otel` is capped below 1.5.1 for now. 1.5.1 changed which key an exporter
-  sends in a simulation, and the kit's exporter test fails with it; the cap goes once that is
-  decided (TH-10547).
+- In a hosted simulation, traceAI's exporters again send traces to the simulation collector
+  with the simulation's ingest key, including with `fi-instrumentation-otel` 1.5.1 and later.
+  The cap below 1.5.1 is removed.
 
 - `StepEfficiency` now measures repeated tool calls against total tool calls,
   rather than total steps, so several repeats within one step cannot produce a
@@ -53,6 +53,9 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- A native agent whose tools are a separate HTTP server in its source records it as `runtime.tool_service`;
+  the bundle starts that server behind the tool proxy, so its tools run and are recorded like a Compose
+  `tools-api`.
 - Actors: one list, `actors.json`, of everyone the agent deals with
   who is not the agent: the caller, someone with the caller, a manager, a coworker, a system. Every actor has
   the same record (parent, goal, constraints, behaviour, knowledge, permitted actions, activation), and one
@@ -174,6 +177,11 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   and the person's own session records what the agent actually heard.
 - Runtime validation checks scenarios on one database lane per CPU by default, capped by the
   sandbox's cgroup CPU quota, instead of a fixed 16; `ALK_VALIDATION_DB_LANES` still overrides it.
+- Chat readiness tool routing: the tool proxy logs each call's full path, so two service tools
+  whose paths share a last segment are told apart and an older record naming only that segment
+  credits neither; a tool request's handler is bounded by the request deadline and a handler that
+  outlasts it leaves the tool unobserved; an earlier answer is reused only for the same candidate
+  and tool definition, within the one request and time budget for the check.
 - Docs corpus: the full `docs/` tree (quickstarts, per-track guides, framework
   pages, reference material, and the `docs/llms.txt` machine index) with
   machine-checkable page metadata, enforced by the new `docs_executability`

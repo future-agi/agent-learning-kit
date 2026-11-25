@@ -95,6 +95,17 @@ def _scenario(name: str = "adds-a-big-mac", **overrides) -> dict:
             {"tool": "add", "arguments": {"item_id": "big_mac"}},
         ],
         "sub_goals": ["item-added", "right-item"],
+        "negative_controls": [
+            {
+                "name": "adds_twice",
+                "why": "adds the item twice",
+                "steps": [
+                    {"tool": "lst", "arguments": {}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                    {"tool": "add", "arguments": {"item_id": "big_mac"}},
+                ],
+            }
+        ],
     }
     payload.update(overrides)
     return payload
@@ -961,11 +972,91 @@ def test_a_deferred_scenario_is_not_checked_rather_than_a_problem(tmp_path, monk
     from fi.alk.harness.prove import Proof
 
     root = _suite(tmp_path, "adds-a-big-mac")
-    monkeypatch.setattr(nudge, "prove", lambda *_args: Proof(deferred=True))
+    monkeypatch.setattr(nudge, "prove", lambda *_args, **_kwargs: Proof(deferred=True))
 
     problems, not_checked, _ = nudge.suite_gate(root, set())
 
     assert problems == [] and not_checked == ["adds-a-big-mac"]
+
+
+def _edit_scenario(root: Path, name: str, **fields) -> None:
+    body = root / "scenarios" / name / "scenario.json"
+    payload = json.loads(body.read_text(encoding="utf-8"))
+    payload.update(fields)
+    body.write_text(json.dumps(payload), encoding="utf-8")
+
+
+_ADDS_ONCE = {
+    "name": "adds_once",
+    "why": "adds the item once",
+    "steps": [{"tool": "lst", "arguments": {}}, {"tool": "add", "arguments": {"item_id": "big_mac"}}],
+}
+
+
+@pytest.mark.parametrize(
+    ("fields", "said"),
+    [
+        ({"negative_controls": [_ADDS_ONCE]}, "the checks pass a wrong behaviour"),
+        (
+            {"instruction": "Order one Big Mac. This tests whether the agent reaches the menu before adding the item "
+             "it was asked for."},
+            "gives the answer away",
+        ),
+    ],
+    ids=["control-the-checks-pass", "leaked-answer"],
+)
+def test_a_rebuild_keeps_a_case_only_by_the_rule_a_submit_keeps_it_by(tmp_path, fields, said):
+    """A case already in the suite that a submit would refuse is a problem in the rebuild, with the reason; one the
+    person is still editing is left unchecked as before."""
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", **fields)
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert [(one["item"], one["kind"]) for one in problems] == [("adds-a-big-mac", "scenario")]
+    assert said in problems[0]["message"] and not_checked == []
+    assert nudge.suite_gate(root, {"adds-a-big-mac"})[:2] == ([], ["adds-a-big-mac"])
+
+
+def test_a_suite_written_before_controls_were_required_still_rebuilds_its_cases_kept_as_written(tmp_path):
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert problems == [] and not_checked == []
+    entry = load_proofs(root)["adds-a-big-mac"]
+    # Kept, recorded not proved with the builder's hint, so the platform holds it out of runs.
+    assert (entry["proved"], entry["kept_as_written"], entry["blocked_reason"]) == (False, True, "no_negative_control")
+    assert entry["why"].startswith("no negative control: add a wrong behaviour")
+    [warning] = nudge.unproved_without_control(root)
+    assert "adds-a-big-mac" in warning and "kept as written" in warning
+
+
+def test_a_legacy_rebuild_reports_its_uncontrolled_cases_and_passes(tmp_path):
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+    server = nudge.nudge_server(root, {"nudge_id": "n-1", "stage": "suite"}, catalogue=load_catalogue(root), kept=None)
+
+    said = _call(server, "report_update", {"changed": False, "notes": "nothing to change"})
+
+    assert not said.get("is_error"), said
+    result = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert result["checks"]["passed"] is True
+    assert any("kept as written: no negative control" in one for one in result["checks"]["warnings"])
+
+
+def test_a_deferred_case_with_a_leaked_answer_is_a_problem_not_unchecked(tmp_path, monkeypatch):
+    from fi.alk.harness.prove import Proof
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    leaked = [{"who": "caller", "field": "instruction", "grader_field": "tests", "excerpt": "reaches the menu"}]
+    monkeypatch.setattr(nudge, "prove", lambda *_args, **_kwargs: Proof(deferred=True, leaks=leaked))
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert [one["item"] for one in problems] == ["adds-a-big-mac"] and not_checked == []
+    assert "gives the answer away" in problems[0]["message"]
 
 
 def test_a_failing_generated_scenario_is_a_problem(tmp_path):
@@ -1681,3 +1772,108 @@ def test_usage_delta_counts_only_what_the_turn_spent():
         # Only the model this turn called: m1 ran in an earlier turn.
         "models": ["m2"],
     }
+
+
+def test_a_builder_add_leaves_the_cases_it_did_not_write_byte_identical(tmp_path):
+    from fi.alk.harness.scenario_tools import write_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    (legacy,) = load_scenarios(root)
+    legacy.keywords = ["Cart order", "legacy word"]
+    write_scenarios([legacy], root, load_catalogue(root))
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in (root / "scenarios" / "adds-a-big-mac").rglob("*")
+        if path.is_file()
+    }
+    scenarios, _server, _catalogue, _kept = _session(root, "suite")
+
+    added = _call(
+        scenarios, "submit_scenario", _scenario(
+            "adds-two-big-macs",
+            keywords=["cart order"],
+            sources=[{"kind": "assumption", "quote": "Orders repeat.", "supports": "two items"}],
+        )
+    )
+    saved = _call(scenarios, "save_scenarios", {"design": {"keywords": ["cart order"]}})
+
+    assert not added.get("is_error"), added
+    assert saved["content"][0]["text"].startswith("Saved 2 scenarios"), saved
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in (root / "scenarios" / "adds-a-big-mac").rglob("*")
+        if path.is_file()
+    } == before
+    assert {one.name: one.keywords for one in load_scenarios(root)}["adds-two-big-macs"] == [
+        "Cart order"
+    ]
+
+
+def test_a_save_is_refused_while_a_case_s_controls_break_only_what_the_suite_shares(tmp_path, monkeypatch):
+    from fi.alk.harness import scenario_tools as tools_module
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    scenarios, _server, _catalogue, _kept = _session(root, "suite")
+    monkeypatch.setattr(
+        tools_module, "controls_off_their_case", lambda written, kept, world_root: [f"{kept[0].name}: shared control"]
+    )
+
+    saved = _call(scenarios, "save_scenarios", {})
+
+    assert saved.get("is_error") and "adds-a-big-mac: shared control" in saved["content"][0]["text"], saved
+
+
+def _old_suite(tmp_path: Path) -> Path:
+    """Two cases written before negative controls were required: on disk with none."""
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-a-mcflurry")
+    for name in ("adds-a-big-mac", "adds-a-mcflurry"):
+        _edit_scenario(root, name, negative_controls=[])
+    return root
+
+
+def test_a_validate_keeps_an_old_suite_without_controls_runnable_and_a_build_holds_it(tmp_path):
+    from fi.alk.harness.prove_suite import prove_suite
+
+    root = _old_suite(tmp_path)
+
+    validated = prove_suite(root, tmp_path / "validated.json")
+    built = prove_suite(root, tmp_path / "built.json", judge_case_goals=True)
+
+    for key in ("adds-a-big-mac", "adds-a-mcflurry"):
+        assert validated[key]["kept_as_written"] is True and validated[key]["blocked_reason"] == "no_negative_control"
+        assert built[key]["kept_as_written"] is False and built[key]["blocked_reason"] == "no_negative_control"
+
+
+def test_a_new_case_without_a_control_is_still_refused(tmp_path):
+    root = _old_suite(tmp_path)
+
+    said = accept_scenario(
+        _scenario("adds-a-coke", negative_controls=[]), world_root=root, catalogue=load_catalogue(root), kept=[]
+    )
+
+    assert said.get("is_error") and "no negative control" in said["content"][0]["text"], said
+
+
+def test_an_edited_old_case_is_judged_and_an_untouched_one_never_is(tmp_path):
+    from fi.alk.harness.scenario_tools import controls_off_their_case
+
+    root = _old_suite(tmp_path)
+    scenarios, _server, _catalogue, kept = _session(root, "suite")
+
+    edited = _call(scenarios, "edit_scenario", {"scenario_key": "adds-a-big-mac", "instruction": "Order a Big Mac."})
+    saved = _call(scenarios, "save_scenarios", {})
+
+    assert edited.get("is_error") and "no negative control" in edited["content"][0]["text"], edited
+    # The untouched old cases are saved as they are; nothing about their controls stops the save.
+    assert saved["content"][0]["text"].startswith("Saved 2 scenarios"), saved
+    assert controls_off_their_case([], kept, root) == []
+
+
+def test_a_check_rewrite_proves_an_old_case_again_as_written(tmp_path):
+    from fi.alk.harness.scenario_tools import _no_longer_hold
+
+    root = _old_suite(tmp_path)
+
+    assert _no_longer_hold(root, load_catalogue(root), ["adds-a-big-mac"], root) == []
+    entry = load_proofs(root)["adds-a-big-mac"]
+    assert (entry["kept_as_written"], entry["blocked_reason"]) == (True, "no_negative_control")

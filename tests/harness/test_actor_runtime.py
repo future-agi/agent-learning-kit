@@ -619,6 +619,7 @@ def test_the_runner_writes_a_trial_s_faults_into_the_world_database_never_a_file
 
         def execute(self, sql, params=()):
             ran.append((sql.split()[0], params))
+            return SimpleNamespace(fetchall=lambda: [])
 
     monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda *a, **k: _Connection()))
     database = SimpleNamespace(protocol="postgres", address="postgresql://world")
@@ -950,7 +951,7 @@ def _chat_target(faults):
 
     contract = SimpleNamespace(tool_entrypoints=[{"tool": "update_deal", "endpoint": "crm/update_deal"}])
     world = _InProcessWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=None, contract=contract, world=world, scenario_key="s", scenario_id="s-1", faults=faults
     )
     return target, world

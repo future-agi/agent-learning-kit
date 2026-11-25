@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -13,10 +14,12 @@ import test_egress_proxy
 from fi.alk.harness.world_door import (
     LIMITS_UNREADABLE,
     AGENT,
+    APPROVAL_MISSING,
     DictRoster,
     Executed,
     HandlerExecutor,
     MemoryLog,
+    Outcome,
     Routed,
     TeeLog,
     ToolCall,
@@ -1223,6 +1226,28 @@ def test_a_fault_the_platform_names_by_the_tool_holds_the_call_the_http_door_see
     assert other.outcome == "committed"
 
 
+def test_a_fault_written_as_the_route_s_path_holds_the_call_and_is_never_an_unknown_action():
+    from fi.alk.harness.call_runner import fault_notices
+    from fi.alk.harness.world_door import routed_faults
+
+    contract = {"tool_entrypoints": [{"tool": "apply_discount", "endpoint": "/crm/apply_discount", "mode": "import"}]}
+    faults = routed_faults([{"action": "crm/apply_discount", "mode": "error", "status": 403}], contract)
+    executor = _Executor()
+    door = _door(executor, faults=faults)
+
+    outcome = door.enter(ToolCall(action="crm.apply_discount", name="apply_discount", arguments={}, method="POST"))
+
+    assert outcome.outcome == "faulted" and executor.ran == []
+    notices = fault_notices(faults, [], [], contract=contract)
+    assert not [one for one in notices if one["code"] == "fault_unknown_action"]
+    # A method or a host around the path is not a route's path: the fault names no action, so the trial is unmeasured.
+    for written in ("POST /crm/apply_discount", "https://host/crm/apply_discount"):
+        kept = routed_faults([{"action": written, "mode": "error", "status": 403}], contract)
+        assert kept[0]["action"] == written
+        notices = fault_notices(kept, [], [], contract=contract)
+        assert [one["code"] for one in notices] == ["fault_unknown_action"]
+
+
 def test_a_keyed_retry_with_true_where_the_first_sent_1_is_another_write_never_its_duplicate():
     executor = _Executor()
     door = _door(executor)
@@ -1523,3 +1548,130 @@ def test_the_runner_s_doors_check_an_actor_s_template_against_the_sealed_routes(
     assert enter(open_door, "orders.export").refusal_code == "not_permitted"
     (sealed / "actions.json").write_text("{not json")
     assert enter(door(), "orders.1043").refusal_code == LIMITS_UNREADABLE
+
+
+# Every reason the door gives itself, as (status, reason, refusal code).
+_DOOR_REASONS = [
+    (502, "RuntimeError: the world's door failed", None),
+    (403, "this request names an actor it cannot prove it is", "identity_conflict"),
+    (503, "this world's action log cannot record an actor's action", None),
+    (503, "the world's actor list could not be read", None),
+    (503, "the world could not check this actor", None),
+    (403, "billing is not an actor in this world", "unknown_actor"),
+    (403, "orders.%2e%2e is not a plain route, so it is not permitted for billing", "not_permitted"),
+    (403, "the world could not read its routes to check billing's permissions", "limits_unreadable"),
+    (403, "orders.cancel is not permitted for billing", "not_permitted"),
+    (409, "this idempotency key was already used for another action or with other arguments", "idempotency_conflict"),
+    (403, "this channel does not belong to a worker of this trial", "identity_conflict"),
+    (403, "the world could not read the limits of refund", "limits_unreadable"),
+    (403, "the deadline for refund has passed", "deadline_passed"),
+    (403, "orders.cancel is not permitted for refund", "not_permitted"),
+    (503, "this trial's test conditions could not be read", "faults_unknown"),
+    (503, "whether this action was approved could not be read", "approval_unknown"),
+    (503, "whether this idempotency key's first action took effect is unknown; it is not run again", None),
+    (503, "unavailable", None),
+    (504, "timeout_before_commit", None),
+    (502, "ConnectionError: unavailable", None),
+]
+_EVALUATION_WORDS = re.compile(r"harness|test|trial|door|actor|scenario|fault|check|sub-?goal", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("status, reason, code", _DOOR_REASONS)
+def test_agent_reply_names_no_evaluation_word(status, reason, code):
+    """The agent hears a plain word for a call the door answered; why stays in the log row."""
+    from fi.alk.harness import in_process_door
+
+    outcome = Outcome("refused" if status in (403, 409) else "faulted", status, reason=reason, refusal_code=code)
+    replies = [
+        json.loads(outcome.answer())["detail"],
+        outcome.detail,
+        in_process_door._held(outcome)["detail"],
+    ]
+    assert replies[0] in ("forbidden", "not found", "conflict", "unavailable", "timeout")
+    assert len(set(replies)) == 1
+    assert not _EVALUATION_WORDS.search(replies[0])
+
+
+def test_a_fault_the_scenario_wrote_and_a_missing_approval_keep_their_own_words():
+    from fi.alk.harness import in_process_door
+
+    written = Outcome(
+        "faulted", 500, body=json.dumps({"detail": "card declined"}).encode(), reason="card declined",
+        fault={"mode": "error", "message": "card declined"},
+    )
+    assert json.loads(written.answer()) == {"detail": "card declined"}
+    assert in_process_door._held(written)["detail"] == "card declined"
+    held = Outcome("refused", 403, reason="refunds needs an approval that has not been given", refusal_code=APPROVAL_MISSING)
+    assert json.loads(held.answer()) == {"detail": "approval required"}
+    assert in_process_door._held(held)["detail"] == "approval required"
+    assert not _EVALUATION_WORDS.search(held.detail)
+
+
+def test_the_tables_columns_are_read_from_the_statements_that_make_them():
+    from fi.alk.harness.world_door import TRIAL_TABLES_DDL, ddl_columns
+
+    made = ddl_columns(*TRIAL_TABLES_DDL, "ALTER TABLE _alk_worker_runs ADD COLUMN IF NOT EXISTS note TEXT")
+
+    assert made["_alk_trial_faults"] == ("id", "faults", "worker_deadline_at", "worker_deadlines", "sealed_at", "started_at")
+    # A column added to a statement is a column the check waits for: no list beside the statements to forget.
+    assert made["_alk_worker_runs"] == ("worker", "at", "note")
+    assert ddl_columns(
+        "CREATE TABLE IF NOT EXISTS t (a TEXT NOT NULL, b TEXT, PRIMARY KEY (a, b));ALTER TABLE t ADD COLUMN IF NOT EXISTS c JSONB"
+    ) == {"t": ("a", "b", "c")}
+
+
+def test_a_key_the_log_cannot_check_is_our_failure_and_one_a_test_condition_lost_is_the_agent_s():
+    from fi.alk.harness.world_door import KEY_UNKNOWN, LOG_UNKNOWN, WORLD_UNREACHABLE, world_failed
+
+    class _LogDown(MemoryLog):
+        def committed(self, key, actor):
+            raise RuntimeError("log down")
+
+    door = _door(log=_LogDown())
+    held = door.enter(ToolCall(action="orders.refund", name="refund", key="k-1"))
+    assert (held.outcome, held.refusal_code) == ("faulted", LOG_UNKNOWN)
+    assert world_failed(door.events()[-1])
+
+    # The world unreachable mid-action: ours, and the keyed retry it leaves unknown is ours too.
+    down = _door(_Executor(fail=True))
+    first = down.enter(ToolCall(action="orders.refund", name="refund", key="k-2"))
+    again = down.enter(ToolCall(action="orders.refund", name="refund", key="k-2"))
+    assert (first.refusal_code, again.refusal_code) == (WORLD_UNREACHABLE, LOG_UNKNOWN)
+    assert all(world_failed(row) for row in down.events())
+
+    # A test condition lost the first answer after the world applied it: the retry is the agent's to handle.
+    lost = _door(faults=[{"action": "orders.refund", "mode": "timeout_after_commit", "on_call": 1}])
+    lost.enter(ToolCall(action="orders.refund", name="refund", key="k-3"))
+    retry = lost.enter(ToolCall(action="orders.refund", name="refund", key="k-3"))
+    assert retry.refusal_code != LOG_UNKNOWN and not any(world_failed(row) for row in lost.events())
+    assert KEY_UNKNOWN  # the code a lost retry carries when one is held
+
+
+def test_a_lost_key_is_ours_only_when_our_door_lost_it_across_doors_on_one_keys_table():
+    from fi.alk.harness.world_door import KEY_UNKNOWN, LOG_UNKNOWN, world_failed
+
+    def keyed(door, key):
+        return door.enter(ToolCall(action="orders.refund", name="refund", key=key))
+
+    log = MemoryLog()
+    # The agent's own tools server answered 5xx on the first try: its world. A retry, by this door or another, is the
+    # agent's to handle, graded.
+    keyed(_door(_Executor(status=500), log=log), "k-upstream")
+    assert keyed(_door(log=log), "k-upstream").refusal_code == KEY_UNKNOWN
+    # Our own executor failed on the first try: the retry is ours, by any door.
+    keyed(_door(_Executor(fail=True), log=log), "k-ours")
+    assert keyed(_door(log=log), "k-ours").refusal_code == LOG_UNKNOWN
+    # A door that claimed a key and never recorded its answer: ours.
+    log.claim("k-pending", "agent")
+    held = keyed(_door(log=log), "k-pending")
+    assert held.refusal_code == LOG_UNKNOWN and world_failed({**held.__dict__, "actor_id": "agent", "outcome": "faulted"})
+
+
+def test_the_agent_s_tools_server_not_answering_is_its_world_graded_never_our_failure():
+    from fi.alk.harness.world_door import UPSTREAM_UNREACHABLE, HttpExecutor, world_failed
+
+    door = _door(HttpExecutor("http://127.0.0.1:9", timeout=1))
+    outcome = door.enter(ToolCall(action="orders.refund", name="refund"))
+
+    assert (outcome.outcome, outcome.refusal_code) == ("faulted", UPSTREAM_UNREACHABLE)
+    assert not world_failed(door.events()[-1])
