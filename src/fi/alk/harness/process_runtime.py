@@ -71,6 +71,8 @@ from .world_roles import (
     DOOR_ROLE_GROUP,
     DOOR_TABLE_RIGHTS,
     HARNESS_ONLY_TABLES,
+    HARNESS_RELNAME,
+    STORE_ROLE_GROUP,
     HARNESS_TABLES_WITH_CODE,
     PG_CATALOG_PLANTS,
     STORE_ROLE_PREFIX,
@@ -4536,15 +4538,23 @@ _LEGACY_SENTINEL_QUERIES = {"SELECT id FROM harness_seed_sentinel WHERE id='read
 
 
 def sentinel_credentials(
-    store: StoreEntry, credentials: EngineCredentials | None, login: EngineCredentials | None
+    engine: ManagedEngine,
+    credentials: EngineCredentials | None,
+    *,
+    login: EngineCredentials | None = None,
+    world_index: int | None = None,
+    world_roles: bool = False,
 ) -> EngineCredentials | None:
-    """Who reads the store's sentinel: the harness's own fixed query (its marker table, the superuser's) as the
-    harness, on the system's own path and read-only; any other a bundle carries as the restricted login, like the
-    rest of the bundle's SQL."""
-    query = store.sentinel.query if store.sentinel is not None else None
-    if login is None or _LEGACY_SENTINEL_QUERIES.get(str(query), query) == SEED_SENTINEL_QUERY:
+    """Who reads a Postgres store's sentinel, at the baseline and at every reset: never the harness. At the baseline
+    the restricted login the bundle's files ran as; at a reset with world roles, that world's store role. Only with
+    one fixed user (no roles at all) is it the harness, as every other process is."""
+    if engine is not ManagedEngine.POSTGRES or credentials is None:
         return credentials
-    return login
+    if login is not None:
+        return login
+    if world_roles and world_index is not None and credentials.world_secret:
+        return store_role(credentials, world_index)
+    return credentials
 
 
 def check_sentinel(
@@ -5440,7 +5450,7 @@ def _freeze_one_store(
             host="localhost",
             port=port,
             dbname=sentinel_dbname,
-            credentials=sentinel_credentials(store, credentials, login),
+            credentials=sentinel_credentials(process.engine, credentials, login=login),
             sql_runner=context.sql_runner,
             redis_runner=context.redis_runner,
             rabbitmq_inspector=context.rabbitmq_inspector,
@@ -5844,15 +5854,17 @@ def _seed_escalations(
     return ours, others
 
 
+# The seed's marker table as the bundle's prefix makes it; a harness table like the others.
+_SENTINEL_DDL = "CREATE TABLE IF NOT EXISTS public.harness_seed_sentinel (id text PRIMARY KEY);\n"
 # Each harness table's whole shape, by engine port, as the harness's own statements make it on that engine.
 _HARNESS_SHAPES: dict[int, dict[str, dict[tuple[str, str], str]]] = {}
 _HARNESS_TABLE = (
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE '\\_alk\\_%'"
+    f"WHERE n.nspname = 'public' AND c.relkind = 'r' AND {HARNESS_RELNAME}"
 )
 _HARNESS_RELATION = (
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND c.relkind <> 'i' AND c.relname LIKE '\\_alk\\_%'"
+    f"WHERE n.nspname = 'public' AND c.relkind <> 'i' AND {HARNESS_RELNAME}"
 )
 # One row per part of a harness relation that decides what reading or writing it does: (relation, kind, key, value).
 # The relation itself (its kind, whether logged, replica identity, row security, grants, partitioning), and for a
@@ -5938,7 +5950,7 @@ def _harness_table_shapes(
 
     run("postgres", f'CREATE DATABASE "{scratch}" TEMPLATE "template0"')
     try:
-        run(scratch, _TOOL_TRACE_DDL + ACTORS_DDL)
+        run(scratch, _TOOL_TRACE_DDL + ACTORS_DDL + _SENTINEL_DDL)
         shapes = _shape_items(run(scratch, _HARNESS_SHAPE, read_only=True))
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{scratch}"')
@@ -6047,7 +6059,7 @@ def _adopt_harness_tables(
     # Tables first: a sequence a table owns moves with it, and one that is linked to a table cannot be moved alone.
     run(
         "DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.oid, c.relkind FROM pg_class c "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname LIKE '\\_alk\\_%' "
+        f"JOIN pg_namespace n ON n.oid = c.relnamespace WHERE {HARNESS_RELNAME} "
         "AND c.relkind IN ('r', 'S') AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
         "AND n.nspname NOT LIKE 'pg\\_%' ORDER BY c.relkind DESC LOOP "
         "IF (SELECT relowner FROM pg_class WHERE oid = r.oid) <> "
@@ -6275,6 +6287,20 @@ def seed_store_safely(
             bundle_dir=bundle_dir,
             made_by="seed",
         )
+        if login is not None:
+            # Every check done: the bundle's sentinel is read as the restricted login, never as the harness.
+            _call_sql(
+                sql_runner,
+                stage="baseline",
+                process_name=process_name,
+                host="localhost",
+                port=port,
+                user=credentials.username,
+                password=credentials.password,
+                dbname=dbname,
+                statement="DO $$ BEGIN IF to_regclass('public.harness_seed_sentinel') IS NOT NULL THEN "
+                f'GRANT SELECT ON public.harness_seed_sentinel TO "{login.username}"; END IF; END $$',
+            )
     return login
 
 
@@ -6454,6 +6480,7 @@ def _grant_world_role_group(
         "END LOOP; END $$",
     )
     if not door:
+        _grant_store_role_group(run, baseline_db)
         return
     door_group = f'"{DOOR_ROLE_GROUP}"'
     run(
@@ -6487,6 +6514,23 @@ def _grant_world_role_group(
         f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); "
         "END IF; END $$",
     )
+    _grant_store_role_group(run, baseline_db)
+
+
+def _grant_store_role_group(run: Callable[[str, str], None], baseline_db: str) -> None:
+    """The group every world's store role belongs to may read the log (checks read the world's events) and the seed's
+    marker (each reset reads it), and nothing else of the harness's."""
+    run(
+        "postgres",
+        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{STORE_ROLE_GROUP}') "
+        f'THEN CREATE ROLE "{STORE_ROLE_GROUP}" NOLOGIN; END IF; END $$',
+    )
+    for table in ("_alk_tool_trace", "harness_seed_sentinel"):
+        run(
+            baseline_db,
+            f"DO $$ BEGIN IF to_regclass('public.{table}') IS NOT NULL THEN "
+            f'GRANT SELECT ON public.{table} TO "{STORE_ROLE_GROUP}"; END IF; END $$',
+        )
 
 
 def _reset_template_database(
@@ -6565,6 +6609,8 @@ def _reset_template_database(
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
             f"'{store.username}') THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
+            f"DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = '{STORE_ROLE_GROUP}') THEN "
+            f'GRANT "{STORE_ROLE_GROUP}" TO "{store.username}"; END IF; END $$',
             f'ALTER ROLE "{store.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
             f"PASSWORD '{store.password}'",
             "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
@@ -6727,7 +6773,12 @@ def _check_all_sentinels(
             host="localhost",
             port=port,
             dbname=dbname,
-            credentials=context.credentials.get(process.name),
+            credentials=sentinel_credentials(
+                process.engine,
+                context.credentials.get(process.name),
+                world_index=world_index,
+                world_roles=context.require_declared_user,
+            ),
             sql_runner=context.sql_runner,
             redis_runner=context.redis_runner,
             rabbitmq_inspector=context.rabbitmq_inspector,

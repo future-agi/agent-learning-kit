@@ -87,6 +87,8 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         # The world's store role: the group's rights, past row security, and replica mode for a reset.
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_s3') THEN "
         'CREATE ROLE "alk_s3" LOGIN IN ROLE "alk_world_tools"; END IF; END $$',
+        "DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_store') THEN "
+        'GRANT "alk_world_store" TO "alk_s3"; END IF; END $$',
         'ALTER ROLE "alk_s3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
         f"PASSWORD '{pr.store_role(_CREDENTIALS, 3).password}'",
         "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
@@ -703,8 +705,6 @@ def test_a_bundle_without_a_door_keeps_today_s_grants(door_worlds):
 
 
 def _trial_state(monkeypatch, superuser: str, faults: list, **deadlines) -> None:
-    from types import SimpleNamespace
-
 
     monkeypatch.setattr(call_runner, "_find_postgres_endpoint", lambda _runtime: SimpleNamespace(address=superuser))
     call_runner._write_trial_state(SimpleNamespace(), faults, **deadlines)
@@ -786,8 +786,6 @@ def test_as_the_door_s_role_the_template_s_tables_take_a_key_claim_and_a_worker_
 @real_postgres
 def test_a_worker_stop_made_as_the_door_s_role_is_recorded_as_stopped(door_worlds, monkeypatch):
     import time
-    from types import SimpleNamespace
-
 
     superuser, _world, door, _reset = door_worlds(True)
     _trial_state(monkeypatch, superuser, [], worker_deadline_at=time.time() - 1)
@@ -904,8 +902,6 @@ def test_migrations_and_the_seed_run_as_the_migrations_login(tmp_path: Path, mon
 
 
 def test_a_migration_that_needs_a_superuser_says_where_the_statement_belongs(tmp_path: Path, monkeypatch):
-    from types import SimpleNamespace
-
     def apply(_engine, path, **kw):
         if Path(path).name == "migrate.sql":
             raise pr.ProcessRuntimeError("seed", "seed_failed", "must be superuser to create an event trigger")
@@ -1301,8 +1297,6 @@ def test_an_actor_s_record_change_in_the_runner_s_doors_runs_as_the_world_s_role
 
 
 def test_the_runner_hands_its_record_door_the_world_s_role_address(monkeypatch, tmp_path: Path):
-    from types import SimpleNamespace
-
     made: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
         call_runner, "record_door", lambda dsn, bundle_dir=None, records_dsn=None: made.append((dsn, records_dsn))
@@ -1484,8 +1478,6 @@ def test_a_function_the_seed_put_in_pg_catalog_refuses_the_build_before_any_harn
 def test_with_world_roles_an_actor_s_record_change_never_runs_as_the_superuser(monkeypatch, tmp_path: Path):
     """With per-user isolation every world has a role of its own: a world without one is refused actors, and no door
     falls back to the superuser's address. Without world roles (one fixed user) nothing changes."""
-    from types import SimpleNamespace
-
     from fi.alk.harness import chat_call_runner, privilege
 
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
@@ -1505,8 +1497,6 @@ def test_with_world_roles_an_actor_s_record_change_never_runs_as_the_superuser(m
 
 
 def test_actors_read_a_world_s_rows_with_its_own_role(monkeypatch):
-    from types import SimpleNamespace
-
     from fi.alk.harness.world.stores import postgres as stores
 
     from fi.alk.harness import privilege
@@ -1547,8 +1537,6 @@ _WORLD_CODE = (
 def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role(door_worlds, monkeypatch):
     """R4-1: the chat and hosted worlds' state store (a handler's SQL, a check's read, a reset) runs as the world's
     own role with world roles: a shadow a query reaches and every trigger a reset fires run with that role's rights."""
-    from types import SimpleNamespace
-
     from fi.alk.harness import chat_call_runner, privilege
     from fi.alk.harness.world.stores import StoreError
     from fi.alk.harness.world.stores.postgres import attached_world_store
@@ -1582,8 +1570,6 @@ def test_with_one_fixed_user_a_reset_suspends_the_world_s_triggers_and_refuses_o
 ):
     """R4-1, no world roles: the reset runs as the harness, so triggers are suspended before the truncate, and a
     trigger set to fire anyway (ENABLE ALWAYS / REPLICA) refuses the reset instead of running as the harness."""
-    from types import SimpleNamespace
-
     from fi.alk.harness import privilege
     from fi.alk.harness.world.stores import StoreError
     from fi.alk.harness.world.stores.postgres import attached_world_store
@@ -1725,9 +1711,15 @@ def test_a_seed_only_store_runs_its_seed_as_the_restricted_login(tmp_path: Path)
 
 
 def _full_prefix() -> str:
+    """The bundle's prefix as the author writes it: the seed's marker, the harness's tables, the actors."""
     from fi.alk.harness.actors import ACTORS_DDL
 
-    return author._TOOL_TRACE_DDL + ACTORS_DDL
+    return (
+        "CREATE TABLE IF NOT EXISTS public.harness_seed_sentinel (id text PRIMARY KEY);\n"
+        "INSERT INTO public.harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
+        + author._TOOL_TRACE_DDL
+        + ACTORS_DDL
+    )
 
 
 _UNLIKE_THE_HARNESS = {
@@ -1887,8 +1879,6 @@ def test_the_store_reads_and_resets_a_row_secured_world_while_the_tools_stay_und
     """Auditor A, item 4: a world table with row security (as Supabase writes one). The harness's store role reads it
     whole, so checks see the world, and its reset puts every row back; the agent's tools' role stays under the
     customer's own policies."""
-    from types import SimpleNamespace
-
     from fi.alk.harness import chat_call_runner, privilege
     from fi.alk.harness.world.stores.postgres import attached_world_store
 
@@ -1913,21 +1903,18 @@ def test_the_store_reads_and_resets_a_row_secured_world_while_the_tools_stay_und
     assert sorted(row["name"] for row in store.table("riders")) == ["ada", "bo"]
 
 
-def test_a_bundle_s_own_sentinel_runs_as_the_restricted_login_and_the_harness_s_as_the_harness():
-    """Auditor A, item 6: the harness's own sentinel reads its own marker table; any other a bundle carries is the
-    bundle's SQL, and runs as the restricted login."""
-    from fi.alk.harness.bundle_v2 import StoreEntry
+def test_a_sentinel_is_read_as_the_login_at_the_baseline_and_the_store_role_at_a_reset_never_the_harness():
+    """Auditor B, items 1-2: one rule for both callers. The baseline reads the sentinel as the restricted login, a
+    reset with world roles as that world's store role; only with one fixed user (no roles) is it the harness."""
+    harness = pr.EngineCredentials("harness", "x", world_secret="s")
+    login = pr.EngineCredentials(pr.MIGRATOR_ROLE, "y")
+    postgres = pr.ManagedEngine.POSTGRES
 
-    harness, login = pr.EngineCredentials("harness", "x"), pr.EngineCredentials(pr.MIGRATOR_ROLE, "y")
-    for query, expected in (
-        (pr.SEED_SENTINEL_QUERY, harness),
-        ("SELECT id FROM harness_seed_sentinel WHERE id='ready'", harness),
-        ("SELECT count(*)::text FROM riders", login),
-    ):
-        store = StoreEntry.model_construct(sentinel=SimpleNamespace(query=query))
-        assert pr.sentinel_credentials(store, harness, login) is expected
-    assert pr.sentinel_credentials(StoreEntry.model_construct(sentinel=SimpleNamespace(query="x")), harness, None) \
-        is harness
+    assert pr.sentinel_credentials(postgres, harness, login=login) is login
+    assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=True) == pr.store_role(harness, 2)
+    assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=False) is harness
+    other = next(engine for engine in pr.ManagedEngine if engine is not postgres)
+    assert pr.sentinel_credentials(other, harness, login=login) is harness
 
 
 @real_postgres
@@ -1965,8 +1952,7 @@ def test_rows_planted_in_the_harness_tables_never_reach_a_trial(tmp_path: Path):
 def test_a_seed_marker_holding_more_than_its_one_row_refuses_the_build(tmp_path: Path):
     build, run, baseline = _seeded(
         tmp_path,
-        "CREATE TABLE IF NOT EXISTS public.harness_seed_sentinel (id text PRIMARY KEY);\n"
-        "INSERT INTO public.harness_seed_sentinel VALUES ('ready'), ('forged');\n",
+        "INSERT INTO public.harness_seed_sentinel VALUES ('forged');\n",
         "",
     )
     try:
@@ -1981,8 +1967,6 @@ def test_a_seed_marker_holding_more_than_its_one_row_refuses_the_build(tmp_path:
 def test_the_store_role_s_reads_and_snapshot_never_reach_a_world_shadow(door_worlds, monkeypatch):
     """The final audit's nit: a world's `public.array_position(int2vector, smallint)` outranks the system's for the
     store's primary-key read; the store role's reads run read-only on the system's own path, so it never runs."""
-    from types import SimpleNamespace
-
     from fi.alk.harness import privilege
     from fi.alk.harness.world.stores.postgres import attached_world_store
 
@@ -2004,6 +1988,52 @@ def test_the_store_role_s_reads_and_snapshot_never_reach_a_world_shadow(door_wor
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute("SELECT name FROM riders ORDER BY id").fetchall() == [("ada",)]
+
+
+@real_postgres
+def test_a_sentinel_made_as_a_view_over_world_code_refuses_the_build_before_anyone_reads_it(tmp_path: Path):
+    """Auditor B, item 1: the seed's marker made as a view over a function would run that function as whoever reads
+    it. The marker is a harness table under the one shape rule, so the build is refused and nothing ran it."""
+    build, run, baseline = _seeded(
+        tmp_path,
+        "CREATE TABLE public.ran (superuser boolean); GRANT INSERT ON public.ran TO PUBLIC;\n"
+        "CREATE FUNCTION public.ready() RETURNS text LANGUAGE plpgsql AS $$ BEGIN "
+        "INSERT INTO public.ran VALUES (current_setting('is_superuser') = 'on'); RETURN 'ready'; END $$;\n"
+        "DROP TABLE public.harness_seed_sentinel;\n"
+        "CREATE VIEW public.harness_seed_sentinel AS SELECT public.ready() AS id;\n",
+        "",
+    )
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            build()
+        assert "harness_seed_sentinel" in str(refused.value)
+        assert run(baseline, "SELECT count(*) FROM public.ran") == [(0,)]
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_checks_read_a_door_bundle_s_log_as_the_store_role(door_worlds, monkeypatch):
+    """Auditor B, item 4: in a door bundle the world's group has no right on the log; the store role's group reads
+    it (SELECT only), so a check on the world's events sees the door's row instead of failing unread."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.handle import HostedWorld
+    from fi.alk.harness.world.stores.postgres import attached_world_store
+
+    superuser, world, door, _reset = door_worlds(True)
+    world_door.PostgresLog(door).write(
+        {"name": "refund", "arguments": {}, "result": None, "ok": True, "error": "", "at": 1.0, "action_id": "a1",
+         "outcome": "committed", "actor_id": "agent"}
+    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = attached_world_store(
+        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+    )
+
+    events = HostedWorld.events(SimpleNamespace(query=store.query))
+    assert [(row["name"], row["outcome"]) for row in events] == [("refund", "committed")]
+    with pytest.raises(Exception):
+        store.query("INSERT INTO public._alk_tool_trace (name, arguments, ok, at) VALUES ('x', '{}', true, 0)")
 
 
 def _pg_dump_schema(owner: str) -> str:

@@ -20,6 +20,10 @@ DOOR_ROLE_PREFIX = "alk_d"
 # World N's store role: reads and resets the world's rows for the harness past their row security, with the world
 # group's rights and nothing more; never the agent's tools' role.
 STORE_ROLE_PREFIX = "alk_s"
+# Every world's store role belongs to it: the harness's read-only grants on its own tables (the log, the marker).
+STORE_ROLE_GROUP = "alk_world_store"
+# The harness's own relations, by name, in SQL over `pg_class c`: its `_alk_*` tables and the seed's marker.
+HARNESS_RELNAME = "(c.relname LIKE '\\_alk\\_%' OR c.relname = 'harness_seed_sentinel')"
 # The door's address, rendered only into the door's own processes.
 WORLD_DOOR_DATABASE_URL = "WORLD_DOOR_DATABASE_URL"
 # The world's own role, given to the door's processes too: the rows of the world (an actor's record change, an MCP
@@ -84,7 +88,7 @@ class SeedEscalationQueries(NamedTuple):
 # oid past the system's own, wherever it lives, `pg_catalog` included) refuses the build.
 _HARNESS_FROM = "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
 _HARNESS_WHERE = (
-    "WHERE c.relname LIKE '\\_alk\\_%' AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+    f"WHERE {HARNESS_RELNAME} AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
     "AND n.nspname NOT LIKE 'pg\\_%'"
 )
 _FIRST_USER_OID = 16384
@@ -132,7 +136,7 @@ HARNESS_TABLES_WITH_CODE = (
 def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
     """The queries for a world group ``world_group``, the group every world's role is a member of."""
     our_role = (
-        f"(r.rolname IN ('{world_group}', '{DOOR_ROLE_GROUP}') "
+        f"(r.rolname IN ('{world_group}', '{DOOR_ROLE_GROUP}', '{STORE_ROLE_GROUP}') "
         f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$')"
     )
     our_roles = (
@@ -145,6 +149,7 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         f"WHERE {our_role} AND NOT ("
         f"(g.rolname = '{world_group}' AND (r.rolname ~ '^({WORLD_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$' "
         f"OR r.rolname = '{DOOR_ROLE_GROUP}')) "
+        f"OR (g.rolname = '{STORE_ROLE_GROUP}' AND r.rolname ~ '^{STORE_ROLE_PREFIX}[0-9]+$') "
         f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$'))"
     )
     other_roles = (

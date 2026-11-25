@@ -277,10 +277,10 @@ class HostedWorld(HttpObservationHandle):
         from ..world_door import EvidenceUnavailable, is_attempt
 
         try:
-            rows = self.query('SELECT * FROM "_alk_tool_trace" ORDER BY at, id')
+            rows = self.query("SELECT * FROM public._alk_tool_trace ORDER BY at, id")
         except Exception as exc:  # noqa: BLE001 - told apart below: no log, or a log out of reach
             try:
-                present = self.query("SELECT to_regclass('_alk_tool_trace') IS NOT NULL AS present")
+                present = self.query("SELECT to_regclass('public._alk_tool_trace') IS NOT NULL AS present")
             except Exception:  # noqa: BLE001 - the database itself is out of reach
                 raise EvidenceUnavailable("the world's action log could not be read") from exc
             if present and not present[0].get("present"):
