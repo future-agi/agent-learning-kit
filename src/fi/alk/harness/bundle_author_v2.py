@@ -1616,17 +1616,6 @@ def _plan_node_process(source: Path, **kwargs: Any) -> SourceProcess:
     )
 
 
-def _native_js_runtime(language: str, command: Sequence[str]) -> str:
-    """``bun`` or ``node`` when a native process declares that JavaScript runtime, else empty."""
-    language = language.lower()
-    launcher = list(command[:1])
-    if language == "bun" or (not language and launcher == ["bun"]):
-        return "bun"
-    if language in _NODE_LANGUAGES or (not language and launcher == ["node"]):
-        return "node"
-    return ""
-
-
 def _plan_source_process(
     source: Path, *, language: str = "", **kwargs: Any
 ) -> SourceProcess:
@@ -3074,6 +3063,9 @@ def resolve_environment_plan(
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
     contract_runtime = contract_runtime if isinstance(contract_runtime, dict) else {}
     runtime_command = [str(item) for item in (contract_runtime.get("command") or [])]
+    is_bun_runtime = runtime_model.language.lower() == "bun" or bool(
+        runtime_command and runtime_command[0] == "bun"
+    )
     runtime_workdir = str(contract_runtime.get("workdir") or "")
     interface = contract_runtime.get("interface")
     interface = interface if isinstance(interface, dict) else {}
@@ -3088,8 +3080,12 @@ def resolve_environment_plan(
             )
             or []
         )
-    # Classified after the Dockerfile CMD fill: that CMD can be the only sign of a Node or Bun agent.
-    js_runtime = _native_js_runtime(runtime_model.language, runtime_command)
+    # Node is read after the Dockerfile CMD fill: that CMD can be the only sign of a Node agent.
+    js_runtime = (
+        "bun"
+        if is_bun_runtime
+        else "node" if _is_node(runtime_model.language, runtime_command) else ""
+    )
     interface_port = interface.get("port")
     interface_health_path = str(interface.get("health_path") or "/health")
 
@@ -3250,16 +3246,16 @@ def resolve_environment_plan(
                 _compose_command(service.get("command"))
                 or _dockerfile_run(service_root)
             )
-            service_js = _native_js_runtime(service_language, service_command or [])
-            if service_js and service_name == control_name and contract_interface_kind != "http":
-                # As in the native lane: only an HTTP route reaches a Bun or Node control service.
-                raise BundleAuthorError(f"runtime_{service_js}_http_interface_required")
+            service_node = _is_node(service_language, service_command or [])
+            if service_node and service_name == control_name and contract_interface_kind != "http":
+                # As in the native lane: only an HTTP route reaches a Node control service.
+                raise BundleAuthorError("runtime_node_http_interface_required")
             process = _plan_source_process(
                 root,
                 language=service_language,
                 version=(
                     runtime_model.version
-                    if declared_runtime and _native_js_runtime(runtime_model.language, [])
+                    if declared_runtime and runtime_model.language.lower() == "bun"
                     else ""
                 ),
                 name=service_name,
@@ -3346,8 +3342,8 @@ def resolve_environment_plan(
                         ),
                     }
                 )
-            # A JavaScript process already starts from its own component.
-            if not service_js:
+            # A Node or declared Bun process already starts from its own package folder.
+            if not (service_node or (declared_runtime and runtime_model.language.lower() == "bun")):
                 process = _python_component_command(source=root, component=service_root, process=process)
             processes.append(process)
             if port:
@@ -3443,7 +3439,7 @@ def resolve_environment_plan(
             component = server_start_folder(
                 root,
                 contract_runtime,
-                _runtime_component(root, runtime_workdir, python_project=not js_runtime),
+                _runtime_component(root, runtime_workdir, python_project=js_runtime != "node"),
             )
             entry = next(
                 (

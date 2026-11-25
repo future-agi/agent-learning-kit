@@ -9269,6 +9269,45 @@ def test_compose_node_control_service_requires_an_http_interface(tmp_path):
     assert _agent_of(plan).run_command == ["node", "server.js"]
 
 
+@pytest.mark.parametrize("declared", [True, False])
+def test_compose_bun_control_service_admission_is_unchanged(tmp_path, declared):
+    """The Node HTTP guard is Node's alone: a Compose Bun service with no interface plans as before."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/package.json": '{"name":"agent","packageManager":"bun@1.3.14"}',
+            "agent/bun.lock": '{"lockfileVersion": 1}',
+            "agent/server.ts": "Bun.serve({fetch: () => new Response('ok')})",
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: ./agent\n"
+                "    command: [bun, run, server.ts]\n"
+            ),
+        },
+    )
+    runtime = (
+        {
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "compose",
+            "compose_file": "compose.yml",
+            "service": "agent",
+            "command": [],
+        }
+        if declared
+        else None
+    )
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat", contract_runtime=runtime
+    )
+
+    agent = _agent_of(plan)
+    assert ["bun", "install", "--frozen-lockfile"] in agent.build_commands
+    assert agent.working_directory == "agent"
+
+
 def test_compose_node_control_service_gets_no_python_tracer(tmp_path):
     """Only the Compose command makes this agent Node, so no runtime field can switch the Python tracer off."""
     source = _repo(
