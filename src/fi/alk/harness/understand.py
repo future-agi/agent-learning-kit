@@ -47,15 +47,32 @@ SUBMIT_REMINDER = (
 )
 
 
-def _provider_import_briefing() -> str:
-    """Load the sanitized external-provider definition prepared by the control process."""
+def _named_provider_profile() -> dict[str, Any] | None:
+    """The sanitized external-provider definition the control process named, if it named one.
+    One named but unreadable is still in force, as an empty definition: the build said the
+    agent has one, so repository lines are not its prompt either way."""
     configured = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV, "").strip()
     if not configured:
-        return ""
-    path = Path(configured)
+        return None
     try:
-        profile = json.loads(path.read_text(encoding="utf-8"))
+        profile = json.loads(Path(configured).read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def profile_in_force(source: AgentSource) -> dict[str, Any] | None:
+    """The provider definition this reading is shown, if any: a source-free provider's own, or
+    the one the build named beside a repository."""
+    if source.kind == "provider":
+        return dict(getattr(source, "profile", None) or {})
+    return _named_provider_profile()
+
+
+def _provider_import_briefing() -> str:
+    """Load the sanitized external-provider definition prepared by the control process."""
+    profile = _named_provider_profile()
+    if not profile:
         return ""
     return (
         "\n\n## Imported provider target (authoritative, read-only)\n\n"
@@ -162,6 +179,7 @@ def open_stage(
                 require_setup_contract=require_setup_contract
                 and source.kind == "repo",
                 subfolder=source.subfolder if source.kind == "repo" else None,
+                provider_profile=profile_in_force(source),
             ),
         },
         extra_builtins=source.builtin_tools(),
