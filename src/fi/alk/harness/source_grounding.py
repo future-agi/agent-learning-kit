@@ -94,8 +94,13 @@ def _policy_assertion_matches(test_text: str, case: Mapping[str, Any]) -> bool:
     )
     if any(not re.search(_identifier_pattern(code), test_text) for code in named_codes):
         return False
-    score = re.search(r"\brelevance score of (\d+)\b", str(case.get("policy_reference") or ""), re.I)
-    if score and not re.search(r"\b" + re.escape(score[1]) + r"\b", test_text):
+    score = re.search(
+        r"\brelevance score of (\d+)\b", str(case.get("policy_reference") or ""), re.I
+    )
+    if score and not re.search(
+        rf"\bscore\b\s*(?:of\s+|is\s+|[:=]\s*)?{score[1]}\b(?![.,]\d)",
+        test_text,
+    ):
         return False
     # An ordinary success inside the window also passes when a forbidden
     # extension is granted. The assertion must distinguish those behaviors.

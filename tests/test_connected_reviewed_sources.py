@@ -518,12 +518,22 @@ def test_grading_codes_stay_out_of_source_scenario_presentation(field, value):
 
 def test_qualification_requires_specific_score_and_label_in_authored_assertion():
     from fi.alk.harness.source_grounding import scenario_relates_to_case
+
     case = {
         "policy_reference": "A prospect who needs Python tracing receives a relevance score of 5 and the qualification label TRACE-51."
     }
     args = {"instruction": "You run an agent platform and need Python tracing."}
-    for incomplete in ("Qualifies the Python tracing lead as a good fit.",
-                       "Assigns relevance score 5 to the Python tracing prospect.",
-                       "Qualifies the Python tracing lead as TRACE-51 with score 1."):
+    for incomplete in (
+        "Qualifies the Python tracing lead as a good fit.",
+        "Assigns relevance score 5 to the Python tracing prospect.",
+        "Qualifies the Python tracing lead as TRACE-51 with score 1.",
+        "For the 5 Python tracing workloads, assign relevance score 1 and label TRACE-51.",
+    ):
         assert not scenario_relates_to_case({**args, "tests": incomplete}, case)
-    assert scenario_relates_to_case({**args, "tests": "Assigns the Python tracing lead score 5 and label TRACE-51."}, case)
+    assert scenario_relates_to_case(
+        {
+            **args,
+            "tests": "Assigns the Python tracing lead score 5 and label TRACE-51.",
+        },
+        case,
+    )
