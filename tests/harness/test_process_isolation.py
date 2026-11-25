@@ -68,6 +68,27 @@ def test_the_granted_capabilities_turn_on_per_user_isolation(tmp_path, monkeypat
     assert enabled == [subtree]  # every customer execution in a cgroup of its own
 
 
+def test_per_user_isolation_never_changes_the_harness_s_own_user(tmp_path, monkeypatch):
+    """Only the harness's children switch users. The harness keeps its own, so the files it writes privately (proofs
+    under umask 077) stay readable to the sandbox user that packs and downloads them."""
+    switched = []
+    for name in ("setuid", "seteuid", "setreuid", "setresuid", "setgid", "setegid", "setregid", "setresgid"):
+        monkeypatch.setattr(privilege.os, name, lambda *args, name=name: switched.append(name), raising=False)
+    monkeypatch.setattr(privilege, "_clear_ambient_capabilities", lambda: None)
+    monkeypatch.setattr(privilege.containment, "enable", lambda subtree: None)
+    before = os.umask(0o022)
+    try:
+        mode = privilege.establish_isolation(
+            {privilege.ISOLATION_ENV: "required"},
+            status_path=_status(tmp_path, _ALL),
+            protected_hardlinks=_hardlinks(tmp_path),
+            contain=lambda: privilege.containment.Containment(tmp_path / "cgroup"),
+        )
+    finally:
+        os.umask(before)
+    assert mode is IsolationMode.PER_USER and switched == []
+
+
 def test_a_required_isolation_without_containment_refuses_to_start(tmp_path, monkeypatch):
     monkeypatch.setattr(
         privilege, "_clear_ambient_capabilities", lambda: pytest.fail("isolation went on")
@@ -577,3 +598,80 @@ def test_a_workspace_bundle_runs_setup_ready_and_check_under_per_user_isolation(
     assert report["root_mode"] == "0o700"
     assert report["results"] == {"setup": None, "ready": True, "check": "from child"}
     assert report["file_owner_is_agent"]
+
+
+def test_every_declared_process_user_exists_in_the_images_and_the_template_checks_it():
+    """A bundle that declares a user the image lacks fails to spawn under per-user isolation, so each user the bundle
+    may declare (the world's door's `svc-door` included) is made in both images and checked by the template build."""
+    from fi.alk.harness.bundle_v2 import ProcessUser
+
+    root = Path(__file__).resolve().parents[2]
+    uids = {"svc-agent": 2001, "svc-tools": 2002, "svc-data": 2003, "svc-door": 2004}
+    assert {one.value for one in ProcessUser} == set(uids)
+    template = (root / "scripts" / "e2b-template.py").read_text()
+    for image in ("Dockerfile.hosted", "Dockerfile.sandbox"):
+        dockerfile = (root / image).read_text()
+        for user, uid in uids.items():
+            assert f"useradd --uid {uid} --gid {uid} --create-home --shell /usr/sbin/nologin {user}" in dockerfile
+    for user, uid in uids.items():
+        assert f'test "$(id -u {user})" = {uid}' in template
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root may write any file")
+def test_the_agent_s_user_can_write_nothing_in_the_harness_s_own_source(tmp_path):
+    import stat
+
+    from fi.alk.harness.privilege import writable_harness_source
+
+    source = tmp_path / "fi"
+    (source / "alk" / "harness").mkdir(parents=True)
+    (source / "alk" / "harness" / "checks.py").write_text("# the grader\n")
+    (source / "evals").mkdir()
+    # As unpacked by the user that runs it: every part writable, the grader among it.
+    found = writable_harness_source([source])
+    assert str(source / "alk" / "harness" / "checks.py") in found and str(source / "evals") in found
+
+    for path in [*source.rglob("*"), source]:
+        path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o222)
+    try:
+        assert writable_harness_source([source]) == []
+    finally:
+        for path in [source, *source.rglob("*")]:
+            path.chmod(stat.S_IMODE(path.stat().st_mode) | 0o200)
+
+
+def test_the_template_refuses_a_harness_source_its_user_can_write():
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "scripts" / "e2b-template.py").read_text()
+    assert '"harness-source-read-only"' in template
+    assert "writable_harness_source" in template and "sys.exit(1 if found else 0)" in template
+
+
+def test_a_proposer_s_candidate_in_the_certify_sandbox_gets_no_author_credential_and_no_verifier_evidence(
+    tmp_path, monkeypatch
+):
+    """The fix engine's code reaches a sandbox only as a candidate agent version, run as the agent's user in the certify
+    sandbox, beside the authoring credentials and the suite's proofs. Its environment carries none of those
+    credentials, and under per-user isolation every proof the certify writes (the reference's and controls' verdicts,
+    the live results) is the harness's alone."""
+    from fi.alk.harness import live_proof, prove_suite
+    from fi.alk.harness.proofs import PROOFS, record_proof
+    from fi.alk.harness.prove import Proof
+
+    names = sorted(hosted_authoring_entrypoint._PASSTHROUGH | hosted_authoring_entrypoint._OBSERVABILITY_PASSTHROUGH)
+    monkeypatch.setattr(os, "environ", {"PATH": "/usr/bin"})
+    hosted_authoring_entrypoint._configure_generation_environment({name: f"author-{name}" for name in names})
+    hosted_authoring_entrypoint._configure_observability_environment({name: f"author-{name}" for name in names})
+    candidate = pr._allowlisted_ambient_env(dict(os.environ))
+    assert not [name for name in candidate if candidate[name].startswith("author-")]
+
+    monkeypatch.setattr(privilege, "_mode", IsolationMode.PER_USER)
+    before = os.umask(0o077)  # what establish_isolation sets under per-user isolation
+    try:
+        record_proof(tmp_path, "refund", Proof())
+        live_proof.write_live(tmp_path, {"refund": {"with_solution": [], "controls": []}})
+        prove_suite._write(tmp_path / "scenario-proofs.json", {})
+    finally:
+        os.umask(before)
+    for name in (PROOFS, live_proof.LIVE_PROOFS, "scenario-proofs.json"):
+        assert (tmp_path / name).stat().st_mode & 0o077 == 0, name

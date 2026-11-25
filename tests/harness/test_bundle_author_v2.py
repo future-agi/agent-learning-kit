@@ -33,7 +33,7 @@ from fi.alk.harness.bundle_author_v2 import (
 from fi.alk.harness import framework_servers
 from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
-from fi.alk.harness.bundle_v2 import load_bundle_v2
+from fi.alk.harness.bundle_v2 import ProcessUser, load_bundle_v2
 from fi.alk.harness.certification import (
     CertificationAuthoring,
     CertificationChecks,
@@ -1705,6 +1705,17 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
     loaded = load_bundle_v2(output)
     assert loaded.digest == first.digest
     assert loaded.metadata["packaging"] == packaging
+    if case == "uber-compose":
+        # Only the world's door, as its own user, reaches the database as the door's role; the agent's tools never.
+        by_name = {process.name: process for process in loaded.processes}
+        assert by_name["tool-proxy"].user is ProcessUser.SVC_DOOR
+        assert by_name["tool-proxy"].environment["DATABASE_URL"] == "{{WORLD_DOOR_DATABASE_URL}}"
+        assert by_name["tools-api"].user is ProcessUser.SVC_TOOLS
+        assert [
+            name
+            for name, process in by_name.items()
+            if "WORLD_DOOR_DATABASE_URL" in json.dumps(getattr(process, "environment", {}))
+        ] == ["tool-proxy"]
     # A build says it is one, so the platform never takes its seal for a chat's reseal.
     assert loaded.metadata["sealed_from"] == "build"
     assert loaded.provenance.source_digest
@@ -5361,7 +5372,15 @@ def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> 
         process for process in manifest.processes if process.name == "mcp-toolbox"
     )
     assert adapter.depends_on == ["world-db"]
-    assert adapter.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    # The world's door: its own OS user and database role, which no other process gets.
+    assert adapter.user is ProcessUser.SVC_DOOR
+    assert adapter.environment["DATABASE_URL"] == "{{WORLD_DOOR_DATABASE_URL}}"
+    assert not [
+        process.name
+        for process in manifest.processes
+        if process.name != "mcp-toolbox"
+        and "WORLD_DOOR_DATABASE_URL" in json.dumps(getattr(process, "environment", {}))
+    ]
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert "mcp-toolbox" in agent.depends_on
     assert agent.environment["MCP_TOOLBOX_URL"] == "{{MCP_TOOLBOX_URL}}"
@@ -6390,12 +6409,12 @@ def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None
 
     without = _action_log_seed(tmp_path)
     assert "actor_id text" in without and "outcome text" in without and "effect text" in without
-    assert "INSERT INTO _alk_actors" not in without
+    assert "INSERT INTO public._alk_actors" not in without
     (tmp_path / "actors.json").write_text(
         '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
     )
     with_actors = _action_log_seed(tmp_path)
-    assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
+    assert "actor_id text" in with_actors and "INSERT INTO public._alk_actors" in with_actors
 
 
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
@@ -8814,6 +8833,24 @@ def test_a_langgraph_dependency_outside_the_source_is_never_its_project(tmp_path
     assert _dependency_project(config, source) == inside.resolve()
     config.write_text(json.dumps({"dependencies": ["../../elsewhere"], "graphs": {"a": "./a.py:g"}}))
     assert _dependency_project(config, source) is None
+
+
+@pytest.mark.parametrize("make", ["tool_proxy", "world_door", "mcp_toolbox"])
+def test_each_door_process_runs_as_the_door_with_the_door_s_database_role(make):
+    from fi.alk.harness import bundle_author_v2 as author
+
+    process = {
+        "tool_proxy": lambda: author._tool_proxy_process(),
+        "world_door": lambda: author._world_door_process([]),
+        "mcp_toolbox": lambda: author._mcp_toolbox_process(),
+    }[make]()
+    assert process.user is ProcessUser.SVC_DOOR
+    assert process.environment["DATABASE_URL"] == "{{WORLD_DOOR_DATABASE_URL}}"
+    # The world's own role reaches the door only to write the world's rows, never the call log.
+    assert process.environment["WORLD_RECORDS_DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert json.dumps({k: v for k, v in process.environment.items() if k != "WORLD_RECORDS_DATABASE_URL"}).count(
+        "{{WORLD_DATABASE_URL}}"
+    ) == 0
 
 
 def test_a_leftover_file_that_does_not_parse_does_not_make_the_callback_ambiguous(tmp_path):

@@ -94,7 +94,7 @@ def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_p
     captured = []
 
     @contextmanager
-    def connect(_dsn, *, autocommit, cursor_factory=psycopg.Cursor):
+    def connect(_dsn, *, autocommit, cursor_factory=psycopg.Cursor, options=""):
         class Connection:
             description = None
             rowcount = 0
@@ -111,6 +111,10 @@ def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_p
         yield Connection()
 
     monkeypatch.setattr(psycopg, "connect", connect)
+    # A bundle sealed before the world's role: the door's path, found free of shadows.
+    from fi.alk.harness import mcp_toolbox_adapter
+
+    monkeypatch.setitem(mcp_toolbox_adapter._SHADOW_FREE, "unused", True)
     statement = (
         "SELECT '$1', $$ $2 $$, $tag$ $1 $tag$, '100%', $2, $1, $1 -- $99\n/* $98 */"
     )
@@ -124,8 +128,11 @@ def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_p
     assert captured[0] == (statement.encode(), [b"one", b"two"])
     # Then the call goes into the world's own call log, as the tool proxy logs its calls.
     logged, values = captured[1]
-    assert logged.startswith(b"INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at)")
+    assert logged.startswith(
+        b"INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at, outcome, actor_id)"
+    )
     assert values[:2] == [b"example", b'{"first": "one", "second": "two"}']
+    assert values[-2:] == [b"committed", b"agent"]
 
 
 def test_source_sql_executes_without_rewriting_literals_or_comments(tmp_path):

@@ -115,7 +115,16 @@ from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
 from .world.tools import _binding
-from .world_door import DOOR_CAPABILITIES, DOOR_FILE, method_action, world_action
+from .world_door import (
+    DOOR_CAPABILITIES,
+    DOOR_FILE,
+    HARNESS_TABLES_DDL,
+    HARNESS_TABLES_COMPLETE,
+    HARNESS_TABLES_KEY,
+    SEED_SENTINEL_QUERY,
+    method_action,
+    world_action,
+)
 from .scenario_source import declared_tool_names, deterministic_names, load_one
 
 
@@ -170,7 +179,7 @@ _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
 # The world's action log: every action the door saw, who took it and what came of it.
 _TOOL_TRACE_DDL = (
-    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "CREATE TABLE IF NOT EXISTS public._alk_tool_trace ("
     "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
     "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
     "action_id text NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text), "
@@ -179,13 +188,16 @@ _TOOL_TRACE_DDL = (
     "on_behalf_of text, idempotency_key text, action text);\n"
     # The columns a prebuilt world's own tool server writes, so one row carries both sets; `action` (the world action in
     # full) for a table made before it was recorded.
-    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
+    "ALTER TABLE public._alk_tool_trace ADD COLUMN IF NOT EXISTS action text, ADD COLUMN IF NOT EXISTS agent_tool text, "
     "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
     "ADD COLUMN IF NOT EXISTS status text, ADD COLUMN IF NOT EXISTS effect text, ADD COLUMN IF NOT EXISTS attribution text, "
     # How each call was made and the scenario's fault the door applied on it.
     "ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
     # The HTTP path a call through the tool proxy went to.
     "ADD COLUMN IF NOT EXISTS endpoint text;\n"
+    # Each trial's own tables, made here so they are in the sealed template, owned by the harness, and the rights on
+    # them are set before any world is cloned; a role that owns no table cannot make one later.
+    + "".join(f"{statement};\n" for statement in HARNESS_TABLES_DDL)
 )
 
 
@@ -2125,7 +2137,8 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
     environment = {
         "PORT": "{{PORT_tool-proxy}}",
         "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
-        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+        "DATABASE_URL": "{{WORLD_DOOR_DATABASE_URL}}",
+        "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
         # This world's worker channels, {token: worker id}, written by the runner.
         "WORKER_CHANNELS_FILE": "{{WORLD_DIR}}/worker-channels.json",
     }
@@ -2140,7 +2153,7 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
         run_command=[sys.executable, "proxy.py"],
         environment=environment,
         started_check=StartedCheck(port=True, timeout_seconds=180),
-        user=ProcessUser.SVC_TOOLS,
+        user=ProcessUser.SVC_DOOR,
         depends_on=["tools-api", "world-db"],
     )
 
@@ -2484,7 +2497,8 @@ def declared_read_tools(tool_entrypoints: list[dict[str, Any]] | None) -> list[s
 def _world_door_process(read_tools: list[str]) -> SourceProcess:
     environment = {
         "PORT": "{{PORT_world-door}}",
-        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+        "DATABASE_URL": "{{WORLD_DOOR_DATABASE_URL}}",
+        "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
     }
     if read_tools:
         environment["READ_ACTIONS"] = ",".join(read_tools)
@@ -2495,7 +2509,7 @@ def _world_door_process(read_tools: list[str]) -> SourceProcess:
         run_command=[sys.executable, "server.py"],
         environment=environment,
         started_check=StartedCheck(port=True, timeout_seconds=180),
-        user=ProcessUser.SVC_TOOLS,
+        user=ProcessUser.SVC_DOOR,
         depends_on=["world-db"],
     )
 
@@ -2620,11 +2634,12 @@ def _mcp_toolbox_process() -> SourceProcess:
         run_command=[sys.executable, "server.py"],
         environment={
             "PORT": "{{PORT_mcp-toolbox}}",
-            "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            "DATABASE_URL": "{{WORLD_DOOR_DATABASE_URL}}",
+            "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
             "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
-        user=ProcessUser.SVC_TOOLS,
+        user=ProcessUser.SVC_DOOR,
         depends_on=["world-db"],
     )
 
@@ -4588,8 +4603,8 @@ def author_bundle_v2(
         seed_dir = temporary / "seed"
         seed_dir.mkdir()
         prefix = (
-            "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
-            "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
+            "CREATE TABLE IF NOT EXISTS public.harness_seed_sentinel (id text PRIMARY KEY);\n"
+            "INSERT INTO public.harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
             + _action_log_seed(authoring_root)
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
@@ -4634,7 +4649,7 @@ def author_bundle_v2(
                 ),
             ),
             sentinel=Sentinel(
-                query="SELECT id FROM harness_seed_sentinel WHERE id='ready'",
+                query=SEED_SENTINEL_QUERY,
                 expected="ready",
             ),
         )
@@ -4738,6 +4753,8 @@ def author_bundle_v2(
                 "environment_plan_version": "2",
                 # A build's seal, told apart from a chat's reseal, which stamps the tree it sealed from instead.
                 "sealed_from": BUILD_SEAL,
+                # Its migration makes every harness table with every column: the build requires each of them.
+                HARNESS_TABLES_KEY: HARNESS_TABLES_COMPLETE,
                 **(
                     {"source_tool_trace_version": _SOURCE_TOOL_TRACE_VERSION}
                     if _uses_source_tool_trace(plan.processes)

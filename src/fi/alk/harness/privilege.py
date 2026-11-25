@@ -137,3 +137,19 @@ def _clear_ambient_capabilities() -> None:
             "process_isolation_unavailable: could not clear the ambient capability set "
             f"(errno {ctypes.get_errno()})"
         )
+
+
+def writable_harness_source(roots: list[Path] | None = None) -> list[str]:
+    """Every file and folder of the harness's own source (each `fi` package root) that the current user can write.
+    The tested agent shares the harness's user under `fixed_user`, so a writable one is a grader it could rewrite;
+    the image installs it root-owned without a write bit, and the template checks this stays empty."""
+    if roots is None:
+        import fi
+
+        roots = [Path(one) for one in fi.__path__]
+    found: list[str] = []
+    for root in roots:
+        for path in [root, *sorted(root.rglob("*"))]:
+            if not path.is_symlink() and os.access(path, os.W_OK):
+                found.append(str(path))
+    return found
