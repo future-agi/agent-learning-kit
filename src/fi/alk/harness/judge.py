@@ -93,6 +93,10 @@ How to decide:
 7. The channel can add content of its own that the agent did not produce, such as a recorded
    notice a phone line plays or a system message around a chat. When the agent's instructions do
    not ask for it, it is not the agent's: judge the agent only on what it said and did itself.
+8. Hold the agent to what it was told and what the results of its own actions showed it. The records
+   show what happened. The agent is never expected to know a record its own actions never showed it.
+   It is still wrong when it states as fact something nothing it was told or saw supports, or skips a
+   lookup its rules require.
 """.strip()
 JUDGE_EXPLANATION = """
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
@@ -166,6 +170,23 @@ class NoGateway(RuntimeError):
 def judge_model() -> str:
     """The judge's model. Set ALK_JUDGE_MODEL to run it on something other than the harness model."""
     return os.environ.get(JUDGE_MODEL_ALIAS, "").strip() or chosen_model()
+
+
+_REACHABLE_TIMEOUT_SECONDS = 20
+
+
+def judge_reachable(timeout: float = _REACHABLE_TIMEOUT_SECONDS) -> str:
+    """``passed`` when the judge's model answers one tiny request in ``timeout`` seconds, else
+    ``failed``: a judged sub-goal cannot be graded without it."""
+    try:
+        chat_completion(
+            [{"role": "user", "content": "Reply with the single word: ready"}], [], False, timeout=timeout, max_tokens=5
+        )
+    except Exception as exc:  # noqa: BLE001 - any failure means the judge cannot grade
+        logger.warning("judge not reachable in the check: %s", type(exc).__name__)
+        logger.debug("judge reachability failure", exc_info=True)
+        return "failed"
+    return "passed"
 
 
 def _short(value: object) -> object:
@@ -357,7 +378,7 @@ async def run_judge_conversation(
         forced = step == steps - 1
         evidence.delivered()
         try:
-            reply = await asyncio.to_thread(_complete, conversation, tools, forced)
+            reply = await asyncio.to_thread(chat_completion, conversation, tools, forced)
         except NoGateway:
             raise
         except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
@@ -424,7 +445,7 @@ async def request_final_verdicts(
     evidence.looked.update({"listen", "transcript"})
     try:
         try:
-            reply = await asyncio.to_thread(_complete, messages, [decide], True)
+            reply = await asyncio.to_thread(chat_completion, messages, [decide], True)
         except NoGateway:
             raise
         except Exception:
@@ -432,7 +453,7 @@ async def request_final_verdicts(
                 raise
             # The recording itself was refused: decide from the transcript.
             unplayable = [*messages[:2], {"role": "user", "content": _UNPLAYABLE}]
-            reply = await asyncio.to_thread(_complete, unplayable, [decide], True)
+            reply = await asyncio.to_thread(chat_completion, unplayable, [decide], True)
         for call in reply.get("tool_calls") or []:
             await _run([decide], call)
     except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
@@ -453,6 +474,12 @@ def describe_call(
         f"{_others_present(messages)}"
         f"{_reference_solution(scenario)}"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
+        + (
+            "Each action's `at` and each transcript turn's [at ...] are the same clock, in seconds: a claim the "
+            "agent made about a tool's result before that tool was called is not supported by it.\n\n"
+            if any(getattr(call, "at", 0) for call in calls)
+            else ""
+        )
         + (
             ""
             if calls
@@ -621,15 +648,21 @@ def _others_present(messages: Sequence[Any]) -> str:
 def _transcript(messages: Sequence[Any]) -> str:
     """The turns as spoken, oldest first. A long call keeps its tail, where a readback would be."""
     body = "\n".join(
-        f"{_speaker(m)}: {str(m.get('content') or '').strip()}"
+        (f"[at {float(m['at']):.1f}] " if m.get("at") else "") + f"{_speaker(m)}: {str(m.get('content') or '').strip()}"
         for m in messages
         if isinstance(m, dict)
     )
     return body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
 
 
-def _complete(
-    conversation: list[dict[str, Any]], tools: Sequence[Any], forced: bool
+def chat_completion(
+    conversation: list[dict[str, Any]],
+    tools: Sequence[Any],
+    forced: bool,
+    *,
+    temperature: float | None = None,
+    timeout: float = _TURN_TIMEOUT_SECONDS,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """One turn of the judge on the gateway's OpenAI-compatible chat completions."""
     env = provider_env(judge_model())
@@ -650,11 +683,15 @@ def _complete(
         ]
     if forced:
         body["tool_choice"] = {"type": "function", "function": {"name": "decide"}}
+    if temperature is not None:
+        body["temperature"] = temperature
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     response = requests.post(
         f"{base}/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json=body,
-        timeout=_TURN_TIMEOUT_SECONDS,
+        timeout=timeout,
     )
     response.raise_for_status()
     answer = response.json()
@@ -704,6 +741,7 @@ def _recording(path: str) -> dict[str, Any]:
 
 
 def _call(call: Any) -> dict[str, Any]:
+    at = getattr(call, "at", 0.0) or 0.0
     return {
         "name": getattr(call, "name", ""),
         "arguments": getattr(call, "arguments", None) or {},
@@ -711,7 +749,9 @@ def _call(call: Any) -> dict[str, Any]:
         "ok": bool(getattr(call, "ok", False)),
         "refused": bool(getattr(call, "refused", False)),
         "error": str(getattr(call, "error", "") or ""),
+        **({"at": round(float(at), 1)} if at else {}),
     }
+
 
 
 def _say(text: str, *, error: bool = False) -> dict[str, Any]:

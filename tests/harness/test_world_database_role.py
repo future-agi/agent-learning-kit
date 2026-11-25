@@ -425,14 +425,15 @@ def test_a_world_s_role_claims_an_actor_key_once(worlds, monkeypatch):
 
 @real_postgres
 def test_an_older_bundle_s_action_log_records_how_each_call_was_made(worlds, monkeypatch):
-    """A log made before the method and fault columns gains them on the baseline; a world role could not add them."""
+    """A log made before the method, fault and endpoint columns gains them on the baseline; a world role could not add
+    them."""
     connect, _reset, _baseline = worlds
     log = PostgresLog("the world's role")
     monkeypatch.setattr(log, "_connect", lambda **_: connect(0, "w0"))
 
     log._ensure_call_columns()
 
-    assert {"method", "fault"} <= log._table_columns()
+    assert {"method", "fault", "endpoint"} <= log._table_columns()
 
 
 @real_postgres

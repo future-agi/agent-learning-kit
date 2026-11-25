@@ -347,7 +347,7 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -408,7 +408,7 @@ def test_a_chat_trial_says_its_workers_were_held_on_their_channels_only_behind_a
     from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
     from fi.alk.harness.world_door import DOOR_FILE
 
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -455,7 +455,7 @@ def test_a_chat_trial_says_its_workers_were_held_on_their_channels_only_behind_a
 def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
     tmp_path: Path, monkeypatch: Any, written: bool, readable: bool, failed: bool
 ) -> None:
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     trace = tmp_path / "agent-tool-calls.jsonl"
 
@@ -512,7 +512,7 @@ def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     trace = tmp_path / "agent-tool-calls.jsonl"
 
@@ -582,7 +582,7 @@ def test_hosted_chat_reads_spans_switched_on_for_a_callback_agent_only_into_an_e
     that does not pair (another argument). Where the build switched the spans on with the empty-list rule, the span
     adds no call; without the marker it reads as before, and the span is a second call."""
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     trace = tmp_path / "agent-tool-calls.jsonl"
 
@@ -711,7 +711,7 @@ def test_hosted_chat_does_not_execute_response_metadata(
 
     wrapper._request_json = request_json  # type: ignore[method-assign]
     world = _ToolWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -767,7 +767,7 @@ def test_hosted_chat_executes_nested_message_call_despite_metadata_response(
 
     wrapper._request_json = request_json  # type: ignore[method-assign]
     world = _ToolWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -802,7 +802,7 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
         json.dumps(contract), encoding="utf-8"
     )
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -918,7 +918,7 @@ def _observed_target_timeouts(tmp_path: Path, monkeypatch: Any, config: dict[str
     }
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     observed: dict[str, float] = {}
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -962,7 +962,7 @@ def test_hosted_chat_attributes_target_runtime_failure_to_agent(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     context = _context(tmp_path)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
 
     async def failed(*_args: Any, **_kwargs: Any) -> Transcript:
         raise RuntimeError("provider rejected the target model")
@@ -1004,7 +1004,7 @@ def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(
     scenario.update({"name": "one", "max_turns": 4})
     scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
 
     conversation = importlib.import_module("fi.alk.harness.run.conversation")
 
@@ -1164,10 +1164,10 @@ def test_only_with_one_fixed_user_a_tool_world_imports_customer_code_from_the_up
         # This process holds the harness's capabilities: the agent's code runs only in its
         # handler child (tests/harness/test_handler_child.py).
         with pytest.raises(CallAborted, match="handler_child_required"):
-            chat._tool_world(context.bundle_dir, contract, runtime, source)
+            chat.tool_world(context.bundle_dir, contract, runtime, source)
         assert str(source) not in sys.path
         return
-    world = chat._tool_world(context.bundle_dir, contract, runtime, source)
+    world = chat.tool_world(context.bundle_dir, contract, runtime, source)
     result = world.handle_tool_call(
         {
             "id": "tool-1",
@@ -1200,7 +1200,7 @@ def test_http_failure_classification_retains_partial_evidence(
 
     context = _context(tmp_path)
     adapter = _Adapter()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
 
     async def failed(*_args, **_kwargs):
         failure = HTTPCallFailure(
@@ -1285,7 +1285,7 @@ def test_contract_endpoint_model_reaches_openai_wire_payload(
     monkeypatch.setattr(HTTPAgentWrapper, "_post_json", post)
     world = _ToolWorld()
     if lane == "hosted":
-        monkeypatch.setattr(chat, "_tool_world", lambda *_args: world)
+        monkeypatch.setattr(chat, "tool_world", lambda *_args: world)
         monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
         runner = chat.HostedChatCallRunner(_Adapter(), context)
         runtime = EnvironmentRuntime(
@@ -1422,7 +1422,7 @@ def test_hosted_chat_native_tool_message_completion(
         return original(call)
 
     world.handle_tool_call = execute
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -1482,7 +1482,7 @@ def test_hosted_chat_records_a_cumulative_native_tool_call_only_once(
             )
 
     world = _ToolWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=Wrapper(),
         contract=contract,
         world=world,
@@ -1539,7 +1539,7 @@ def test_hosted_chat_function_response_payload_cannot_request_tools(
         return original(call)
 
     world.handle_tool_call = execute
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -1624,7 +1624,7 @@ def test_hosted_chat_prefers_canonical_calls_within_assistant_message(
         return original(call)
 
     world.handle_tool_call = execute
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -1688,7 +1688,7 @@ def test_generated_command_bridge_handles_readiness_and_hosted_chat(tmp_path, mo
     )
     provider = SimpleNamespace(reset=AsyncMock())
     factory = SimpleNamespace(create=AsyncMock(return_value=None))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     adapter = _Adapter()
     try:
@@ -1735,7 +1735,7 @@ def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_pa
                                                           "arguments": {"account_id": "ACC-1"}}]}]
     path.write_text(json.dumps(document), encoding="utf-8")
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1788,7 +1788,7 @@ def test_a_chat_trial_writes_a_fault_named_by_its_tool_as_that_tool_s_route_and_
     path.write_text(json.dumps(document), encoding="utf-8")
     written: list[list] = []
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1824,7 +1824,7 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     written: list[list] = []
     during: list[list] = []
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1873,7 +1873,7 @@ def test_a_chat_trial_relying_on_limits_its_door_cannot_hold_is_held_before_any_
     document["worker_budget_seconds"] = 2
     path.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     turns: list[Any] = []
 
@@ -1918,7 +1918,7 @@ def test_a_readiness_probe_sets_no_worker_deadline_while_a_graded_trial_does(tmp
     (context.bundle_dir / "generated" / "tool-proxy" / "door.json").write_text('{"worker_deadlines": "per_worker"}')
     written: list[tuple] = []
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, *rest: written.append(rest))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1959,7 +1959,7 @@ def test_a_proxied_chat_trial_whose_faults_cannot_be_read_back_reaches_the_sched
     path.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, *_rest: None)
     monkeypatch.setattr(call_runner, "trial_faults_readable", lambda _dsn: False)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -2020,7 +2020,7 @@ def test_a_readiness_probe_applies_none_of_the_scenario_s_faults(tmp_path: Path,
         return real_door(world, None, permissions, faults, **kwargs)
 
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults, *_rest: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     monkeypatch.setattr(chat, "chat_door", _door)
 
@@ -2053,7 +2053,7 @@ def test_a_proxied_chat_trial_without_actors_still_reads_the_world_s_table(tmp_p
 
     context = _context(tmp_path)
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, _faults: None)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     mirrors: list = []
     real_door = chat.chat_door
@@ -2131,8 +2131,8 @@ def test_a_chat_call_reads_the_world_s_action_log_when_its_bundle_says_evidence_
     from fi.alk.harness.bundle_v2 import EvidenceSeam
 
     logged = Call(name="issue_refund", arguments={"order_id": "1043"}, worker_id="refund")
-    monkeypatch.setattr(call_runner, "_collect_tool_trace_calls", lambda _runtime, **_: (logged,))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda _runtime, **_: (logged,))
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -2225,7 +2225,7 @@ def test_an_actor_the_agent_s_last_call_wakes_still_acts_when_the_conversation_e
         "trigger": {"kind": "on_tool", "tool": "lookup_account"},
     }]}]
     path.write_text(json.dumps(document), encoding="utf-8")
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -2345,7 +2345,7 @@ def _run_and_stop(context, adapter, monkeypatch):
 
     seen: dict[str, Any] = {}
     stopped = {"value": False}
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _blocked_on_the_second_turn(seen))
     runner = chat.HostedChatCallRunner(adapter, replaced(context, stop_requested=lambda: stopped["value"]))
 
@@ -2410,7 +2410,7 @@ def test_a_stopped_call_abandons_the_agent_reply_it_was_waiting_on(tmp_path, mon
 
     from dataclasses import replace as replaced
 
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", drive)
     runner = chat.HostedChatCallRunner(_Adapter(), replaced(_context(tmp_path), stop_requested=lambda: stopped["value"]))
 
@@ -2457,7 +2457,7 @@ def _stopped_while_sealing(context, monkeypatch, *, stop: bool):
         sealing.set()
         await asyncio.sleep(0.2)
 
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", drive)
     monkeypatch.setattr(chat, "_record_text_usage", record_usage)
     adapter = _Adapter()
@@ -2527,7 +2527,7 @@ def test_a_stopped_call_s_wind_down_is_cut_short_so_it_seals_inside_the_stop_bou
         return _a_full_exchange()
 
     monkeypatch.setattr(chat, "_STOPPED_WIND_DOWN_SECONDS", 0.3)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", drive)
     monkeypatch.setattr(actor_dispatch, "build_dispatcher", lambda *_args, **_kwargs: _Dispatcher())
     adapter = _Adapter()
@@ -2611,7 +2611,7 @@ def test_a_hosted_job_that_does_not_turn_actors_on_plays_no_actor_and_no_fault(t
     path.write_text(json.dumps(document), encoding="utf-8")
     written: list[list] = []
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:

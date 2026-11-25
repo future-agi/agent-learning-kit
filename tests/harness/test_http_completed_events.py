@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
-from fi.alk.harness.chat_call_runner import _HostedChatTarget
+from fi.alk.harness.chat_call_runner import HostedChatTarget
 from fi.alk.harness.contract import RuntimeInterface
 from fi.simulate.agent.wrapper import AgentInput
 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
@@ -188,7 +188,7 @@ def test_native_paginated_tools_recorded_once_without_execution_or_continuation(
         contract = SimpleNamespace(
             runtime=SimpleNamespace(interface=SimpleNamespace(include_tools=False))
         )
-        target = _HostedChatTarget(
+        target = HostedChatTarget(
             wrapper=wrapper(base),
             contract=contract,
             world=world,
@@ -331,7 +331,7 @@ def test_native_serialized_tool_call_uses_flat_arguments():
          'observation': {'is_error': False, 'content': 'original bytes'}}], 'next': None}]
     with server(pages=pages) as (base, requests):
         world = SimpleNamespace(calls=[])
-        target = _HostedChatTarget(wrapper=wrapper(base, spec),
+        target = HostedChatTarget(wrapper=wrapper(base, spec),
             contract=SimpleNamespace(runtime=SimpleNamespace(interface=SimpleNamespace(include_tools=False))),
             world=world, scenario_key='case', scenario_id='one')
         assert asyncio.run(target.say('view')) == 'Edited.'
@@ -371,7 +371,7 @@ def test_native_validation_failure_and_retry_are_recorded_once():
     ]
     with server(pages=[{"items": events, "next": None}]) as (base, requests):
         world = SimpleNamespace(calls=[])
-        target = _HostedChatTarget(
+        target = HostedChatTarget(
             wrapper=wrapper(base, spec),
             contract=SimpleNamespace(runtime=SimpleNamespace(
                 interface=SimpleNamespace(include_tools=False))),

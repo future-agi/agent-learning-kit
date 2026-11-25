@@ -20,7 +20,7 @@ from test_chat_call_runner import (
 
 from fi.alk.harness import retell_chat_call_runner as retell
 from fi.alk.harness import chat_call_runner as chat
-from fi.alk.harness.chat_call_runner import _HostedChatTarget
+from fi.alk.harness.chat_call_runner import HostedChatTarget
 from fi.alk.harness.hosted_scheduler import CallCancelled
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.retell_chat_call_runner import (
@@ -130,7 +130,7 @@ def test_a_retell_tool_that_returned_http_405_is_recorded_as_failed_for_grading(
 
     monkeypatch.setattr(wrapper, "_request", request)
     world = SimpleNamespace(calls=[])
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=wrapper,
         contract=SimpleNamespace(runtime=None, tool_entrypoints=[]),
         world=world,
@@ -277,7 +277,7 @@ def test_retell_chat_uses_authored_scenario_document_for_selected_trial(
 
     monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
     monkeypatch.setattr(retell, "_scenario_document", load_document)
-    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(retell, "_drive_conversation", _single_exchange)
     adapter = _Adapter()
     runner = retell.RetellChatCallRunner(adapter, context)
@@ -315,7 +315,7 @@ def test_hosted_chat_target_stops_normally_on_provider_terminal_response() -> No
                 },
             )
 
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=Wrapper(),
         contract=SimpleNamespace(runtime=None),
         world=SimpleNamespace(calls=[]),
@@ -344,7 +344,7 @@ class _ClosingWrapper:
 def _stoppable_runner(tmp_path, monkeypatch, *, drive, close=None):
     stopped = {"value": False}
     monkeypatch.setattr(retell, "RetellChatWrapper", lambda **_kwargs: _ClosingWrapper(close))
-    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(retell, "_drive_conversation", drive)
     adapter = _Adapter()
     runner = retell.RetellChatCallRunner(adapter, replace(_context(tmp_path), stop_requested=lambda: stopped["value"]))

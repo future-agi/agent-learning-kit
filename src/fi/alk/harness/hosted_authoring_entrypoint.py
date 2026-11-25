@@ -186,13 +186,9 @@ def _write_failure_cause(cause: str | None) -> None:
         print(f"could not record the failure cause: {exc}", file=sys.stderr)
 
 
-def main(argv: list[str] | None = None) -> int:
-    try:
-        establish_isolation()
-    except IsolationUnavailable as exc:
-        # Infrastructure, not the environment (not 78): the platform retries within its budget.
-        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
-        return 2
+def configure_authoring_credentials() -> tuple[dict[str, str], dict[str, str]]:
+    """Put the platform's generation credentials in this process's environment; return every
+    value the secrets channel holds, and the gateway's values."""
     # This process authors the environment but never runs the submitted target. Do not let a
     # launcher-provided parent environment accidentally bypass the target-secrets file boundary.
     for name in _TARGET_CREDENTIAL_NAMES:
@@ -224,6 +220,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     _configure_generation_environment(values)
     _configure_observability_environment(all_values)
+    return all_values, gateway_values
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        establish_isolation()
+    except IsolationUnavailable as exc:
+        # Infrastructure, not the environment (not 78): the platform retries within its budget.
+        print(f"IsolationUnavailable: {exc}", file=sys.stderr, flush=True)
+        return 2
+    all_values, gateway_values = configure_authoring_credentials()
     # This process holds the platform's generation credentials, and authoring loads the customer's
     # .env into it: only through the same allowlist as the sandbox controller.
     mark_controller_process()

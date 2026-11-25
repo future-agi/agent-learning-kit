@@ -48,6 +48,7 @@ from .contract import (
     RuntimeInterface,
     ToolEntry,
     RuntimeSecretFile,
+    RuntimeToolService,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
@@ -1086,6 +1087,18 @@ def contract_tools(
                     "description": "Rules it must obey, in the source's own words. The agent "
                     "under test is told these and graded against them.",
                 },
+                "rule_sources": {
+                    "type": "array",
+                    "description": "For each rule read from a file of the agent's material (a policy or knowledge "
+                    "document, a prompt file): the rule exactly as written in hard_constraints, the file relative "
+                    "to the source root, and the line it comes from quoted exactly. Leave a rule out when no one "
+                    "line states it.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"rule": {"type": "string"}, "file": {"type": "string"}, "quote": {"type": "string"}},
+                        "required": ["rule", "file", "quote"],
+                    },
+                },
                 "tools": {
                     "type": "array",
                     "description": "Every tool the agent really has. Everything downstream is "
@@ -1149,6 +1162,12 @@ def contract_tools(
                                 "description": "The world's tables the tool adds to, changes or deletes from, "
                                 "declared from its code.",
                             },
+                            "world_free": {
+                                "type": "boolean",
+                                "description": "True only when the tool's code touches no table of the world and "
+                                "no service: it keeps the agent's own session memory or computes from its "
+                                "arguments alone. False when unsure.",
+                            },
                             "description": {"type": "string"},
                             "requires": {
                                 "type": "array",
@@ -1168,6 +1187,29 @@ def contract_tools(
                                 "every refusal the code returns as an ordinary value rather than an "
                                 "error. Read from the tool, the helpers it calls and the service "
                                 "behind it.",
+                            },
+                            "refusals": {
+                                "type": "array",
+                                "description": "Each refusal in `refuses` that turns on a field of a record the "
+                                "call names, as structure, when the tool's code or the service behind it shows it: "
+                                "the HTTP `status` it answers, the `table` and the `column` the call's `argument` is "
+                                "matched on, the record's `field` and the `values` that refuse (at least one), and "
+                                "the `message` the code gives. A record carrying a fault in the agent's "
+                                "own data (a payment that times out) is one. The world scenarios are proved on "
+                                "answers each the same way.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {"type": "integer"},
+                                        "table": {"type": "string"},
+                                        "column": {"type": "string"},
+                                        "argument": {"type": "string"},
+                                        "field": {"type": "string"},
+                                        "values": {"type": "array"},
+                                        "message": {"type": "string"},
+                                    },
+                                    "required": ["status", "table", "column", "argument", "field", "values"],
+                                },
                             },
                             "effects": {
                                 "type": "string",
@@ -1604,6 +1646,10 @@ def contract_tools(
                                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
                             },
                             "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
+                        },
+                        "tool_service": {
+                            **RuntimeToolService.model_json_schema(),
+                            "description": Runtime.model_fields["tool_service"].description,
                         },
                         "required_environment": {
                             "type": "object",

@@ -18,8 +18,6 @@ import shutil
 import threading
 import time
 from pathlib import Path
-import shutil
-import sys
 import tempfile
 from typing import Any
 
@@ -44,6 +42,8 @@ from .provider_tools import with_provider_tools
 from .scenarios import load as load_written
 from .source_folder import non_github_folder_failure, refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
+from . import authoring_runtime_validation, live_proof, prove_suite
+from .outbound import redact_outbound_text
 
 
 def _persist_authored_scenario_count(
@@ -478,6 +478,8 @@ def _certify_only(args: argparse.Namespace) -> int:
         raise RuntimeValidationError(
             "environment", f"Certify-only validation failed: {_one_line(exc)}"
         ) from exc
+    if getattr(args, "prove_scenarios", False):
+        _prove_scenarios(output, getattr(args, "deadline_at", None), agent_document=getattr(args, "agent_document", None))
     try:
         # Written before sealing: the platform's fill gate keys on the sealed certificate.
         report_path.write_text(
@@ -506,6 +508,58 @@ def _certify_only(args: argparse.Namespace) -> int:
             "bundle", "Certify-only: validation left no certified bundle to seal"
         )
     return 0
+
+
+SCENARIO_PROOFS = "scenario-proofs.json"
+
+
+def _prove_only(args: argparse.Namespace) -> int:
+    """Prove the cases of a certified pair, `--keys` or every one, into `SCENARIO_PROOFS`: first on the
+    pair's sealed runtime for the tools a running server serves, then offline. Certifies nothing,
+    calls no model and never fails: a case the live pass did not reach is recorded unplayed, which `prove_suite` reads."""
+    output = args.output.resolve()
+    keys = {one.strip() for one in args.keys.split(",") if one.strip()} if args.keys is not None else None
+    if args.target_secrets is not None:
+        # A one-shot provider credential; proving never uses it.
+        args.target_secrets.unlink(missing_ok=True)
+    live_proof.forget_live(output, keys)
+    # The offline pass after it keeps its own margin before the deadline.
+    until = args.deadline_at - 2 * prove_suite.DEADLINE_MARGIN_SECONDS if args.deadline_at is not None else None
+    try:
+        job = HarnessJob.model_validate_json(args.job.read_text(encoding="utf-8"))
+        live = asyncio.run(authoring_runtime_validation.prove_on_sealed_runtime(job, args.source.resolve(), output, keys=keys, until=until))
+        print(f"prove-only: {live_proof.live_summary(live)}", file=sys.stderr, flush=True)
+    except Exception as exc:  # noqa: BLE001 - live proofs only add evidence
+        from .proofs import proof_key
+        from .scenario_tools import load_scenarios
+
+        why = redact_outbound_text(_one_line(exc))
+        print(f"prove-only: live proofs not run: {why}", file=sys.stderr, flush=True)
+        # No case was played: those whose steps only the live runtime could run are not proved (`prove_suite`).
+        asked = keys if keys is not None else {proof_key(one) for one in load_scenarios(output)}
+        live_proof.write_unplayed(output, {key: why for key in asked})
+    prove_suite.prove_suite(
+        output, output / SCENARIO_PROOFS, deadline_at=args.deadline_at, keys=keys, agent_document=args.agent_document
+    )
+    return 0
+
+
+def _prove_scenarios(
+    output: Path, deadline_at: float | None, *, stage: str = "certify-only", agent_document: Path | None = None
+) -> None:
+    """Prove every scenario on this authoring tree into `SCENARIO_PROOFS`, with what the validation just played on the
+    live runtime applied as `--prove-only` applies it (nothing is played again); never fails the build or certify."""
+    try:
+        prove_suite.prove_suite(
+            output,
+            output / SCENARIO_PROOFS,
+            deadline_at=deadline_at,
+            agent_document=agent_document,
+            # A build just wrote the suite, so each case's controls are judged against it, as a submit judges them.
+            judge_case_goals=stage == "build",
+        )
+    except Exception as exc:  # noqa: BLE001 - a missing proofs file reads as "no new proofs"
+        print(f"{stage}: scenario proofs not written: {_one_line(exc)}", file=sys.stderr, flush=True)
 
 
 def _load_provider_import_profile(
@@ -587,6 +641,15 @@ def agent_source_kind(job: HarnessJob, profile: dict[str, object] | None) -> str
         return "provider"
     kind = str(job.metadata.get("source_kind") or "repo")
     return kind if kind in {"repo", "spec"} else "repo"
+
+
+def build_deadline(args: argparse.Namespace, started: float) -> float:
+    """When this build is stopped, in epoch seconds: the job's own deadline when it gives one, else its start plus the
+    build's time budget (`ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS`)."""
+    from .chat_call_runner import _build_budget_seconds
+
+    given = getattr(args, "deadline_at", None)
+    return float(given) if given is not None else started + _build_budget_seconds()
 
 
 def _await_harness(output: Path) -> int:
@@ -675,6 +738,7 @@ def _review_while_writing(job: HarnessJob, source: Path, output: Path, done: thr
 
 
 def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> int:
+    started = time.time()
     parser = argparse.ArgumentParser()
     parser.add_argument("job", type=Path)
     parser.add_argument("--source", type=Path, required=True)
@@ -714,6 +778,34 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         type=Path,
         help="Directory the sealed bundle is written to in --certify-only mode",
     )
+    parser.add_argument(
+        "--prove-scenarios",
+        action="store_true",
+        help="With --certify-only: prove every scenario after validation and before sealing",
+    )
+    parser.add_argument(
+        "--prove-only",
+        action="store_true",
+        help="Prove the certified pair's cases, on its sealed runtime where a tool can be played there; certify nothing",
+    )
+    parser.add_argument(
+        "--keys",
+        default=None,
+        help="With --prove-only: comma-separated scenario keys to prove; default every one",
+    )
+    parser.add_argument(
+        "--agent-document",
+        type=Path,
+        default=None,
+        help="With --prove-scenarios or --prove-only: the agent version's agent.json; a case whose reference calls a "
+        "tool it lacks is not kept",
+    )
+    parser.add_argument(
+        "--deadline-at",
+        type=float,
+        default=None,
+        help="Epoch seconds the validation job is stopped at; scenario proving keeps a margin before it",
+    )
     reading = parser.add_mutually_exclusive_group()
     reading.add_argument(
         "--read-agent-only",
@@ -731,6 +823,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         help="A reading's raw contract.json at /work/seed/contract.json; the build reuses it when it matches the job",
     )
     args = parser.parse_args(argv)
+    from .grounding import publish_source_root
+
+    # A `file:` source may cite the agent's own source: every proof this process runs reads it from here.
+    publish_source_root(args.source)
     raw_job = _job_document(args.job)
     publish_actors_switch(
         raw_job.get("metadata") if isinstance(raw_job.get("metadata"), dict) else None,
@@ -742,6 +838,8 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         parser.error(
             "--seed-contract cannot be combined with --certify-only, --read-agent-only or --find-agents"
         )
+    if args.prove_only:
+        return _prove_only(args)
     if args.certify_only:
         if args.bundle_output is None:
             parser.error("--certify-only requires --bundle-output")
@@ -793,6 +891,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         args.source.resolve(), job.source.subfolder, args.output.resolve()
     ):
         return EXIT_REFUSED
+    from .scenario import seed_used_keys
+
+    # A build or rebuild of an environment that had scenarios never gives a new one a key it gave before.
+    seed_used_keys(args.output.resolve(), job.metadata)
     from .browser_environment import job_failure
 
     sites_failure = job_failure(job.metadata)
@@ -911,9 +1013,14 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
                     )
                 asyncio.run(
                     validate_and_repair(
-                        runtime_job, args.source.resolve(), args.output.resolve()
+                        runtime_job,
+                        args.source.resolve(),
+                        args.output.resolve(),
+                        deadline_at=build_deadline(args, started),
                     )
                 )
+                # A fresh build shows each case's verdict from the live runtime it was just played on.
+                _prove_scenarios(args.output.resolve(), None, stage="build")
         finally:
             if previous_profile_path is None:
                 os.environ.pop(PROVIDER_IMPORT_PROFILE_PATH_ENV, None)

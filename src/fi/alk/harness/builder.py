@@ -10,7 +10,7 @@ changes the environment only through the tools that prove each change.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -23,6 +23,7 @@ from .backends import (
     tool,
     tool_server,
 )
+from .actors import SEED_RECORDS_CONTEXT_ONLY, knowledge_roles, seed_records_loaded
 from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
@@ -32,6 +33,7 @@ from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, wor
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
+from .proofs import load_shown_proofs, proof_key, record_proof, status_lines, utc_stamp
 
 BUILDER = "builder"
 KNOWLEDGE_SERVER = "knowledge"
@@ -154,18 +156,46 @@ def knowledge_server(contract: AgentContract | None, destination: Path) -> ToolS
     )
 
 
+def tab_lines(tab: dict[str, Any]) -> list[str]:
+    """The Scenarios tab's counts and each row's state with its reason, as the platform sent them; nothing when it
+    sent none."""
+    lines = []
+    counts = tab.get("counts")
+    if isinstance(counts, dict):
+        lines.append(
+            "On the Scenarios tab: "
+            + ", ".join(
+                f"{int(counts.get(key) or 0)} {label}"
+                for key, label in (("proved", "proved"), ("kept_as_written", "kept as written"), ("not_proved", "not proved"))
+            )
+            + "."
+        )
+    for row in tab.get("rows") or []:
+        life = row.get("lifecycle") if isinstance(row, dict) else None
+        if not isinstance(life, dict):
+            continue
+        reason = str(life.get("reason_text") or "").strip()
+        lines.append(f"#{row.get('number')} {row.get('name')}: {life.get('state')}" + (f" ({reason})" if reason else ""))
+    return lines
+
+
 def suite_server(
     out: Path,
     kept: list,
     contract: AgentContract | None = None,
     source_root: Path | None = None,
     sealed: bool = True,
+    tab_status: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
 ) -> ToolServer:
-    """Whole-suite operations the single-scenario tools would take one call per scenario to do."""
+    """Whole-suite operations the single-scenario tools would take one call per scenario to do. ``tab_status`` reads
+    the Scenarios tab's own states where the platform can be asked: its counts, and the rows of the scenarios
+    named (all of the first page when none are), each with its `lifecycle`."""
+    # Proofs made from here on are this chat's own; older ones may not be what the Scenarios tab shows.
+    opened_at = utc_stamp()
     from .catalogue import load_catalogue
-    from .proofs import record_proof
     from .prove import prove
     from .scenario_tools import write_scenarios
+
 
     @tool(
         "drop_scenarios",
@@ -182,11 +212,15 @@ def suite_server(
             return _err(f"none of these is in the suite: {', '.join(missing)}")
         if len(gone) == len(kept):
             return _err("that would remove every scenario; an environment keeps at least one")
+        keys = {one.name: one.scenario_key for one in kept if one.name in wanted}
         kept[:] = [one for one in kept if one.name not in wanted]
         write_scenarios(kept, out, load_catalogue(out))
         return _ok(
-            f"dropped {len(gone)}: {', '.join(gone)}. {len(kept)} left"
+            f"dropped {len(gone)}: {', '.join(f'{name} (scenario_key {keys[name]})' for name in gone)}. "
+            f"{len(kept)} left"
             + (f". Not found: {', '.join(missing)}" if missing else "")
+            + '. To restore one as it was, submit it with its scenario_key and restored_from {"key": its scenario_key}:'
+            " it takes that key back, and its history with it"
         )
 
     @tool(
@@ -205,15 +239,48 @@ def suite_server(
             if scenario is None:
                 lines.append(f"{name}: not in the suite")
                 continue
-            proof = prove(scenario, catalogue, out)
-            record_proof(out, scenario.scenario_key, proof)
+            proof = prove(scenario, catalogue, out, as_written=True)
+            record_proof(out, proof_key(scenario), proof, solution_steps=len(scenario.solution))
             gates = ", ".join(f"{gate} {'yes' if held else 'no'}" for gate, held in proof.gates().items())
             lines.append(
                 f"{name}: {'holds' if proof.holds else 'does not hold'} ({gates})"
                 + ("" if proof.holds else f". {proof.why()}")
-                + (" Judged-only: nothing observable to check." if proof.judged_only else "")
+                + (
+                    " Judged-only: nothing observable to check."
+                    + ("" if proof.controls_failed else f" {proof.why()}")
+                    if proof.judged_only
+                    else ""
+                )
             )
         return _ok("\n".join(lines) or "name at least one scenario")
+
+    @tool(
+        "scenario_status",
+        "Each scenario's state and its reason as the Scenarios tab shows them, with the tab's counts, and each proof "
+        "made in this chat with its reason. Call it before you say how many scenarios are proved or held, or why one "
+        "is in its state, and quote it: the tab's state and reason are what the person sees. Passing is "
+        "a run's result, never a proof's: read it with read_runs. `names` narrows to some scenarios, `state` to one "
+        "of proved, kept as written, not proved.",
+        schema(
+            {
+                "names": {"type": "array", "items": {"type": "string"}},
+                "state": {"type": "string", "enum": ["proved", "kept as written", "not proved"]},
+            },
+            [],
+        ),
+    )
+    async def scenario_status(args: dict[str, Any]) -> dict[str, Any]:
+        names = [str(one) for one in args.get("names") or []]
+        tab = await tab_status(names) if tab_status is not None else {}
+        lines = tab_lines(tab)
+        lines += status_lines(
+            load_shown_proofs(out),
+            kept,
+            names=[str(one) for one in args.get("names") or []],
+            state=str(args.get("state") or ""),
+            since=opened_at,
+        )
+        return _ok("\n".join(lines))
 
     @tool(
         "check_health",
@@ -225,7 +292,8 @@ def suite_server(
         schema({"prove": bool}, []),
     )
     async def check_health(args: dict[str, Any]) -> dict[str, Any]:
-        problems = suite_health(contract_of(out), out, kept, prove_all=bool(args.get("prove")), sealed=sealed)
+        current = contract_of(out)
+        problems = suite_health(current, out, kept, prove_all=bool(args.get("prove")), sealed=sealed)
         return _ok("Healthy: nothing broken found." if not problems else "\n".join(problems))
 
     @tool(
@@ -304,7 +372,7 @@ def suite_server(
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
         from .backends.files import secret_text
-        from .contract import ToolSpec, validate_contract
+        from .contract import AmendmentRecord, ToolSpec, validate_contract
         from .source_folder import agent_scope, in_agent_scope
 
         if contract is None:
@@ -359,12 +427,13 @@ def suite_server(
             contract.tools.pop()
             contract.amendments.pop()
             return _err("the contract would not be valid: " + "; ".join(problems))
+        contract.amendment_records.append(AmendmentRecord(kind="tool", key=name, action="added"))
         _persist(contract, out)
         return _ok(f"{name} added to the contract. Re-prove the scenarios that use it, then save_changes.")
 
     return tool_server(
         name="suite",
-        tools=[drop_scenarios, prove_scenarios, check_health, impact_of, change_world, declare_tool],
+        tools=[drop_scenarios, prove_scenarios, scenario_status, check_health, impact_of, change_world, declare_tool],
     )
 
 
@@ -563,6 +632,25 @@ def suite_health(
 
 
 
+def attached_files_brief(contract: AgentContract, out: Path) -> list[str]:
+    """The attached files and their roles, each seed_records file marked context only where the agent's tools serve
+    their own data (`actors.seed_records_loaded`)."""
+    roles = knowledge_roles(out)
+    if not roles:
+        return []
+    loaded = seed_records_loaded(contract.model_dump(mode="json"))
+    lines = ["- Attached files:"]
+    for path, role in sorted(roles.items()):
+        note = f"; {SEED_RECORDS_CONTEXT_ONLY}" if role == "seed_records" and not loaded else ""
+        lines.append(f"  - {path} ({role}{note})")
+    if not loaded:
+        lines.append(
+            "  Ground each scenario only on records the agent's tools serve; read them through the tools, never from "
+            "an attached seed file."
+        )
+    return lines
+
+
 def environment_brief(contract: AgentContract, out: Path, overview: dict[str, Any] | None) -> str:
     """What the builder knows about this environment before the first question, all derived."""
     from .catalogue import load_catalogue
@@ -580,6 +668,7 @@ def environment_brief(contract: AgentContract, out: Path, overview: dict[str, An
         f"- Modality {contract.modality}; {len(contract.tools)} tools: "
         + (", ".join(tool.name for tool in contract.tools) or "none (judged from the conversation)")
     )
+    lines.extend(attached_files_brief(contract, out))
     if contract.amendments:
         lines.append("- Contract amendments made after the agent was read:")
         lines.extend(f"  - {one}" for one in contract.amendments[-10:])
@@ -717,6 +806,8 @@ def open_builder(
     sealed: bool = True,
     more_servers: dict[str, ToolServer] | None = None,
     catalogue: Catalogue | None = None,
+    removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
+    tab_status: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
@@ -731,11 +822,12 @@ def open_builder(
         can_grow=True,
         scenario_problem=scenario_problem,
         catalogue=catalogue,
+        removed_lookup=removed_lookup,
     )
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,
         KNOWLEDGE_SERVER: knowledge_server(contract, out),
-        "suite": suite_server(out, kept, contract, source_root, sealed=sealed),
+        "suite": suite_server(out, kept, contract, source_root, sealed=sealed, tab_status=tab_status),
     }
     if platform is not None:
         servers[platform.name] = platform
