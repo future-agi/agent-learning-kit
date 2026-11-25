@@ -1128,8 +1128,8 @@ async def write_in_parallel(
     at_once = max(1, min(at_once or AT_ONCE, MOST_AT_ONCE))
     prior = load_scenarios(destination)
     pending = reviewed.remaining(prior) if reviewed is not None else []
-    allocation = planned(len(pending) if reviewed is not None else wanted, cases, slices)
-    if reviewed is not None and (unallocated := len(pending) - sum(one.count for one in allocation)):
+    allocation = planned(max(len(pending), wanted - len(prior)) if reviewed is not None else wanted, cases, slices)
+    if reviewed is not None and (unallocated := len(pending) - sum(one.count for one in allocation)) > 0:
         allocation.extend(even_slices(unallocated, cases or ["Approved source cases"]))
     logger.info(
         "writing %s scenarios across %s slices, %s at a time: %s",
@@ -1197,11 +1197,11 @@ async def write_in_parallel(
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
     for _ in range(max(0, rounds)):
-        if len(suite) >= wanted:
+        if len(suite) >= wanted and (reviewed is None or not reviewed.remaining(suite)):
             break
         if reviewed is not None:
             pending = reviewed.remaining(suite)
-            missing = even_slices(len(pending), cases or ["Approved source cases"])
+            missing = even_slices(max(len(pending), wanted - len(suite)), cases or ["Approved source cases"])
         else:
             missing = await gaps_in(
                 contract,
@@ -1211,7 +1211,7 @@ async def write_in_parallel(
                 on_event=on_event,
                 ask=ask,
             )
-        missing = missing[: max(0, wanted - len(suite))]
+            missing = missing[: max(0, wanted - len(suite))]
         if not missing:
             break
         if on_event:

@@ -1934,17 +1934,32 @@ class HostedChatRuntime:
                 # Not opened yet: the first message opens it.
                 return False
             stage = load_design(self.workspace).stage
-            progress = (stage, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
-            if progress != self._last_progress or tools.reopen:
+            scenario_count = len(
+                list((self.workspace / "scenarios").glob("*/scenario.json"))
+            )
+            requested_count = int(self.job.get("scenario_count") or 0)
+            progress = (stage, scenario_count)
+            changed = progress != self._last_progress or tools.reopen
+            if changed:
                 self._last_progress, self._idle_turns = progress, 0
+            at_count = requested_count and scenario_count >= requested_count
+            if stage == "suite" and ((at_count and changed) or self._idle_turns >= 3):
+                result = await tools.finish_design({})
+                if tools.done:
+                    return True
+                if self._idle_turns >= 3:
+                    return False
+                # A customized template can already contain the requested count
+                # while its new source cases still need to be written.
+                said = result["content"][0]["text"]
             elif self._idle_turns >= 3:
                 return False
+            else:
+                said = unfinished(stage)
             self._idle_turns += 1
             if tools.reopen:
                 await self.conversation.close()
-                said = "[You were opened again with the tools for what you saved: carry on where you were.]"
-            else:
-                said = unfinished(stage)
+                said += " You were reopened with the tools for the current stage. Carry on."
         await self._handle(
             {
                 "sequence": self.client.command_watermark,

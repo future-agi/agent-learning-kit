@@ -51,6 +51,7 @@ from fi.alk.studio._environment_inputs import (
     review_environment_inputs,
 )
 from fi.alk.studio._source_scenarios import (
+    _distinct_source_drafts,
     EnvironmentRequirements,
     _public_source_case,
     _reviewable_scenarios,
@@ -110,6 +111,7 @@ class AcceptRequest(_ImmutableValue):
     review: EnvironmentInputReview
     reviewer_id: str
     existing_environments: tuple[AgentEnvironmentSpec, ...] = ()
+    prior_source_projection: tuple[AgentEnvironmentSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,7 @@ class CompileRequest(_ImmutableValue):
     operation: Literal["compile"]
     snapshot: dict[str, Any]
     existing_environments: tuple[AgentEnvironmentSpec, ...] = ()
+    prior_source_projection: tuple[AgentEnvironmentSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,6 +133,7 @@ class GenerateScenariosRequest(_ImmutableValue):
         int, Field(strict=True, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)
     ]
     bundle_manifest: dict[str, Any] | None = None
+    distinct_source_cases: bool = False
 
 
 @dataclass(frozen=True)
@@ -141,6 +145,7 @@ class ResealScenariosRequest(_ImmutableValue):
     mode: Literal["reviewed_build", "existing_environment"]
     generated_scenario_keys: Annotated[tuple[str, ...], Field(min_length=1)]
     schema_digest: str | None = None
+    distinct_case_budget: Annotated[int, Field(strict=True, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)] | None = None
 
 
 def _bundle_digest(manifest_body: dict[str, Any], pin: dict[str, str | None]) -> str:
@@ -170,14 +175,30 @@ def _native_source_scenario(draft: Any, requirements: EnvironmentRequirements):
 
     case = _sealed_source_case(_public_source_case(draft))
     context = safe_source_context(case)
+    # Existing environments receive native scenarios directly, without a writer.
+    # Put a checkable expectation in the test itself, before binding citations.
+    facts = case["starting_facts"]
+    rule = case["policy_reference"]
+    checks = []
+    if rule:
+        checks.append(f"The response must apply this source passage accurately: {rule}")
+    for source_id, record_id in dict.fromkeys((f["source_id"], f["record_id"]) for f in facts):
+        values = [
+            f"{fact['field'].rsplit('/', 1)[-1]} = {fact['value']}"
+            for fact in facts if (fact["source_id"], fact["record_id"]) == (source_id, record_id)
+        ]
+        checks.append(f"Check the response against record {record_id}: " + "; ".join(values))
+    instruction = f"{requirements.task.strip()} for {context}."
+    if rule:
+        instruction += f" Ask how the following passage applies: {rule}"
     native_args = bind_source_case(
         {
             "name": draft.scenario_id,
             "scenario_key": draft.scenario_id,
             "use_case": requirements.task.strip(),
             "branch": draft.category,
-            "instruction": requirements.task.strip() + f" for {context}.",
-            "tests": case["purpose"],
+            "instruction": instruction,
+            "tests": " ".join([case["purpose"], *checks]),
             "fixture": {"origin": "seed", SOURCE_FIXTURE: case},
         },
         case,
@@ -215,7 +236,8 @@ def _generate_scenarios(request: GenerateScenariosRequest) -> dict[str, Any]:
         requested_count=request.requested_count,
     )
     scenarios = []
-    for draft in generated.drafts:
+    drafts = _distinct_source_drafts(generated) if request.distinct_source_cases else generated.drafts
+    for draft in drafts:
         scenario = draft.scenario.model_dump(mode="json")
         persona = scenario["dataset"][0]
         if draft.category == "negative_control":
@@ -452,11 +474,12 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
             generated = _reviewable_scenarios(
                 reviewed,
                 environment_requirements=requirements,
-                requested_count=len(generated_scenarios),
+                requested_count=request.distinct_case_budget or len(generated_scenarios),
             )
+            drafts = _distinct_source_drafts(generated) if request.distinct_case_budget else generated.drafts
             expected = {
                 native.scenario_key: (native, document, case)
-                for draft in generated.drafts
+                for draft in drafts
                 for native, document, case in [
                     _native_source_scenario(draft, requirements)
                 ]
@@ -610,7 +633,8 @@ def execute_request(payload: bytes) -> dict[str, Any]:
                     _canonical_json(request.snapshot).encode()
                 )
             compiled = compile_environment_inputs(
-                reviewed, existing_environments=request.existing_environments
+                reviewed, existing_environments=request.existing_environments,
+                prior_source_projection=request.prior_source_projection,
             )
             result = {
                 "snapshot": json.loads(serialize_environment_snapshot(reviewed)),

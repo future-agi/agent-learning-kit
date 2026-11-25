@@ -1220,6 +1220,38 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
         )
 
 
+def test_reviewed_scenario_bundle_defers_target_configuration_until_run(tmp_path: Path) -> None:
+    from fi.alk.harness.hosted_entrypoint import require_deferred_agent_settings
+    from fi.alk.harness.process_preflight import PreflightError
+    from fi.alk.harness.reviewed_build import PIN_FILE
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    path = authoring / "contract.json"
+    contract = json.loads(path.read_text())
+    names = ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"]
+    contract.setdefault("runtime", {})["required_environment"] = {"agent": names}
+    path.write_text(json.dumps(contract))
+    kwargs = dict(source=source, job=_job(connector="auto", with_secrets=True),
+                  authoring=authoring, output=tmp_path / "bundle")
+    with pytest.raises(BundleAuthorError, match="requires_source_pin"):
+        author_bundle_v2(**kwargs, reviewed_scenarios_only=True)
+    digest = "sha256:" + "4" * 64
+    (authoring / PIN_FILE).write_text(json.dumps({
+        "id": "source_snapshot_" + "4" * 16, "digest": digest, "schema_digest": digest
+    }))
+    with pytest.raises(BundleAuthorError, match="target_runtime_configuration_missing"):
+        author_bundle_v2(**kwargs)
+    bundle = author_bundle_v2(**kwargs, reviewed_scenarios_only=True)
+    assert bundle.metadata["deferred_agent_settings"] == names
+    with pytest.raises(PreflightError, match="OPENAI_API_KEY"):
+        require_deferred_agent_settings(bundle, {"OPENAI_API_KEY": " "})
+    require_deferred_agent_settings(bundle, {name: "test-value" for name in names})
+
+
 def test_bundle_accepts_post_checkout_runtime_configuration_names(
     tmp_path: Path,
 ) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from fi.alk.studio._environment_input_snapshots import _assert_reviewed_snapshot
@@ -162,6 +162,15 @@ def _public_source_case(draft: SourceScenarioDraft) -> dict[str, Any]:
     }
 
 
+def _distinct_source_drafts(generated: GeneratedScenarioDraftSet) -> tuple[SourceScenarioDraft, ...]:
+    unique = {}
+    for draft in generated.drafts:
+        case = _public_source_case(draft)
+        case.pop("id")
+        unique.setdefault(_content_digest(case), draft)
+    return tuple(unique.values())
+
+
 def _sealed_source_case(case: dict[str, Any]) -> dict[str, Any]:
     return {**_canonical_value(case), "proof_digest": _content_digest(case)}
 
@@ -196,12 +205,21 @@ def generate_source_scenarios(
     public_rules = tuple(
         rule for source in public_policies for rule in source.active_rules
     )
-    references = tuple(
-        statement
-        for source in reviewed.sources
-        if isinstance(source, ReviewedReferenceSource) and source.audience.tested_agent
-        for statement in source.statements
-    )
+    references = []
+    for source in reviewed.sources:
+        if not isinstance(source, ReviewedReferenceSource) or not source.audience.tested_agent:
+            continue
+        # In a numbered reference, use its list items for test cases. The full
+        # reference, including introductory text, stays available to the agent.
+        clauses = []
+        for statement in source.statements:
+            parts = re.split(r"(?m)^\s*(?=\d+[.)]\s+)", statement.text)
+            clauses.extend(
+                replace(statement, text=part.strip())
+                for part in parts
+                if re.match(r"^\d+[.)]\s+", part.strip())
+            )
+        references.extend(clauses or source.statements)
     private_rules = tuple(
         rule
         for source in reviewed.sources
@@ -259,6 +277,8 @@ def generate_source_scenarios(
             for field, value in record.values
         )
         applicable = _rules_for_category(public_rules, category)
+        if applicable:
+            applicable = (applicable[(index // len(categories)) % len(applicable)],)
         candidates = statements if applicable else references
         excerpt = candidates[index % len(candidates)] if candidates else None
         if applicable:
@@ -473,7 +493,7 @@ def _rules_for_category(
             if rule.kind in {"forbidden_behavior", "refusal", "eligibility"}
         )
     if category == "success":
-        return tuple(
+        return tuple(rule for rule in rules if rule.kind == "required_behavior") or tuple(
             rule
             for rule in rules
             if rule.kind in {"required_behavior", "forbidden_behavior", "eligibility"}

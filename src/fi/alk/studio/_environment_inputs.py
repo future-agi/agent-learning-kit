@@ -366,6 +366,7 @@ def compile_environment_inputs(
     reviewed: ReviewedEnvironmentInputs,
     *,
     existing_environments: tuple[AgentEnvironmentSpec, ...] = (),
+    prior_source_projection: tuple[AgentEnvironmentSpec, ...] = (),
 ) -> CompiledEnvironmentInputs:
     _assert_reviewed_snapshot(reviewed)
     _validate_audience_relationships(reviewed)
@@ -380,6 +381,10 @@ def compile_environment_inputs(
         source for source in reviewed.sources if source.audience.tested_agent
     )
     environments = _compile_projection(reviewed, agent_sources)
+    if prior_source_projection:
+        environments = _merge_source_projections(
+            prior_source_projection, environments, {source.pin.source_id for source in reviewed.sources}
+        )
     _validate_environment_collisions((*existing_environments, *environments))
     participants = {
         identifier: _compile_projection(
@@ -466,6 +471,34 @@ def _validate_audience_relationships(reviewed: ReviewedEnvironmentInputs) -> Non
             "Source audiences would break an approved relationship",
             diagnostics=tuple(diagnostics),
         )
+
+
+def _merge_source_projections(prior, current, replaced_source_ids):
+    """Keep one adapter per type across successive approved imports."""
+    _validate_environment_collisions(prior)
+    combined = {env.type: env.as_dict()["data"] for env in current}
+    for env in prior:
+        old = env.as_dict()["data"]
+        if env.type == "retrieval_memory":
+            data = combined.setdefault(env.type, {**old, "documents": []})
+            retained = [doc for doc in old["documents"] if doc["source"] not in replaced_source_ids]
+            data["documents"] = retained + data["documents"]
+            if not data["documents"]:
+                del combined[env.type]
+        elif env.type == "structured_artifacts":
+            data = combined.setdefault(env.type, {**old, "artifacts": {}})
+            retained = {
+                key: item for key, item in old["artifacts"].items()
+                if item["metadata"]["source_id"] not in replaced_source_ids
+            }
+            if retained.keys() & data["artifacts"].keys():
+                raise EnvironmentInputError("source_mapping_invalid", "Duplicate compiled artifact ID")
+            data["artifacts"] = {**retained, **data["artifacts"]}
+            if not data["artifacts"]:
+                del combined[env.type]
+        else:
+            raise EnvironmentInputError("source_mapping_invalid", "Unrecognized prior source adapter")
+    return tuple(AgentEnvironmentSpec(kind, data) for kind, data in combined.items())
 
 
 def _compile_projection(

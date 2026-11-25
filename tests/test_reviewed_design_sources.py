@@ -482,10 +482,7 @@ def test_design_rejects_unrelated_scenario_with_approved_fixture():
         "tests": "Confirms the selected airline seat.",
         "fixture": {"reviewed_source": "source-case-order"},
     }
-    assert (
-        bind_scenario(evidence, args)
-        == "The scenario is unrelated to its approved source case."
-    )
+    assert bind_scenario(evidence, args).startswith("The scenario is unrelated")
 
 
 async def _approve(*_args):
@@ -626,6 +623,7 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
             (index, case)
             for index, case in enumerate(evidence["cases"], start=1)
             if case["category"] == "success"
+            and "approved" in case["policy_reference"]
             and any(fact["field"] == "status" for fact in case["starting_facts"])
         )
         shown = _tool(
@@ -739,5 +737,26 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
                 assert b"HIDDEN_SENTINEL_74Q" not in content
                 assert b"Alice" not in content
                 assert b"private-review-id" not in content
+    finally:
+        tools.world.close()
+
+
+def test_wrong_record_role_is_rejected_before_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS_MODEL", "test-model")
+    open_design(tmp_path, name="returns")
+    stage, tools = _stage(tmp_path)
+    evidence = {"cases": [{"starting_facts": [
+        {"field": "expected_action", "value": "escalate_ACORN-58"}
+    ]}]}
+    monkeypatch.setattr("fi.alk.harness.design.tools.load_evidence", lambda *_: evidence)
+    args = {"one_liner": "Manage returns", "summary": "Routes to queues (e.g. ACORN-58).",
+            "use_cases": ["Escalate a return"]}
+    try:
+        failed = _tool(stage, "design", "propose_design", args)
+        assert failed["is_error"]
+        assert load_design(tmp_path).pending_proposal is None
+        corrected = {**args, "summary": "Escalate with code ACORN-58."}
+        assert not _tool(stage, "design", "propose_design", corrected).get("is_error")
+        assert load_design(tmp_path).stage == "world"
     finally:
         tools.world.close()

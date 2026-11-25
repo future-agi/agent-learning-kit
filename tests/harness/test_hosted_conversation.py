@@ -726,6 +726,94 @@ def test_carrying_on_a_build_restates_how_many_scenarios_it_was_asked_for(tmp_pa
     assert "call finish_build" in handled[0]
 
 
+def test_idle_finished_design_is_sealed_instead_of_left_running(tmp_path, monkeypatch):
+    runtime = object.__new__(HostedChatRuntime)
+    runtime.workspace = tmp_path
+    runtime.job = {}
+    runtime._asking = False
+    runtime._last_progress = ("suite", 0)
+    runtime._idle_turns = 3
+
+    class Tools:
+        reopen = False
+        done = False
+
+        async def finish_design(self, _args):
+            self.done = True
+
+    runtime.design_tools = Tools()
+    monkeypatch.setattr(
+        "fi.alk.harness.design.workspace.load_design",
+        lambda _workspace: SimpleNamespace(stage="suite"),
+    )
+
+    assert asyncio.run(runtime._carry_on_designing())
+    assert runtime.design_tools.done
+
+
+def test_design_at_requested_scenario_count_is_sealed_before_another_model_turn(
+    tmp_path, monkeypatch
+):
+    runtime = object.__new__(HostedChatRuntime)
+    runtime.workspace = tmp_path
+    runtime.job = {"scenario_count": 2}
+    runtime._asking = False
+    runtime._last_progress = None
+    runtime._idle_turns = 0
+    for name in ("one", "two"):
+        scenario = tmp_path / "scenarios" / name
+        scenario.mkdir(parents=True)
+        (scenario / "scenario.json").write_text("{}", encoding="utf-8")
+
+    class Tools:
+        reopen = False
+        done = False
+
+        async def finish_design(self, _args):
+            self.done = True
+
+    runtime.design_tools = Tools()
+    handled = []
+    runtime._handle = handled.append
+    monkeypatch.setattr(
+        "fi.alk.harness.design.workspace.load_design",
+        lambda _workspace: SimpleNamespace(stage="suite"),
+    )
+
+    assert asyncio.run(runtime._carry_on_designing())
+    assert runtime.design_tools.done
+    assert handled == []
+
+
+def test_inherited_scenario_count_carries_seal_failure_to_builder(tmp_path, monkeypatch):
+    runtime = object.__new__(HostedChatRuntime)
+    runtime.workspace = tmp_path
+    runtime.job = {"scenario_count": 1}
+    runtime.client = SimpleNamespace(command_watermark=1)
+    runtime._asking = False
+    runtime._last_progress, runtime._idle_turns = None, 0
+    scenario = tmp_path / "scenarios" / "inherited"
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.json").write_text("{}", encoding="utf-8")
+
+    class Tools:
+        reopen = False
+        done = False
+
+        async def finish_design(self, _args):
+            return {"content": [{"text": "Prove the six missing approved source cases."}]}
+
+    runtime.design_tools = Tools()
+    handled = []
+    async def handle(command):
+        handled.append(command["payload"]["content"])
+    runtime._handle = handle
+    monkeypatch.setattr("fi.alk.harness.design.workspace.load_design",
+                        lambda _workspace: SimpleNamespace(stage="suite"))
+    assert asyncio.run(runtime._carry_on_designing())
+    assert "six missing approved source cases" in handled[0]
+
+
 def test_open_for_building_passes_subfolder(tmp_path, monkeypatch):
     policy_path = tmp_path / "policy.yaml"
     policy_path.write_text(
@@ -858,3 +946,29 @@ def test_a_file_that_shrinks_while_the_workspace_is_packed_does_not_fail_the_pac
     with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
         assert archive.extractfile("scenarios/one.json").read() == b"{}"
         assert archive.extractfile("contract.json").read() == b"{}"
+
+
+def test_lost_ack_replays_identical_event_before_the_next_emit(monkeypatch):
+    from fi.alk.harness.hosted_conversation import ConversationTransportError
+
+    client = ConversationClient(_capabilities())
+    sent = []
+
+    async def send(method, url, *, json_body):
+        event = json_body["events"][0]
+        sent.append(event.copy())
+        if len(sent) == 1:
+            raise ConversationTransportError("ack lost after commit")
+        return {"acked_through_sequence": event["sequence"]}
+
+    monkeypatch.setattr(client, "_request", send)
+
+    async def exercise():
+        with pytest.raises(ConversationTransportError):
+            await client.emit("turn_started", acknowledge_through=3)
+        await client.emit("turn_completed")
+
+    asyncio.run(exercise())
+    assert sent[0] == sent[1]
+    assert [event["sequence"] for event in sent] == [1, 1, 2]
+    assert client.command_watermark == 3

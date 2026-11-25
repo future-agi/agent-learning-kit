@@ -20,13 +20,13 @@ from fi.alk.studio._environment_input_snapshots import (
     MAX_SNAPSHOT_BYTES,
     deserialize_environment_snapshot,
 )
-from fi.alk.studio._source_scenarios import _public_source_case, _reviewable_scenarios
+from fi.alk.studio._source_scenarios import _distinct_source_drafts, _public_source_case, _reviewable_scenarios
 
 from ..backends import ToolServer, tool, tool_server
 from ..folder import read_all
 from ..releases import ReleaseError
 from ..scenario import SOURCE_FIXTURE
-from ..source_grounding import bind_source_case, validate_bound_scenario
+from ..source_grounding import action_code_guidance, bind_source_case, validate_bound_scenario
 from ..tools import schema
 from .workspace import Design, DocumentRecord, ReviewedSourcePin
 
@@ -182,7 +182,8 @@ def project_evidence(
     evidence: dict[str, Any] = {
         "documents": [],
         "records": [],
-        "cases": [_public_source_case(draft) for draft in generated.drafts],
+        "cases": [_public_source_case(draft) for draft in _distinct_source_drafts(generated)],
+        "scenario_count": count,
     }
     for environment in compiled.agent_environments:
         data = environment.as_dict()["data"]
@@ -317,7 +318,8 @@ def bind_scenario(evidence: dict[str, Any], args: dict[str, Any]) -> str:
     try:
         args.update(bind_source_case(args, case))
     except ValueError:
-        return "The scenario is unrelated to its approved source case."
+        hint = action_code_guidance([case])
+        return "The scenario is unrelated to its approved source case. Choose an input that triggers the cited rule and assert the required outcome. Keep record codes in their supplied roles. Only name queues, priorities and deadlines supported by the evidence." + (" " + hint if hint else "")
     return ""
 
 
@@ -327,17 +329,11 @@ def check_grounded_suite(
     if not evidence:
         return
     cases = {case["id"]: case for case in evidence["cases"]}
-    inherited = set(design.template.scenario_keys) if design.template else set()
     seen: set[str] = set()
     for scenario in read_all(workspace):
         source = scenario.fixture.get(SOURCE_FIXTURE)
         if source is None:
-            if scenario.scenario_key in inherited:
-                continue
-            raise ReleaseError(
-                "design_source_required",
-                f"{scenario.name} needs an approved source case.",
-            )
+            continue
         case_id = source.get("id") if isinstance(source, dict) else None
         if not isinstance(case_id, str) or source != cases.get(case_id):
             raise ReleaseError(

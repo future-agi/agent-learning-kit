@@ -29,6 +29,10 @@ class ConversationTransportError(RuntimeError):
     pass
 
 
+class _RejectedRequest(ConversationTransportError):
+    """The endpoint returned a definitive rejection."""
+
+
 class ConversationEndpoints(BaseModel):
     # A newer platform may offer endpoints this harness does not use yet.
     model_config = ConfigDict(extra="ignore")
@@ -154,6 +158,7 @@ class ConversationClient:
         )
         self.turn_context = dict(capabilities.turn_context)
         self._emit_lock = asyncio.Lock()
+        self._pending_event: dict[str, Any] | None = None
 
     async def commands(self) -> list[dict[str, Any]]:
         separator = "&" if "?" in self.capabilities.endpoints.commands else "?"
@@ -184,6 +189,10 @@ class ConversationClient:
                 function_call_id.encode("utf-8")
             ).hexdigest()
         async with self._emit_lock:
+            if self._pending_event is not None:
+                # A lost acknowledgement can follow a committed write. Retry the
+                # identical ID and digest before assigning another sequence.
+                await self._send_pending_event()
             sequence = self.event_watermark + 1
             event: dict[str, Any] = {
                 "schema_version": EVENT_SCHEMA_VERSION,
@@ -204,21 +213,25 @@ class ConversationClient:
                 if acknowledge_through is None
                 else acknowledge_through
             )
-            body = await self._request(
-                "POST",
-                self.capabilities.endpoints.events,
-                json_body={
-                    "schema_version": EVENT_SCHEMA_VERSION,
-                    "acknowledged_through": acknowledged,
-                    "events": [event],
-                },
-            )
-            self.event_watermark = int(body["acked_through_sequence"])
-            if acknowledge_through is not None:
-                self.command_watermark = max(
-                    self.command_watermark, acknowledge_through
-                )
+            self._pending_event = {
+                "schema_version": EVENT_SCHEMA_VERSION,
+                "acknowledged_through": acknowledged,
+                "events": [event],
+            }
+            await self._send_pending_event()
             return event
+
+    async def _send_pending_event(self) -> None:
+        pending = self._pending_event
+        assert pending is not None
+        try:
+            body = await self._request("POST", self.capabilities.endpoints.events, json_body=pending)
+        except _RejectedRequest:
+            self._pending_event = None
+            raise
+        self.event_watermark = int(body["acked_through_sequence"])
+        self.command_watermark = max(self.command_watermark, pending["acknowledged_through"])
+        self._pending_event = None
 
     async def checkpoint(self, workspace: Path) -> dict[str, Any]:
         body = await asyncio.to_thread(_workspace_archive, workspace)
@@ -375,7 +388,7 @@ class ConversationClient:
                     if isinstance(response.body, dict)
                     else ""
                 )
-                raise ConversationTransportError(
+                raise _RejectedRequest(
                     f"conversation endpoint returned HTTP {response.status_code}"
                     + (f": {said}" if said else "")
                 )

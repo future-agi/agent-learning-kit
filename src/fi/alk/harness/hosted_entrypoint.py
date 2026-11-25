@@ -332,6 +332,18 @@ def peek_secret_values_for_purpose(
     }
 
 
+def require_deferred_agent_settings(manifest: EnvironmentBundleV2, target_values: dict[str, str]) -> None:
+    from .secrets import process_secret_environment_names, target_provider_environment
+
+    required = manifest.metadata.get("deferred_agent_settings", [])
+    supplied = process_secret_environment_names(
+        name for name, value in target_provider_environment(target_values).items() if value.strip()
+    )
+    missing = sorted(set(required) - supplied)
+    if missing:
+        raise PreflightError("target_runtime_configuration_missing", ", ".join(missing))
+
+
 def peek_target_provider_secret_values(
     secrets_path: Path, secret_purposes: dict[str, str]
 ) -> dict[str, str]:
@@ -2675,6 +2687,7 @@ async def run_job(
         # (never clamped), so an out-of-1..8 W fails HERE with `parallelism_out_of_range`, per
         # §2e.7, rather than being silently laundered into a valid one.
         try:
+            require_deferred_agent_settings(manifest, target_provider_secret_values)
             await asyncio.to_thread(
                 preflight_bundle,
                 bundle_dir,

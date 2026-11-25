@@ -52,11 +52,16 @@ _SEMANTIC_FIELDS = (
 
 
 def _tokens(value: object) -> set[str]:
-    return {
-        token.casefold()
-        for token in _WORDS.findall(str(value))
-        if len(token) >= 3 and token.casefold() not in _STOP
-    }
+    terms = set()
+    for token in _WORDS.findall(str(value).casefold()):
+        if len(token) < 3 and not (token.isdigit() and len(token) >= 2):
+            continue
+        # A caller can ask for one refund under a rule governing refunds.
+        if len(token) > 4 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
+            token = token[:-1]
+        if token not in _STOP:
+            terms.add(token)
+    return terms
 
 
 def _case_terms(case: Mapping[str, Any]) -> tuple[set[str], set[str]]:
@@ -69,20 +74,145 @@ def _case_terms(case: Mapping[str, Any]) -> tuple[set[str], set[str]]:
         record_tokens = _tokens(record)
         if any(character.isdigit() for character in record):
             strong.update(record_tokens)
-        topic.update(_tokens(fact.get("field")))
-        source_tokens = _tokens(fact.get("source_id"))
-        strong.update(source_tokens)
-        topic.update(source_tokens)
+        topic.update(_tokens(str(fact.get("field") or "").rsplit("/", 1)[-1]))
         topic.update(_tokens(fact.get("value")))
-    for citation in case.get("citations") or ():
-        if isinstance(citation, Mapping):
-            source_tokens = _tokens(citation.get("source_id"))
-            strong.update(source_tokens)
-            topic.update(source_tokens)
     policy_tokens = _tokens(case.get("policy_reference"))
     strong.update(token for token in policy_tokens if any(c.isdigit() for c in token))
     topic.update(policy_tokens)
     return strong, topic
+
+
+def _identifier_pattern(identifier: str) -> str:
+    return r"(?<![\w-])" + re.escape(identifier.casefold()) + r"(?![\w-])"
+
+
+def _policy_assertion_matches(test_text: str, case: Mapping[str, Any]) -> bool:
+    named_codes = re.findall(
+        r"\bcode\s+(?:is\s+)?([A-Z]{2,}-[0-9]+)\b",
+        str(case.get("policy_reference") or ""),
+        flags=re.IGNORECASE,
+    )
+    if any(not re.search(_identifier_pattern(code), test_text) for code in named_codes):
+        return False
+    # An ordinary success inside the window also passes when a forbidden
+    # extension is granted. The assertion must distinguish those behaviors.
+    policy = str(case.get("policy_reference") or "").casefold()
+    if re.search(r"\bno (?:general )?extensions?\b", policy):
+        if not re.search(
+            r"\b(?:den(?:y|ies|ied|ying)|reject(?:s|ed)?|refus(?:e|es|ed|ing)|declin(?:e|es|ed|ing)|"
+            r"ineligible|too late|no (?:general )?(?:exceptions?|extensions?)|cannot extend|"
+            r"(?:does not|doesn't|will not|won't|cannot) (?:approve|grant|extend))\b",
+            test_text,
+        ):
+            return False
+    return True
+
+
+def _record_fields(case: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(fact.get("field", "")).rsplit("/", 1)[-1]: fact.get("value")
+        for fact in case.get("starting_facts") or ()
+        if isinstance(fact, Mapping)
+    }
+
+
+def _action_codes(fields: Mapping[str, Any]) -> list[str]:
+    return re.findall(r"(?<![A-Z0-9])[A-Z][A-Z0-9]+-[0-9]+(?![A-Z0-9])",
+                      str(fields.get("expected_action") or ""))
+
+
+def reviewed_action_arguments(case: Mapping[str, Any], arguments: Mapping[str, Any]) -> set[str]:
+    fields = _record_fields(case)
+    codes = set(_action_codes(fields))
+    if not codes:
+        return set()
+    action = fields["expected_action"]
+    return {
+        key for key, value in arguments.items() if isinstance(value, str)
+        and (value in codes or value == action)
+        and (key in {"action", "expected_action", "code", "identifier"}
+             or key.endswith(("_code", "_identifier")))
+    }
+
+
+def action_code_guidance(cases: list[dict[str, Any]]) -> str:
+    examples = dict.fromkeys(
+        str(fields["expected_action"]) for case in cases
+        if _action_codes(fields := _record_fields(case))
+    )
+    if not examples:
+        return ""
+    return ("Preserve expected_action values as written: " + ", ".join(list(examples)[:12])
+            + ". Treat an action suffix as its identifier. Keep it in an action or code argument "
+              "(for escalation, give the tool an escalation_code argument) and assert that identifier in the test. The outcome check must reject a different code: compare the stored result against the approved record or fixed reference arguments. Only assign another role if its field "
+              "explicitly supplies that value.")
+
+
+def record_role_problem(text: str, case: Mapping[str, Any], steps=()) -> str:
+    fields = _record_fields(case)
+    normalized = text.casefold().replace("_", " ")
+    for code in _action_codes(fields):
+        exact = _identifier_pattern(code)
+        for match in re.finditer(exact, normalized):
+            before = normalized[:match.start()].rstrip(" `*'\"")
+            after = normalized[match.end():].lstrip(" `*'\"")
+            for role in ("queue", "priority", "reason", "destination", "team"):
+                if any(role in key.split("_") and str(value).casefold() == code.casefold()
+                       for key, value in fields.items()):
+                    continue
+                if (re.search(r"\b" + role + r"s?\s*(?:[ (:,=]*(?:named|is|of|like|such as|e\.g\.)?[ (:,=]*)$", before)
+                    or re.match(role + r"\b", after)
+                    or (role == "destination" and re.search(r"\bto$", before)
+                        and not any(str(fields.get(k, "")).casefold() == code.casefold()
+                                    for k in ("queue", "team", "destination")))):
+                    return f"Use {code} as the identifier of expected_action {fields['expected_action']}. The record does not identify it as a {role}."
+        for step in steps or ():
+            if not isinstance(step, Mapping):
+                continue
+            for key, value in (step.get("arguments") or {}).items():
+                if (str(value).casefold() == code.casefold()
+                    and key not in ("action", "expected_action", "code", "identifier")
+                    and not key.endswith(("_code", "_identifier"))
+                    and str(fields.get(key, "")).casefold() != code.casefold()):
+                    return f"Carry {code} in the action or code argument. The record does not give it as {key}."
+    return ""
+
+
+def _record_assertion_matches(test_text: str, instruction: str, case: Mapping[str, Any]) -> bool:
+    fields = _record_fields(case)
+    authored = test_text + " " + instruction
+    action = str(fields.get("expected_action") or "")
+    for identifier in _action_codes(fields):
+        if not re.search(_identifier_pattern(identifier), test_text.replace("_", " ")):
+            return False
+    if action and not case.get("policy_reference"):
+        # Elapsed days describe this record. A numerical policy window needs
+        # its own source field, even when the correct action is a late denial.
+        limits = re.finditer(
+            r"\b(\d+)[ -]days? (?:return )?(?:window|deadline|limit)\b"
+            r"|\b(?:past|beyond|outside|exceeds?) (\d+)[ -]days?\b",
+            authored,
+        )
+        for limit in limits:
+            days = limit[1] or limit[2]
+            if not any(
+                (str(value) == days and re.search(r"window|limit|deadline", key, re.I))
+                or limit[0] in str(value).casefold()
+                for key, value in fields.items()
+            ):
+                return False
+    if "queue" in fields:
+        check_words = _WORDS.findall(test_text)
+        for key in ("queue", "priority", "code"):
+            if fields.get(key) is None:
+                continue
+            expected = _WORDS.findall(str(fields[key]).casefold())
+            if expected and not any(
+                check_words[i : i + len(expected)] == expected
+                for i in range(len(check_words) - len(expected) + 1)
+            ):
+                return False
+    return True
 
 
 def scenario_relates_to_case(args: Mapping[str, Any], case: Mapping[str, Any]) -> bool:
@@ -104,7 +234,15 @@ def scenario_relates_to_case(args: Mapping[str, Any], case: Mapping[str, Any]) -
         ]
     )
     strong, topic = _case_terms(case)
-    return bool(authored & strong) or len(authored & topic) >= 2
+    if not (_tokens(authored_values["instruction"]) & (strong | topic)):
+        return False
+    test_text = authored_values["tests"].casefold()
+    if not _policy_assertion_matches(test_text, case) or not _record_assertion_matches(test_text, authored_values["instruction"].casefold(), case):
+        return False
+    if record_role_problem(test_text + " " + authored_values["instruction"], case, args.get("solution")):
+        return False
+    checks = _tokens(authored_values["tests"])
+    return bool(checks & topic) and (bool(authored & strong) or len(authored & topic) >= 2)
 
 
 def safe_source_context(case: Mapping[str, Any]) -> str:
@@ -144,6 +282,17 @@ def bind_source_case(
     if require_relevance and not scenario_relates_to_case(args, case):
         raise ValueError("source_case_unrelated")
     bound = dict(args)
+    if bound.get("solution"):
+        steps = []
+        for step in bound["solution"]:
+            marked = reviewed_action_arguments(case, step.get("arguments") or {}) if isinstance(step, Mapping) else set()
+            if marked:
+                fixed = dict(step.get("fixed") or {})
+                for key in marked:
+                    fixed[key] = "record: approved expected_action"
+                step = {**step, "fixed": fixed}
+            steps.append(step)
+        bound["solution"] = steps
     context = safe_source_context(case)
     instruction = str(bound.get("instruction") or "").strip()
     marker = f"Reviewed context: {context}."

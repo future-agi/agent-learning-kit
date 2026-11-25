@@ -199,7 +199,7 @@ def _arguments(case, name="Track a shipment"):
         "name": name,
         "use_case": "Track an order",
         "instruction": "Ask about the status of order 4821.",
-        "tests": "Reports the available status of the shipment.",
+        "tests": "Reports that order 4821 has shipped and arrives on Tuesday.",
         "fixture": {"origin": "seed", "reviewed_source": case["id"]},
         "sub_goals": ["order-status"],
         "solution": [],
@@ -216,7 +216,10 @@ def test_connected_rejects_unrelated_scenario_with_approved_fixture(tmp_path):
         approved.bind(
             {
                 **_arguments(approved.cases[0]),
-                "instruction": "Book a flight to Paris.",
+                "instruction": (
+                    "Book a flight to Paris. Reference document "
+                    + approved.cases[0]["citations"][0]["source_id"]
+                ),
                 "tests": "Confirms the selected airline seat.",
             },
             [],
@@ -370,6 +373,12 @@ def test_parallel_writers_get_disjoint_case_allocations(tmp_path, monkeypatch):
             del prompt, on_event
             read = _tool(self.spec.servers, "reviewed_sources", "read_source")
             result = await read({"section": "cases", "index": 1})
+            if result.get("is_error"):
+                args = _arguments({"id": ""}, name="Check an ordinary shipment")
+                args["fixture"] = {"origin": "seed"}
+                submitted = await _tool(self.spec.servers, "scenarios", "submit_scenario")(args)
+                assert not submitted.get("is_error"), submitted
+                return
             case = json.loads(result["content"][0]["text"])
             assert (await read({"section": "cases", "index": 2}))["is_error"]
             assigned.append(case["id"])
@@ -389,3 +398,103 @@ def test_parallel_writers_get_disjoint_case_allocations(tmp_path, monkeypatch):
     reviewed.check_complete(suite, workspace)
     assert assigned == [case["id"] for case in reviewed.cases]
     assert len({scenario.name for scenario in suite}) == 2
+    assert sum(reviewed.saved_case(one) is not None for one in suite) == 1
+
+
+def test_routing_case_checks_the_destination_priority_and_code():
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    case = {"starting_facts": [
+        {"field": field, "value": value, "record_id": "SABLE-19"}
+        for field, value in {"condition": "threat of legal action", "queue": "risk-response",
+                             "priority": "urgent", "code": "SABLE-19"}.items()
+    ]}
+    scenario = {"instruction": "Route a threat of legal action with code SABLE-19."}
+    for test in ["Escalates the legal threat urgently.",
+                 "Routes to refund-specialists at urgent priority with SABLE-19.",
+                 "Routes to risk-response at urgent priority with SABLE-91."]:
+        assert not scenario_relates_to_case({**scenario, "tests": test}, case)
+    assert scenario_relates_to_case(
+        {**scenario, "tests": "Routes to risk response at urgent priority with SABLE-19."}, case
+    )
+
+
+def test_high_value_refund_check_accepts_a_concrete_amount_over_the_threshold():
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    case = {"policy_reference": "Refunds above $425 require human escalation. The escalation code is ORCHID-72."}
+    scenario = {
+        "instruction": "I want to return this $500 monitor for a refund.",
+        "tests": "The agent escalates the refund with code ORCHID-72.",
+    }
+    assert scenario_relates_to_case(scenario, case)
+    assert not scenario_relates_to_case({**scenario, "instruction": "Book a flight."}, case)
+    assert not scenario_relates_to_case({**scenario, "tests": "Escalate the refund with ORCHID-27."}, case)
+
+
+def test_no_extension_rule_requires_a_decision_about_a_late_request():
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    case = {"policy_reference": "Gold-tier customers receive no general extension to the 37-day return window."}
+    scenario = {"instruction": "A Gold-tier customer wants to return a jacket."}
+    assert not scenario_relates_to_case(
+        {**scenario, "tests": "Processes a full refund for the Gold-tier customer within the 37-day window."}, case
+    )
+    assert scenario_relates_to_case(
+        {**scenario, "tests": "Denies the Gold-tier customer's late request on day 38."}, case
+    )
+    assert scenario_relates_to_case(
+        {"instruction": "A Gold-tier customer asks for an extension on day 38.",
+         "tests": "Explains that Gold-tier customers receive no general extension to the 37-day return window."}, case
+    )
+
+
+def test_record_action_does_not_supply_an_unstated_routing_queue_or_policy_deadline():
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    case = {"starting_facts": [
+        {"record_id": "RET-004", "field": "days_since_delivery", "value": 7},
+        {"record_id": "RET-004", "field": "expected_action", "value": "escalate_ORCHID-72"},
+    ]}
+    def accepts(test):
+        return scenario_relates_to_case({"instruction": "Process return RET-004", "tests": test}, case)
+
+    assert accepts("For RET-004, escalate using ORCHID-72.")
+    assert not accepts("For RET-004, escalate to queue ORCHID-72.")
+    assert not accepts("For RET-004, escalate using ORCHID-720.")
+    case["starting_facts"][1]["value"] = "deny_late_return"
+    assert accepts("Deny the late return for RET-004.")
+    assert not scenario_relates_to_case(
+        {"instruction": "Process return RET-004 even though it is past 30 days.",
+         "tests": "Deny the late return for RET-004."}, case
+    )
+    assert not accepts("Deny RET-004 because it exceeds the 30-day window.")
+    case["starting_facts"].append({"record_id": "RET-004", "field": "return_window_days", "value": 30})
+    assert accepts("Deny RET-004 because it exceeds the 30-day window.")
+
+def test_record_action_identifier_keeps_its_role_in_proposal_assertion_and_reference():
+    from fi.alk.harness.source_grounding import record_role_problem, scenario_relates_to_case
+
+    case = {"starting_facts": [
+        {"field": "case_id", "value": "RET-004", "record_id": "RET-004"},
+        {"field": "expected_action", "value": "escalate_ORCHID-72"},
+    ]}
+    assert record_role_problem("Escalate to designated support queues (e.g. ORCHID-72).", case)
+    assert not record_role_problem("Escalate with code ORCHID-72.", case)
+    base = {"instruction": "Return the mixer for RET-004.", "tests": "Escalate RET-004 with code ORCHID-72."}
+    assert not scenario_relates_to_case({**base, "tests": "Escalate the appliance return to ORCHID-72."}, case)
+    for key, expected in [("reason", False), ("queue", False), ("escalation_code", True)]:
+        step = {"tool": "escalate_case", "arguments": {key: "ORCHID-72"}}
+        assert scenario_relates_to_case({**base, "solution": [step]}, case) is expected
+    case["starting_facts"].append({"field": "queue", "value": "ORCHID-72"})
+    assert not record_role_problem("Escalate to queue ORCHID-72.", case)
+
+
+def test_source_action_code_is_fixed_for_the_wrong_value_proof():
+    from fi.alk.harness.source_grounding import bind_source_case
+
+    case = {"starting_facts": [{"field": "expected_action", "value": "escalate_ACORN-58"}]}
+    step = {"tool": "escalate", "arguments": {"escalation_code": "ACORN-58", "notes": "free"}}
+    bound = bind_source_case({"solution": [step]}, case, require_relevance=False)
+    assert bound["solution"][0]["fixed"] == {"escalation_code": "record: approved expected_action"}
+    assert "fixed" not in step

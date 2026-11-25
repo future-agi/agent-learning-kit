@@ -39,7 +39,7 @@ from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
 from .scenario import SOURCE_FIXTURE, Scenario
-from .source_grounding import semantic_source_digest
+from .source_grounding import reviewed_action_arguments, semantic_source_digest
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import read_manifest, restore
 
@@ -766,13 +766,18 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     sets that argument again (a draft the solution itself corrects)."""
     steps = list(getattr(scenario, "solution", None) or ())
     wrong = []
+    case = (getattr(scenario, "fixture", None) or {}).get(SOURCE_FIXTURE) or {}
     for at, step in enumerate(steps):
+        approved = reviewed_action_arguments(case, step.arguments) if isinstance(case, dict) else set()
         for name in step.fixed or ():
             value = step.arguments.get(name)
             if isinstance(value, bool):
                 other: Any = not value
             elif isinstance(value, (int, float)):
                 other = value + 1
+            elif name in approved and value[-1].isascii() and value[-1].isdigit():
+                # Preserve the identifier format so syntax-only validation cannot pass this proof.
+                other = value[:-1] + str((int(value[-1]) + 1) % 10)
             elif isinstance(value, str) and value and not value.startswith("$"):
                 other = f"{value}-other"
             else:

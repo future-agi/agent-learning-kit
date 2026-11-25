@@ -307,6 +307,29 @@ def test_prepare_parses_supported_sources_with_provenance() -> None:
     assert records.fields[0].personal_data_suspected is True
 
 
+def test_prepare_does_not_treat_business_attributes_as_personal_data() -> None:
+    draft = prepare_environment_inputs(
+        (
+            EnvironmentSource(
+                source_id="cases",
+                filename="cases.csv",
+                media_type="text/csv",
+                content=(
+                    b"case_id,customer_tier,product_name,customer_id,customer_name\n"
+                    b"C1,gold,Headphones,U1,Alice\n"
+                ),
+                role="seed_records",
+            ),
+        )
+    )
+
+    fields = {item.source_field: item for item in draft.sources[0].fields}
+    assert fields["customer_tier"].personal_data_suspected is False
+    assert fields["product_name"].personal_data_suspected is False
+    assert fields["customer_id"].personal_data_suspected is True
+    assert fields["customer_name"].personal_data_suspected is True
+
+
 def test_prepare_preserves_blocking_row_diagnostic() -> None:
     source = EnvironmentSource(
         source_id="bad",
@@ -399,6 +422,19 @@ def test_policy_with_personal_data_requires_a_sanitized_upload() -> None:
     assert [(item.code, item.severity) for item in draft.diagnostics] == [
         ("source_privacy_unresolved", "blocking")
     ]
+
+
+def test_policy_iso_date_is_not_personal_data() -> None:
+    source = EnvironmentSource(
+        source_id="dated-policy",
+        filename="dated.pdf",
+        media_type="application/pdf",
+        content=_pdf("Policy version: 2026-11-23"),
+        role="policy",
+    )
+    draft = prepare_environment_inputs((source,), destination_schema=_schema())
+
+    assert draft.diagnostics == ()
 
 
 def test_flagged_policy_content_blocks_review() -> None:
@@ -1903,3 +1939,18 @@ def test_hidden_related_records_do_not_renumber_visible_synthetic_facts() -> Non
             source for source in second.sources if source.visibility == "agent_visible"
         ).records
     )
+
+
+def test_incremental_document_import_keeps_old_pages_and_removes_newly_hidden_pages():
+    first = _policy_source("Existing refund policy.", source_id="first")
+    second = _policy_source("New escalation policy.", source_id="second")
+    _, reviewed_first = _approve_proposals((first,))
+    _, reviewed_second = _approve_proposals((second,))
+    _, reviewed_hidden = _approve_proposals((first,), hidden=("first",))
+    initial = compile_environment_inputs(reviewed_first).agent_environments
+    merged = compile_environment_inputs(reviewed_second, prior_source_projection=initial).agent_environments
+    assert len(merged) == 1
+    assert [d["source"] for d in merged[0].data["documents"]] == ["first", "second"]
+    narrowed = compile_environment_inputs(reviewed_hidden, prior_source_projection=merged).agent_environments
+    assert [d["source"] for d in narrowed[0].data["documents"]] == ["second"]
+    assert [d["source"] for d in initial[0].data["documents"]] == ["first"]

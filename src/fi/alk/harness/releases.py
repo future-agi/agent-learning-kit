@@ -1438,7 +1438,7 @@ class PostgresProof:
         `catalogue` grades with sub-goals not yet written to the suite."""
         import random
 
-        from .checks import run_check
+        from .checks import reference_of, run_check
         from .folder import apply_setup, check_ready
         from .world.handle import HostedWorld
         from .world.runtime import Call
@@ -1500,11 +1500,12 @@ class PostgresProof:
             tools.close()
         if ready.ok and observed is not None:
             played = list(observed)
+        reference = reference_of(scenario.solution)
         return Attempt(
             ready,
             faults,
             [
-                (name, run_check(source, world, played, name=name))
+                (name, run_check(source, world, played, name=name, reference=reference))
                 for name, source in self.checks(scenario, catalogue)
             ]
             if ready.ok

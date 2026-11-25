@@ -53,6 +53,7 @@ from ..world.tools import DRAFT
 from .contract import write_contract
 from .handlers import ALLOWED_IMPORTS, behaviour_problems, source_problems
 from .proof import ViewProof
+from ..source_grounding import action_code_guidance, record_role_problem
 from .reviewed_sources import REVIEW_REQUIRED, load_evidence
 from .workspace import (
     Design,
@@ -305,10 +306,11 @@ class DesignTools:
             f"Scenarios: {len(read_all(self.workspace))}."
         )
         if evidence := load_evidence(self.workspace, design):
+            lines.append(action_code_guidance(evidence["cases"]))
             lines.append(
                 "Approved source evidence is available through read_source: "
                 + ", ".join(
-                    f"{len(entries)} {section}" for section, entries in evidence.items()
+                    f"{len(evidence[section])} {section}" for section in ("documents", "records", "cases")
                 )
                 + ". Use only the approved projection."
             )
@@ -342,6 +344,10 @@ class DesignTools:
             )
         except ValidationError as exc:
             return _err(f"Not proposed: {exc}")
+        proposal_text = "\n".join([proposal.one_liner, proposal.summary, *proposal.use_cases])
+        for case in load_evidence(self.workspace, design).get("cases", []):
+            if problem := record_role_problem(proposal_text, case):
+                return _err("Revise the proposal before requesting approval. " + problem)
         save_design(
             self.workspace, design.model_copy(update={"pending_proposal": proposal})
         )

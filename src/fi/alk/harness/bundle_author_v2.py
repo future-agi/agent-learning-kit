@@ -121,6 +121,7 @@ class EnvironmentPlanV2:
     processes: tuple[ManagedProcess | SourceProcess, ...]
     capabilities: dict[str, CapabilityV2]
     readiness: tuple[ReadinessProbeV2, ...]
+    deferred_agent_settings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         names = [process.name for process in self.processes]
@@ -2659,6 +2660,7 @@ def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
     *,
+    scenario_build: bool = False,
     contract_modality: str | None = None,
     contract_interface_kind: str | None = None,
     contract_runtime: dict[str, Any] | None = None,
@@ -3528,6 +3530,16 @@ def resolve_environment_plan(
         admission = assess_configuration(
             runtime=runtime_model, selected=selected, supplied_by_process=bindings
         )
+        deferred_agent_settings = ()
+        if scenario_build and not isinstance(selected, ComposeSelection):
+            # Only the target agent is idle during reviewed scenario generation.
+            deferred_agent_settings = tuple(sorted({
+                item.environment_name for item in admission.missing
+                if item.process == control_name and item.origin == "runtime_declaration"
+            }))
+            admission = admission.model_copy(update={"missing": [
+                item for item in admission.missing if item.process != control_name
+            ]})
         admission.require_no_missing_declarations()
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
@@ -3575,6 +3587,7 @@ def resolve_environment_plan(
             ]
 
     return EnvironmentPlanV2(
+        deferred_agent_settings=deferred_agent_settings,
         packaging=packaging,
         control_service=control_name,
         processes=tuple(processes),
@@ -4018,12 +4031,15 @@ def author_bundle_v2(
     authoring: str | Path,
     output: str | Path,
     include_scenarios: bool = True,
+    reviewed_scenarios_only: bool = False,
 ) -> EnvironmentBundleV2:
     source_root = Path(source).resolve()
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     output_root.parent.mkdir(parents=True, exist_ok=True)
     reviewed_source = load_review_pin(authoring_root)
+    if reviewed_scenarios_only and (reviewed_source is None or not include_scenarios):
+        raise BundleAuthorError("reviewed_scenarios_only_requires_source_pin")
     if include_scenarios and reviewed_source is None and job.metadata.get("generic_harness_v1") is True:
         certified = _reuse_certified_bundle(
             source=source_root,
@@ -4172,6 +4188,7 @@ def author_bundle_v2(
     plan = resolve_environment_plan(
         source_root,
         job,
+        scenario_build=reviewed_scenarios_only,
         contract_modality=contract_modality,
         contract_interface_kind=contract_interface_kind,
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
@@ -4469,6 +4486,7 @@ def author_bundle_v2(
                 ),
                 **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
+                **({"deferred_agent_settings": list(plan.deferred_agent_settings)} if plan.deferred_agent_settings else {}),
                 **({"reviewed_source": reviewed_source} if reviewed_source is not None else {}),
                 **(
                     {
@@ -5019,6 +5037,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--authoring", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reviewed-scenarios-only", action="store_true")
     args = parser.parse_args(argv)
     job = _load_job(args.job)
     if refuse_unusable_folder(
@@ -5033,6 +5052,7 @@ def main(argv: list[str] | None = None) -> int:
         job=job,
         authoring=args.authoring,
         output=args.output,
+        reviewed_scenarios_only=args.reviewed_scenarios_only,
     )
     return 0
 

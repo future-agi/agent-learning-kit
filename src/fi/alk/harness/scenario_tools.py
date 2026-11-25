@@ -71,6 +71,7 @@ from .folder import (
     write_folder,
     write_index,
 )
+from .source_grounding import reviewed_action_arguments
 from .checks import reference_of, run_check
 from .proofs import record_proof, record_unprovable
 from .releases import ReleaseError
@@ -1502,7 +1503,9 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
     said = plain(f"{scenario.instruction} {json.dumps(scenario.fixture, default=str)}")
     known = plain(instructions)
     wrong = []
+    case = scenario.fixture.get("reviewed_source") or {}
     for step in scenario.solution:
+        approved = reviewed_action_arguments(case, step.arguments) if isinstance(case, dict) else set()
         for name, source in (step.fixed.items() if isinstance(step.fixed, dict) else ()):
             value = step.arguments.get(name)
             if not isinstance(value, str) or not value.strip():
@@ -1513,7 +1516,7 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
             holds = {
                 "caller": plain(value) in said,
                 # A tool can take a record's value wrapped in a format it names (`kind:id`, `a/b`).
-                "record": plain(value) in stored or (len(parts) > 1 and all(part in stored for part in parts[1:])),
+                "record": name in approved or plain(value) in stored or (len(parts) > 1 and all(part in stored for part in parts[1:])),
                 "rule": any(plain(one) in known and plain(value) in plain(one) for one in quoted),
             }.get(kind)
             if not holds:

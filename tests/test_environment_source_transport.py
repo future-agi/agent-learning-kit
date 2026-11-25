@@ -684,3 +684,25 @@ def test_module_reads_stdin_and_file_and_exits_nonzero_on_error(tmp_path: Path):
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["result"]["draft"]["sources"] == []
     assert sorted(item.name for item in tmp_path.iterdir()) == ["request.json"]
+
+
+def test_incremental_generation_emits_each_distinct_numbered_clause_once():
+    source = {
+        "source_id": "service",
+        "filename": "service.txt",
+        "media_type": "text/plain",
+        "role": "reference",
+        "content_base64": base64.b64encode(
+            b"Policy edition 2026\n\n1. Use LUMA-83 for chargers.\n2. Use GLASS-21 for batteries.\n\nTraining copy."
+        ).decode(),
+    }
+    accepted = _accept_proposed(_inferred([source])["draft"])
+    result = _generate(accepted["result"]["snapshot"], count=20, distinct_source_cases=True)
+    assert result["ok"], result
+    cases = result["result"]["scenarios"]
+    assert [item["source_case"]["policy_reference"] for item in cases] == [
+        "1. Use LUMA-83 for chargers.", "2. Use GLASS-21 for batteries."
+    ]
+    for item, code in zip(cases, ["LUMA-83", "GLASS-21"], strict=True):
+        assert code in item["native"]["tests"].partition("Reviewed source expectations:")[0]
+        assert item["source_case"]["citations"] == [{"source_id": "service", "page": 1, "row": None}]

@@ -29,10 +29,15 @@ from fi.alk.studio._environment_input_types import (
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 
-_PHONE_RE = re.compile(r"(?<!\d)(?:\+?\d[\d .()-]{7,}\d)(?!\d)")
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?!\d{4}-\d{2}-\d{2}(?!\d))(?:\+?\d[\d .()-]{7,}\d)(?!\d)"
+)
 
 _PERSONAL_FIELD_RE = re.compile(
-    r"(?:^|_)(?:customer|buyer|user|person|member|patient|name|email|phone|address)(?:_|$)",
+    r"(?:^|_)(?:email|phone|address)(?:_|$)"
+    r"|(?:^|_)(?:first|last|full|display|customer|buyer|user|person|member|patient)_name(?:_|$)"
+    r"|(?:^|_)(?:customer|buyer|user|person|member|patient)_id(?:_|$)"
+    r"|^name$",
     re.IGNORECASE,
 )
 

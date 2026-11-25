@@ -824,7 +824,7 @@ def open_builder(
         contract,
         out,
         out,
-        wanted=len(reviewed.cases) if reviewed is not None else max(len(existing), 1),
+        wanted=reviewed.evidence.get("scenario_count", len(reviewed.cases)) if reviewed is not None else max(len(existing), 1),
         can_grow=reviewed is None,
         scenario_problem=scenario_problem,
         catalogue=catalogue,
