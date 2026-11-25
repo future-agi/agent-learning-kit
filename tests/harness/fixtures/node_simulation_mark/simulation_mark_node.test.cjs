@@ -489,3 +489,36 @@ test("a redirect from the collector is not followed with the ingest key", async 
   // The exporter sees the redirect as the collector's answer.
   assert.equal(result.stdout.trim(), "307");
 });
+
+test("a key the caller sets after the request starts never replaces the ingest key", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const script = `
+    import http from "node:http";
+    const late = [
+      (req) => { req.setHeader("X-Api-Key", "customer-key"); req.setHeader("x-secret-key", "customer-secret"); },
+      (req) => { req.setHeader("x-api-key", "customer-key"); req.flushHeaders(); },
+      (req) => { req.appendHeader("x-api-key", "customer-key"); req.appendHeader("X-Secret-Key", "customer-secret"); },
+    ];
+    for (const change of late) {
+      await new Promise((resolve, reject) => {
+        const req = http.request("http://127.0.0.1:${collector.port}/v1/traces", {
+          method: "POST", headers: { "content-type": "application/json" },
+        }, (res) => { res.resume(); res.on("end", resolve); });
+        req.on("error", reject);
+        change(req);
+        req.end("{}");
+      });
+    }
+  `;
+  const result = await run(script, envFor(collector));
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(
+    collector.seen.map((sent) => [sent.headers["x-api-key"], sent.headers["x-secret-key"]]),
+    [
+      ["ingest-key", "ingest-secret"],
+      ["ingest-key", "ingest-secret"],
+      ["ingest-key", "ingest-secret"],
+    ],
+  );
+});

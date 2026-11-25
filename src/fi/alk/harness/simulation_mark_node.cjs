@@ -356,11 +356,25 @@ function install() {
     return Buffer.from(String(chunk), typeof encoding === "string" ? encoding : "utf8");
   }
 
-  /** Hold the body until `end`, then send it marked. */
+  /** Hold the body until `end`, then send it marked; the auth headers stay ours until sent. */
   function buffered(req) {
     const originalWrite = req.write;
     const originalEnd = req.end;
+    const originalSetHeader = req.setHeader;
     const chunks = [];
+    const ourValue = new Map(ours);
+    req.setHeader = function (name, value) {
+      const lower = String(name).toLowerCase();
+      return originalSetHeader.call(this, name, ourValue.has(lower) ? ourValue.get(lower) : value);
+    };
+    if (typeof req.appendHeader === "function") {
+      const originalAppendHeader = req.appendHeader;
+      req.appendHeader = function (name, value) {
+        const lower = String(name).toLowerCase();
+        if (ourValue.has(lower)) return originalSetHeader.call(this, name, ourValue.get(lower));
+        return originalAppendHeader.call(this, name, value);
+      };
+    }
     req.write = function (chunk, encoding, callback) {
       const done = typeof encoding === "function" ? encoding : callback;
       const buffer = chunkBuffer(chunk, encoding);
