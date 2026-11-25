@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def _signature(parameters: list[dict[str, Any]]) -> str:
     names: list[str] = []
-    reserved = {"_execute", "_spec", "_name", "_database_url", "_trace_path", "locals"}
+    reserved = {"_execute", "_spec", "_name", "_database_url", "_records_url", "_trace_path", "locals"}
     python_types = {
         "string": "str",
         "integer": "int",
@@ -44,7 +44,10 @@ def _execute(
     *,
     database_url: str,
     trace_path: Path,
+    records_url: str = "",
 ) -> str:
+    """Run a tool's statement with the world's own role (`records_url`; a bundle sealed before it has only the door's)
+    and log it with the door's: a trigger or a statement of the customer's never runs with the door's rights."""
     import psycopg
 
     ordered = [
@@ -55,7 +58,7 @@ def _execute(
     error: str | None = None
     try:
         with psycopg.connect(
-            database_url, autocommit=True, cursor_factory=psycopg.RawCursor
+            records_url or database_url, autocommit=True, cursor_factory=psycopg.RawCursor
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(str(spec["statement"]), ordered)
@@ -123,7 +126,9 @@ def _json_accepted(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, byte
     return [*kept, (b"accept", b"application/json")]
 
 
-def _application(definitions: dict[str, Any], database_url: str, trace_path: Path):
+def _application(
+    definitions: dict[str, Any], database_url: str, trace_path: Path, *, records_url: str = ""
+):
     try:
         from mcp.server.mcpserver import MCPServer
     except ImportError:
@@ -153,12 +158,13 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
             "_spec": spec,
             "_name": tool_name,
             "_database_url": database_url,
+            "_records_url": records_url,
             "_trace_path": trace_path,
         }
         exec(  # noqa: S102 - compiled only from validated declarative parameter names
             f"def generated_{position}({_signature(spec.get('parameters') or [])}):\n"
             "    return _execute(_name, _spec, locals(), "
-            "database_url=_database_url, trace_path=_trace_path)\n",
+            "database_url=_database_url, trace_path=_trace_path, records_url=_records_url)\n",
             namespace,
         )
         server.tool(name=tool_name, description=str(spec.get("description") or ""))(
@@ -205,6 +211,7 @@ if __name__ == "__main__":
             definitions,
             os.environ["DATABASE_URL"],
             Path(os.environ["HARNESS_TOOL_TRACE"]),
+            records_url=os.environ.get("WORLD_RECORDS_DATABASE_URL", ""),
         ),
         host="0.0.0.0",
         port=int(os.environ["PORT"]),

@@ -8846,7 +8846,11 @@ def test_each_door_process_runs_as_the_door_with_the_door_s_database_role(make):
     }[make]()
     assert process.user is ProcessUser.SVC_DOOR
     assert process.environment["DATABASE_URL"] == "{{WORLD_DOOR_DATABASE_URL}}"
-    assert "{{WORLD_DATABASE_URL}}" not in json.dumps(process.environment)
+    # The world's own role reaches the door only to write the world's rows, never the call log.
+    assert process.environment["WORLD_RECORDS_DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert json.dumps({k: v for k, v in process.environment.items() if k != "WORLD_RECORDS_DATABASE_URL"}).count(
+        "{{WORLD_DATABASE_URL}}"
+    ) == 0
 
 
 def test_a_leftover_file_that_does_not_parse_does_not_make_the_callback_ambiguous(tmp_path):

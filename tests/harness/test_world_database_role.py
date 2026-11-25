@@ -839,19 +839,22 @@ def test_the_door_s_rights_name_only_tables_the_harness_makes():
     assert set(pr.DOOR_TABLE_RIGHTS) == set(made)
 
 
-def test_the_seed_check_snapshots_after_the_migrations_and_before_the_seed(tmp_path: Path, monkeypatch):
-    """The source's migrations made a SECURITY DEFINER function and the seed made an event trigger: only the seed's is
-    refused, because the snapshot between the two lists holds the migration's."""
-    applied: list[str] = []
-    monkeypatch.setattr(pr, "apply_seed_file", lambda _engine, path, **_kw: applied.append(Path(path).name))
+def test_migrations_run_as_the_migrations_login_and_the_seed_as_the_superuser(tmp_path: Path, monkeypatch):
+    """Migrations connect as the non-superuser migrations login, the seed as the superuser, and the seed's event
+    trigger is refused."""
+    applied: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pr,
+        "apply_seed_file",
+        lambda _engine, path, **kw: applied.append((Path(path).name, kw["credentials"].username)),
+    )
     code = seed_escalation_queries(pr.WORLD_ROLE_GROUP).code
-    from_migration = ("security definer function auth.uid()", "m1")
     from_seed = ("event trigger planted", "s1")
 
     def answer(dbname: str, statement: str) -> list[tuple[str, str]]:
         if statement != code or dbname == "postgres":
             return []
-        return [from_migration] + ([from_seed] if "seed.sql" in applied else [])
+        return [from_seed] if any(name == "seed.sql" for name, _ in applied) else []
 
     spy = runtime_tests.SqlSpy()
 
@@ -869,36 +872,36 @@ def test_the_seed_check_snapshots_after_the_migrations_and_before_the_seed(tmp_p
     )
     with pytest.raises(pr.ProcessRuntimeError) as raised:
         pr.freeze_baseline(manifest, bundle_digest=manifest.digest, context=context)
-    assert applied == ["migrate.sql", "seed.sql"]
+    assert applied[0] == ("migrate.sql", pr.MIGRATOR_ROLE)
+    assert applied[1][0] == "seed.sql" and applied[1][1] != pr.MIGRATOR_ROLE
     assert "event trigger planted" in str(raised.value)
-    assert "auth.uid()" not in str(raised.value)
 
 
-@real_postgres
-@pytest.mark.parametrize(
-    "migration, seed, refused",
-    [
-        # A source whose own migrations define a SECURITY DEFINER function builds.
-        ("CREATE FUNCTION mig_owned() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'", "", None),
-        # One the seed adds is refused.
-        ("", "CREATE FUNCTION seed_added() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'", "seed_added()"),
-        # A seed that changes the migration's function is refused.
-        (
-            "CREATE FUNCTION mig_changed() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'",
-            "CREATE OR REPLACE FUNCTION mig_changed() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 2'",
-            "mig_changed()",
-        ),
-        # A seed that turns a migration's plain function into a SECURITY DEFINER one is refused.
-        (
-            "CREATE FUNCTION mig_plain() RETURNS int LANGUAGE sql AS 'SELECT 1'",
-            "ALTER FUNCTION mig_plain() SECURITY DEFINER",
-            "mig_plain()",
-        ),
-        # A seed that alters the world group is refused.
-        ("", 'ALTER ROLE "alk_world_tools" CREATEDB', "alk_world_tools"),
-    ],
-)
-def test_the_seed_check_refuses_only_what_the_seed_added_or_changed(migration, seed, refused):
+def test_a_migration_that_needs_a_superuser_says_where_the_statement_belongs(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+
+    def apply(_engine, path, **kw):
+        if Path(path).name == "migrate.sql":
+            raise pr.ProcessRuntimeError("seed", "seed_failed", "must be superuser to create an event trigger")
+
+    monkeypatch.setattr(pr, "apply_seed_file", apply)
+    store = SimpleNamespace(migrations=["migrate.sql"], seed_files=["seed.sql"])
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_store_seed(
+            store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=tmp_path, port=5432, dbname="b",
+            credentials=pr.EngineCredentials("harness", "pw"), process_name="db", sync_run=None,
+            migration_credentials=pr.EngineCredentials(pr.MIGRATOR_ROLE, "pw"),
+        )
+
+    said = str(raised.value)
+    assert "must be superuser" in said and "move that statement to a seed file" in said
+    assert said.count("seed/seed_failed") == 1
+
+
+def _migrated(migration: str, seed: str, *, alk_table: bool = False):
+    """A baseline whose migrations ran as the migrations login and whose seed ran as the superuser; the check, and a
+    runner for each login."""
     parts = urlsplit(_REAL)
     host, port = parts.hostname or "localhost", parts.port or 5432
     superuser = pr.EngineCredentials(parts.username, parts.password or "")
@@ -906,20 +909,59 @@ def test_the_seed_check_refuses_only_what_the_seed_added_or_changed(migration, s
     checked = {"port": port, "credentials": superuser, "baseline_db": baseline, "sql_runner": pr.default_sql_runner,
                "process_name": "db"}
 
-    def run(dbname: str, statement: str) -> None:
+    def run(creds, dbname: str, statement: str):
         if statement:
-            pr.default_sql_runner(
-                host=host, port=port, user=superuser.username, password=superuser.password, dbname=dbname,
-                statement=statement,
+            return pr.default_sql_runner(
+                host=host, port=port, user=creds.username, password=creds.password, dbname=dbname, statement=statement,
             )
+        return None
 
-    run("postgres", f'CREATE DATABASE "{baseline}"')
-    run("postgres", "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_tools') "
+    run(superuser, "postgres", f'CREATE DATABASE "{baseline}"')
+    run(superuser, "postgres", "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_tools') "
         "THEN CREATE ROLE alk_world_tools NOLOGIN; END IF; END $$")
+    migrator = pr.migrator_credentials(**{k: v for k, v in checked.items()})
+    run(migrator, baseline, migration)
+    before = pr.seed_escalation_snapshot(**checked)
+    run(superuser, baseline, seed)
+    if alk_table:
+        run(superuser, baseline, "CREATE TABLE _alk_action_keys (key text PRIMARY KEY)")
+    return superuser, migrator, baseline, checked, before, run
+
+
+def _dropped(superuser, baseline, run) -> None:
+    run(superuser, "postgres", 'ALTER ROLE "alk_world_tools" NOCREATEDB')
+    run(superuser, "postgres", f'DROP DATABASE IF EXISTS "{baseline}"')
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    "migration, seed, refused",
+    [
+        # Supabase-style: a migration's SECURITY DEFINER auth helper builds; it runs as the migrations login.
+        (
+            "CREATE SCHEMA auth; CREATE FUNCTION auth.uid() RETURNS text LANGUAGE sql SECURITY DEFINER "
+            "AS $$ SELECT current_setting('request.jwt.claim.sub', true) $$",
+            "",
+            None,
+        ),
+        # RESET ROLE cannot escape the migrations login: what it makes after is still that login's.
+        ("RESET ROLE; CREATE FUNCTION reset_then() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'", "", None),
+        # One the seed adds, as the superuser, is refused.
+        ("", "CREATE FUNCTION seed_added() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'", "seed_added()"),
+        # A seed that hands a migration's function to the superuser and grants it to PUBLIC is refused.
+        (
+            "CREATE FUNCTION mig_revoked() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'; "
+            "REVOKE EXECUTE ON FUNCTION mig_revoked() FROM PUBLIC",
+            "ALTER FUNCTION mig_revoked() OWNER TO CURRENT_USER; GRANT EXECUTE ON FUNCTION mig_revoked() TO PUBLIC",
+            "mig_revoked()",
+        ),
+        # A seed that alters the world group is refused.
+        ("", 'ALTER ROLE "alk_world_tools" CREATEDB', "alk_world_tools"),
+    ],
+)
+def test_the_seed_check_refuses_what_runs_with_more_rights_than_its_caller(migration, seed, refused):
+    superuser, _migrator, baseline, checked, before, run = _migrated(migration, seed)
     try:
-        run(baseline, migration)
-        before = pr.seed_escalation_snapshot(**checked)
-        run(baseline, seed)
         if refused is None:
             pr._refuse_seed_escalation(**checked, before_seed=before)
         else:
@@ -927,8 +969,237 @@ def test_the_seed_check_refuses_only_what_the_seed_added_or_changed(migration, s
                 pr._refuse_seed_escalation(**checked, before_seed=before)
             assert raised.value.code == "seed_failed" and refused in str(raised.value)
     finally:
-        run("postgres", 'ALTER ROLE "alk_world_tools" NOCREATEDB')
-        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}"')
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_a_migration_s_security_definer_function_cannot_reach_the_harness_tables():
+    """A migration's SECURITY DEFINER function runs as the migrations login, which has no right on a harness table:
+    called by anyone, it is refused there. SET ROLE to the superuser is refused to the migrations login too."""
+    reads = (
+        "CREATE FUNCTION peek() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER "
+        "AS $$ BEGIN RETURN (SELECT count(*) FROM _alk_action_keys); END $$"
+    )
+    superuser, migrator, baseline, checked, before, run = _migrated(reads, "", alk_table=True)
+    try:
+        pr._refuse_seed_escalation(**checked, before_seed=before)
+        with pytest.raises(Exception) as denied:
+            run(superuser, baseline, "SET ROLE alk_world_tools; SELECT peek()")
+        assert "permission denied" in str(denied.value)
+        with pytest.raises(Exception) as escaped:
+            run(migrator, baseline, f'SET ROLE "{superuser.username}"')
+        assert "permission denied" in str(escaped.value)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    "migration, refused",
+    [
+        # E1: a migration makes a harness table first, with a trigger the superuser's write would run.
+        (
+            "CREATE TABLE _alk_trial_faults (id int PRIMARY KEY, faults jsonb); "
+            "CREATE FUNCTION grab() RETURNS trigger LANGUAGE plpgsql AS "
+            "$$ BEGIN EXECUTE 'ALTER ROLE alk_world_tools SUPERUSER'; RETURN NEW; END $$; "
+            "CREATE TRIGGER grab BEFORE INSERT OR UPDATE ON _alk_trial_faults FOR EACH ROW EXECUTE FUNCTION grab()",
+            "harness table",
+        ),
+        # E1 without a trigger: a harness table the migrations own is refused too.
+        ("CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text)", "harness table"),
+        # E3: functions in public that an unqualified call in a harness statement would resolve to.
+        (
+            "CREATE FUNCTION public.unnest(text[]) RETURNS SETOF text LANGUAGE sql AS $$ SELECT 'x' $$",
+            "shadows a system function",
+        ),
+        (
+            "CREATE FUNCTION public.format(text, text) RETURNS text LANGUAGE sql AS $$ SELECT $1 $$",
+            "shadows a system function",
+        ),
+        # Trusted extensions whose functions share system names (pgcrypto's gen_random_uuid, citext's lower) build.
+        ("CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS citext", None),
+    ],
+)
+def test_harness_tables_and_system_names_are_the_harness_s_alone(migration, refused):
+    superuser, _migrator, baseline, checked, before, run = _migrated(migration, "")
+    try:
+        if refused is None:
+            pr._refuse_seed_escalation(**checked, before_seed=before)
+        else:
+            with pytest.raises(pr.ProcessRuntimeError) as raised:
+                pr._refuse_seed_escalation(**checked, before_seed=before)
+            assert refused in str(raised.value)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_a_migration_s_function_cannot_drop_a_harness_table_through_public():
+    """E4: the migrations login may create in `public` but does not own it, so its SECURITY DEFINER function cannot
+    drop and remake a harness table, called by anyone."""
+    swap = (
+        "CREATE FUNCTION swap() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN "
+        "DROP TABLE public._alk_tool_trace; CREATE TABLE public._alk_tool_trace (id int); "
+        "GRANT ALL ON public._alk_tool_trace TO PUBLIC; END $$"
+    )
+    superuser, _migrator, baseline, checked, before, run = _migrated(
+        swap, "CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text)"
+    )
+    try:
+        pr._refuse_seed_escalation(**checked, before_seed=before)
+        with pytest.raises(Exception) as denied:
+            run(superuser, baseline, "SET ROLE alk_world_tools; SELECT swap()")
+        assert "must be owner" in str(denied.value)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_a_customer_trigger_fired_by_the_world_s_rows_cannot_forge_the_call_log(door_worlds):
+    """E2: the door's role may write the call log; a customer trigger on a world table, fired by a row the door
+    writes, runs as whoever wrote the row. Written with the world's role (as the door's processes now do), the trigger
+    is refused the log; written with the door's, it could forge it."""
+    superuser, world, door, _reset = door_worlds(True)
+    forge = (
+        "CREATE FUNCTION forge() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "INSERT INTO _alk_tool_trace (name, arguments, ok, at) VALUES ('forged', '{}'::jsonb, true, 0); "
+        "RETURN NEW; END $$; "
+        "CREATE TRIGGER forge AFTER INSERT ON riders FOR EACH ROW EXECUTE FUNCTION forge()"
+    )
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(forge)
+
+    with pytest.raises(Exception) as refused:
+        world_door.PostgresRecords(world)("INSERT INTO riders (name) VALUES (%s)", ["ada"])
+    assert "permission denied" in str(refused.value)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT count(*) FROM _alk_tool_trace WHERE name = 'forged'").fetchone() == (0,)
+    # The door's own role still could: the reason its processes write the world's rows with the world's role.
+    world_door.PostgresRecords(door)("INSERT INTO riders (name) VALUES (%s)", ["bo"])
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT count(*) FROM _alk_tool_trace WHERE name = 'forged'").fetchone() == (1,)
+
+
+def test_every_door_process_writes_the_world_s_rows_with_the_world_s_role(monkeypatch):
+    import importlib
+
+    from fi.alk.harness import bundle_author_v2 as author_module
+    from fi.alk.harness import in_process_door, mcp_toolbox_adapter, tool_trace_proxy
+
+    for process in (
+        author_module._tool_proxy_process(),
+        author_module._world_door_process([]),
+        author_module._mcp_toolbox_process(),
+    ):
+        assert process.environment["WORLD_RECORDS_DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+        assert process.environment["DATABASE_URL"] == "{{WORLD_DOOR_DATABASE_URL}}"
+    monkeypatch.setenv("DATABASE_URL", "door-url")
+    monkeypatch.setenv("WORLD_RECORDS_DATABASE_URL", "world-url")
+    try:
+        assert importlib.reload(tool_trace_proxy).RECORDS_DATABASE_URL == "world-url"
+        assert importlib.reload(in_process_door).RECORDS_DATABASE_URL == "world-url"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(tool_trace_proxy)
+        importlib.reload(in_process_door)
+    opened: list[str] = []
+
+    class _Connection:
+        def __init__(self, url):
+            opened.append(url)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self):
+            return self
+
+        def execute(self, *args, **kwargs):
+            return None
+
+        description = None
+        rowcount = 1
+
+    import psycopg as real_psycopg
+
+    monkeypatch.setattr(real_psycopg, "connect", lambda url, **kwargs: _Connection(url))
+    mcp_toolbox_adapter._execute(
+        "add", {"statement": "INSERT INTO riders (name) VALUES (%s)", "parameters": [{"name": "name"}]},
+        {"name": "ada"}, database_url="door-url", trace_path=Path("/dev/null"), records_url="world-url",
+    )
+    assert opened == ["world-url", "door-url"]
+
+
+def _pg_dump_schema(owner: str) -> str:
+    """A schema file as `pg_dump --schema-only` writes it, owners and the plpgsql comment included."""
+    return (
+        "SET statement_timeout = 0;\n"
+        "SELECT pg_catalog.set_config('search_path', '', false);\n"
+        "COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';\n"
+        "CREATE TABLE public.items (id integer NOT NULL, name text);\n"
+        f"ALTER TABLE public.items OWNER TO {owner};\n"
+        "CREATE SEQUENCE public.items_id_seq AS integer START WITH 1 INCREMENT BY 1;\n"
+        f"ALTER SEQUENCE public.items_id_seq OWNER TO {owner};\n"
+        "CREATE FUNCTION public.note() RETURNS text LANGUAGE plpgsql AS $_$\n"
+        "BEGIN\n"
+        "-- ALTER TABLE public.items OWNER TO someone;\n"
+        "RETURN 'ALTER TABLE public.items OWNER TO someone;';\n"
+        "END\n"
+        "$_$;\n"
+        f"ALTER FUNCTION public.note() OWNER TO {owner};\n"
+    )
+
+
+def test_a_dump_s_ownership_statements_are_left_out_and_function_bodies_kept(tmp_path: Path):
+    file = tmp_path / "schema.sql"
+    file.write_text(_pg_dump_schema("postgres"), encoding="utf-8")
+
+    filtered, skipped = pr._without_ownership(file)
+
+    text = filtered.read_text(encoding="utf-8")
+    assert skipped == 4
+    assert "-- left out by the harness (ownership): ALTER TABLE public.items OWNER TO postgres;" in text
+    assert "RETURN 'ALTER TABLE public.items OWNER TO someone;';" in text
+    assert "\nALTER TABLE public.items OWNER TO postgres;" not in text
+    assert pr._without_ownership(tmp_path / "schema.json") == (tmp_path / "schema.json", 0)
+
+
+@real_postgres
+def test_a_pg_dump_schema_with_owners_builds_as_the_migrations_login(tmp_path: Path):
+    superuser, migrator, baseline, checked, before, run = _migrated("", "")
+    try:
+        dumped = _pg_dump_schema(f'"{superuser.username}"')
+        with pytest.raises(Exception):
+            run(migrator, baseline, dumped)
+        file = tmp_path / "schema.sql"
+        file.write_text(dumped, encoding="utf-8")
+        filtered, _ = pr._without_ownership(file)
+        run(migrator, baseline, filtered.read_text(encoding="utf-8"))
+        pr._refuse_seed_escalation(**checked, before_seed=before)
+        owner = run(superuser, baseline, "SELECT tableowner FROM pg_tables WHERE tablename = 'items'")
+        assert owner == [(pr.MIGRATOR_ROLE,)]
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_a_grant_to_public_changes_a_function_s_fingerprint():
+    superuser, _migrator, baseline, checked, before, run = _migrated(
+        "", "CREATE FUNCTION held() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'; "
+        "REVOKE EXECUTE ON FUNCTION held() FROM PUBLIC"
+    )
+    try:
+        ours, _ = pr._seed_escalations(**checked)
+        run(superuser, baseline, "GRANT EXECUTE ON FUNCTION held() TO PUBLIC")
+        after, _ = pr._seed_escalations(**checked)
+        fingerprint = {what: mark for _db, what, mark in ours if "held()" in what}
+        changed = {what: mark for _db, what, mark in after if "held()" in what}
+        assert fingerprint and fingerprint != changed
+    finally:
+        _dropped(superuser, baseline, run)
 
 
 def _as_superuser(dbname: str, statement: str) -> None:

@@ -4285,6 +4285,46 @@ def apply_seed_file(
         )
 
 
+# Statements a dump makes that only say who owns what or describe an extension: the migrations' login may not run
+# them, and skipping them leaves its own objects its own (pg_restore --no-owner). Whole statements on one line only.
+_OWNERSHIP_ONLY = re.compile(
+    r"^\s*(ALTER\s+[A-Za-z ]+?\s+.+\s+OWNER\s+TO\s+[^;\s]+"
+    r"|COMMENT\s+ON\s+EXTENSION\s+\S+\s+IS\s+'(?:[^']|'')*')\s*;\s*$",
+    re.IGNORECASE,
+)
+_DOLLAR_QUOTE = re.compile(r"\$[A-Za-z_][A-Za-z_0-9]*\$|\$\$")
+
+
+def _without_ownership(file: Path) -> tuple[Path, int]:
+    """A migration file without the dump's ownership and extension-comment statements, and how many it left out; the
+    file itself when it has none. Lines inside a dollar-quoted body (a function's) are never touched."""
+    if file.suffix.lower() != ".sql":
+        return file, 0
+    try:
+        lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
+    except (OSError, UnicodeDecodeError):
+        return file, 0
+    kept: list[str] = []
+    open_tag: str | None = None
+    skipped = 0
+    for line in lines:
+        if open_tag is None and _OWNERSHIP_ONLY.match(line):
+            skipped += 1
+            kept.append("-- left out by the harness (ownership): " + line.strip() + "\n")
+            continue
+        kept.append(line)
+        for tag in _DOLLAR_QUOTE.findall(line):
+            open_tag = tag if open_tag is None else (None if tag == open_tag else open_tag)
+    if not skipped:
+        return file, 0
+    descriptor, name = tempfile.mkstemp(prefix="migration-", suffix=".sql")
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.writelines(kept)
+    # The store's own user runs psql on it.
+    os.chmod(name, 0o644)
+    return Path(name), skipped
+
+
 def apply_store_seed(
     store: StoreEntry,
     *,
@@ -4301,26 +4341,47 @@ def apply_store_seed(
     source_digest: str | None = None,
     generic_artifact_root: Path | None = None,
     after_migrations: Callable[[], None] | None = None,
+    migration_credentials: EngineCredentials | None = None,
 ) -> None:
     """§2c: "migrations then seed_files... applied in listed order" — migrations always precede
     seed_files, regardless of how many files either list holds, and each list keeps its own
-    authored order (never sorted). ``after_migrations`` runs between the two lists."""
+    authored order (never sorted). ``after_migrations`` runs between the two lists. Migrations run as
+    ``migration_credentials`` when given (the non-superuser migrations login), the seed as ``credentials``."""
     for files in (store.migrations, store.seed_files):
+        as_migration = files is store.migrations and migration_credentials is not None
         for relative_path in files:
-            apply_seed_file(
-                engine,
-                bundle_dir / relative_path,
-                port=port,
-                dbname=dbname,
-                credentials=credentials,
-                process_name=process_name,
-                sync_run=sync_run,
-                user=user,
-                group=group,
-                rabbitmq_import=rabbitmq_import,
-                source_digest=source_digest,
-                generic_artifact_root=generic_artifact_root,
-            )
+            path = bundle_dir / relative_path
+            if as_migration:
+                path, skipped = _without_ownership(path)
+                if skipped:
+                    logger.info(
+                        "migration_ownership_statements_left_out process=%s file=%s count=%d",
+                        process_name,
+                        relative_path,
+                        skipped,
+                    )
+            try:
+                apply_seed_file(
+                    engine, path, port=port, dbname=dbname,
+                    credentials=migration_credentials if as_migration else credentials, process_name=process_name,
+                    sync_run=sync_run, user=user, group=group, rabbitmq_import=rabbitmq_import,
+                    source_digest=source_digest, generic_artifact_root=generic_artifact_root,
+                )
+            except ProcessRuntimeError as failed:
+                if not as_migration:
+                    raise
+                said = str(failed).split(": ", 1)[-1]
+                raise ProcessRuntimeError(
+                    failed.stage,
+                    failed.code,
+                    f"{said}. Migrations run as a login that is no superuser and owns only this database: one that "
+                    "makes an event trigger, a function in an untrusted language, a role or an extension only a "
+                    "superuser may add fails here; move that statement to a seed file or drop it.",
+                    process=failed.process or process_name,
+                    domain=failed.domain or FailureDomain.ENVIRONMENT,
+                    diagnostics=failed.diagnostics,
+                    cause=failed.cause,
+                ) from failed
         if files is store.migrations and after_migrations is not None:
             after_migrations()
 
@@ -5187,6 +5248,17 @@ def _freeze_one_store(
                 dbname="postgres",
                 statement=f'CREATE DATABASE "{baseline_dbname}"',
             )
+        migrations_as = (
+            migrator_credentials(
+                port=port,
+                credentials=credentials,
+                baseline_db=baseline_dbname,
+                sql_runner=context.sql_runner,
+                process_name=process.name,
+            )
+            if process.engine is ManagedEngine.POSTGRES and credentials is not None and store.migrations
+            else None
+        )
         before_seed: set[SeedEscalation] = set()
 
         def _snapshot_before_seed() -> None:
@@ -5217,6 +5289,7 @@ def _freeze_one_store(
             source_digest=manifest.provenance.source_digest,
             generic_artifact_root=context.generic_artifact_root,
             after_migrations=_snapshot_before_seed,
+            migration_credentials=migrations_as,
         )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
@@ -5631,9 +5704,55 @@ def _seed_escalations(
         )
         return {(dbname, str(row[0]), str(row[1]) if len(row) > 1 else "") for row in rows or [] if row}
 
-    ours = found("postgres", queries.our_roles)
-    others = found("postgres", queries.other_roles) | found("postgres", queries.code) | found(baseline_db, queries.code)
+    # Code that runs with rights its caller lacks is refused whoever made it: the migrations' login cannot make it,
+    # so only the seed or a superuser can have.
+    ours = found("postgres", queries.our_roles) | found("postgres", queries.code) | found(baseline_db, queries.code)
+    others = found("postgres", queries.other_roles)
     return ours, others
+
+
+# The login a source's migrations run as: it owns only what its migrations make, so code a migration makes runs with
+# no more than this role's rights, and no right on the harness's tables is ever its.
+MIGRATOR_ROLE = "alk_migrator"
+
+
+def migrator_credentials(
+    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+) -> EngineCredentials:
+    """Make (or refresh) the migrations' login with a new password and let it create in the superuser's baseline and
+    its `public`. It is no superuser and can make no role or database: a migration that needs more is refused
+    by Postgres itself."""
+    password = secrets.token_hex(24)
+
+    def run(dbname: str, statement: str) -> None:
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=dbname,
+            statement=statement,
+        )
+
+    run(
+        "postgres",
+        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{MIGRATOR_ROLE}') "
+        f'THEN CREATE ROLE "{MIGRATOR_ROLE}"; END IF; END $$',
+    )
+    run(
+        "postgres",
+        f'ALTER ROLE "{MIGRATOR_ROLE}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS '
+        f"PASSWORD '{password}'",
+    )
+    # The database and its `public` stay the superuser's (since Postgres 15 `public` belongs to whoever owns the
+    # database): the migrations may create schemas, trusted extensions and objects in `public`, never drop or alter
+    # what they do not own there, a harness table included.
+    run("postgres", f'GRANT CONNECT, CREATE, TEMPORARY ON DATABASE "{baseline_db}" TO "{MIGRATOR_ROLE}"')
+    run(baseline_db, f'GRANT USAGE, CREATE ON SCHEMA public TO "{MIGRATOR_ROLE}"')
+    return EngineCredentials(MIGRATOR_ROLE, password)
 
 
 def seed_escalation_snapshot(
