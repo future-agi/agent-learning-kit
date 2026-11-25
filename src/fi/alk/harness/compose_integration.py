@@ -49,9 +49,12 @@ def runtime_capability_briefing() -> str:
     heading = (
         "\n\n## Available execution capabilities\n\n"
         "Generated native process execution supports Python, source-declared pinned Bun, "
-        "or source-declared pinned Node started with a node command. Read a Node.js project "
-        "as runtime.language=node; do not translate it to Bun without source evidence or "
-        "invent a replacement entrypoint or runtime. "
+        "or one npm package started with a node command: runtime.workdir holds its "
+        "package.json, pinning an exact npm@x.y.z, and package-lock.json. It runs on the "
+        "image's Node, not a version the source asks for. npm or pnpm workspaces, pnpm and "
+        "yarn are not supported yet. Read a Node.js project as runtime.language=node; do not "
+        "translate it to Bun without source evidence or invent a replacement entrypoint or "
+        "runtime. "
     )
     if not enabled():
         return heading + (

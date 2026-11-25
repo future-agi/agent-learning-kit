@@ -857,12 +857,13 @@ class Runtime(BaseModel):
     # an otherwise unambiguous Node repository fail the generated-runtime admission path.
     language: str = Field(
         default="",
-        description="Source language. Native process supports Python, Bun or Node. Bun and "
-        "Node need a source-declared exact packageManager version and its one root lockfile: "
-        "bun@x.y.z with bun.lock or bun.lockb; for node, npm@x.y.z with package-lock.json or "
-        "pnpm@x.y.z with pnpm-lock.yaml. Node installs without lifecycle scripts. Bun needs that "
-        "exact Bun version in the image; Node runs on the image's Node 22 whatever version the "
-        "source asks for. Both need an HTTP command whose first argument is bun or node.",
+        description="Source language. Native process supports Python, Bun or Node. Bun needs "
+        "a source-declared exact packageManager bun@x.y.z with one root bun.lock or bun.lockb "
+        "and that exact Bun version in the image. Node supports one npm package: runtime.workdir "
+        "holds package.json with an exact packageManager npm@x.y.z and package-lock.json; npm or "
+        "pnpm workspaces, pnpm and yarn are refused. Node installs without lifecycle scripts and "
+        "runs on the image's Node 22 whatever version the source asks for. Both need an HTTP "
+        "command whose first argument is bun or node.",
     )
     version: str = ""
     install: str = Field(
