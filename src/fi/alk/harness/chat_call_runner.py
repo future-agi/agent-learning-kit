@@ -1505,8 +1505,9 @@ class HostedChatCallRunner:
                 kind=ArtifactKind.TOOL_TRACE,
                 scenario_key=scenario.scenario_key,
             )
-        # Last, so they never crowd out the transcript and the end state.
-        shots, shot_notices = await upload_screenshots(
+        # Last, so they never crowd out the transcript and the end state. Never named as the call's recordings: the
+        # platform reads those as a voice call's.
+        _, shot_notices = await upload_screenshots(
             self._adapter, scenario.scenario_key, browser, browser_shots_dir(runtime)
         )
         outcome = CallOutcome(
@@ -1514,7 +1515,6 @@ class HostedChatCallRunner:
             tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
             notices=tuple(said) + tuple(shot_notices),
-            recording_artifacts=shots,
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

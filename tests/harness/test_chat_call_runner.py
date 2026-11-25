@@ -2747,7 +2747,8 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
     )
     assert adapter.kinds[-1] == "screenshot"
     assert adapter.kinds.index("transcript") < adapter.kinds.index("screenshot")
-    assert outcome.recording_artifacts == (f"artifact-{len(adapter.kinds)}",)
+    # The platform reads a call's recordings as proof of a voice call: a chat trial's screenshots are never named there.
+    assert outcome.recording_artifacts == ()
 
 
 @pytest.mark.parametrize("include_tools", [False, True])

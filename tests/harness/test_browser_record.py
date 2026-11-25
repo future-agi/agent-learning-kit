@@ -4,6 +4,7 @@ split into the pages it tried to open and the requests the pages made."""
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import socket
 import struct
@@ -440,6 +441,8 @@ def test_each_page_and_the_trial_s_end_are_photographed(tmp_path, devtools_port)
     ]
     for one in shots:
         assert (tmp_path / "w0-shots" / one["file"]).read_bytes() == fake.shot
+        # The id the platform will store it under, so a row and its stored screenshot can be matched.
+        assert one["artifact_id"] == "sha256:" + hashlib.sha256(fake.shot).hexdigest()
     assert body["screenshots_capped"] is False
 
 

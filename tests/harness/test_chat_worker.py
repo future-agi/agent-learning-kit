@@ -753,3 +753,57 @@ def test_the_transcript_names_the_end_state_by_the_id_it_was_stored_under():
     assert "end_state_artifact" not in _json.loads(_with_stored_end_state(transcript, {}))["world_actors"]
     plain = _json.dumps({"messages": []}).encode()
     assert _with_stored_end_state(plain, {}) == plain
+
+
+def test_a_screenshot_the_platform_did_not_keep_is_said_and_never_named(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+
+    class Refuses:
+        def __init__(self) -> None:
+            self.kinds: list[str] = []
+
+        async def upload_artifact(self, data, *, kind, **_kwargs):
+            self.kinds.append(kind.value)
+            return None if kind.value == "screenshot" else f"stored-{len(self.kinds)}"
+
+    async def worker(module, payload, **_kwargs):
+        return {
+            "outcome": {
+                "calls": [], "turns": 1, "started_at": None, "ended_at": None, "duration_ms": 1,
+                "transcript_artifact": "0", "recording_artifacts": [],
+            },
+            "artifacts": [
+                {"id": "0", "kind": "transcript", "data": base64.b64encode(b"t").decode()},
+                {"id": "1", "kind": "screenshot", "data": base64.b64encode(b"jpeg").decode()},
+            ],
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    adapter = Refuses()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-0", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY
+    )
+    outcome = asyncio.run(
+        chat_worker.IsolatedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", source_scenario_key="one", scenario_id="id"), runtime
+        )
+    )
+    assert adapter.kinds == ["transcript", "screenshot"]
+    assert outcome.recording_artifacts == ()
+    assert [one["code"] for one in outcome.notices] == ["screenshots_not_kept"]
+
+
+def test_the_worker_keeps_screenshots_within_what_its_result_can_carry(monkeypatch):
+    # The worker's result is one file with a size limit: a screenshot that would push it over is not kept, and the
+    # trial goes on.
+    monkeypatch.setattr(chat_worker, "MAX_RESULT_BYTES", 400)
+    collector = chat_worker._ArtifactCollector()
+    kinds = chat_worker.ArtifactKind
+
+    async def run():
+        assert await collector.upload_artifact(b"t" * 100, kind=kinds.TRANSCRIPT) == "0"
+        assert await collector.upload_artifact(b"j" * 100, kind=kinds.SCREENSHOT) == "1"
+        assert await collector.upload_artifact(b"j" * 100, kind=kinds.SCREENSHOT) is None
+
+    asyncio.run(run())
+    assert [one["kind"] for one in collector.artifacts] == ["transcript", "screenshot"]

@@ -182,11 +182,15 @@ class BrowserRecord:
                 self._shots_capped = True
             return True, dropped
 
-    def photographed(self, tab: str, *, when: str, url: str, file: str, size: int) -> None:
+    def photographed(
+        self, tab: str, *, when: str, url: str, file: str, size: int, artifact_id: str | None = None
+    ) -> None:
+        """A screenshot kept. ``artifact_id`` is the id the platform stores it under, so a row and its stored
+        screenshot can be matched."""
         with self._lock:
             self._shots.append(
                 {"file": file, "when": when, "url": _clean(url, 2048), "tab": self._tab(tab), "at": self.clock(),
-                 "bytes": size}
+                 "bytes": size, **({"artifact_id": artifact_id} if artifact_id else {})}
             )
 
     def allowed(self, url: str) -> bool:
@@ -653,7 +657,8 @@ class BrowserRecorder:
             return
         tab = self._tabs.get(session or "")
         self.record.photographed(
-            tab[0] if tab else "", when=when, url=url, file=name, size=len(data)
+            tab[0] if tab else "", when=when, url=url, file=name, size=len(data),
+            artifact_id="sha256:" + hashlib.sha256(data).hexdigest(),
         )
 
     def _attached(self, params: dict[str, Any], parent: str | None) -> None:

@@ -21,7 +21,7 @@ from .call_runner import ArtifactUploader, CallRunnerContext
 from .chat_call_runner import _check_text_usage, handler_child_for
 from .handler_child import HandlerChannel
 from .hosted_scheduler import USER_CANCELED, CallAborted, CallCancelled, CallOutcome, Scenario, World, call_sealed
-from .isolated_process import IsolatedWorkerError, run_json_worker, run_worker, stop_requested
+from .isolated_process import MAX_RESULT_BYTES, IsolatedWorkerError, run_json_worker, run_worker, stop_requested
 from .outbound import ArtifactKind
 from .privilege import IsolationMode, isolation_mode
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
@@ -255,18 +255,19 @@ class _UsageCollector:
 class _ArtifactCollector:
     def __init__(self) -> None:
         self.artifacts: list[dict[str, Any]] = []
+        self._carried = 0
 
     async def upload_artifact(
         self, data: bytes, *, kind: ArtifactKind, **_kwargs: Any
-    ) -> str:
+    ) -> str | None:
+        encoded = base64.b64encode(data).decode("ascii")
+        # The worker's result is one file with a size limit. A screenshot that would take it past three quarters of
+        # that, leaving room for the outcome, is not kept rather than failing the trial; its runner says so.
+        if kind is ArtifactKind.SCREENSHOT and self._carried + len(encoded) > MAX_RESULT_BYTES * 3 // 4:
+            return None
+        self._carried += len(encoded)
         identifier = str(len(self.artifacts))
-        self.artifacts.append(
-            {
-                "id": identifier,
-                "kind": kind.value,
-                "data": base64.b64encode(data).decode("ascii"),
-            }
-        )
+        self.artifacts.append({"id": identifier, "kind": kind.value, "data": encoded})
         return identifier
 
 
