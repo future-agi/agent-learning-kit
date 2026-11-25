@@ -326,6 +326,30 @@ def test_save_world_refuses_a_literal_json_has_no_form_for(tmp_path):
             "  ADD extra json, ADD CONSTRAINT meta_key UNIQUE (key);",
             [("meta", "extra"), ("meta", "value")],
         ),
+        (
+            "CREATE TABLE meta (old JSONB, new TEXT);"
+            "ALTER TABLE public.meta ALTER COLUMN old TYPE TEXT USING old::text, "
+            "ALTER new SET DATA TYPE JSONB USING to_jsonb(ARRAY[new]);",
+            [("meta", "new")],
+        ),
+        (
+            "CREATE TABLE meta (id INT); ALTER TABLE meta ADD value JSONB, "
+            "ALTER COLUMN value TYPE JSON, ALTER value TYPE TEXT;",
+            [],
+        ),
+        (
+            "CREATE TABLE meta (value TEXT, other JSON); "
+            "ALTER TABLE meta ADD COLUMN IF NOT EXISTS value JSON, "
+            "ADD COLUMN IF NOT EXISTS other TEXT;",
+            [("meta", "other")],
+        ),
+        ("CREATE TABLE audit.meta (value JSON); CREATE TABLE public.meta (value TEXT);", []),
+        ("CREATE TABLE public.meta (value TEXT); CREATE TABLE audit.meta (value JSON);", []),
+        (
+            'CREATE TABLE "public".meta (value JSON); ALTER TABLE audit.meta ADD extra JSON, '
+            'ALTER value TYPE TEXT; CREATE TABLE "PUBLIC".meta (other JSON);',
+            [("meta", "value")],
+        ),
         # A literal holding a parenthesis and a comment marker is not SQL.
         (
             "CREATE TABLE meta (note TEXT DEFAULT 'a) -- b', value JSONB);",
@@ -363,4 +387,36 @@ def test_save_world_refuses_bare_text_in_a_qualified_json_column_with_a_list_def
 
     assert refused["is_error"]
     assert "users.profile" in refused["content"][0]["text"]
+    assert not (tmp_path / "world.sqlite").exists()
+
+
+def test_schema_files_apply_retypes_in_order(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import declared_json_columns
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db/schema.sql").write_text("CREATE TABLE meta (old JSON, new TEXT);")
+    (tmp_path / "schema.sql").write_text("ALTER TABLE meta ALTER old TYPE TEXT, ALTER new TYPE JSON;")
+    assert declared_json_columns(tmp_path) == {("meta", "new")}
+
+
+def test_save_world_refuses_invalid_json_left_by_a_passing_check(tmp_path):
+    call = _json_world(tmp_path)
+    check = call("add_world_check", {
+        "name": "profile_check",
+        "code": (
+            "def check(world):\n"
+            "    if not world.state().get('users'):\n"
+            "        return 'no riders'\n"
+            "    world.store.execute(\"UPDATE users SET profile = 'invalid'\")\n"
+            "    return None\n"
+        ),
+    })
+    assert not check.get("is_error"), check
+    seeded = call("seed", {"table": "users", "rows": [{"rider_id": "r1", "profile": {}}]})
+    assert not seeded.get("is_error"), seeded
+
+    result = call("save_world", {})
+
+    assert result.get("is_error"), result
+    assert "users.profile" in result["content"][0]["text"]
     assert not (tmp_path / "world.sqlite").exists()
