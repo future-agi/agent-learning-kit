@@ -854,6 +854,7 @@ def open_for_composition(
     platform: ToolServer | None = None,
     ask: Callable[..., Any] | None = None,
     hosted_prompt: str = "",
+    postgres_proof: Callable[[Any, Any], str] | None = None,
 ) -> Stage:
     """The same harness on a composition: a prebuilt environment it does not own, bound to the
     person's agent. Only the suite changes, so the tools that change the world or the contract
@@ -874,6 +875,7 @@ def open_for_composition(
         ),
         files_note=composition.files_note(),
         without=FIXED_ENVIRONMENT_TOOLS,
+        postgres_proof=postgres_proof,
     )
 
 

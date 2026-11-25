@@ -1101,17 +1101,21 @@ class HostedChatRuntime:
 
     async def _open_for_composition(self) -> Stage:
         from .builder import open_for_composition
-        from .composition_edit import open_composition
+        from .composition_edit import SuiteProof, open_composition
 
         self.composition, laid_out = await asyncio.to_thread(open_composition, self.workspace)
         if laid_out:
             # The working copy is the composition's suite as published: nothing is unsaved yet.
             self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+        if self._view_proof is not None:
+            await asyncio.to_thread(self._view_proof.close)
+        self._view_proof = SuiteProof(self.composition, self._design_postgres)
         return open_for_composition(
             self.composition,
             platform=self._builder_platform_server(),
             ask=self._ask,
             hosted_prompt=self._hosted_prompt(),
+            postgres_proof=self._view_proof.scenario if self._view_proof.needed() else None,
         )
 
     async def _seal_composition(self) -> dict[str, Any] | None:
@@ -2328,7 +2332,7 @@ class HostedChatRuntime:
             with suppress(asyncio.CancelledError):
                 await activity_task
             await self.conversation.close()
-            # Its databases live on the design's cluster, so it closes first.
+            # Its databases live on the scratch cluster, so it closes first.
             if self._view_proof is not None:
                 self._view_proof.close()
             self._design_cluster.close()
@@ -3411,12 +3415,18 @@ class HostedChatRuntime:
                         )
                     # The turn carries on after the answer (a design builds for an hour), so the
                     # platform settles the question now rather than at turn_completed.
-                    await self.client.emit(
-                        "question_answered",
-                        message_id=message_id,
-                        stage=self.conversation.stage_name,
-                        payload={"reply_message_id": str(command["message_id"])},
-                    )
+                    try:
+                        await self.client.emit(
+                            "question_answered",
+                            message_id=message_id,
+                            stage=self.conversation.stage_name,
+                            payload={"reply_message_id": str(command["message_id"])},
+                        )
+                    except ConversationTransportError as exc:
+                        # A platform without this event refuses it; turn_completed settles the
+                        # question there.
+                        if exc.status != 400:
+                            raise
                     if asked and self.backend_name == "claude":
                         # The CLI's own question tool takes its answers as an allowed, rewritten input.
                         from claude_agent_sdk.types import PermissionResultAllow

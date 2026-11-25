@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,29 +27,36 @@ from typing import Any
 from .binding_proof import BindingProofV1, proof_digest, prove_binding
 from .bindings import MappedToolBinding
 from .contract import AgentContract
-from .folder import document_for, read_folder, write_index
+from .folder import read_folder, write_index
 from .releases import (
+    ATTACHED,
+    CHAT_CONNECTORS,
     RELEASES_SUITE,
     SCENARIOS,
+    SERVERS,
     SUB_GOALS,
     WORLD,
     AgentBindingV1,
     BindingMode,
     EnvironmentReleaseV1,
     Policy,
+    PostgresProof,
     ReleaseError,
     ScenarioOrigin,
     SuiteReleaseV1,
     SuiteScenario,
     _contract,
+    _scenario_files,
     apply_policy_profile,
     environment_directory,
     graded_rules,
     load_agent_binding,
     load_environment_release,
     load_policy,
+    load_servers,
     load_suite_release,
     load_tools,
+    postgres_verdict,
     seal_suite_release,
 )
 from .scenario_tools import load_scenarios
@@ -125,7 +133,7 @@ class Composition:
 
     @property
     def modality(self) -> str:
-        return "chat" if self.binding.agent.connector == "retell_chat" else "voice"
+        return "chat" if self.binding.agent.connector in CHAT_CONNECTORS else "voice"
 
     @property
     def contract(self) -> AgentContract:
@@ -350,9 +358,19 @@ def open_composition(workspace: Path) -> tuple[Composition, bool]:
         policy=load_policy(directories[-1]),
     )
     if (workspace / "contract.json").is_file():
+        _lay_out_servers(composition)
         return composition, False
     _lay_out(composition)
     return composition, True
+
+
+def _lay_out_servers(composition: Composition) -> None:
+    """The environment's attached servers, which the scenario tools read from the workspace."""
+    workspace, root = composition.workspace, composition.environment_root
+    if (root / SERVERS).is_file():
+        shutil.copyfile(root / SERVERS, workspace / SERVERS)
+    if (root / ATTACHED).is_dir():
+        shutil.copytree(root / ATTACHED, workspace / ATTACHED, dirs_exist_ok=True)
 
 
 def _lay_out(composition: Composition) -> None:
@@ -364,6 +382,7 @@ def _lay_out(composition: Composition) -> None:
             shutil.copytree(path, target, dirs_exist_ok=True)
         else:
             shutil.copyfile(path, target)
+    _lay_out_servers(composition)
     apply_policy_profile(
         workspace, composition.policy, composition.suite.policy_profile
     )
@@ -377,6 +396,43 @@ def _lay_out(composition: Composition) -> None:
         if (composition.suite_root / name).is_file():
             shutil.copyfile(composition.suite_root / name, workspace / name)
     write_index(load_scenarios(workspace), workspace)
+
+
+class SuiteProof:
+    """The PostgreSQL proof of one scenario of the working copy, for scenarios that call attached
+    servers' tools. The environment is fixed, so its world is seeded once; one proof runs at a
+    time."""
+
+    def __init__(self, composition: Composition, admin_dsn: Callable[[], str]) -> None:
+        self._composition = composition
+        self._admin_dsn = admin_dsn
+        self._lock = threading.Lock()
+        self._proof: PostgresProof | None = None
+
+    def needed(self) -> bool:
+        return bool(load_servers(self._composition.environment_root))
+
+    def scenario(self, scenario: Any, catalogue: Any) -> str:
+        """Why `scenario` does not hold on PostgreSQL, graded with `catalogue`; "" when it does."""
+        composition = self._composition
+        with self._lock:
+            try:
+                if self._proof is None:
+                    self._proof = PostgresProof(
+                        composition.suite_root,
+                        composition.environment_root,
+                        composition.suite.policy_profile,
+                        self._admin_dsn(),
+                    ).__enter__()
+                return postgres_verdict(self._proof, scenario, catalogue=catalogue)[1]
+            except ReleaseError as exc:
+                return f"{exc.code}: {exc.detail}"
+
+    def close(self) -> None:
+        with self._lock:
+            if self._proof is not None:
+                self._proof.__exit__()
+                self._proof = None
 
 
 @dataclass
@@ -407,8 +463,9 @@ def plan_change(composition: Composition) -> ChangePlan | None:
         before = held.get(key)
         if (
             before is not None
-            and before[1] is not None
-            and document_for(before[1]) == document_for(scenario)
+            and before[1] == scenario
+            and _scenario_files(workspace, f"{SCENARIOS}/{scenario.name}/checks")
+            == _scenario_files(composition.suite_root, f"{before[0].path}/checks")
         ):
             # Unchanged: carried over byte for byte, so the sealer can check it is the parent's.
             entries.append(

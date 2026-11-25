@@ -35,7 +35,7 @@ from .tools import (
     RESULT,
     settle_proposal,
 )
-from .workspace import load_design, open_design
+from .workspace import load_design, open_design, output_problem
 
 _NUDGES = 3
 _ROUNDS = 6
@@ -283,6 +283,13 @@ def main(argv: list[str] | None = None) -> int:
         return run_hosted(args)
     if bool(args.template_environment) != bool(args.template_suite):
         raise SystemExit("--template-environment and --template-suite go together")
+    # Said before the design is paid for, not when it is sealed.
+    if problem := output_problem(Path(args.output)):
+        raise SystemExit(f"--output: {problem}; choose a new folder")
+    # The design's handlers and checks are model-written: they run in their own process.
+    os.environ["ALK_HANDLER_ISOLATION"] = (
+        os.environ.get("ALK_HANDLER_ISOLATION") or "process"
+    )
     return asyncio.run(_design(args))
 
 

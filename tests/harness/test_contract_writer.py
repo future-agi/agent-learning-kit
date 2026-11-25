@@ -1402,11 +1402,15 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "writes the scenario index the builder reads"),
     ("fi.alk.harness.composition_edit", "open_composition", "_lay_out"): (
         1, "opens the workspace: the layout above"),
+    ("fi.alk.harness.composition_edit", "_lay_out", "_lay_out_servers"): (
+        1, "copies the release's servers.json and attached files from the archive"),
+    ("fi.alk.harness.composition_edit", "open_composition", "_lay_out_servers"): (
+        1, "the same copy, for a workspace already laid out without them"),
     # A design seals its own contract through its own writer (`design.contract`), the design's
     # contract.json; the builder's `contract.write_contract` is for an agent that was read.
     ("fi.alk.harness.design.contract", "write_contract", "write_text"): (
         1, "the design mode's own contract writer"),
-    ("fi.alk.harness.hosted_agent", "HostedAgentCallRunner.run", "converse"): (1, _TRACE),
+    ("fi.alk.harness.hosted_agent", "HostedAgentCallRunner._run", "converse"): (1, _TRACE),
     # A run bundle composed from sealed releases: the files are copied as the releases hold them,
     # and the generated contract.json is the agent's view of the release's tools.
     ("fi.alk.harness.releases", "compose_bundle", "shutil.copytree"): (

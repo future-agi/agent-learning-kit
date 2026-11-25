@@ -4054,6 +4054,23 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+# A served tool the platform says was called and the world never ran is no evidence it was.
+WORLD_RAN_NONE = "the platform reports calls of the world's tools, and the world ran none"
+
+
+def _served_tools(bundle_dir: Path, contract: Mapping[str, Any]) -> set[str]:
+    """Every name the world's tool server answers to or traces under: the agent's tools and the
+    environment's. A call under any of them either reached the world or was not made there."""
+    from .releases import TOOL_SERVER_DIRECTORY, TOOLS, attached_tool_names, load_tools
+
+    served = {str(tool.get("name") or "") for tool in contract.get("tools") or []}
+    server = Path(bundle_dir) / TOOL_SERVER_DIRECTORY
+    if (server / TOOLS).is_file():
+        served |= {tool.name for tool in load_tools(server)}
+        served |= attached_tool_names(server)
+    return served
+
+
 def _framework_message(result: Any) -> bool:
     """Whether a span recorded a tool's answer only as the framework's message object (LangChain's
     `{"output": "content='...' name=... tool_call_id=..."}`): that text is not the result the agent's own report
@@ -5024,9 +5041,25 @@ class CallRunnerImpl:
         # from transcript prose.
         # Hand-offs are kept for the record but are not calls checks grade, so they neither stand
         # in for the provider's stream nor count as a capture.
-        if not graded_calls(calls) and case is not None:
-            calls = (*calls, *_collect_provider_tool_calls(case))
-        capture_failed = capture_failed and not graded_calls(calls)
+        # A request-bound world ran the agent's tools itself: an unread trace leaves the trial
+        # unmeasured, and only the platform's own actions, which never reach the tool server, are
+        # taken from what it reports.
+        ran_elsewhere: tuple[str, ...] = ()
+        if binding is not None:
+            if collected and not graded_calls(calls):
+                reported = _collect_provider_tool_calls(case)
+                served = _served_tools(
+                    self._context.bundle_dir, _bundle_contract(self._context.bundle_dir)
+                )
+                own = tuple(call for call in reported if call.name not in served)
+                if own != reported:
+                    capture_failed, collected = True, False
+                    ran_elsewhere = (WORLD_RAN_NONE,)
+                calls = (*calls, *own)
+        else:
+            if not graded_calls(calls) and case is not None:
+                calls = (*calls, *_collect_provider_tool_calls(case))
+            capture_failed = capture_failed and not graded_calls(calls)
         # Only when the world's door saw the agent's tools can the trial say what changed in the world.
         door_seen = (
             self._context.evidence_seam is EvidenceSeam.TOOL_TRACE or runtime.endpoints.get("world_door") is not None
@@ -5249,7 +5282,7 @@ class CallRunnerImpl:
             evidence_collected=collected,
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
-            unmeasured=unmeasured_reasons(trial_notices),
+            unmeasured=(*ran_elsewhere, *unmeasured_reasons(trial_notices)),
             world_failures=world_failure_reasons(trial_notices),
             missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={

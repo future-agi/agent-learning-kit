@@ -1651,7 +1651,8 @@ def seal_suite_release(
     with `origin`. A derived suite passes its entries explicitly. With `postgres_dsn` (a role that
     may create databases) every scenario is also proved on PostgreSQL, which hosted runs require.
     """
-    from .folder import read_folder
+    from .catalogue import load_catalogue
+    from .folder import check_file_drift, read_folder
 
     root = Path(root)
     environment_root = Path(environment_root)
@@ -1702,6 +1703,8 @@ def seal_suite_release(
         },
     )
     loaded = _check_suite_contents(root, entries, parent=parent)
+    if drift := check_file_drift(root, load_catalogue(root)):
+        raise ReleaseError("suite_check_files_invalid", "; ".join(drift))
     _check_rule_coverage(root, profile, loaded)
     _check_simulator_prompt(root)
     (root / PROOFS).unlink(missing_ok=True)
@@ -1972,6 +1975,7 @@ MCP_CLIENT = "mcp_client"
 WORLD_MCP = "world-mcp"
 WORLD_MCP_CAPABILITY = "world_mcp"
 _COMPOSABLE_CONNECTORS = {"retell_chat", "retell", "vapi", HOSTED_AGENT, MCP_CLIENT}
+CHAT_CONNECTORS = frozenset({"retell_chat", HOSTED_AGENT, MCP_CLIENT})
 _COMPOSABLE_MODES = {BindingMode.CANONICAL, BindingMode.TOOL_ROUTED}
 _ARG_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
 
@@ -2226,9 +2230,7 @@ def compose_bundle(
         list(binding.agent_tools) if binding.mode is BindingMode.TOOL_ROUTED else tools
     )
     agent_tool_names = sorted(tool.name for tool in agent_tools)
-    modality = (
-        "chat" if connector in ("retell_chat", HOSTED_AGENT, MCP_CLIENT) else "voice"
-    )
+    modality = "chat" if connector in CHAT_CONNECTORS else "voice"
     # Provider agents reach the world's tools through the webhook tool server; our agent and a
     # declared agent reach the same tools over MCP (a declared agent under its own tool names,
     # through the binding). All run from the same directory through WorldTools.

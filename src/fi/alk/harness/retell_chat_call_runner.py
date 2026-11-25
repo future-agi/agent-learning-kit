@@ -9,7 +9,6 @@ import urllib.error
 import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Mapping
 
 from fi.simulate.agent.wrapper import (
@@ -24,10 +23,12 @@ from .call_runner import (
     CallRunnerContext,
     RETELL_API_KEY_ALIAS,
     ToolCaptureFailed,
+    WORLD_RAN_NONE,
     _bind_call,
     _clear_tool_trace_calls,
     collect_tool_trace_calls,
     _find_postgres_endpoint,
+    _served_tools,
     _upload_tool_trace,
     graded_calls,
 )
@@ -49,12 +50,6 @@ from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario,
 from .run.conversation import Transcript
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .releases import (
-    TOOL_SERVER_DIRECTORY,
-    TOOLS,
-    attached_tool_names,
-    load_tools,
-)
 from .usage import simulator_funding
 
 logger = logging.getLogger(__name__)
@@ -283,17 +278,6 @@ class RetellChatWrapper(AgentWrapper):
             return
 
 
-def _served_tools(bundle_dir: Path, contract: AgentContract) -> set[str]:
-    """Every name the world's tool server answers to or traces under: the agent's tools and the
-    environment's. A call under any of them either reached the world or was not made there."""
-    served = {tool.name for tool in contract.tools}
-    server = bundle_dir / TOOL_SERVER_DIRECTORY
-    if (server / TOOLS).is_file():
-        served |= {tool.name for tool in load_tools(server)}
-        served |= attached_tool_names(server)
-    return served
-
-
 class RetellChatCallRunner:
     """Drive multi-turn scenarios directly through Retell's native Chat API."""
 
@@ -343,8 +327,8 @@ class RetellChatCallRunner:
         bound = binding.call_values() if binding else {}
         # A request-bound world's tool server runs the agent's calls and traces them as the
         # environment's own tools; that trace, not the names Retell reports, is what checks read.
-        # Only a release bundle binds requests, and its seam is the tool trace; the chat worker
-        # this runs in is not told the seam, so the binding decides.
+        # Only a release bundle binds requests, and its seam is the tool trace, so the binding
+        # decides.
         traced = binding is not None
         if traced:
             endpoint = _find_postgres_endpoint(runtime)
@@ -444,16 +428,14 @@ class RetellChatCallRunner:
                     calls = world_calls
                 else:
                     # The platform's own actions (ending the chat, a transfer) never reach the
-                    # tool server. A served tool Retell says was called and the world never ran
-                    # is no evidence it was: the trial is unmeasured.
-                    served = _served_tools(self._context.bundle_dir, self._contract)
+                    # tool server.
+                    served = _served_tools(
+                        self._context.bundle_dir, self._contract.model_dump()
+                    )
                     own = tuple(call for call in calls if call.name not in served)
                     if own != calls:
                         capture_failed = True
-                        unmeasured = (
-                            "the platform reports calls of the world's tools, and the world "
-                            "ran none",
-                        )
+                        unmeasured = (WORLD_RAN_NONE,)
                     calls = own
         await _upload_tool_trace(
             self._adapter, calls, scenario_key=scenario.scenario_key, binding=binding
