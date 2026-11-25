@@ -733,3 +733,37 @@ test("a call id the exporter set itself is dropped from a span the hook does not
     assert.deepEqual(attributes(exported.resourceSpans[0].scopeSpans[0].spans[0].attributes), { "fi.span.kind": "LLM" });
   }
 });
+
+test("an ingest key that is not a valid header value turns the hook off, with one line", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const body = JSON.stringify(otlp([span("llm", 1n)]));
+  const script = `
+    import http from "node:http";
+    await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+      method: "POST", headers: { "content-type": "application/json", "x-api-key": "customer-key" }, body: ${JSON.stringify(body)},
+    });
+    await new Promise((resolve, reject) => {
+      const req = http.request("http://127.0.0.1:${collector.port}/v1/traces", {
+        method: "POST", headers: { "content-type": "application/json", "x-api-key": "customer-key" },
+      }, (res) => { res.resume(); res.on("end", resolve); });
+      req.on("error", reject);
+      req.end(${JSON.stringify(body)});
+    });
+  `;
+  const bad = [
+    { FI_SIMULATION_INGEST_API_KEY: "ingest\r\nx-injected: 1" },
+    { FI_SIMULATION_INGEST_SECRET_KEY: "ingest\tsecret" },
+    { FI_SIMULATION_INGEST_API_KEY: "ingest-k\u00e9y" },
+  ];
+  for (const keys of bad) {
+    const result = await run(script, { ...envFor(collector), ...keys });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "simulation mark hook: failed\n");
+  }
+  assert.equal(collector.seen.length, 2 * bad.length);
+  for (const sent of collector.seen) {
+    assert.equal(sent.headers["x-api-key"], "customer-key");
+    assert.equal(sent.body.toString(), body);
+  }
+});

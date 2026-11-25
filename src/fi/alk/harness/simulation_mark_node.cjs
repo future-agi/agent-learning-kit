@@ -46,6 +46,8 @@ const INGEST_SECRET_KEY = "FI_SIMULATION_INGEST_SECRET_KEY";
 const TRACES_ENDPOINT = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
 const MEASURE = "FI_SIMULATION_INSTRUMENT";
 const AUTH_HEADERS = ["x-api-key", "x-secret-key"];
+// An ingest key is printable ASCII.
+const HEADER_VALUE = /^[\x20-\x7e]+$/;
 const DEFAULT_PORTS = { "http:": 80, "https:": 443 };
 const MARK_PREFIX = "fi.simulation.";
 const ORIGIN_KEY = "fi.simulation.origin";
@@ -245,6 +247,11 @@ function install() {
   const secretKey = env[INGEST_SECRET_KEY];
   const collector = hostPort(env[TRACES_ENDPOINT]);
   if (!apiKey || !secretKey || collector === null) return;
+  if (!HEADER_VALUE.test(apiKey) || !HEADER_VALUE.test(secretKey)) {
+    // Not a key: as a header it would fail the request or add one.
+    write("failed");
+    return;
+  }
   const ours = [
     [AUTH_HEADERS[0], apiKey],
     [AUTH_HEADERS[1], secretKey],
