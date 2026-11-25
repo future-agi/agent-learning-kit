@@ -458,3 +458,34 @@ test("a request on a socket the caller chose is not given the key, whatever host
   assert.equal(seen[0]["x-api-key"], "customer-key");
   assert.equal(seen[0]["x-secret-key"], undefined);
 });
+
+test("a redirect from the collector is not followed with the ingest key", async (t) => {
+  const other = await stub();
+  const seen = [];
+  const collector = http.createServer((req, res) => {
+    seen.push(req.url);
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(307, { location: `http://127.0.0.1:${other.port}/v1/traces` });
+      res.end();
+    });
+  });
+  await new Promise((resolve) => collector.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    collector.close();
+    other.server.close();
+  });
+  const port = collector.address().port;
+  const script = `
+    const response = await fetch("http://127.0.0.1:${port}/v1/traces", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    console.log(response.status);
+  `;
+  const result = await run(script, envFor({ port }));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(seen.length, 1);
+  assert.equal(other.seen.length, 0);
+  // The exporter sees the redirect as the collector's answer.
+  assert.equal(result.stdout.trim(), "307");
+});

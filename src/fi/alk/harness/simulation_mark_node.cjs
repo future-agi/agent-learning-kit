@@ -308,14 +308,16 @@ function install() {
         // customer's key, so our collector refuses it instead of storing it in their project.
         write("failed");
         for (const name of AUTH_HEADERS) headers.set(name, "");
-        return originalFetch.call(this, new Request(input, { ...init, headers }));
+        return originalFetch.call(this, new Request(input, { ...init, headers, redirect: "manual" }));
       }
       const marked = mark(body, headers.get("content-type"), headers.get("content-encoding"));
       if (marked !== null) {
         body = marked;
         headers.delete("content-length");
       }
-      return originalFetch.call(this, new Request(request, { headers, body }));
+      // A redirect is answered to the exporter, never followed: fetch would carry our key to
+      // wherever it points.
+      return originalFetch.call(this, new Request(request, { headers, body, redirect: "manual" }));
     };
     wrapped[PATCHED] = true;
     globalThis.fetch = wrapped;
