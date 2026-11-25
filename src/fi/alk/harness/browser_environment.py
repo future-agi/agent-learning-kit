@@ -7,9 +7,9 @@ sites is refused here, before anything is installed: refusing it at the reading 
 reading knows no job.
 
 The list is read strictly. Absent means the environment has no browser. Present, it must be a
-non-empty list of host names, each one the run's egress allows where the job also controls
-egress: a list that is wrong is the platform's fault, shown at once rather than as pages that never
-load.
+non-empty list of host names or `*.` wildcards, each one the run's egress covers where the job also
+controls egress: a list that is wrong is the platform's fault, shown at once rather than as pages
+that never load.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract import AgentContract, how_it_runs
-from .egress_proxy import LOOPBACK, host_allowed
+from .egress_proxy import LOOPBACK, entry_admits
 from .job import FailureDomain, HarnessFailure, HarnessStage
 
 BROWSER_ALLOWED_SITES = "browser_allowed_sites"
@@ -80,6 +80,22 @@ def _some(sites: list[str]) -> str:
     return f"{named}, and {rest} more" if rest > 0 else named
 
 
+def _egress_covers(egress: list[str], site: str) -> bool:
+    """Whether the egress admits every host the site names, each entry read as the sandbox firewall reads it.
+
+    Cover, not presence: the platform drops a host from the egress list when a wildcard there covers it.
+    A wildcard site needs a wildcard at or above it; a name alone never covers the hosts under it.
+    """
+    if site.startswith("*."):
+        name = site[2:]
+        return any(
+            entry.strip().lower() == site or entry_admits(entry, name)
+            for entry in egress
+            if entry.strip().lower().startswith("*.")
+        )
+    return any(entry_admits(entry, site) for entry in egress)
+
+
 def allowed_sites(metadata: Mapping[str, Any] | None) -> tuple[str, ...] | None:
     """The sites the job's browser may open, or None when the job gives it no browser.
 
@@ -111,7 +127,7 @@ def allowed_sites(metadata: Mapping[str, Any] | None) -> tuple[str, ...] | None:
     sites = tuple(dict.fromkeys(site.lower() for site in raw))
     egress = metadata.get("egress_allowed_hosts")
     if isinstance(egress, list) and all(isinstance(one, str) for one in egress):
-        outside = [site for site in sites if not host_allowed(site.removeprefix("*."), egress)]
+        outside = [site for site in sites if not _egress_covers(egress, site)]
         if outside:
             raise SitesProblem(
                 _failure(

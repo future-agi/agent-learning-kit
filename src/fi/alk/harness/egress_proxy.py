@@ -67,6 +67,16 @@ def host_allowed(host: str, allowed: Iterable[str], *, loopback: bool = True) ->
     return False
 
 
+def entry_admits(entry: str, host: str) -> bool:
+    """Whether one allowed-host entry admits a host, read as the sandbox firewall reads it: `example.com` is
+    that host only; `*.example.com` is every host under it, at any depth, not `example.com` itself."""
+    host = host.strip().strip("[]").lower().rstrip(".")
+    entry = entry.strip().lower().rstrip(".")
+    if entry.startswith("*."):
+        return bool(entry[2:]) and host.endswith(entry[1:])
+    return bool(entry) and host == entry
+
+
 class _Refused:
     """Neither runs nor knows an actor: the proxy only ever refuses through the door."""
 

@@ -109,8 +109,11 @@ job's `metadata.browser_allowed_sites` is absent. It checks at the build command
 contract already on disk, else an accepted seed that matches the job), between the reading and the
 environment in the staged run, and when the hosted build first sees a saved contract
 (`browser_environment.py`). The list itself is read strictly: present, it must be a non-empty list
-of host names (`browser_allowed_sites_invalid`), each one the run's egress allows when the job
-controls egress (`browser_site_not_in_egress`).
+of host names or `*.` wildcards (`browser_allowed_sites_invalid`), each one the run's egress covers
+when the job controls egress (`browser_site_not_in_egress`). One entry means one thing, as the
+sandbox firewall reads it: `example.com` is that host only, and `*.example.com` is every host under
+it, not `example.com` itself. Cover, not presence: the platform drops a host from the egress list
+when a wildcard there covers it.
 
 **The environment's browser** (`kit_browser.py`). Where the job has sites and the contract needs a
 browser, the kit starts one headless Chromium for each world (`alk-chromium` from the image, or
@@ -118,7 +121,9 @@ browser, the kit starts one headless Chromium for each world (`alk-chromium` fro
 at each spawn of the world, so a reset never keeps the agent's process. The agent's process alone
 gets its DevTools address in `ALK_BROWSER_CDP_URL`: a relay in front of the browser's port, fixed
 for the world's life, which counts the clients that attach. The browser's requests go through a
-refusing proxy of its own whose list is the sites and nothing else: never loopback, and never a
+refusing proxy of its own whose list is the sites and nothing else, each read as above and never
+wider than the firewall (the agent's proxy still reads a name as covering the hosts under it): never
+loopback, and never a
 site whose name resolves to loopback; Chromium sends loopback through it too, and QUIC and WebRTC
 are off. A refusal is logged at the world's door as the agent's `egress_blocked` attempt marked
 `via: browser`, and shows in the trial's `blocked` list, once a client has attached to the browser
