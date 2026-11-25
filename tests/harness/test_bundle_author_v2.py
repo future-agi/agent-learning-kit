@@ -6699,7 +6699,7 @@ def _node_plan_kwargs(root: Path, **changes):
     }
 
 
-_NPM_INSTALL_ARGV = ["corepack", "npm", "ci", "--ignore-scripts"]
+_NPM_INSTALL_ARGV = ["env", "COREPACK_ENV_FILE=0", "corepack", "npm", "ci", "--ignore-scripts"]
 
 
 @pytest.mark.parametrize("workdir", [".", "apps/chat"])
@@ -6898,6 +6898,28 @@ def test_native_node_accepts_corepack_hash_pin_and_rejects_symlink_lock(
     (tmp_path / "package-lock.json").symlink_to(tmp_path / "package.json")
     with pytest.raises(BundleAuthorError, match="runtime_node_manifest_unsafe"):
         _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+
+
+def test_native_node_install_ignores_a_source_corepack_env_file(tmp_path: Path) -> None:
+    """A source ``.corepack.env`` or declared environment must not pick the installer's registry."""
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    _node_package(tmp_path)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+    bin_directory = tmp_path / "bin"
+    bin_directory.mkdir()
+    corepack = bin_directory / "corepack"
+    corepack.write_text('#!/bin/sh\necho "COREPACK_ENV_FILE=$COREPACK_ENV_FILE $*"\n')
+    corepack.chmod(0o755)
+    install = subprocess.run(
+        process.build_commands[-1],
+        cwd=tmp_path,
+        env={"PATH": f"{bin_directory}:/usr/bin:/bin", "COREPACK_ENV_FILE": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert install.returncode == 0, install.stderr
+    assert install.stdout.strip() == "COREPACK_ENV_FILE=0 npm ci --ignore-scripts"
 
 
 def test_native_node_requires_node_and_corepack_on_path(tmp_path: Path) -> None:

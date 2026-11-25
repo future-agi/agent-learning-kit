@@ -1499,8 +1499,9 @@ def _python_component_command(
 
 
 _NODE_LANGUAGES = {"node", "nodejs"}
-# Corepack runs the exact npm the source pins.
-_NPM_INSTALL = ["corepack", "npm", "ci", "--ignore-scripts"]
+# Corepack runs the exact npm the source pins. COREPACK_ENV_FILE=0 keeps a source .corepack.env from
+# choosing the registry or integrity keys; it is argv, so no declared environment value overrides it.
+_NPM_INSTALL = ["env", "COREPACK_ENV_FILE=0", "corepack", "npm", "ci", "--ignore-scripts"]
 # Toolchain probes run isolated (-I): they start in the source tree, whose modules must not shadow the stdlib.
 # The build reads a probe's ``runtime_unsupported:`` exit as the image's failure, not the agent's.
 _NODE_TOOLCHAIN_PROBE = (
