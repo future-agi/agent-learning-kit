@@ -9302,3 +9302,36 @@ def test_compose_node_control_service_requires_an_http_interface(tmp_path):
         contract_runtime={**runtime, "interface": _NODE_JSON_INTERFACE},
     )
     assert _agent_of(plan).run_command[-2:] == ["node", "server.js"]
+
+
+@pytest.mark.parametrize("excluded", ["package-lock.json", "*.json", "*-lock.json"])
+def test_native_node_bundle_refuses_to_exclude_its_admitted_lockfile(tmp_path, excluded):
+    """Admission checked the lockfile, so the sealed context must carry it to ``npm ci``."""
+    source = tmp_path / "source"
+    source.mkdir()
+    _node_package(source)
+    (source / "server.js").write_text(_NODE_CHAT_SERVER)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "execution": "native",
+                    "command": ["node", "server.js"],
+                    "interface": _NODE_JSON_INTERFACE,
+                    "context_excludes": [excluded],
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    with pytest.raises(Exception, match="generated_runtime_context_exclude_required"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=tmp_path / "bundle",
+        )

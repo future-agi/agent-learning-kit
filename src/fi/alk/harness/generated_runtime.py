@@ -1241,7 +1241,16 @@ def _context_excludes(
 ) -> tuple[str, ...]:
     required = {
         Path(name)
-        for name in (dependency, "pyproject.toml", "package.json")
+        # A Node or Bun install needs the lockfile admission checked beside its package.json.
+        for name in (
+            dependency,
+            "pyproject.toml",
+            "package.json",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "bun.lock",
+            "bun.lockb",
+        )
         if name and component.joinpath(name).is_file()
     }
     for token in command:
