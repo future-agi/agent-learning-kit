@@ -159,6 +159,18 @@ def test_loopback_is_never_one_of_the_sites() -> None:
     assert len(record.body()["blocked_navigations"]) == 1
 
 
+def test_a_site_is_read_as_the_browser_s_proxy_reads_it() -> None:
+    # A name is that host only; a wildcard is every host under it, not the name itself. The record keeps
+    # the proxy's rule, so what the proxy refused is what the record shows as blocked.
+    record = BrowserRecord(["shop.test", "*.pay.test"], clock=_Clock())
+    record.requested("tab-1", "http://img.shop.test/a.png", document=False, main_frame=False)
+    record.requested("tab-1", "http://a.b.pay.test/x.js", document=False, main_frame=False)
+    record.requested("tab-1", "http://pay.test/", document=True, main_frame=True)
+    body = record.body()
+    assert body["blocked_page_requests"] == [{"host": "img.shop.test", "count": 1}]
+    assert [one["url"] for one in body["blocked_navigations"]] == ["http://pay.test/"]
+
+
 def test_a_record_the_recorder_could_not_finish_says_so() -> None:
     record, _ = _record()
     record.broken("the browser's DevTools connection closed")
