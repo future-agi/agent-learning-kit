@@ -9343,7 +9343,9 @@ def test_compose_node_control_service_gets_no_python_tracer(tmp_path):
     assert "ALK_OBSERVE_FRAMEWORKS" not in agent.environment
 
 
-@pytest.mark.parametrize("excluded", ["package-lock.json", "*.json", "*-lock.json"])
+@pytest.mark.parametrize(
+    "excluded", ["package-lock.json", "package.json", "*.json", "*-lock.json"]
+)
 def test_native_node_bundle_refuses_to_exclude_its_admitted_lockfile(tmp_path, excluded):
     """Admission checked the lockfile, so the sealed context must carry it to ``npm ci``."""
     source = tmp_path / "source"
@@ -9374,3 +9376,46 @@ def test_native_node_bundle_refuses_to_exclude_its_admitted_lockfile(tmp_path, e
             job=_job(connector="auto"),
             output=tmp_path / "bundle",
         )
+
+
+@pytest.mark.parametrize("lane", ["python", "bun"])
+def test_an_unused_javascript_lockfile_can_still_be_excluded(tmp_path, lane):
+    """Only the lockfile the selected installer reads is required; a stray one stays excludable."""
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "package-lock.json").write_text('{"lockfileVersion": 3}')
+    if lane == "python":
+        (source / "agent.py").write_text("print('agent')\n")
+        (source / "requirements.txt").write_text("\n")
+        runtime = {"execution": "native", "command": ["python", "agent.py"]}
+    else:
+        (source / "package.json").write_text('{"name":"chat","packageManager":"bun@1.3.14"}')
+        (source / "bun.lock").write_text('{"lockfileVersion": 1}')
+        (source / "server.ts").write_text("Bun.serve({fetch: () => new Response('ok')})")
+        runtime = {
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "native",
+            "command": ["bun", "run", "server.ts"],
+        }
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    **runtime,
+                    "interface": {"kind": "http", "port": 8080, "path": "/chat"},
+                    "context_excludes": ["package-lock.json"],
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=output
+    )
+    agent = next(p for p in manifest.processes if p.name == manifest.runtime.control_service)
+    assert not (output / agent.working_directory / "package-lock.json").exists()

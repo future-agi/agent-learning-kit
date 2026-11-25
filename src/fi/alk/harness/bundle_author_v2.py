@@ -4006,6 +4006,9 @@ def _package_process_sources(
         )
         if selected_runtime is not None:
             required.extend(selected_runtime.requirements_files)
+        if _NPM_INSTALL in process.build_commands:
+            # Admission checked this lockfile; `npm ci` needs it in the sealed context.
+            required.append("package-lock.json")
         declared_component = (component / process.source_component).resolve()
         if not declared_component.is_relative_to(component):
             raise GeneratedRuntimeError("generated_runtime_context_component_mismatch")
