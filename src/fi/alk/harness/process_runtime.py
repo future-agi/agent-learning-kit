@@ -69,6 +69,15 @@ from .bundle_v2 import (
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .egress_proxy import EgressProxy
 from .world_door import HARNESS_TABLES_DDL, PostgresLog
+from .browser_runtime import (
+    browser_metadata,
+    browser_started,
+    close_browsers,
+    contract_needs_browser,
+    read_browser_allowed_sites,
+    stop_browser,
+    world_browser_environment,
+)
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -4477,7 +4486,7 @@ def spawn_world(
                 agent_environment = None
                 if process.user == ProcessUser.SVC_AGENT:
                     if browser_environment is None:
-                        browser_environment = _world_browser_environment(context, world_index, endpoints)
+                        browser_environment = world_browser_environment(context, world_index, endpoints)
                     agent_environment = {
                         **(_egress_environment(context, world_index, endpoints, configuration_addresses) or {}),
                         **browser_environment,
@@ -5667,7 +5676,7 @@ def _clone_or_reset_world(
     in_place = (
         keep_processes
         # A new browser for each trial means a new agent process, never one holding the last browser.
-        and not _browser_started(context)
+        and not browser_started(context)
         and bool(existing_handles)
         # A process the harness stopped mid-trial (a worker past its deadline) comes back with a full respawn.
         and all(
@@ -5682,7 +5691,7 @@ def _clone_or_reset_world(
     )
     # The last trial's browser goes before the world's records are sealed again, so a page still open in it never
     # reaches the next trial's world.
-    _stop_browser(context, world_index)
+    stop_browser(context, world_index)
     for name, handle in reversed(list(existing_handles.items())):
         if not in_place and name not in job_shared_handles:
             # M7, p6-review-r1: waits for real exit before `_seal_world_store` below `rmtree`s
@@ -6179,16 +6188,24 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     return dict(typed.customer_code_environment)
 
 
+def read_job_json(work_directory: Path, unknown: Callable[[str], ProcessRuntimeError]) -> Any | None:
+    """`/work/job.json` as JSON, or None when there is none (a local run). One that cannot be read fails the spawn,
+    with ``unknown`` saying which setting could not be told."""
+    try:
+        return json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise unknown(f"job.json cannot be read as JSON ({exc})") from exc
+
+
 def _read_egress_allowed_hosts(work_directory: Path) -> tuple[str, ...] | None:
     """The hosts a controlled run allows the agent, from `/work/job.json` `metadata.egress_allowed_hosts`; None when
     the platform sent none (egress not controlled, or a local run). A `job.json` that cannot say, or a value that is
     not a list of host names, fails the spawn: a controlled run never starts with its egress uncontrolled."""
-    try:
-        raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    raw = read_job_json(work_directory, _egress_unknown)
+    if raw is None:
         return None
-    except (OSError, ValueError) as exc:
-        raise _egress_unknown(f"job.json cannot be read as JSON ({exc})") from exc
     metadata = raw.get("metadata", {}) if isinstance(raw, dict) else None
     if not isinstance(metadata, dict):
         raise _egress_unknown(f"job.json {'metadata' if isinstance(raw, dict) else 'top level'} is not an object")
@@ -6252,161 +6269,6 @@ def _egress_environment(
         )
         context.egress_proxies[world_index] = proxy
     return proxy.environment(sorted(hosts))
-
-
-def _read_browser_allowed_sites(work_directory: Path) -> tuple[str, ...] | None:
-    """The sites the environment's browser may open, from `/work/job.json` `metadata.browser_allowed_sites`; None
-    when the environment has no browser. A list that is present and wrong fails the spawn, as the build's start
-    would have."""
-    from .browser_environment import SitesProblem, allowed_sites
-
-    try:
-        raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as exc:
-        raise _browser_unknown(f"job.json cannot be read as JSON ({exc})") from exc
-    metadata = raw.get("metadata") if isinstance(raw, dict) else None
-    try:
-        return allowed_sites(metadata if isinstance(metadata, dict) else None)
-    except SitesProblem as problem:
-        raise _browser_unknown(problem.failure.message) from problem
-
-
-def _browser_unknown(reason: str) -> ProcessRuntimeError:
-    return ProcessRuntimeError("browser", "spawn_failed", reason, domain=FailureDomain.INFRASTRUCTURE)
-
-
-def _contract_needs_browser(bundle_dir: Path | None) -> bool:
-    """Whether the bundle's contract says its agent needs a browser from the environment; False for none, or one
-    that can't be read (the build's own steps report that)."""
-    from .contract import AgentContract, how_it_runs
-
-    if bundle_dir is None:
-        return False
-    path = Path(bundle_dir) / "contract.json"
-    try:
-        contract = AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return False
-    except (OSError, ValueError):
-        # Taken for no browser, so the trial will say none was started; the cause is here.
-        logger.warning("browser: the agent's contract at %s could not be read", path, exc_info=True)
-        return False
-    return "browser" in how_it_runs(contract).needs
-
-
-def _browser_started(context: SpawnContext) -> bool:
-    return context.browser_allowed_sites is not None and context.needs_browser
-
-
-def _world_browser_environment(
-    context: SpawnContext, world_index: int, endpoints: dict[str, RuntimeEndpoint]
-) -> dict[str, str]:
-    """The browser's address for the agent's process: the world's browser, started anew on an empty profile at each
-    spawn of the world; nothing where the environment gives the agent no browser."""
-    if not _browser_started(context):
-        return {}
-    browser = context.browsers.get(world_index)
-    if browser is None:
-        database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
-        log = PostgresLog(database.address) if database is not None else None
-        if log is None:
-            logger.warning(
-                "browser: the world has no postgres endpoint to hold its action log; the browser's refused sites are "
-                "refused but not recorded"
-            )
-        make = context.browser_factory or _kit_browser_factory(context)
-        browser = make(world_index, log)
-        context.browsers[world_index] = browser
-    try:
-        browser.start()
-    except (OSError, RuntimeError) as exc:
-        raise ProcessRuntimeError(
-            "browser", "spawn_failed", f"the environment's browser did not start: {exc}",
-            domain=FailureDomain.INFRASTRUCTURE,
-        ) from exc
-    return browser.environment()
-
-
-def _kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
-    """Makes a world's `KitBrowser`: Chromium from the image, run as the agent's user through the context's runner,
-    with its profile in the world's scratch and its state where only the kit writes."""
-    from .kit_browser import KitBrowser, chromium_binary
-
-    binary = chromium_binary()
-    if binary is None:
-        raise _browser_unknown("this image has no browser (alk-chromium) for a browser environment")
-    user = _resolve_process_user(
-        ProcessUser.SVC_AGENT,
-        resolver=context.user_resolver,
-        require=context.require_declared_user,
-        process_name="browser",
-        stage="browser",
-        domain=FailureDomain.INFRASTRUCTURE,
-    )
-    uid = user.pw_uid if user is not None else None
-    gid = user.pw_gid if user is not None else None
-
-    def make(world_index: int, log: Any) -> Any:
-        state = context.work_directory / "browser-state" / f"w{world_index}.json"
-        state.parent.mkdir(parents=True, exist_ok=True)
-
-        def launch(argv: list[str], cwd: Path, env: dict[str, str], log_path: Path) -> Any:
-            return context.runner(argv, cwd=cwd, env=env, log_path=log_path, user=uid, group=gid)
-
-        def prepare(profile: Path) -> None:
-            # The profile is the agent's, and so is the browser's log, which the runner hands to the user it starts
-            # the browser as. The folder around them, and the browser's state file, stay the kit's.
-            if uid is not None:
-                context.chown(profile, uid, gid if gid is not None else -1)
-
-        return KitBrowser(
-            binary=binary,
-            sites=context.browser_allowed_sites or (),
-            log=log,
-            directory=world_scratch_dir(context.work_directory, world_index, "browser"),
-            state_path=state,
-            launch=launch,
-            stop=lambda handle: _terminate_and_wait(handle),
-            prepare=prepare,
-            retain_log=context.retain_process_log,
-        )
-
-    return make
-
-
-def _browser_metadata(context: SpawnContext, world_index: int) -> dict[str, Any]:
-    """What the world's runtime says of its browser, for the trial's notices."""
-    if context.browser_allowed_sites is None:
-        return {}
-    if not context.needs_browser:
-        return {"browser": {"state": "not_started"}}
-    browser = context.browsers.get(world_index)
-    return {"browser": browser.metadata()} if browser is not None else {}
-
-
-def _stop_browser(context: SpawnContext, world_index: int) -> None:
-    """Stop one world's browser, if it has one. Logged, never raised."""
-    browser = context.browsers.get(world_index)
-    if browser is None:
-        return
-    try:
-        browser.stop()
-    except Exception:  # noqa: BLE001 - the world is reset whatever its browser does
-        logger.warning("reset: the browser of world %s did not stop cleanly", world_index, exc_info=True)
-
-
-def _close_browsers(context: SpawnContext, world_index: int | None = None) -> None:
-    """Stop one world's browser, or every world's, and close its proxy and relay. Logged, never raised."""
-    for index in [world_index] if world_index is not None else list(context.browsers):
-        browser = context.browsers.pop(index, None)
-        if browser is None:
-            continue
-        try:
-            browser.close()
-        except Exception:  # noqa: BLE001 - teardown reaches the end whatever one browser does
-            logger.warning("teardown: the browser of world %s did not close cleanly", index, exc_info=True)
 
 
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
@@ -7119,8 +6981,8 @@ class ProcessRuntimeProvider:
                     work_directory
                 ),
                 egress_allowed_hosts=_read_egress_allowed_hosts(work_directory),
-                browser_allowed_sites=_read_browser_allowed_sites(work_directory),
-                needs_browser=_contract_needs_browser(bundle_dir),
+                browser_allowed_sites=read_browser_allowed_sites(work_directory),
+                needs_browser=contract_needs_browser(bundle_dir),
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
@@ -7702,7 +7564,7 @@ class ProcessRuntimeProvider:
         metadata = {
             **self._control_metadata(world_index),
             **_dispatch_metadata(result.handles),
-            **_browser_metadata(self._context, world_index),
+            **browser_metadata(self._context, world_index),
         }
         if existing is not None:
             existing.runtime_id = new_runtime_id(self._bundle_digest, world_index)
@@ -7896,7 +7758,7 @@ class ProcessRuntimeProvider:
     def _teardown_world(self, world_index: int) -> None:
         self._destroy_provider_target(world_index)
         if self._context is not None:
-            _close_browsers(self._context, world_index)
+            close_browsers(self._context, world_index)
         handles = self._world_handles.pop(world_index, {})
         # N12, p6-review-r2 (MINOR): reversed — `handles`' insertion order is `spawn_world`'s own
         # `_topological_order` (dependencies first), so terminating it forward sends SIGTERM to a
@@ -8114,7 +7976,7 @@ class ProcessRuntimeProvider:
             self._destroy_provider_target(world_index)
         if self._context is not None:
             # Before the worlds' folders go: each browser's profile is in its world's scratch.
-            _close_browsers(self._context)
+            close_browsers(self._context)
 
         # N12, p6-review-r2 (MINOR): reversed per world (dependents before the engine they depend
         # on — see `_teardown_world`'s own note) and bounded by `self._close_wait_timeout_seconds`
