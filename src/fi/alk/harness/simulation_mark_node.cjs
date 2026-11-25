@@ -19,9 +19,9 @@
  *
  * The call stamp follows the Python hook, which stamps a span when it starts. Spans here are
  * read when they are exported, which a batching exporter does after the call may have ended or
- * the next one begun, so the hook keeps the recent windows of the call file (from the file's
- * write time to its removal) and stamps a span with the call whose window holds its start time.
- * A span that started outside every window is left unstamped, never given another call.
+ * the next one begun, so the hook keeps the recent windows in which it saw the call file (see
+ * `CallWindows`) and stamps a span with the call whose window holds its start time. A span that
+ * started outside every window is left unstamped, never given another call.
  *
  * Every other request is untouched. Nothing runs without the ingest key and the collector
  * endpoint, or while the sandbox measures the agent itself (`FI_SIMULATION_INSTRUMENT`): that
@@ -36,7 +36,6 @@ const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
 const nodeModule = require("node:module");
-const nodePath = require("node:path");
 const nodeUrl = require("node:url");
 const zlib = require("node:zlib");
 
@@ -111,24 +110,38 @@ function hostPort(endpoint) {
   return `${host}:${port}`;
 }
 
-/** The windows in which the call file named each recent call. */
+/**
+ * The windows in which the hook saw the call file name each recent call. A window runs from the
+ * file's write time (never before the last look that saw another state) to the last look that
+ * saw the file. Between two looks the file may have changed any number of times, so a span that
+ * started there is left unstamped rather than given a call it may not have started in.
+ */
 class CallWindows {
   constructor(path) {
     this.path = path;
     this.seen = null;
+    // Just after the latest look: a file seen for the first time was put in place after it.
+    this.changedAfter = 0n;
     this.windows = [];
   }
 
   observe() {
+    const before = BigInt(Date.now()) * 1000000n;
     let stat = null;
     try {
       stat = fs.statSync(this.path, { bigint: true });
     } catch (_) {
       // Removed: the current call has ended.
     }
+    const after = BigInt(Date.now() + 1) * 1000000n;
     const seen = stat === null ? null : `${stat.ino}:${stat.mtimeNs}`;
-    if (seen === this.seen) return;
     const open = this.windows[this.windows.length - 1];
+    const previousLook = this.changedAfter;
+    if (seen === this.seen) {
+      if (seen !== null && open && open.open) open.end = before;
+      this.changedAfter = after;
+      return;
+    }
     let call = null;
     if (stat !== null) {
       try {
@@ -138,35 +151,19 @@ class CallWindows {
       }
     }
     this.seen = seen;
-    if (open && open.end === null) {
-      // A replaced file ends the window at the new file's write; a removed one at the removal,
-      // which set its folder's write time, else at the time it was seen gone.
-      let end = stat === null ? this.removedAt() : stat.mtimeNs;
-      if (end < open.start) end = open.start;
-      open.end = end;
-    }
-    if (call !== null) {
-      this.windows.push({ call, start: stat.mtimeNs, end: null });
-      if (this.windows.length > WINDOWS_KEPT) this.windows.shift();
-    }
-  }
-
-  removedAt() {
-    const now = BigInt(Date.now()) * 1000000n;
-    try {
-      const folder = fs.statSync(nodePath.dirname(this.path), { bigint: true }).mtimeNs;
-      return folder < now ? folder : now;
-    } catch (_) {
-      return now;
-    }
+    this.changedAfter = after;
+    if (open) open.open = false;
+    if (call === null) return;
+    // The file was put in place after the previous look, which saw another state.
+    const start = stat.mtimeNs > previousLook ? stat.mtimeNs : previousLook;
+    this.windows.push({ call, start, end: before, open: true });
+    if (this.windows.length > WINDOWS_KEPT) this.windows.shift();
   }
 
   at(startNs) {
     for (let i = this.windows.length - 1; i >= 0; i--) {
       const window = this.windows[i];
-      if (window.start <= startNs && (window.end === null || startNs < window.end)) {
-        return window.call;
-      }
+      if (window.start <= startNs && startNs <= window.end) return window.call;
     }
     return null;
   }

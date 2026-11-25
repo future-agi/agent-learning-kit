@@ -104,7 +104,8 @@ test("marks fetch and http exports to the collector and leaves every other reque
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
   const callFile = path.join(dir, "simulation_call_execution_id");
   fs.writeFileSync(callFile, "call-a");
-  const start = BigInt(Date.now() + 1000) * 1000000n;
+  // The span starts after the call file is written and before the export.
+  const start = fs.statSync(callFile, { bigint: true }).mtimeNs + 1000n;
   // The exporter's own values for our keys lose to ours, and each key is sent once.
   const body = JSON.stringify(
     otlp(
@@ -236,7 +237,8 @@ test("a span is stamped with the call that ran when it started, or with none", a
     fs.writeFileSync(${JSON.stringify(callFile)}, "call-a");
     await wait(250);
     const duringA = ns();
-    await wait(30);
+    // A look sees the file after the span starts: a window ends at the last look that saw it.
+    await wait(250);
     fs.unlinkSync(${JSON.stringify(callFile)});
     await wait(250);
     const between = ns();
@@ -390,7 +392,7 @@ test("a span that starts after the call file is removed, before the hook looks, 
     fs.writeFileSync(${JSON.stringify(callFile)}, "call-a");
     await wait(250);
     const duringA = ns();
-    hold(30);
+    await wait(250);
     fs.unlinkSync(${JSON.stringify(callFile)});
     hold(50);
     const afterA = ns();
@@ -541,4 +543,81 @@ test("a key the caller sets after the request starts never replaces the ingest k
       ["ingest-key", "ingest-secret"],
     ],
   );
+});
+
+test("a span gets a call only while the hook saw that call's file, never one it did not start in", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
+  const callFile = path.join(dir, "simulation_call_execution_id");
+  // The call file is written and removed as the scheduler does it; `hold` keeps the hook's poll
+  // from running, as a busy event loop does.
+  const script = `
+    import fs from "node:fs";
+    import path from "node:path";
+    const file = ${JSON.stringify(callFile)};
+    const writeCall = (id) => {
+      fs.rmSync(file, { force: true });
+      const staged = path.join(path.dirname(file), ".simulation_call_execution_id.tmp");
+      fs.writeFileSync(staged, id);
+      fs.chmodSync(staged, 0o444);
+      fs.renameSync(staged, file);
+    };
+    const removeCall = () => fs.rmSync(file, { force: true });
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const hold = (ms) => { const until = Date.now() + ms; while (Date.now() < until); };
+    const ns = () => BigInt(Date.now()) * 1000000n;
+    const spans = [];
+    const span = (name) => spans.push({ traceId: "0af7651916cd43dd8448eb211c80319c", spanId: "b7ad6b7169203331",
+      name, startTimeUnixNano: String(ns()), endTimeUnixNano: String(ns() + 1000n), attributes: [] });
+    // A, seen by the poll; the next call written within one poll of A's removal.
+    writeCall("call-a");
+    await wait(150);
+    span("in-a");
+    await wait(250);
+    removeCall();
+    hold(15);
+    span("gap");
+    hold(15);
+    writeCall("call-b");
+    await wait(250);
+    removeCall();
+    await wait(250);
+    // A whole short call between two polls, right after the one before it.
+    writeCall("call-c");
+    await wait(250);
+    removeCall();
+    hold(5);
+    writeCall("call-d");
+    hold(10);
+    span("in-short");
+    hold(10);
+    removeCall();
+    await wait(250);
+    // The folder is written again after the removal, before the hook looks.
+    writeCall("call-e");
+    await wait(250);
+    removeCall();
+    hold(100);
+    span("after-e");
+    hold(100);
+    fs.writeFileSync(path.join(path.dirname(file), "other-entry"), "x");
+    await wait(250);
+    await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }),
+    });
+  `;
+  const result = await run(script, envFor(collector, callFile));
+  assert.equal(result.code, 0, result.stderr);
+  const exported = JSON.parse(collector.seen[0].body.toString());
+  const stamps = Object.fromEntries(
+    exported.resourceSpans[0].scopeSpans[0].spans.map((one) => [
+      one.name,
+      attributes(one.attributes)["fi.simulator.call_execution_id"] ?? null,
+    ]),
+  );
+  // A call the hook never saw leaves its span unstamped; it is never given the call before it.
+  assert.ok([null, "call-d"].includes(stamps["in-short"]), JSON.stringify(stamps));
+  assert.deepEqual({ ...stamps, "in-short": null }, { "in-a": "call-a", gap: null, "in-short": null, "after-e": null });
 });
