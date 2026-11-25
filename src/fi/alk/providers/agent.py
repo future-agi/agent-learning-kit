@@ -253,21 +253,33 @@ def _authored_model(value: Any) -> dict[str, Any] | None:
     return {"provider": provider, "name": name, "temperature": None, "max_tokens": None}
 
 
-# An environment variable's name: only that is passed on as where the model is set.
-_SETTING = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,254}")
+# The setting a model is read from, as a contract records it: an environment variable's name in
+# capitals, digits and _, not starting with a digit, at most LONGEST_SETTING characters. The
+# contract save (harness.model_citation) checks a setting with is_a_setting_name and the document
+# writes only a setting that passes it, so the two can't drift.
+LONGEST_SETTING = 255
+_SETTING = re.compile(r"[A-Z_][A-Z0-9_]*")
+
+
+def is_a_setting_name(setting: str) -> bool:
+    """Whether ``setting`` is written as the name of an environment variable a model is read
+    from."""
+    return len(setting) <= LONGEST_SETTING and _SETTING.fullmatch(setting) is not None
 
 
 def _authored_model_source(value: Any) -> dict[str, Any] | None:
     """Where the model is set, when the code reads it from an environment variable: the
-    setting's name and the line that looks it up, or None when the contract's model has no
-    setting. The document's model is unchanged (the default, when the line gives one): the
-    platform reads this beside it, so it can say where the model comes from rather than show
-    the default as the model a run uses. Read from the redacted contract, so a setting the
-    cleaner changed is not an environment name any more and is left out."""
+    setting's name and the line that reads it, or None when the contract's model has no
+    setting. This is a projection of ``extension.contract.model`` (its setting, path and line),
+    written beside the contract so the platform need not read the contract. The document's model
+    is unchanged (the default, when the line gives one): the platform reads this beside it, so it
+    can say where the model comes from rather than show the default as the model a run uses.
+    Read from the redacted contract, so a setting the cleaner changed is not an environment name
+    any more and is left out."""
     if not isinstance(value, Mapping):
         return None
     setting = str(value.get("setting") or "").strip()
-    if not _SETTING.fullmatch(setting):
+    if not is_a_setting_name(setting):
         return None
     line = value.get("line")
     return {

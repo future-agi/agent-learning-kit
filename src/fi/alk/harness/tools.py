@@ -467,14 +467,16 @@ def _checked_against_source(
             if cited := model_problems(contract, source_root):
                 model = contract.model
                 setting = model.setting.strip() if model is not None else ""
-                # A setting refused twice is left out and the name kept if it passes alone, so a
-                # reading never ends with less than it would without the setting. Not a
-                # credential's: the whole model goes, so no default of it can stay.
+                # Refused twice: the reader said the model comes from a setting, so the name is
+                # never kept alone (it would be the default, shown as the model in use). The
+                # setting is kept without the name if it passes alone; otherwise the model is
+                # left out, as an unknown model is. A credential's setting always loses the whole
+                # model, so no default of it can stay.
                 droppable = bool(setting) and not names_a_credential(setting)
                 if asked is not None and "model" in asked:
                     if model is not None and droppable:
-                        model.setting = ""
-                        if not model.name.strip() or model_problems(contract, source_root):
+                        model.name = ""
+                        if model_problems(contract, source_root):
                             contract.model = None
                     else:
                         contract.model = None
@@ -483,8 +485,8 @@ def _checked_against_source(
                     if asked is not None:
                         asked.add("model")
                         problems.append(
-                            "model: if the model is refused again, its setting is left out, and "
-                            "the model too unless its name passes alone"
+                            "model: if the model is refused again, its name is left out and its "
+                            "setting kept if that passes alone; otherwise the model is left out"
                             if droppable
                             else "model: if the model is refused again, it is left out"
                         )
