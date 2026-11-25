@@ -1373,10 +1373,6 @@ class HostedChatCallRunner:
                     self._adapter, scenario.scenario_key, browser, refused, why=WORLD_END_UNREADABLE,
                     action_log=door_log,
                 )
-            if browser is not None and "state_changes" in sealed:
-                # The browser's refusals in the agent's blocked list, split into its navigations and its pages'
-                # requests and counted; the addresses are in the world_state file.
-                sealed = {**sealed, "state_changes": sealed_browser_blocked(sealed["state_changes"], browser)}
             # `door` says a door stood for these counts, so a reader never takes a record from before it for one.
             world_record = {
                 **(world_record or {}),
@@ -1388,6 +1384,10 @@ class HostedChatCallRunner:
                 # Counts only: the browser's rows are in the world_state file.
                 **({"browser": browser_counts(browser)} if browser is not None else {}),
             }
+            if browser is not None and isinstance(world_record.get("state_changes"), list):
+                # The browser's refusals in the agent's blocked list, which the door's log gives, split into its
+                # navigations and its pages' requests and counted; the addresses are in the world_state file.
+                world_record["state_changes"] = sealed_browser_blocked(world_record["state_changes"], browser)
         else:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)
