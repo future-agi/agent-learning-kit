@@ -24,7 +24,7 @@
       "name": "handoff_escalation_flow"
     },
     {
-      "name": "mailbox_draft_reply_flow",
+      "name": "nobody_signed_in_reads_and_drafts_no_mail",
       "calls": [
         {
           "arguments": {
@@ -36,7 +36,8 @@
           "arguments": {
             "threadId": "th_c03_draft_needed"
           },
-          "tool": "get_thread"
+          "tool": "get_thread",
+          "expect": "refusal"
         },
         {
           "tool": "create_draft",
@@ -47,15 +48,16 @@
             "replyToMessageId": "msg_006",
             "body": "Hello Charlie, your transaction at Best Buy for $85.00 has posted.",
             "subject": "Re: Question about Best Buy charge"
-          }
+          },
+          "expect": "refusal"
         }
       ],
       "expect_state": {
-        "gmail_drafts.count": 1
+        "gmail_drafts.count": 0
       }
     },
     {
-      "name": "verify_lock_and_dispute_flow",
+      "name": "nobody_signed_in_locks_and_disputes_nothing",
       "calls": [
         {
           "arguments": {
@@ -64,7 +66,8 @@
             "session_id": "SESS02",
             "challenge_type": "passcode"
           },
-          "tool": "verify_identity"
+          "tool": "verify_identity",
+          "expect": "refusal"
         },
         {
           "arguments": {
@@ -74,7 +77,8 @@
             "confirmed": true,
             "session_id": "SESS02"
           },
-          "tool": "lock_card"
+          "tool": "lock_card",
+          "expect": "refusal"
         },
         {
           "tool": "create_dispute",
@@ -85,12 +89,13 @@
             "request_key": "REQ-C02-SEQ1",
             "dispute_reason": "unrecognized_charge",
             "transaction_id": "TX04"
-          }
+          },
+          "expect": "refusal"
         }
       ],
       "expect_state": {
         "handoffs.count": 0,
-        "disputes.count": 6
+        "disputes.count": 5
       }
     }
   ],

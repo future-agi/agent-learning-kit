@@ -224,28 +224,28 @@ def test_a_customization_answers_for_what_it_changes(tmp_path, monkeypatch) -> N
     """Rows left over from building, and a world check that cannot fail, are still refused."""
     workspace = tmp_path / "workspace"
     open_design(
-        workspace, name="desk", template=_template("banking", tmp_path, monkeypatch)
+        workspace, name="desk", template=_template("sales_intake", tmp_path, monkeypatch)
     )
     handlers, world = _approved(workspace)
     columns = [
-        row["name"] for row in world.store.query('PRAGMA table_info("disputes")')
+        row["name"] for row in world.store.query('PRAGMA table_info("leads")')
     ]
     world.connection.execute(
-        f"INSERT INTO disputes ({', '.join(columns)}) SELECT 'D-LEFT', "
+        f"INSERT INTO leads ({', '.join(columns)}) SELECT 'L-LEFT', "
         + ", ".join(columns[1:])
-        + " FROM disputes LIMIT 1"
+        + " FROM leads LIMIT 1"
     )
     world.connection.commit()
 
     leftover = asyncio.run(handlers["save_world"]({"notes": ""}))
 
     assert leftover["is_error"]
-    assert "left over from building: disputes" in _said(leftover)
+    assert "left over from building: leads" in _said(leftover)
 
-    world.connection.execute(f"DELETE FROM disputes WHERE {columns[0]} = 'D-LEFT'")
+    world.connection.execute(f"DELETE FROM leads WHERE {columns[0]} = 'L-LEFT'")
     world.connection.commit()
     # A template check rewritten to look at nothing is the customization's own.
-    name = next(iter(designed._spec(PACKAGES / "banking")["world_checks"]))
+    name = next(iter(designed._spec(PACKAGES / "sales_intake")["world_checks"]))
     asyncio.run(
         handlers["add_world_check"](
             {"name": name, "code": "def check(world):\n    world.state()\n    return None\n"}
