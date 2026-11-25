@@ -27,6 +27,21 @@ Each package's `README.md` lists its tools, scenarios, coverage map and known ga
 | `sales_intake` | V17 Sales intake | 19 + Gmail 8 + Calendar 8 + Slack 7 | 100 | 5/5 | Wave A increment 9: three capabilities in one world, rubric, territories with a fallback queue, demos on the owner's calendar, 100 scenarios across 8 jobs, `tests/harness/test_sales_intake_validation.py` |
 | `internal_knowledge` | V11 Internal knowledge | 15 + Drive 5 + Slack 7 | 100 | 5/5 | Wave A increment 10: the corpus is the business system, versions, precedence and Slack decisions, 100 scenarios across 8 jobs, `tests/harness/test_internal_knowledge_validation.py` |
 
+### Workbook cases
+
+A vertical's workbook case `Vxx-S0y` is its scenario named `vxx_s0y_...`:
+
+| Package | S01 | S02 | S03 | S04 | S05 |
+|---|---|---|---|---|---|
+| `banking` (V01) | `happy_path_lock_and_dispute` | `auth_challenge_failure_handoff` | `pending_charge_dispute_declined` | `idempotent_dispute_retry_timeout` | `partial_failure_lock_ok_dispute_failed` |
+| `clinic_scheduling` (V02) | `reschedule_within_constraints` | `referral_required` | `slot_taken_during_confirmation` | `urgent_symptom_during_scheduling` | `other_patient_records_withheld` |
+| `internal_knowledge` (V11) | `current_hotel_cap_with_citation` | `restricted_salary_document` | `relocation_allowance_japan_not_covered` | `conflicting_client_dinner_caps` | `injected_instruction_in_faq` |
+| `service_scheduling` (V12) | `book_spanish_speaker_thursday` | `dst_repeated_hour_clarified` | `last_slot_taken_during_confirmation` | `failed_reschedule_keeps_original` | `late_cancellation_fee_disclosed` |
+| `hr` (V13) | `three_working_days_requested` | `calendar_holiday_inside_date_range` | `insufficient_leave_balance` | `outdated_carry_forward_policy` | `authorization_coworker_leave_details` |
+| `retail` (V15) | `happy_path_single_item_return` | `final_sale_policy_boundary` | `quantity_already_returned_duplicate` | `discounted_partial_refund_arithmetic` | `service_failure_label_escalation` |
+| `saas_subscriptions` (V16) | `schedule_end_of_cycle_downgrade` | `unauthorized_member_mutation_denied` | `downgrade_blocked_seat_limit_exceeded` | `explain_invoice_seat_increase` | `idempotent_duplicate_schedule_request` |
+| `sales_intake` (V17) | `qualified_inbound_lead_demo_offered` | `missing_timeline_not_sales_ready` | `existing_contact_resubmits_demo_request` | `unmapped_country_to_fallback_queue` | `opt_out_after_qualification` |
+| `internal_it` (V20) | `submit_readonly_request` | `complete_approved_access` | `reject_approval_bypass` | `reject_mismatched_token` | `duplicate_access_idempotency` |
 
 ## MCP capabilities
 
@@ -52,7 +67,7 @@ Notion (M05) is outside Wave A and was removed.
 ## Shared
 
 - `designed.py`: the build for environments the environment builder designed (every package except
-  the clinic, whose `build.py` and `suite.py` are hand-written).
+  `appointment_booking`, whose `build.py` and `suite.py` are hand-written).
 - Capability tables are namespaced (`gmail_*`, `drive_*`, `slack_*`, `calendar_*`, plus the shared
   `current_actor`), so two capabilities can share one world (Wave A plan §5).
 - `attach_capability.py`: `python -m fi.alk.environments.attach_capability <vertical> <capability>`
@@ -61,6 +76,7 @@ Notion (M05) is outside Wave A and was removed.
   to the capability.
 - `authoring.py`: `python -m fi.alk.environments.authoring sync-checks <package>` rewrites every
   scenario's check files from the package's catalogue, so the proved check is the one runs execute.
-- Every suite in this folder has the grading weakness recorded in the plan (§7, decision 8): a
-  sub-goal's check is the same file in every scenario that uses it, so a wrong target can pass.
-  The fix is in the builder; the suites are re-sealed after it.
+- A sub-goal's check is the same file in every scenario that uses it; what it holds a run to is that
+  scenario's reference: the arguments its solution marks `fixed`. A value no step fixes is not
+  graded by the check. In the verticals, a check that governs a write counts the mail, Slack and
+  document evidence the reference fixes only when it was read before that write.
