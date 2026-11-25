@@ -1625,6 +1625,47 @@ def test_a_lost_failed_or_interrupted_ending_comes_back_in_a_fresh_sandbox(
     assert payload["usage"]["usd"] == 0.02
 
 
+def test_workspace_checkpoint_archives_one_ending_file_and_replays_turns(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    from fi.alk.harness import spend
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    monkeypatch.setattr(spend, "_stages", {})
+    client = BuilderClient()
+    workspace = tmp_path / "original"
+    runtime = _runtime(workspace, client, monkeypatch)
+    runtime.conversation = SpendingConversation(workspace, writes=False)
+    commands = [
+        {"sequence": n, "message_id": f"m-{n}", "kind": "user_message", "payload": {"content": "hello"}}
+        for n in range(1, 4)
+    ]
+    for command in commands:
+        asyncio.run(runtime._handle(command))
+    expected = [event["payload"] for event in client.events if event["kind"] == "turn_completed"]
+    assert len(expected) == len(commands)
+
+    async def archive_checkpoint(workspace):
+        return {"archive": _workspace_archive(workspace)}
+
+    monkeypatch.setattr(client, "checkpoint", archive_checkpoint)
+    packed = asyncio.run(runtime._checkpoint())["archive"]
+    fresh = tmp_path / "restored"
+    with tarfile.open(fileobj=io.BytesIO(packed), mode="r:gz") as archive:
+        assert [n for n in archive.getnames() if n.startswith(".futureagi-turn-ending")] == [
+            ".futureagi-turn-endings.json"
+        ]
+        archive.extractall(fresh, filter="data")
+
+    restarted = _runtime(fresh, client, monkeypatch)
+    client.events.clear()
+    for command in commands:
+        asyncio.run(restarted._handle(command))
+    replay = [event["payload"] for event in client.events if event["kind"] == "turn_completed"]
+    assert replay == [{**ending, "replayed": True} for ending in expected]
+
+
 def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch):
     """The coordinator state is appended every turn: it must not carry the whole history."""
     from fi.alk.harness import spend

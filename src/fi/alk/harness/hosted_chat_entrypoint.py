@@ -1840,12 +1840,15 @@ class HostedChatRuntime:
         delivery fails, the restart replays this same ending."""
         ending = {"command_message_id": message_id, "outcome": outcome, **self._turn_usage()}
         endings = self._read_turn_endings()
-        # A command id is an opaque wire value, not a workspace path.
-        digest = hashlib.sha256(message_id.encode()).hexdigest()
-        self._write_dotfile(f"{_ENDING_PREFIX}{digest}.json", {message_id: ending})
-        endings[message_id] = ending
         if self._control_only():
+            # A command id is an opaque wire value, not a workspace path.
+            digest = hashlib.sha256(message_id.encode()).hexdigest()
+            self._write_dotfile(f"{_ENDING_PREFIX}{digest}.json", {message_id: ending})
             self._pending_endings[message_id] = ending
+        else:
+            # A workspace checkpoint packs every file. Keep a single archive member.
+            self._write_dotfile(_TURN_ENDINGS, {**endings, message_id: ending})
+        endings[message_id] = ending
         return ending
 
     def _turn_ending(self, message_id: str, **bare: Any) -> dict[str, Any]:
@@ -1859,11 +1862,11 @@ class HostedChatRuntime:
     def _read_turn_endings(self) -> dict[str, dict[str, Any]]:
         if self._endings is None:
             endings = self._read_ending_file(self.workspace / _TURN_ENDINGS)
-            for path in self.workspace.glob(f"{_ENDING_PREFIX}*.json"):
-                endings.update(self._read_ending_file(path))
-            self._endings = endings
             if self._control_only():
+                for path in self.workspace.glob(f"{_ENDING_PREFIX}*.json"):
+                    endings.update(self._read_ending_file(path))
                 self._pending_endings.update(endings)
+            self._endings = endings
         return self._endings
 
     def _read_ending_file(self, path: Path) -> dict[str, dict[str, Any]]:
