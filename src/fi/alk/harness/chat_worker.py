@@ -197,7 +197,6 @@ class IsolatedChatCallRunner:
                 marker=result.get("error_marker"),
                 code=result.get("error_code") or "call_failed",
                 partial=outcome,
-                details=result.get("details"),
             )
         return outcome
 
@@ -348,8 +347,6 @@ async def main() -> None:
             "error_code": exc.code,
             "error_marker": exc.marker,
         }
-        if exc.details is not None:
-            result["details"] = exc.details
         if exc.partial is not None:
             result["partial"] = asdict(exc.partial)
         if collector.artifacts:
