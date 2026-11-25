@@ -298,6 +298,7 @@ class Stage:
 
     async def __aexit__(self, *_exc: Any) -> None:
         if self._session is not None:
+            self._record_interrupted_usage()
             await self._session.stop()
             self._session = None
 
@@ -309,8 +310,12 @@ class Stage:
         for one in said:
             self.channel.record("said", one, stage=self.name)
         await self._session.send(folded_in(message, said))
-        async for event in self._pending_events():
-            yield event
+        try:
+            async for event in self._pending_events():
+                yield event
+        except GeneratorExit:
+            self._record_interrupted_usage()
+            raise
 
     async def resume(self, invocation_id: str) -> AsyncIterator[Event]:
         """Resume one interrupted provider invocation."""
@@ -320,8 +325,12 @@ class Stage:
         if resume is None:
             raise RuntimeError("the selected backend cannot resume interrupted turns")
         await resume(invocation_id)
-        async for event in self._pending_events():
-            yield event
+        try:
+            async for event in self._pending_events():
+                yield event
+        except GeneratorExit:
+            self._record_interrupted_usage()
+            raise
 
     async def _pending_events(self) -> AsyncIterator[Event]:
         turn = Turn()
@@ -354,6 +363,7 @@ class Stage:
             except StopAsyncIteration:
                 break
             except asyncio.CancelledError as exc:
+                self._record_interrupted_usage()
                 if not expired:
                     raise
                 # A reply that lands just as the watcher fires is lost to a timeout: an exact-edge race, accepted.
@@ -378,6 +388,28 @@ class Stage:
                     )
                 yield event
         self.history.append(turn)
+
+    def _record_interrupted_usage(self) -> None:
+        take = getattr(self._session, "take_interrupted_usage", None)
+        if take is not None:
+            usage = take()
+            if usage is not None:
+                self._record_usage(usage)
+
+    def _record_usage(self, received: StageDone) -> None:
+        spend.record(
+            self.name,
+            received.cost_usd,
+            received.turns,
+            received.models,
+            received.tokens_in,
+            received.tokens_out,
+            received.tokens_cached,
+            dict(self.tool_calls),
+            dict(self.tool_refusals),
+            calls=received.calls,
+            call_limit=self._spec.call_budget,
+        )
 
     def _events(self, received: Any, turn: Turn) -> list[Event]:
         if isinstance(received, SessionOpened):
@@ -451,21 +483,7 @@ class Stage:
             turn.tokens_in = received.tokens_in
             turn.tokens_out = received.tokens_out
             turn.tokens_cached = received.tokens_cached
-            # Every harness model call passes here, so the spend ledger is fed once rather than
-            # per stage: a writer added later is counted without anybody remembering to.
-            spend.record(
-                self.name,
-                received.cost_usd,
-                received.turns,
-                received.models,
-                received.tokens_in,
-                received.tokens_out,
-                received.tokens_cached,
-                dict(self.tool_calls),
-                dict(self.tool_refusals),
-                calls=received.calls,
-                call_limit=self._spec.call_budget,
-            )
+            self._record_usage(received)
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
             self.models_used |= received.models
