@@ -10,6 +10,8 @@ def handle(args, db):
             offset = int(args["pageToken"])
         except ValueError:
             raise ToolError(f"Invalid pageToken: {args['pageToken']!r}", category="invalid_input")
+        if offset < 0:
+            raise ToolError(f"Invalid pageToken: {args['pageToken']!r}", category="invalid_input")
     view = args.get("view") or "DRAFT_VIEW_FULL"
     if view not in ("DRAFT_VIEW_UNSPECIFIED", "DRAFT_VIEW_METADATA_ONLY", "DRAFT_VIEW_FULL"):
         raise ToolError(f"Unknown view {view!r}", category="invalid_input")

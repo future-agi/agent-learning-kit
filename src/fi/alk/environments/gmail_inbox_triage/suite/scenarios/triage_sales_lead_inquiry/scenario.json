@@ -68,8 +68,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "add_label_ids": "caller: Target label: TRIAGED",
-        "threadId": "caller: Target thread: T-01"
+        "threadId": "caller: Target thread: T-01",
+        "labelIds": "caller: Target label: TRIAGED"
       }
     }
   ],

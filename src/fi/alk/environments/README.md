@@ -51,7 +51,7 @@ own and are not listed as customer-facing environments (plan decision 2).
 
 | Package | Entry | Tools | Scenarios | Workbook cases | Interface against the official server |
 |---|---|---|---|---|---|
-| `slack_channel_digest` | M01 Slack | 5 official + `slack_check_message_status` | 5 | 5/5 | Identifiers and input schemas of mcp.slack.com, pinned 2026-11-04 |
+| `slack_channel_digest` | M01 Slack | 5 official + `slack_get_approval`, `slack_check_message_status` | 5 | 5/5 | Identifiers and input schemas of mcp.slack.com, pinned 2026-11-04 |
 | `gmail_inbox_triage` | M02 Gmail | 8 of the server's 10 | 16 | 5/5 | Pinned 2026-11-04 from Google's tool reference; three seed threads are conversations with a reply and a correction |
 | `calendar_scheduling_desk` | M03 Google Calendar | 8 of the server's 9 | 12 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
 | `drive_policy_search` | M04 Google Drive | 5 of the server's 8 | 7 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
@@ -72,8 +72,8 @@ Notion (M05) is outside Wave A and was removed.
   `current_actor`), so two capabilities can share one world (Wave A plan §5).
 - `attach_capability.py`: `python -m fi.alk.environments.attach_capability <vertical> <capability>`
   copies a capability's tools, handlers and table schemas into a vertical and records it in the
-  vertical's `mcp_capabilities.json`, which `tests/harness/test_mcp_capability_reference.py` holds
-  to the capability.
+  vertical's `mcp_capabilities.json`. It refuses to replace a handler or tool definition the
+  vertical has changed (its own access rules) unless `--overwrite` is passed.
 - `authoring.py`: `python -m fi.alk.environments.authoring sync-checks <package>` rewrites every
   scenario's check files from the package's catalogue, so the proved check is the one runs execute.
 - A sub-goal's check is the same file in every scenario that uses it; what it holds a run to is that

@@ -43,6 +43,16 @@
       "fixed": {}
     },
     {
+      "tool": "slack_get_approval",
+      "arguments": {
+        "approval_id": "APP-201"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "approval_id": "caller: APP-201"
+      }
+    },
+    {
       "tool": "slack_send_message",
       "arguments": {
         "channel_id": "C01",
@@ -54,7 +64,8 @@
       "fixed": {
         "approval_id": "caller: APP-201",
         "request_key": "caller: REQ-DIGEST-201",
-        "channel_id": "caller: C01"
+        "channel_id": "caller: C01",
+        "message": "record: slack_approvals.approved_text for APP-201"
       }
     }
   ],

@@ -73,7 +73,10 @@
       "environment_arguments": {},
       "fixed": {
         "calendarId": "caller: CAL-PRIMARY",
-        "approval_id": "caller: provide token APP-1002"
+        "approval_id": "caller: provide token APP-1002",
+        "startTime": "caller: Oct 28 at 3:00 PM EDT (19:00:00Z)",
+        "endTime": "caller: 30-minute sync from 19:00:00Z",
+        "attendees": "caller: bob@company.com"
       }
     }
   ],

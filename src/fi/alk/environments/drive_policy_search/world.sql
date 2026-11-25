@@ -20,7 +20,6 @@ CREATE TABLE current_actor (
 INSERT INTO "current_actor" VALUES('default','u_alice');
 CREATE TABLE environment_policy (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO "environment_policy" VALUES('folder_allowlist','"f_public,f_internal,f_restricted,f_archive,f_drafts"');
-INSERT INTO "environment_policy" VALUES('reference_date','"2026-10-26"');
 CREATE TABLE drive_file_revisions (
     revision_id TEXT PRIMARY KEY,
     file_id TEXT NOT NULL,

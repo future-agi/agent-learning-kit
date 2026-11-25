@@ -25,10 +25,20 @@ def _whose_time(db, attendees):
     if others:
         raise ToolError(f"Permission denied: the person in this conversation cannot see when {', '.join(others)} is busy.", category="permission_denied")
 
+def _moment(value, zone):
+    """The moment an ISO 8601 time names, in UTC. A time without an offset, and an all-day date
+    (its midnight), are local to `zone`."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (moment if moment.tzinfo else moment.replace(tzinfo=ZoneInfo(zone))).astimezone(timezone.utc)
+
+
 def handle(args, db):
     import json
     import re
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     attendees = args.get("attendeeEmails")
     if not attendees or not isinstance(attendees, list) or not all(isinstance(a, str) and "@" in a for a in attendees):
@@ -53,13 +63,6 @@ def handle(args, db):
         raise ToolError("preferences.pageSize must be a positive integer", category="invalid_input")
     tz_name = args.get("timeZone")
 
-    def parse_iso(s):
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-
-    t_min, t_max = parse_iso(start_str), parse_iso(end_str)
-    if t_min >= t_max:
-        raise ToolError("startTime must be earlier than endTime", category="invalid_input")
-
     tzinfo = None
     if tz_name:
         try:
@@ -69,6 +72,12 @@ def handle(args, db):
             raise ToolError(f"timeZone must be an IANA time zone name, not {tz_name!r}", category="invalid_input")
     else:
         tz_name = "UTC"
+    try:
+        t_min, t_max = _moment(start_str, tz_name), _moment(end_str, tz_name)
+    except ValueError:
+        raise ToolError("startTime and endTime must be ISO 8601 timestamps", category="invalid_input")
+    if t_min >= t_max:
+        raise ToolError("startTime must be earlier than endTime", category="invalid_input")
 
     def hour_minute(name):
         value = preferences.get(name)
@@ -89,17 +98,17 @@ def handle(args, db):
     allowed = json.loads(allowlist_row["value"]) if allowlist_row else "*"
     if allowed != "*":
         for email in attendees:
-            if email.split("@")[-1] not in allowed:
+            if email.split("@")[-1] not in allowed.split(","):
                 raise ToolError(f"Policy violation: attendee domain {email.split('@')[-1]!r} is not in the attendee allowlist.", category="policy_blocked")
 
     busy = []
     for email in attendees:
         for er in db.query(
-            "SELECT e.start_time, e.end_time FROM calendar_events e JOIN calendar_event_attendees a ON e.event_id = a.event_id "
-            "WHERE a.email = ? AND e.status != 'cancelled' AND e.end_time > ? AND e.start_time < ?",
-            (email, start_str, end_str),
+            "SELECT e.start_time, e.end_time, e.time_zone FROM calendar_events e JOIN calendar_event_attendees a ON e.event_id = a.event_id "
+            "WHERE a.email = ? AND e.status != 'cancelled'",
+            (email,),
         ):
-            busy.append((parse_iso(er["start_time"]) - timedelta(minutes=buffer_min), parse_iso(er["end_time"]) + timedelta(minutes=buffer_min)))
+            busy.append((_moment(er["start_time"], er["time_zone"]) - timedelta(minutes=buffer_min), _moment(er["end_time"], er["time_zone"]) + timedelta(minutes=buffer_min)))
 
     step, dur = timedelta(minutes=30), timedelta(minutes=duration)
     curr = t_min

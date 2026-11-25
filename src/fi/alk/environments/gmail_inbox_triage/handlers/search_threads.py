@@ -1,4 +1,5 @@
 def handle(args, db):
+    import re
     from datetime import datetime, timedelta
 
     page_size = args.get("pageSize")
@@ -13,17 +14,44 @@ def handle(args, db):
             offset = int(page_token)
         except ValueError:
             raise ToolError(f"Invalid pageToken: {page_token!r}", category="invalid_input")
+        if offset < 0:
+            raise ToolError(f"Invalid pageToken: {page_token!r}", category="invalid_input")
     include_trash = bool(args.get("includeTrash"))
 
     clock_row = db.one("SELECT now FROM clock")
     now = datetime.fromisoformat((clock_row["now"] if clock_row else "2026-10-26T10:00:00Z").replace("Z", "+00:00"))
 
-    # Gmail search syntax, the operators this mailbox answers; a bare term matches subject, body
-    # or sender. Drafts are never listed here.
-    label_ids, terms, sender, recipient, subject, newer_than, older_than = [], [], None, None, None, None, None
-    for part in (args.get("query") or "").split():
+    # Gmail search syntax, the operators this mailbox answers (others are refused, not matched as
+    # words); a bare term or "quoted phrase" matches subject, body or sender. Drafts are never
+    # listed here.
+    grouping = re.compile(r"(?:\w+:)?[({]|.*[)}]$|OR$|AROUND$")
+    unanswered = re.compile(r"-\S|(?:bcc|category|deliveredto|filename|has|in|is|larger|list|rfc822msgid|size|smaller):.", re.IGNORECASE)
+
+    def refuse(part):
+        raise ToolError(
+            f"Unsupported search {part!r}: this mailbox answers label:, is:unread, in:inbox, from:, to:, cc:, subject:, "
+            "after:, before:, newer_than:, older_than:, words and \"quoted phrases\"",
+            category="invalid_input",
+        )
+
+    def day(part):
+        value = part.split(":", 1)[1]
+        for form in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(value, form).replace(tzinfo=now.tzinfo)
+            except ValueError:
+                pass
+        raise ToolError(f"{part}: use a date as YYYY/MM/DD", category="invalid_input")
+
+    label_ids, terms, sender, recipient, cc, subject, newer_than, older_than = [], [], None, None, None, None, None, None
+    for quoted in re.findall(r'(?:"[^"]*"|[^\s"])+', args.get("query") or ""):
+        part = quoted.replace('"', "")
         lower = part.lower()
-        if lower.startswith("label:"):
+        if quoted.startswith('"'):
+            terms.append(lower)
+        elif grouping.match(quoted):
+            refuse(quoted)
+        elif lower.startswith("label:"):
             label_ids.append(part.split(":", 1)[1].upper())
         elif lower == "is:unread":
             label_ids.append("UNREAD")
@@ -35,8 +63,14 @@ def handle(args, db):
             sender = part.split(":", 1)[1].lower()
         elif lower.startswith("to:"):
             recipient = part.split(":", 1)[1].lower()
+        elif lower.startswith("cc:"):
+            cc = part.split(":", 1)[1].lower()
         elif lower.startswith("subject:"):
             subject = part.split(":", 1)[1].lower()
+        elif lower.startswith(("after:", "newer:")):
+            newer_than = day(part)
+        elif lower.startswith(("before:", "older:")):
+            older_than = day(part)
         elif lower.startswith("newer_than:") or lower.startswith("older_than:"):
             amount = part.split(":", 1)[1]
             units = {"d": 1, "w": 7, "m": 30, "y": 365}
@@ -49,6 +83,8 @@ def handle(args, db):
                 older_than = now - delta
         elif lower == "has:attachment":
             return {"threads": [], "resultCountEstimate": "0"}
+        elif unanswered.match(part):
+            refuse(quoted)
         else:
             terms.append(lower)
 
@@ -64,6 +100,8 @@ def handle(args, db):
         if sender and not any(sender in m["sender"].lower() for m in msgs):
             continue
         if recipient and not any(recipient in m["recipient"].lower() for m in msgs):
+            continue
+        if cc and not any(cc in (m["cc"] or "").lower() for m in msgs):
             continue
         if subject and subject not in t["subject"].lower():
             continue

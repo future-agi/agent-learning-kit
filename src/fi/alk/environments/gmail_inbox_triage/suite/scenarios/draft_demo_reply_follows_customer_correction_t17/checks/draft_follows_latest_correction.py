@@ -13,14 +13,19 @@ def check(world, calls, reference=None):
     if not drafts:
         return f"not done: no draft on thread {wanted_thread!r}"
     thread = wanted_thread or drafts[-1]["thread_id"]
-    if not any(c.name == "get_thread" and c.ok and c.arguments.get("threadId") == thread for c in calls):
-        return f"not done: thread {thread!r} was not read with get_thread, so the correction could not have been seen"
     # The customer is whoever wrote first; their later message governs.
     in_thread = sorted((m for m in messages if m["thread_id"] == thread), key=lambda m: m["date"])
     customer = in_thread[0]["sender"].lower()
     theirs = [m for m in in_thread if m["sender"].lower() == customer]
     if len(theirs) < 2:
         return None
+    if not any(
+        c.ok and (
+            (c.name == "get_thread" and c.arguments.get("threadId") == thread)
+            or (c.name == "get_message" and c.arguments.get("messageId") == theirs[-1]["id"])
+        ) for c in calls
+    ):
+        return f"not done: the customer's latest message on thread {thread!r} was not read, so the correction could not have been seen"
     days = re.compile(r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", re.I)
     latest = {d.lower() for d in days.findall(theirs[-1]["body"])}
     earlier = {d.lower() for m in theirs[:-1] for d in days.findall(m["body"])}

@@ -65,6 +65,17 @@
       "fixed": {
         "threadId": "caller: Thread: T-13"
       }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "threadId": "T-14",
+        "labelIds": [
+          "TRIAGED"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
     }
   ],
   "alternatives": [],

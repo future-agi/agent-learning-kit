@@ -1,4 +1,4 @@
-def check(world, calls):
+def check(world, calls, reference=None):
     made = [c for c in calls if c.name == "delete_event" and c.ok]
     if not made:
         return "not done: no successful delete_event call was made"
@@ -6,6 +6,9 @@ def check(world, calls):
     cancelled = [e for e in st.get("calendar_events", []) if e.get("status") == "cancelled"]
     if not cancelled:
         return "not done: cancelled event was not found in world state"
+    wanted = {s.get("arguments", {}).get("eventId") for s in reference or () if s.get("tool") == "delete_event"} - {None}
+    if wanted and {e["event_id"] for e in cancelled} != wanted:
+        return f"done wrong: cancelled {sorted(e['event_id'] for e in cancelled)}, expected {sorted(wanted)}"
     outbox = [m for m in st.get("calendar_simulated_outbox", []) if m.get("action") == "cancellation"]
     if not outbox:
         return "not done: cancellation notification was not found in outbox"

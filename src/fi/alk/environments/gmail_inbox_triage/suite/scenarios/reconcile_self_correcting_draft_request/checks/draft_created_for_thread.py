@@ -14,11 +14,14 @@ def check(world, calls, reference=None):
                 to = step.get("arguments", {}).get("to") or []
                 wanted_recipient = to[0] if to else None
 
-    # The reply is grounded in the thread: the agent must have read it (workbook M02, step 2).
+    # The reply is grounded in the thread: the agent must have read it (workbook M02, step 2), with
+    # get_thread or, for the message it answers, get_message.
+    read = {c.arguments.get("messageId") for c in calls if c.name == "get_message" and c.ok}
+    answered = {c.arguments.get("replyToMessageId") for c in made_calls}
     if wanted_thread and not any(
         c.name == "get_thread" and c.ok and c.arguments.get("threadId") == wanted_thread for c in calls
-    ):
-        return f"not done: thread {wanted_thread!r} was not read with get_thread before drafting"
+    ) and not answered <= read:
+        return f"not done: thread {wanted_thread!r} was not read before drafting"
 
     drafts = world.state().get("gmail_drafts", [])
 

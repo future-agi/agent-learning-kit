@@ -49,9 +49,7 @@
         "channel_id": "C04"
       },
       "environment_arguments": {},
-      "fixed": {
-        "channel_id": "caller: C04"
-      }
+      "fixed": {}
     }
   ],
   "alternatives": [],

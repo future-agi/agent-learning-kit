@@ -48,6 +48,7 @@
   },
   "local": {
     "tools": {
+      "slack_get_approval": "a post must match the approved text (C06) and the approver hands over only the approval id; this is how the agent reads the words it may post",
       "slack_check_message_status": "M01-S05 reconciles a send that timed out after committing (workbook C07 read-back); the official server has no ledger, an agent reads the channel back instead, which the check also accepts"
     },
     "parameters": {

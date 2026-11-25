@@ -621,13 +621,18 @@ def test_a_calendar_fault_keeps_only_what_its_kind_commits(built: Path, fault: s
     create_event and update_event alike; only a timeout after the commit lands the change."""
     world = restore(built / WORLD)
     try:
-        world.put("calendar_approvals", {"approval_id": "AP1", "actor_id": "u_clinic_desk", "operation": "any", "target_id": None, "payload_hash": "x",
-                                         "status": "approved", "created_at": "2026-10-26T08:00:00Z", "expires_at": "2026-10-27T08:00:00Z"})
+        def approve(approval, operation, target):
+            world.put("calendar_approvals", {"approval_id": approval, "actor_id": "u_clinic_desk", "operation": operation, "target_id": target, "payload_hash": "x",
+                                             "status": "approved", "created_at": "2026-10-26T08:00:00Z", "expires_at": "2026-10-27T08:00:00Z"})
+
+        approve("AP1", "create_event", "CAL-DESK")
         made = world.call("create_event", {"calendarId": "CAL-DESK", "summary": "Desk task", "startTime": "2026-10-27T09:00:00Z", "endTime": "2026-10-27T09:30:00Z", "approval_id": "AP1"})
         assert made.ok, made.error
+        approve("AP2", "update_event", made.result["id"])
+        approve("AP3", "create_event", "CAL-DESK")
         for operation, arguments in (
-            ("update_event", {"calendarId": "CAL-DESK", "eventId": made.result["id"], "summary": "Moved", "approval_id": "AP1"}),
-            ("create_event", {"calendarId": "CAL-DESK", "summary": "Second", "startTime": "2026-10-27T11:00:00Z", "endTime": "2026-10-27T11:30:00Z", "approval_id": "AP1"}),
+            ("update_event", {"calendarId": "CAL-DESK", "eventId": made.result["id"], "summary": "Moved", "expected_version": 1, "approval_id": "AP2"}),
+            ("create_event", {"calendarId": "CAL-DESK", "summary": "Second", "startTime": "2026-10-27T11:00:00Z", "endTime": "2026-10-27T11:30:00Z", "approval_id": "AP3"}),
         ):
             world.put("calendar_fault_injections", {"fault_id": f"F-{operation}", "operation": operation, "target_id": None, "fault_type": fault, "trigger_once": True, "is_active": True})
             events = _rows(world, ("calendar_events",))

@@ -14,6 +14,8 @@ CREATE TABLE calendar_approvals (
 INSERT INTO "calendar_approvals" VALUES('APP-1001','alice@company.com','create_event','CAL-PRIMARY','HASH-VALID-1001','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
 INSERT INTO "calendar_approvals" VALUES('APP-RESCHEDULE-01','alice@company.com','update_event','EVT-04','HASH-VALID-RESCHEDULE','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
 INSERT INTO "calendar_approvals" VALUES('APP-DELETE-01','alice@company.com','delete_event','EVT-01','HASH-VALID-DELETE','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
+INSERT INTO "calendar_approvals" VALUES('APP-RESCHEDULE-02','alice@company.com','update_event','EVT-CR-101','HASH-VALID-RESCHEDULE-02','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
+INSERT INTO "calendar_approvals" VALUES('APP-DELETE-02','alice@company.com','delete_event','EVT-CR-101','HASH-VALID-DELETE-02','approved','2026-10-26T09:00:00Z','2026-10-26T18:00:00Z');
 CREATE TABLE calendar_attendees (
     email TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -43,6 +45,11 @@ CREATE TABLE clock (
     now TEXT NOT NULL
 );
 INSERT INTO "clock" VALUES(1,'2026-10-26T09:00:00Z');
+CREATE TABLE current_actor (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL
+);
+INSERT INTO "current_actor" VALUES('default','alice@company.com');
 CREATE TABLE environment_policy (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO "environment_policy" VALUES('buffer_minutes','10');
 INSERT INTO "environment_policy" VALUES('max_horizon_days','60');

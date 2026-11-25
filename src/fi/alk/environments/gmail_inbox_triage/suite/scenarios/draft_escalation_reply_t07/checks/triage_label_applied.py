@@ -2,39 +2,29 @@ def check(world, calls, reference=None):
     made_calls = [c for c in calls if c.name == "label_thread" and c.ok]
     if not made_calls:
         return "not done: no successful label_thread call was made"
-        
-    wanted_thread = None
-    wanted_labels = None
-    if reference:
-        for step in reference:
-            if step.get("tool") == "label_thread" and "threadId" in step.get("arguments", {}):
-                wanted_thread = step["arguments"]["threadId"]
-                if "labelIds" in step.get("arguments", {}):
-                    wanted_labels = step["arguments"]["labelIds"]
-                    
-    tl = world.state().get("gmail_thread_labels", [])
-    
+
+    # The threads the task names. A reference step that fixes no thread says the task leaves the
+    # choice of others ("triage my unread threads") to the agent.
+    labelling = [step.get("arguments", {}) for step in reference or () if step.get("tool") == "label_thread"]
+    wanted = {a["threadId"]: a.get("labelIds") or [] for a in labelling if a.get("threadId")}
+    others_allowed = not wanted or any(not a.get("threadId") for a in labelling)
+
+    added = {}
     for c in made_calls:
-        t_id = c.arguments.get("threadId")
-        if wanted_thread and t_id != wanted_thread:
-            return f"done wrong: label_thread called for thread {t_id!r}, expected {wanted_thread!r}"
-            
-        added = c.arguments.get("labelIds") or []
-        if isinstance(added, str):
-            added = [added]
-        if not added:
-            return "not done: label_thread called without labelIds"
-            
-        if wanted_labels:
-            w_list = [wanted_labels] if isinstance(wanted_labels, str) else wanted_labels
-            for lid in w_list:
-                if lid not in added:
-                    return f"done wrong: label {lid!r} was not added to thread {t_id!r}"
-                    
-        for lid in added:
-            if not any(row["thread_id"] == t_id and row["label_id"] == lid for row in tl):
-                return f"not done: label {lid!r} is not present in thread_labels for thread {t_id!r}"
-                
+        added.setdefault(c.arguments.get("threadId"), set()).update(c.arguments.get("labelIds") or [])
+    present = {(row["thread_id"], row["label_id"]) for row in world.state().get("gmail_thread_labels", [])}
+
+    for thread, labels in wanted.items():
+        if thread not in added:
+            return f"done wrong: thread {thread!r} was not labelled"
+        for label in labels or sorted(added[thread]):
+            if label not in added[thread]:
+                return f"done wrong: label {label!r} was not added to thread {thread!r}"
+            if (thread, label) not in present:
+                return f"not done: label {label!r} is not present in thread_labels for thread {thread!r}"
+    for thread in added:
+        if thread not in wanted and not others_allowed:
+            return f"done wrong: label_thread called for thread {thread!r}, which the task does not ask to label"
     return None
 
 

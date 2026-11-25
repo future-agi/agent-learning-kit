@@ -65,7 +65,7 @@
       "environment_arguments": {},
       "fixed": {
         "threadId": "caller: Triage thread: T-17",
-        "add_label_ids": "caller: Target label: TRIAGED"
+        "labelIds": "caller: Target label: TRIAGED"
       }
     }
   ],

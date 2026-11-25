@@ -1,4 +1,5 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    from datetime import datetime
     made = [c for c in calls if c.name == "update_event" and c.ok]
     if not made:
         return "not done: no successful update_event call was made"
@@ -6,6 +7,13 @@ def check(world, calls):
     evts = [e for e in st.get("calendar_events", []) if e.get("version", 1) > 1 and e.get("status") == "confirmed"]
     if not evts:
         return "not done: updated event version was not incremented in world state"
+    wanted = next((s.get("arguments", {}) for s in reference or () if s.get("tool") == "update_event"), {})
+    target = next((e for e in evts if e["event_id"] == wanted.get("eventId", e["event_id"])), None)
+    if target is None:
+        return f"done wrong: event {wanted['eventId']} was not updated"
+    for argument, column in (("startTime", "start_time"), ("endTime", "end_time")):
+        if wanted.get(argument) and datetime.fromisoformat(target[column].replace("Z", "+00:00")) != datetime.fromisoformat(wanted[argument].replace("Z", "+00:00")):
+            return f"done wrong: event {column} is {target[column]}, expected {wanted[argument]}"
     outbox = [m for m in st.get("calendar_simulated_outbox", []) if m.get("action") == "update"]
     if not outbox:
         return "not done: reschedule update notification was not found in outbox"

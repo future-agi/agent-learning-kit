@@ -1,24 +1,29 @@
 """Attach an MCP capability to a vertical environment, the way Wave A stage 1 did by hand.
 
-    python -m fi.alk.environments.attach_capability <vertical> <capability>
+    python -m fi.alk.environments.attach_capability <vertical> <capability> [--overwrite]
 
 A capability package (`gmail_inbox_triage`, `drive_policy_search`, `slack_channel_digest`,
 `calendar_scheduling_desk`) is a tool set in the official server's shape over its own, namespaced
 tables (`gmail_*`, `drive_*`, `slack_*`, `calendar_*`, plus the shared `current_actor`). A vertical
-copies the capability rather than importing it, so the sealed release is self-contained and the
-copy is held to the capability by `tests/harness/test_mcp_capability_reference.py`:
+copies the capability rather than importing it, so the sealed release is self-contained. The copy
+is a starting point: a vertical then adds its own rules to it (who in the conversation may read or
+write, whose records are hidden), so most attached handlers differ from the capability's. The
+capability itself is held to the official server by
+`tests/harness/test_mcp_capability_reference.py`:
 
-- every capability tool is added to the vertical's `tools.json` (replacing an earlier copy), and
-  its handler is copied byte for byte;
+- every capability tool is added to the vertical's `tools.json`, and its handler is copied;
 - every capability table the vertical lacks is created in its `world.sql`, schema only: the
   vertical authors the rows, linked to its own records (plan §3.1);
 - the capability's `system_invariant` rules join the vertical's `policy.json`; its agent rules
   and configurable parameters do not (the vertical's agent is graded by its own rules, and the
   seal requires every configurable parameter to be seeded, which only the vertical can decide);
 - `mcp_capabilities.json` in the vertical records what was attached from where, which is what
-  the reference test reads.
+  its catalogue card shows.
 
-Re-running the attachment is safe: it rewrites the copies and leaves the vertical's own data.
+Re-running the attachment leaves the vertical's own data, and refuses, changing nothing, where the
+vertical's handler or tool definition no longer matches the capability's: it would undo the rules
+the vertical added. Port a capability's change to those by hand, or pass `--overwrite` to replace
+them with the capability's.
 """
 
 from __future__ import annotations
@@ -33,9 +38,12 @@ from pathlib import Path
 ATTACHMENTS = "mcp_capabilities.json"
 SHARED_TABLES = frozenset({"clock", "environment_policy"})
 _CREATE = re.compile(
-    r"CREATE TABLE\s+\"?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\"?\s*\((?:[^;]|\n)*?\);",
-    re.MULTILINE,
+    r"CREATE TABLE\s+\"?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\"?\s*\([^;]*\);"
 )
+
+
+class Diverged(ValueError):
+    """The vertical has changed its copy of the capability."""
 
 
 def _read_json(path: Path):
@@ -66,8 +74,34 @@ def capability_tables(capability: Path) -> list[str]:
     ]
 
 
-def attach(vertical: Path, capability: Path) -> dict[str, list[str]]:
+def diverged(vertical: Path, capability: Path) -> list[str]:
+    """The capability's tools whose handler or definition the vertical holds and has changed."""
+    own = {tool["name"]: tool for tool in _read_json(vertical / "tools.json")}
+    changed = []
+    for tool in _read_json(capability / "tools.json"):
+        name = tool["name"]
+        handler = Path("handlers") / f"{name}.py"
+        copied = vertical / handler
+        if (
+            copied.is_file()
+            and copied.read_bytes() != (capability / handler).read_bytes()
+        ):
+            changed.append(str(handler))
+        if name in own and own[name] != tool:
+            changed.append(f"tools.json {name}")
+    return changed
+
+
+def attach(
+    vertical: Path, capability: Path, *, overwrite: bool = False
+) -> dict[str, list[str]]:
     """Attach `capability` to `vertical`; returns what was copied, created and left to author."""
+    changed = diverged(vertical, capability)
+    if changed and not overwrite:
+        raise Diverged(
+            f"{vertical.name} has its own version of {capability.name}'s {', '.join(changed)}; "
+            "attaching would replace them. Port the change by hand, or pass --overwrite."
+        )
     report: dict[str, list[str]] = {
         "tools": [],
         "handlers": [],
@@ -88,7 +122,7 @@ def attach(vertical: Path, capability: Path) -> dict[str, list[str]]:
     _write_json(vertical / "tools.json", vertical_tools + capability_tools)
     report["tools"] = names
 
-    # Handlers, byte for byte.
+    # Handlers.
     (vertical / "handlers").mkdir(exist_ok=True)
     for name in names:
         shutil.copyfile(
@@ -158,6 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "capability", help="capability package, e.g. drive_policy_search"
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace handlers and tool definitions the vertical has changed",
+    )
     args = parser.parse_args(argv)
     root = Path(__file__).parent
     vertical, capability = root / args.vertical, root / args.capability
@@ -171,7 +210,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             f"{capability.name} has no mcp_reference.json; only MCP capabilities attach"
         )
-    report = attach(vertical, capability)
+    try:
+        report = attach(vertical, capability, overwrite=args.overwrite)
+    except Diverged as exc:
+        parser.error(str(exc))
     print(json.dumps(report, indent=2))
     if report["tables_created"]:
         print(

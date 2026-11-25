@@ -1,4 +1,5 @@
 def handle(args, db):
+    import json
     import re
 
     query = args.get("query")
@@ -54,8 +55,12 @@ def handle(args, db):
         return True
 
     files = db.query("SELECT * FROM drive_files WHERE NOT is_deleted ORDER BY file_id")
+    allow_row = db.one("SELECT value FROM environment_policy WHERE name = 'folder_allowlist'")
+    allowlist = {x.strip() for x in json.loads(allow_row["value"]).split(",")} if allow_row else None
     accessible = []
     for f in files:
+        if allowlist is not None and f["folder_id"] not in allowlist:
+            continue
         if not is_admin:
             perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (f["folder_id"], user_id))
             file_perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (f["file_id"], user_id))

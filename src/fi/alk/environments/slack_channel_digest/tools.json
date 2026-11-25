@@ -402,6 +402,50 @@
     }
   },
   {
+    "name": "slack_get_approval",
+    "description": "Read an approval the desk holds for a Slack post: the exact text it covers, the channel, its status (approved, used) and expiry. Post that text exactly with slack_send_message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "description": "The approval id the approver gave."
+        }
+      },
+      "required": [
+        "approval_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "channel_id": {
+          "type": "string"
+        },
+        "approved_text": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "channel_id",
+        "approved_text",
+        "status",
+        "expires_at"
+      ]
+    }
+  },
+  {
     "name": "slack_send_message",
     "description": "Sends a message to a channel, or a thread reply with thread_ts. Posting is approval-gated: approval_id must name an approval of this exact destination and text for the acting user. request_key makes a retry return the message already posted instead of a duplicate. No @channel, @here or @everyone.",
     "parameters": {

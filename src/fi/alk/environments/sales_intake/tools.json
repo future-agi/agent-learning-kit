@@ -2041,7 +2041,7 @@
         },
         "approval_id": {
           "type": "string",
-          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+          "description": "The approval authorizing this change: the acting user's, for this operation on this calendar (create) or event, unexpired and used once. Required while the environment requires approval for mutations."
         }
       },
       "required": [
@@ -2245,15 +2245,16 @@
         },
         "approval_id": {
           "type": "string",
-          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+          "description": "The approval authorizing this change: the acting user's, for this operation on this calendar (create) or event, unexpired and used once. Required while the environment requires approval for mutations."
         },
         "expected_version": {
           "type": "integer",
-          "description": "The event version the change was decided on; a stale version is refused."
+          "description": "The event version the change was decided on (from the event's version); a stale version is refused."
         }
       },
       "required": [
-        "eventId"
+        "eventId",
+        "expected_version"
       ]
     },
     "mutates_state": true,
@@ -2394,7 +2395,7 @@
         },
         "approval_id": {
           "type": "string",
-          "description": "The approval authorizing this change; required while the environment requires approval for mutations."
+          "description": "The approval authorizing this change: the acting user's, for this operation on this calendar (create) or event, unexpired and used once. Required while the environment requires approval for mutations."
         },
         "recurring_action": {
           "type": "string",
