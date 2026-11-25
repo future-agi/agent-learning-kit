@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from fi.alk.harness import call_runner, tool_evidence
-from fi.alk.harness.chat_call_runner import _HostedChatTarget, _record_completed_tool_call
+from fi.alk.harness.chat_call_runner import HostedChatTarget, _record_completed_tool_call
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.tool_evidence import AGENT, SPAN, TRACER, WORLD, seen, tagged
 from fi.alk.harness.world.runtime import Call, graded_calls, trace_row
@@ -435,7 +435,7 @@ def test_a_google_adk_reply_streamed_in_parts_reads_as_one_record_per_call(tmp_p
             return reader._agent_response_from_payload(_decode_json_or_sse(events))
 
     world = _World()
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=_Agent(),
         contract=SimpleNamespace(runtime=None, tool_entrypoints=[]),
         world=world,
@@ -830,3 +830,30 @@ def test_a_pipe_at_the_notes_path_is_not_read(tmp_path) -> None:
 
     assert not reader.is_alive()
     assert said == [[]]
+
+
+def test_the_agents_own_account_of_the_proxys_failure_answer_is_a_failed_call_of_ours() -> None:
+    from fi.alk.harness.world_door import UPSTREAM_UNAVAILABLE, WORLD_FAILED
+
+    world = _World()
+    # The agent's tool handed back the tool proxy's 502 answer as its value, in the response beside the call.
+    _record_completed_tool_call(
+        world,
+        name="request_discount",
+        arguments={"deal_id": 7, "discount_percent": 20},
+        response={"tool_call_id": "call_9", "content": '{"detail": "tool_upstream_unavailable", "status": 502}'},
+        call_id="call_9",
+    )
+    _record_completed_tool_call(
+        world, name="request_discount", arguments={"deal_id": 7}, response={"content": '{"status": "pending"}'}
+    )
+
+    _record_completed_tool_call(
+        world, name="request_discount", arguments={"deal_id": 7}, response={"content": {"detail": WORLD_FAILED}}
+    )
+
+    failed, answered, ours = world.calls
+    assert (failed.ok, failed.error, failed.result, failed.source) == (False, UPSTREAM_UNAVAILABLE, None, AGENT)
+    assert (answered.ok, answered.result) == (True, {"status": "pending"})
+    # The code kept tells the customer's tools server failing from our world failing, as on the file-traced path.
+    assert (ours.ok, ours.error) == (False, WORLD_FAILED)

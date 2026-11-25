@@ -25,6 +25,9 @@ decided in the notes.
   rebuilt in its own turn after this one lands.
 - There is no running world and no credentials here. Do not try to run the agent's tools; the
   checks are static.
+- A tool the agent's source defines that the contract lacks (one it gained, or one an earlier version
+  removed and this one has again) is added with `declare_tool`, citing the line that defines it.
+  `fix_tool` and `adopt_tool` only change tools the contract already has.
 - For every tool the agent gained, add a sub-goal that checks what the tool lets the person using
   the agent do, so the suite stage adds a scenario for it. `report_update` warns about a new tool
   no sub-goal names; check that one covers it, by name or by its effect.
@@ -51,6 +54,13 @@ decided in the notes.
 - Every sub-goal the environment added must be named by at least one scenario; one scenario may
   cover several.
 - Drop a sub-goal from scenarios with `retire_sub_goal` only after the environment retired it.
+- A scenario that needs a tool or sub-goal the environment no longer has is dropped, not rewritten
+  to do without it. `report_update` records why (the capability, the agent version) and keeps its
+  key and last content, so it comes back on its own when the agent has the capability again.
+- Scenarios the message lists as restored are already back in the suite under their own key. Keep
+  each as it was and change a step only where its tool or arguments changed, then prove it. One
+  that cannot be proved goes back to dropped and is reported; never drop, rename or rewrite one to
+  pass, and never write a new scenario under a dropped key.
 - Prove everything with `prove_scenarios`. Scenarios the person is still editing are listed at the
   end of the message. Only this message's list counts: a scenario an earlier message listed is
   no longer being edited and is repaired like any other. In a listed scenario keep what the
