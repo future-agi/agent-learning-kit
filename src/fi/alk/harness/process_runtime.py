@@ -3755,6 +3755,8 @@ def postgres_seed_argv(*, port: int, dbname: str, user: str, file: Path) -> list
         dbname,
         "-v",
         "ON_ERROR_STOP=1",
+        # No psqlrc of whoever runs it.
+        "-X",
         "-f",
         str(file),
     ]
@@ -4460,40 +4462,62 @@ def _without_trigger_toggles(file: Path) -> tuple[Path, int]:
 
 
 # psql's own meta-commands psql would run from a bundle's file: a shell (`\!`), another file (`\i`), output to a file
-# (`\o`), another database (`\c`) or each row run as SQL (`\gexec`). Only pg_dump's own restriction pair is left.
-_ALLOWED_META = re.compile(r"\\(?:restrict|unrestrict)\b")
-_COPY_FROM_STDIN = re.compile(r"^\s*COPY\b.*\bFROM\s+stdin\b.*;\s*$", re.IGNORECASE)
+# (`\o`), another database (`\c`) or each row run as SQL (`\gexec`). Only pg_dump's own restriction lines are left, and
+# only as whole lines of pg_dump's exact shape: anything after one on its line would be a second command psql runs.
+_ALLOWED_META = re.compile(r"^\\(?:un)?restrict [A-Za-z0-9]+\s*$")
+_COPY_FROM_STDIN = re.compile(r"^\s*COPY\b.*\bFROM\s+stdin\b", re.IGNORECASE)
 _DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$")
 
 
-def _meta_in_line(line: str, state: str | None) -> tuple[int | None, str | None]:
-    """Where a line's first psql meta-command starts outside every string, name, comment and dollar-quoted body (None
-    when it has none), and the state the line leaves: None, "'", '"', "/*<depth>" or a dollar tag."""
+def _meta_in_line(line: str, state: str | None, pending: bool) -> tuple[int | None, str | None, bool]:
+    """Read one line as psql does: where its first meta-command starts outside every string (an E'' string takes
+    backslash escapes), name, comment and dollar-quoted body (None when it has none); the state the line leaves
+    (None, "'", "E'", '"', "/*<depth>" or a dollar tag); and whether a statement is still unfinished after it."""
     i = 0
     while i < len(line):
         if state is None:
+            char = line[i]
             if line.startswith("--", i):
-                return None, None
+                return None, None, pending
             if line.startswith("/*", i):
                 state, i = "/*1", i + 2
                 continue
-            char = line[i]
-            if char in ("'", '"'):
-                state, i = char, i + 1
+            if char == "'":
+                before = line[i - 1] if i else " "
+                earlier = line[i - 2] if i > 1 else " "
+                escaped = before in "eE" and not (earlier.isalnum() or earlier in "_$")
+                state, i, pending = ("E'" if escaped else "'"), i + 1, True
+                continue
+            if char == '"':
+                state, i, pending = '"', i + 1, True
                 continue
             if char == "$":
                 tag = _DOLLAR_TAG.match(line, i)
                 before = line[i - 1] if i else " "
                 if tag and not (before.isalnum() or before in "_$"):
-                    state, i = tag.group(), tag.end()
+                    state, i, pending = tag.group(), tag.end(), True
                     continue
             if char == "\\":
-                return i, None
+                return i, None, pending
+            if char == ";":
+                pending = False
+            elif not char.isspace():
+                pending = True
             i += 1
+        elif state == "E'":
+            if line[i] == "\\":
+                i += 2
+            elif line[i] == "'":
+                if line.startswith("''", i):
+                    i += 2
+                else:
+                    state, i = None, i + 1
+            else:
+                i += 1
         elif state in ("'", '"'):
             closing = line.find(state, i)
             if closing < 0:
-                return None, state
+                return None, state, pending
             if line.startswith(state * 2, closing):
                 i = closing + 2
                 continue
@@ -4502,7 +4526,7 @@ def _meta_in_line(line: str, state: str | None) -> tuple[int | None, str | None]
             depth = int(state[2:])
             opening, closing = line.find("/*", i), line.find("*/", i)
             if closing < 0 and opening < 0:
-                return None, state
+                return None, state, pending
             if opening >= 0 and (closing < 0 or opening < closing):
                 state, i = f"/*{depth + 1}", opening + 2
             else:
@@ -4510,13 +4534,14 @@ def _meta_in_line(line: str, state: str | None) -> tuple[int | None, str | None]
         else:
             closing = line.find(state, i)
             if closing < 0:
-                return None, state
+                return None, state, pending
             i, state = closing + len(state), None
-    return None, state
+    return None, state, pending
 
 
 def _meta_commands(file: Path) -> list[str]:
-    """Each psql meta-command a file holds outside its strings, comments, dollar-quoted bodies and COPY data."""
+    """Each line of a file on which psql would run a meta-command: outside its strings, comments, dollar-quoted bodies
+    and the data of a COPY FROM stdin that really started, any backslash but pg_dump's own whole restriction lines."""
     if file.suffix.lower() != ".sql":
         return []
     try:
@@ -4525,20 +4550,54 @@ def _meta_commands(file: Path) -> list[str]:
         return []
     found: list[str] = []
     state: str | None = None
+    pending = False
     copying = False
     for number, line in enumerate(lines, start=1):
         if copying:
             copying = line != "\\."
             continue
-        if state is None and _COPY_FROM_STDIN.match(line):
-            copying = True
+        if state is None and _ALLOWED_META.match(line):
             continue
-        at, state = _meta_in_line(line, state)
+        started_clean = state is None and not pending
+        at, state, pending = _meta_in_line(line, state, pending)
         if at is not None:
-            if not _ALLOWED_META.match(line, at):
-                found.append(f"line {number}: {line[at:].split()[0]}")
-            state = None
+            found.append(f"line {number}: {line[at:].split()[0]}")
+            state, pending = None, False
+            continue
+        # COPY data follows only a COPY ... FROM stdin statement that began and ended on this line.
+        copying = started_clean and state is None and not pending and bool(_COPY_FROM_STDIN.match(line))
     return found
+
+
+def _bundle_sql_identity(user: int | None, group: int | None) -> tuple[int | None, int | None]:
+    """The OS user psql runs a bundle's SQL as. Under per-user isolation an account that is not the database
+    server's and can neither read nor write its data directory or `pg_hba.conf` (`nobody`), so a meta-command psql
+    ran anyway could do no more than that account; with one fixed user, the user given."""
+    import pwd
+
+    from .privilege import IsolationMode, isolation_mode
+
+    if isolation_mode() is not IsolationMode.PER_USER:
+        return user, group
+    try:
+        entry = pwd.getpwnam("nobody")
+    except KeyError as missing:
+        raise ProcessRuntimeError(
+            "seed",
+            "internal_no_unprivileged_account",
+            "no unprivileged account (nobody) to run a bundle's SQL as",
+            domain=FailureDomain.INFRASTRUCTURE,
+        ) from missing
+    return entry.pw_uid, entry.pw_gid
+
+
+def _readable_copy(file: Path) -> Path:
+    """A copy of a bundle's SQL file any account can read, for psql run as the unprivileged one."""
+    descriptor, name = tempfile.mkstemp(prefix="bundle-sql-", suffix=file.suffix, dir="/tmp")
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(file.read_bytes())
+    os.chmod(name, 0o644)
+    return Path(name)
 
 
 # What a file run as the restricted login asked for that only a superuser may do, and what to change instead.
@@ -4627,11 +4686,17 @@ def apply_store_seed(
                         relative_path,
                         toggled,
                     )
+            run_as = (user, group)
+            if as_login and engine is ManagedEngine.POSTGRES and path.suffix.lower() == ".sql":
+                # Last, after every rewrite: psql reads it as the unprivileged account.
+                run_as = _bundle_sql_identity(user, group)
+                if run_as != (user, group):
+                    path = _readable_copy(path)
             try:
                 apply_seed_file(
                     engine, path, port=port, dbname=dbname,
                     credentials=migration_credentials if as_login else credentials, process_name=process_name,
-                    sync_run=sync_run, user=user, group=group, rabbitmq_import=rabbitmq_import,
+                    sync_run=sync_run, user=run_as[0], group=run_as[1], rabbitmq_import=rabbitmq_import,
                     source_digest=source_digest, generic_artifact_root=generic_artifact_root,
                 )
             except ProcessRuntimeError as failed:

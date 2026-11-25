@@ -2157,20 +2157,23 @@ def test_seeds_a_superuser_load_took_still_build_as_the_restricted_login(tmp_pat
     (
         ("CREATE ROLE anon NOLOGIN;\n", "Roles are the harness's own"),
         ("COPY public.items FROM '/etc/hostname';\n", "COPY ... FROM STDIN"),
-        ("SELECT 1;\n\\! touch /tmp/alk-meta\n", "psql meta-commands are not run (line 2: \\!)"),
+        ("SELECT 1;\n\\! touch {marker}\n", "psql meta-commands are not run (line 2: \\!)"),
     ),
 )
 def test_a_seed_the_login_cannot_run_says_what_to_change_and_nothing_else(tmp_path: Path, seed, said):
     """Auditor B, item 12 and the meta-commands: a refusal names the bundle's file, what was refused and what to
     change; never psql's own output or a scratch path of the harness's."""
-    build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n", seed)
+    marker = tmp_path / "ran"
+    build, run, baseline = _seeded(
+        tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n", seed.replace("{marker}", str(marker))
+    )
     try:
         with pytest.raises(pr.ProcessRuntimeError) as refused:
             build()
         message = str(refused.value)
         assert said in message and "seed.sql" in message
         assert "/var/folders" not in message and "/tmp/tmp" not in message and "\nSET" not in message
-        assert not Path("/tmp/alk-meta").exists()
+        assert not marker.exists()
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
@@ -2187,6 +2190,79 @@ def test_the_restricted_login_cannot_log_in_once_retired():
                           password=superuser.password, dbname="postgres",
                           statement=f"SELECT rolcanlogin, rolbypassrls FROM pg_roles WHERE rolname = '{login.username}'")
     assert roles == [(False, True)] or roles == [(False, False)]
+
+
+_META = {
+    # Auditor B, R2-1: the three ways past the first filter, and the chained case Auditor A found.
+    "estring": ("SELECT E'\\'';\n\\! touch {marker}\n", True),
+    "copy desync": ("COPY public.items (id) FROM stdin /* x;\n*/ \\! touch {marker}\n", True),
+    "unrestrict chain": ("\\restrict k1\n\\unrestrict k1 \\! touch {marker}\n", True),
+    "copy after an unfinished statement": ("SELECT 1\nCOPY public.items (id) FROM stdin;\n\\! touch {marker}\n", True),
+    "gexec": ("SELECT 'x' \\gexec\n", True),
+    "real copy": ("COPY public.items (id) FROM stdin;\n1\n\\.\nSELECT 1;\n", False),
+    "pg_dump restrict lines": ("\\restrict AbC123\nSELECT 1;\n\\unrestrict AbC123\n", False),
+    "escapes in strings": ("SELECT E'a\\nb', 'c\\d';\n", False),
+    "dollar body": ("CREATE FUNCTION public.f() RETURNS text AS $b$\n\\! not meta\n$b$ LANGUAGE sql;\n", False),
+    "comments": ("/* \\! x */ SELECT 1; -- \\! y\n", False),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_META))
+def test_psql_meta_commands_are_found_as_psql_reads_the_file(tmp_path: Path, case):
+    text, meta = _META[case]
+    file = tmp_path / "seed.sql"
+    file.write_text(text.replace("{marker}", str(tmp_path / "ran")), encoding="utf-8")
+
+    assert bool(pr._meta_commands(file)) is meta
+
+
+@real_postgres
+@pytest.mark.parametrize("case", sorted(name for name, (_text, meta) in _META.items() if meta and "touch" in _META[name][0]))
+def test_a_seed_past_the_old_filter_is_refused_and_its_shell_never_runs(tmp_path: Path, case):
+    marker = tmp_path / "ran"
+    build, run, baseline = _seeded(
+        tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n", _META[case][0].replace("{marker}", str(marker))
+    )
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            build()
+        assert "psql meta-commands are not run" in str(refused.value)
+        assert not marker.exists()
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+def test_with_world_roles_psql_runs_a_bundle_s_sql_as_an_account_that_is_not_the_database_server_s(
+    tmp_path: Path, monkeypatch
+):
+    """R2-1's boundary: under per-user isolation psql never runs a bundle's file as the database server's own OS user
+    (whose shell could rewrite pg_hba.conf), but as `nobody`, on a copy it can read, with no psqlrc."""
+    import pwd
+
+    from fi.alk.harness import privilege
+    from fi.alk.harness.bundle_v2 import StoreEntry
+
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    (tmp_path / "schema.sql").write_text("CREATE TABLE public.items (id int);\n", encoding="utf-8")
+    ran: list[dict] = []
+
+    def sync_run(argv, **kwargs):
+        ran.append({"argv": list(argv), **kwargs})
+        return pr.subprocess.CompletedProcess(argv, 0, "", "")
+
+    store = StoreEntry.model_construct(capability="world_db", migrations=["schema.sql"], seed_files=[])
+    pr.apply_store_seed(
+        store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=tmp_path, port=1, dbname="b", credentials=_CREDENTIALS,
+        process_name="db", sync_run=sync_run, user=2003, group=2003,
+        migration_credentials=pr.EngineCredentials(pr.MIGRATOR_ROLE, "p"),
+    )
+
+    nobody = pwd.getpwnam("nobody")
+    [one] = ran
+    assert (one["user"], one["group"]) == (nobody.pw_uid, nobody.pw_gid) != (2003, 2003)
+    assert "-X" in one["argv"]
+    copied = Path(one["argv"][one["argv"].index("-f") + 1])
+    assert copied != tmp_path / "schema.sql" and oct(copied.stat().st_mode & 0o777) == "0o644"
 
 
 def _pg_dump_schema(owner: str) -> str:
