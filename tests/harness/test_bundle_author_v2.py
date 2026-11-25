@@ -6733,7 +6733,7 @@ def test_native_node_plan_installs_locked_root_and_preserves_child_command(
         "project": "files" if child == "." else child + "/files"
     }
     probe, install = agent.build_commands
-    assert probe[:2] == ["python3", "-c"] and len(probe) == 3
+    assert probe[:3] == ["python3", "-I", "-c"] and len(probe) == 4
     assert install == (
         ["corepack", "npm", "ci", "--ignore-scripts"]
         if manager.startswith("npm@")
@@ -6883,6 +6883,26 @@ def test_native_node_requires_node_and_corepack_on_path(tmp_path: Path) -> None:
     matching = probe()
     assert matching.returncode == 0, matching.stderr
     assert matching.stdout.strip() == "Node toolchain v22.11.0"
+
+
+def test_native_node_probe_ignores_modules_planted_in_the_source(tmp_path: Path) -> None:
+    """The probe runs in the source tree, so a submitted ``shutil.py`` must not stand in for the stdlib."""
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    _node_package(tmp_path)
+    (tmp_path / "shutil.py").write_text(
+        "import sys\nprint('Node toolchain v99.0.0', flush=True)\nsys.exit(0)\n"
+    )
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+    probe = subprocess.run(
+        [sys.executable, *process.build_commands[0][1:]],
+        cwd=tmp_path,
+        env={"PATH": str(tmp_path / "no-bin")},
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0
+    assert "runtime_node_toolchain_missing" in probe.stderr
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs a local node binary")

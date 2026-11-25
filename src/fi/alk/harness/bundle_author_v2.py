@@ -1517,6 +1517,7 @@ _NODE_INSTALLS = {
 }
 # The installer runs through Corepack, so the exact packageManager version, not the image's own
 # npm, installs the lockfile. An agent the image's Node cannot run fails when it starts.
+# Toolchain probes run isolated (-I): they start in the source tree, whose modules must not shadow the stdlib.
 _NODE_TOOLCHAIN_PROBE = (
     "import shutil,subprocess,sys; "
     "node=shutil.which('node'); corepack=shutil.which('corepack'); "
@@ -1599,7 +1600,7 @@ def _plan_source_process(
             "actual==sys.argv[1] or sys.exit('runtime_bun_toolchain_version_mismatch: '+actual)"
         )
         build_commands = [
-            ["python3", "-c", verify, version],
+            ["python3", "-I", "-c", verify, version],
             ["bun", "install", "--frozen-lockfile"],
         ]
     else:
@@ -1618,7 +1619,7 @@ def _plan_source_process(
                 f"runtime_node_lock_required: expected exactly one source lockfile, {lock_name}"
             )
         build_commands = [
-            ["python3", "-c", _NODE_TOOLCHAIN_PROBE],
+            ["python3", "-I", "-c", _NODE_TOOLCHAIN_PROBE],
             install,
         ]
     for path in [package_root / "package.json", *locks]:
