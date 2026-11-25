@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import fnmatch
 import hashlib
 import json
 import logging
@@ -1500,24 +1499,8 @@ def _python_component_command(
 
 
 _NODE_LANGUAGES = {"node", "nodejs"}
-# Every JavaScript lockfile a package root can carry; Node accepts only its pinned installer's one.
-_JS_LOCKS = (
-    "bun.lock",
-    "bun.lockb",
-    "package-lock.json",
-    "npm-shrinkwrap.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-)
-_NODE_INSTALLS = {
-    "npm": ("package-lock.json", ["corepack", "npm", "ci", "--ignore-scripts"]),
-    "pnpm": (
-        "pnpm-lock.yaml",
-        ["corepack", "pnpm", "install", "--frozen-lockfile", "--ignore-scripts"],
-    ),
-}
-# The installer runs through Corepack, so the exact packageManager version, not the image's own
-# npm, installs the lockfile. An agent the image's Node cannot run fails when it starts.
+# Corepack runs the exact npm the source pins.
+_NPM_INSTALL = ["corepack", "npm", "ci", "--ignore-scripts"]
 # Toolchain probes run isolated (-I): they start in the source tree, whose modules must not shadow the stdlib.
 _NODE_TOOLCHAIN_PROBE = (
     "import shutil,subprocess,sys; "
@@ -1525,35 +1508,112 @@ _NODE_TOOLCHAIN_PROBE = (
     "node and corepack or sys.exit('runtime_node_toolchain_missing: provision Node and Corepack in the certified image'); "
     "print('Node toolchain '+subprocess.check_output([node,'--version'],text=True).strip(),flush=True)"
 )
+_NODE_LAYOUT_UNSUPPORTED = (
+    "runtime_node_layout_unsupported: Not supported yet: npm/pnpm workspaces, pnpm and yarn. "
+    "Use a single npm package with package-lock.json."
+)
+# Files that make the launch folder, or a folder above it, part of a layout v1 does not install.
+_NODE_FOREIGN_LAYOUT = ("pnpm-lock.yaml", "pnpm-workspace.yaml", "yarn.lock")
+_NODE_PARENT_LOCKS = ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb", *_NODE_FOREIGN_LAYOUT)
 
 
-def _js_workspace_lists(
-    package_root: Path, manifest: dict[str, Any], member: str, manager: str
-) -> bool:
-    """Whether the root's workspaces list ``member``: ``pnpm-workspace.yaml`` for pnpm, else ``package.json``."""
-    if manager == "pnpm":
-        workspace_file = package_root / "pnpm-workspace.yaml"
-        try:
-            declared = (
-                yaml.safe_load(workspace_file.read_text())
-                if workspace_file.is_file() and not workspace_file.is_symlink()
-                else None
-            )
-        except (yaml.YAMLError, UnicodeError):
-            declared = None
-        patterns = declared.get("packages") if isinstance(declared, dict) else None
-    else:
-        patterns = manifest.get("workspaces")
-        if isinstance(patterns, dict):
-            patterns = patterns.get("packages")
-    globs = [
-        (item.startswith("!"), item.removeprefix("!").removeprefix("./").rstrip("/"))
-        for item in (patterns if isinstance(patterns, list) else [])
-        if isinstance(item, str)
+def _is_node(language: str, command: Sequence[str]) -> bool:
+    """Whether a native process declares Node: by its language, or with none by a ``node`` command."""
+    language = language.lower()
+    return language in _NODE_LANGUAGES or (not language and list(command[:1]) == ["node"])
+
+
+def _node_manifest(path: Path) -> dict[str, Any]:
+    if path.is_symlink():
+        raise BundleAuthorError("runtime_node_manifest_unsafe")
+    try:
+        manifest = json.loads(path.read_text())
+    except (ValueError, UnicodeError) as exc:
+        raise BundleAuthorError("runtime_node_manifest_invalid") from exc
+    if not isinstance(manifest, dict):
+        raise BundleAuthorError("runtime_node_manifest_invalid")
+    return manifest
+
+
+def _plan_node_process(source: Path, **kwargs: Any) -> SourceProcess:
+    """v1 Node: one npm package at the launch folder, installed from its own package-lock.json."""
+    command = list(kwargs.get("run_override") or [])
+    if command[:1] != ["node"]:
+        raise BundleAuthorError("runtime_node_command_required: expected node argv")
+    if (
+        kwargs.get("extras")
+        or kwargs.get("requirements_files")
+        or kwargs.get("livekit_download")
+    ):
+        raise BundleAuthorError("runtime_node_python_options_invalid")
+    source, root = source.resolve(), kwargs["root"].resolve()
+    if not root.is_relative_to(source):
+        raise BundleAuthorError("runtime_node_workdir_outside_source")
+    manifest_path = root / "package.json"
+    if not manifest_path.is_file():
+        raise BundleAuthorError(
+            "runtime_node_package_manager_missing: no package.json in the launch folder"
+        )
+    manifest = _node_manifest(manifest_path)
+    manager = manifest.get("packageManager")
+    manager = manager if isinstance(manager, str) else ""
+    has_lock = (root / "package-lock.json").is_file()
+    if (
+        manager.startswith(("pnpm@", "yarn@"))
+        or "workspaces" in manifest
+        or any((root / name).exists() for name in _NODE_FOREIGN_LAYOUT)
+    ):
+        raise BundleAuthorError(_NODE_LAYOUT_UNSUPPORTED)
+    for parent in root.parents:
+        if not parent.is_relative_to(source):
+            break
+        # A parent workspace, or a parent lock the workdir lacks, means npm would install the parent's tree.
+        if (parent / "pnpm-workspace.yaml").exists() or (
+            not has_lock and any((parent / name).exists() for name in _NODE_PARENT_LOCKS)
+        ):
+            raise BundleAuthorError(_NODE_LAYOUT_UNSUPPORTED)
+        if (parent / "package.json").is_file() and "workspaces" in _node_manifest(
+            parent / "package.json"
+        ):
+            raise BundleAuthorError(_NODE_LAYOUT_UNSUPPORTED)
+    if "packageManager" not in manifest:
+        raise BundleAuthorError("runtime_node_package_manager_missing")
+    if not re.fullmatch(
+        r"npm@[0-9]+\.[0-9]+\.[0-9]+(?:\+sha(?:1|224|256|384|512)\.[0-9a-f]+)?", manager
+    ):
+        raise BundleAuthorError("runtime_node_package_manager_unpinned")
+    locks = [
+        name
+        for name in ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb")
+        if (root / name).is_file()
     ]
-    return any(
-        not negated and fnmatch.fnmatchcase(member, glob) for negated, glob in globs
-    ) and not any(negated and fnmatch.fnmatchcase(member, glob) for negated, glob in globs)
+    if locks != ["package-lock.json"]:
+        raise BundleAuthorError(
+            "runtime_node_lock_required: expected exactly one source lockfile, package-lock.json"
+        )
+    for path in (manifest_path, root / "package-lock.json"):
+        if path.is_symlink() or not path.resolve().is_relative_to(source):
+            raise BundleAuthorError("runtime_node_manifest_unsafe")
+    process = _python_process(
+        name=kwargs["name"],
+        working_directory=root.relative_to(source).as_posix(),
+        entry=None,
+        control=kwargs["control"],
+        needs_secrets=kwargs["needs_secrets"],
+        port=kwargs.get("port"),
+        environment=kwargs.get("environment"),
+        depends_on=kwargs.get("depends_on"),
+    )
+    return process.model_copy(
+        update={
+            "build_commands": [
+                ["python3", "-I", "-c", _NODE_TOOLCHAIN_PROBE],
+                list(_NPM_INSTALL),
+            ],
+            "run_command": command,
+            "source_component": ".",
+        }
+    )
 
 
 def _native_js_runtime(language: str, command: Sequence[str]) -> str:
@@ -1572,99 +1632,62 @@ def _plan_source_process(
 ) -> SourceProcess:
     root = kwargs["root"]
     command = kwargs.get("run_override") or []
-    lane = _native_js_runtime(language, command)
-    if not lane:
+    if _is_node(language, command):
+        return _plan_node_process(source, **kwargs)
+    is_bun = language.lower() == "bun" or (
+        not language and command and command[0] == "bun"
+    )
+    if not is_bun:
         return _plan_python(source, **kwargs)
-    if list(command[:1]) != [lane]:
-        raise BundleAuthorError(f"runtime_{lane}_command_required: expected {lane} argv")
+    if not command or command[0] != "bun":
+        raise BundleAuthorError("runtime_bun_command_required: expected bun argv")
     if (
         kwargs.get("extras")
         or kwargs.get("requirements_files")
         or kwargs.get("livekit_download")
     ):
-        raise BundleAuthorError(f"runtime_{lane}_python_options_invalid")
+        raise BundleAuthorError("runtime_bun_python_options_invalid")
     source, root = source.resolve(), root.resolve()
     if not root.is_relative_to(source):
-        raise BundleAuthorError(f"runtime_{lane}_workdir_outside_source")
+        raise BundleAuthorError("runtime_bun_workdir_outside_source")
     package_root = root
     manifest = {}
-    nearest = None
     while True:
         path = package_root / "package.json"
         if path.is_file():
-            nearest = nearest or package_root
             if path.is_symlink():
-                raise BundleAuthorError(f"runtime_{lane}_manifest_unsafe")
+                raise BundleAuthorError("runtime_bun_manifest_unsafe")
             try:
                 manifest = json.loads(path.read_text())
             except (ValueError, UnicodeError) as exc:
-                raise BundleAuthorError(f"runtime_{lane}_manifest_invalid") from exc
+                raise BundleAuthorError("runtime_bun_manifest_invalid") from exc
             if not isinstance(manifest, dict):
-                raise BundleAuthorError(f"runtime_{lane}_manifest_invalid")
+                raise BundleAuthorError("runtime_bun_manifest_invalid")
             if "packageManager" in manifest:
                 break
         if package_root == source:
-            raise BundleAuthorError(f"runtime_{lane}_package_manager_missing")
+            raise BundleAuthorError("runtime_bun_package_manager_missing")
         package_root = package_root.parent
     manager = manifest.get("packageManager")
-    manager = manager if isinstance(manager, str) else ""
-    if lane == "bun":
-        if not re.fullmatch(r"bun@[0-9]+\.[0-9]+\.[0-9]+", manager):
-            raise BundleAuthorError("runtime_bun_package_manager_unpinned")
-        version = manager.removeprefix("bun@")
-        if kwargs.get("version") and kwargs["version"] != version:
-            raise BundleAuthorError("runtime_bun_version_mismatch")
-        locks = [
-            package_root / name
-            for name in ("bun.lock", "bun.lockb")
-            if (package_root / name).is_file()
-        ]
-        if len(locks) != 1:
-            raise BundleAuthorError(
-                "runtime_bun_lock_required: expected exactly one source lockfile"
-            )
-        verify = (
-            "import shutil,subprocess,sys; "
-            "binary=shutil.which('bun'); "
-            "binary or sys.exit('runtime_bun_toolchain_missing: provision pinned Bun in the certified image'); "
-            "actual=subprocess.check_output([binary,'--version'],text=True).strip(); "
-            "print('Bun toolchain '+actual,flush=True); "
-            "actual==sys.argv[1] or sys.exit('runtime_bun_toolchain_version_mismatch: '+actual)"
+    if not isinstance(manager, str) or not re.fullmatch(
+        r"bun@[0-9]+\.[0-9]+\.[0-9]+", manager
+    ):
+        raise BundleAuthorError("runtime_bun_package_manager_unpinned")
+    version = manager.removeprefix("bun@")
+    if kwargs.get("version") and kwargs["version"] != version:
+        raise BundleAuthorError("runtime_bun_version_mismatch")
+    locks = [
+        package_root / name
+        for name in ("bun.lock", "bun.lockb")
+        if (package_root / name).is_file()
+    ]
+    if len(locks) != 1:
+        raise BundleAuthorError(
+            "runtime_bun_lock_required: expected exactly one source lockfile"
         )
-        build_commands = [
-            ["python3", "-I", "-c", verify, version],
-            ["bun", "install", "--frozen-lockfile"],
-        ]
-    else:
-        pinned = re.fullmatch(
-            r"(npm|pnpm)@[0-9]+\.[0-9]+\.[0-9]+(?:\+sha(?:1|224|256|384|512)\.[0-9a-f]+)?",
-            manager,
-        )
-        if not pinned:
-            raise BundleAuthorError("runtime_node_package_manager_unpinned")
-        if nearest != package_root and not _js_workspace_lists(
-            package_root, manifest, nearest.relative_to(package_root).as_posix(), pinned[1]
-        ):
-            # An install at that root would skip this package's own dependencies.
-            raise BundleAuthorError(
-                "runtime_node_package_manager_missing: "
-                f"{nearest.relative_to(source).as_posix()} is not a workspace of the package that pins one"
-            )
-        lock_name, install = _NODE_INSTALLS[pinned[1]]
-        locks = [
-            package_root / name for name in _JS_LOCKS if (package_root / name).is_file()
-        ]
-        if [path.name for path in locks] != [lock_name]:
-            raise BundleAuthorError(
-                f"runtime_node_lock_required: expected exactly one source lockfile, {lock_name}"
-            )
-        build_commands = [
-            ["python3", "-I", "-c", _NODE_TOOLCHAIN_PROBE],
-            install,
-        ]
     for path in [package_root / "package.json", *locks]:
         if path.is_symlink() or not path.resolve().is_relative_to(source):
-            raise BundleAuthorError(f"runtime_{lane}_manifest_unsafe")
+            raise BundleAuthorError("runtime_bun_manifest_unsafe")
     child = root.relative_to(package_root).as_posix()
     run = (
         command
@@ -1678,6 +1701,14 @@ def _plan_source_process(
             *command,
         ]
     )
+    verify = (
+        "import shutil,subprocess,sys; "
+        "binary=shutil.which('bun'); "
+        "binary or sys.exit('runtime_bun_toolchain_missing: provision pinned Bun in the certified image'); "
+        "actual=subprocess.check_output([binary,'--version'],text=True).strip(); "
+        "print('Bun toolchain '+actual,flush=True); "
+        "actual==sys.argv[1] or sys.exit('runtime_bun_toolchain_version_mismatch: '+actual)"
+    )
     process = _python_process(
         name=kwargs["name"],
         working_directory=package_root.relative_to(source).as_posix(),
@@ -1690,7 +1721,10 @@ def _plan_source_process(
     )
     return process.model_copy(
         update={
-            "build_commands": build_commands,
+            "build_commands": [
+                ["python3", "-I", "-c", verify, version],
+                ["bun", "install", "--frozen-lockfile"],
+            ],
             "run_command": run,
             "source_component": child,
         }
@@ -2064,7 +2098,7 @@ def _runtime_component(
 ) -> Path:
     """Resolve a source-declared workdir to its nearest installable project root.
 
-    A Node or Bun process finds its own package root, so it keeps the workdir itself.
+    A Node process installs in the workdir itself, so it keeps it.
     """
 
     configured = configured_workdir.strip()
@@ -3492,7 +3526,7 @@ def resolve_environment_plan(
             root,
             language=runtime_model.language,
             name=control_name,
-            # Bun and Node walk up to their own package root, so they start from the run folder.
+            # Bun walks up to its package root from the run folder; Node's package is that folder.
             root=(
                 (run_folder if js_runtime else component)
                 if subfolder

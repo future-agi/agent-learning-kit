@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
@@ -6681,16 +6680,10 @@ _NODE_JSON_INTERFACE = {
 
 
 def _node_package(root: Path, *, manager: str = "npm@10.9.2", **extra) -> None:
-    pnpm = manager.startswith("pnpm@")
-    if pnpm and "workspaces" in extra:
-        # pnpm reads its workspaces from pnpm-workspace.yaml, not package.json.
-        (root / "pnpm-workspace.yaml").write_text(
-            yaml.safe_dump({"packages": extra.pop("workspaces")})
-        )
+    root.mkdir(parents=True, exist_ok=True)
     manifest = {"name": "order-chat", "packageManager": manager, **extra}
     (root / "package.json").write_text(json.dumps(manifest))
-    lock = "pnpm-lock.yaml" if pnpm else "package-lock.json"
-    (root / lock).write_text('{"lockfileVersion": 3}')
+    (root / "package-lock.json").write_text('{"lockfileVersion": 3}')
 
 
 def _node_plan_kwargs(root: Path, **changes):
@@ -6706,16 +6699,15 @@ def _node_plan_kwargs(root: Path, **changes):
     }
 
 
-@pytest.mark.parametrize("manager", ["npm@10.9.2", "pnpm@9.15.4"])
-@pytest.mark.parametrize("child", [".", "packages/chat"])
-def test_native_node_plan_installs_locked_root_and_preserves_child_command(
-    tmp_path: Path, child: str, manager: str
+_NPM_INSTALL_ARGV = ["corepack", "npm", "ci", "--ignore-scripts"]
+
+
+@pytest.mark.parametrize("workdir", [".", "apps/chat"])
+def test_native_node_plan_installs_and_starts_in_its_workdir(
+    tmp_path: Path, workdir: str
 ) -> None:
-    _node_package(tmp_path, manager=manager, workspaces=["packages/*"])
-    component = tmp_path / child
-    component.mkdir(parents=True, exist_ok=True)
-    if child != ".":
-        (component / "package.json").write_text('{"name":"chat"}')
+    component = tmp_path / workdir
+    _node_package(component)
     (component / "server.js").write_text(_NODE_CHAT_SERVER)
     plan = resolve_environment_plan(
         tmp_path,
@@ -6726,7 +6718,7 @@ def test_native_node_plan_installs_locked_root_and_preserves_child_command(
             "language": "node",
             "version": "22",
             "execution": "native",
-            "workdir": child,
+            "workdir": workdir,
             "command": ["node", "server.js"],
             "install": "touch /tmp/must-not-execute",
             "workspaces": {"project": "files"},
@@ -6735,30 +6727,12 @@ def test_native_node_plan_installs_locked_root_and_preserves_child_command(
     )
     assert plan.packaging == "generated_node"
     agent = next(process for process in plan.processes if process.name == "agent")
-    assert agent.working_directory == "."
-    assert agent.workspaces == {
-        "project": "files" if child == "." else child + "/files"
-    }
+    assert agent.working_directory == workdir
+    assert agent.workspaces == {"project": "files"}
     probe, install = agent.build_commands
     assert probe[:3] == ["python3", "-I", "-c"] and len(probe) == 4
-    assert install == (
-        ["corepack", "npm", "ci", "--ignore-scripts"]
-        if manager.startswith("npm@")
-        else ["corepack", "pnpm", "install", "--frozen-lockfile", "--ignore-scripts"]
-    )
-    assert agent.run_command == (
-        ["node", "server.js"]
-        if child == "."
-        else [
-            "sh",
-            "-c",
-            'cd "./$1" && shift && exec "$@"',
-            "alk-source-process",
-            child,
-            "node",
-            "server.js",
-        ]
-    )
+    assert install == _NPM_INSTALL_ARGV
+    assert agent.run_command == ["node", "server.js"]
     assert "must-not-execute" not in repr(agent.build_commands)
     # ALK binds no JavaScript tools: evidence comes from the completed rows, not a Python tracer.
     assert "HARNESS_TOOL_TRACE" not in agent.environment
@@ -6783,7 +6757,7 @@ def test_native_node_is_read_from_its_command_without_python_tracing(
     )
     agent = next(process for process in plan.processes if process.name == "agent")
     assert plan.packaging == "generated_node"
-    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
     assert len(agent.build_commands) == 2
     assert "HARNESS_TOOL_TRACE" not in agent.environment
     with pytest.raises(BundleAuthorError, match="runtime_node_http_interface_required"):
@@ -6801,21 +6775,47 @@ def test_native_node_is_read_from_its_command_without_python_tracing(
 
 
 @pytest.mark.parametrize(
-    "manifest,locks,changes,error",
+    "manifest,files,changes,error",
     [
         ({}, ["package-lock.json"], {}, "package_manager_missing"),
         ({"packageManager": "npm@latest"}, ["package-lock.json"], {}, "package_manager_unpinned"),
         ({"packageManager": "npm@10"}, ["package-lock.json"], {}, "package_manager_unpinned"),
         ({"packageManager": "bun@1.3.14"}, ["bun.lock"], {}, "package_manager_unpinned"),
-        ({"packageManager": "yarn@4.5.0"}, ["yarn.lock"], {}, "package_manager_unpinned"),
         ({"packageManager": "npm@10.9.2"}, [], {}, "lock_required"),
-        ({"packageManager": "npm@10.9.2"}, ["pnpm-lock.yaml"], {}, "lock_required"),
-        ({"packageManager": "pnpm@9.15.4"}, ["package-lock.json"], {}, "lock_required"),
+        ({"packageManager": "npm@10.9.2"}, ["npm-shrinkwrap.json"], {}, "lock_required"),
         (
             {"packageManager": "npm@10.9.2"},
             ["package-lock.json", "bun.lock"],
             {},
             "lock_required",
+        ),
+        # v1 is a single npm package: pnpm, yarn and workspaces are refused by name.
+        ({"packageManager": "pnpm@9.15.4"}, ["pnpm-lock.yaml"], {}, "layout_unsupported"),
+        ({"packageManager": "pnpm@9.15.4"}, ["package-lock.json"], {}, "layout_unsupported"),
+        ({"packageManager": "yarn@4.5.0"}, ["yarn.lock"], {}, "layout_unsupported"),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "pnpm-lock.yaml"],
+            {},
+            "layout_unsupported",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "yarn.lock"],
+            {},
+            "layout_unsupported",
+        ),
+        (
+            {"packageManager": "npm@10.9.2", "workspaces": ["packages/*"]},
+            ["package-lock.json"],
+            {},
+            "layout_unsupported",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "pnpm-workspace.yaml"],
+            {},
+            "layout_unsupported",
         ),
         (
             {"packageManager": "npm@10.9.2"},
@@ -6833,15 +6833,57 @@ def test_native_node_is_read_from_its_command_without_python_tracing(
     ],
 )
 def test_native_node_rejects_invalid_source(
-    tmp_path: Path, manifest, locks, changes, error: str
+    tmp_path: Path, manifest, files, changes, error: str
 ) -> None:
     from fi.alk.harness.bundle_author_v2 import _plan_source_process
 
     (tmp_path / "package.json").write_text(json.dumps(manifest))
-    for name in locks:
+    for name in files:
         (tmp_path / name).write_text("{}")
-    with pytest.raises(BundleAuthorError, match="runtime_node_" + error):
+    with pytest.raises(BundleAuthorError, match="runtime_node_" + error) as refused:
         _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path, **changes))
+    if error == "layout_unsupported":
+        assert "Use a single npm package with package-lock.json" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "parent",
+    [
+        {"package.json": {"name": "root", "workspaces": ["apps/*"]}},
+        {"package.json": {"name": "root", "workspaces": {"packages": ["apps/chat"]}}},
+        {"pnpm-workspace.yaml": "packages:\n  - 'apps/*'\n"},
+        # A parent lock with none in the workdir: npm would install the parent's tree.
+        {"package.json": {"name": "root"}, "package-lock.json": {}, "member_lock": False},
+        {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n", "member_lock": False},
+    ],
+)
+def test_native_node_refuses_a_member_of_a_parent_workspace(
+    tmp_path: Path, parent: dict
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    parent = dict(parent)
+    member_lock = parent.pop("member_lock", True)
+    for name, body in parent.items():
+        (tmp_path / name).write_text(body if isinstance(body, str) else json.dumps(body))
+    member = tmp_path / "apps" / "chat"
+    _node_package(member)
+    if not member_lock:
+        (member / "package-lock.json").unlink()
+    with pytest.raises(BundleAuthorError, match="runtime_node_layout_unsupported"):
+        _plan_source_process(tmp_path, **_node_plan_kwargs(member))
+
+
+def test_native_node_admits_a_package_nested_under_an_unrelated_parent(tmp_path: Path) -> None:
+    """A parent package.json with no workspaces does not own the nested package's install."""
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"name": "docs-site", "private": true}')
+    member = tmp_path / "apps" / "chat"
+    _node_package(member)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(member))
+    assert process.working_directory == "apps/chat"
+    assert process.run_command == ["node", "server.js"]
 
 
 def test_native_node_accepts_corepack_hash_pin_and_rejects_symlink_lock(
@@ -6849,11 +6891,11 @@ def test_native_node_accepts_corepack_hash_pin_and_rejects_symlink_lock(
 ) -> None:
     from fi.alk.harness.bundle_author_v2 import _plan_source_process
 
-    _node_package(tmp_path, manager="pnpm@9.15.4+sha512." + "ab" * 64)
+    _node_package(tmp_path, manager="npm@10.9.2+sha512." + "ab" * 64)
     process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
-    assert process.build_commands[-1][:2] == ["corepack", "pnpm"]
-    (tmp_path / "pnpm-lock.yaml").unlink()
-    (tmp_path / "pnpm-lock.yaml").symlink_to(tmp_path / "package.json")
+    assert process.build_commands[-1] == _NPM_INSTALL_ARGV
+    (tmp_path / "package-lock.json").unlink()
+    (tmp_path / "package-lock.json").symlink_to(tmp_path / "package.json")
     with pytest.raises(BundleAuthorError, match="runtime_node_manifest_unsafe"):
         _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
 
@@ -6891,55 +6933,6 @@ def test_native_node_requires_node_and_corepack_on_path(tmp_path: Path) -> None:
     assert matching.returncode == 0, matching.stderr
     assert matching.stdout.strip() == "Node toolchain v22.11.0"
 
-
-@pytest.mark.parametrize(
-    "manager,membership",
-    [
-        ("npm@10.9.2", {"workspaces": ["packages/*"]}),
-        ("npm@10.9.2", {"workspaces": {"packages": ["packages/chat"]}}),
-        ("pnpm@9.15.4", {"pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"}),
-    ],
-)
-def test_native_node_installs_the_workspace_that_lists_its_package(
-    tmp_path: Path, manager: str, membership: dict
-) -> None:
-    from fi.alk.harness.bundle_author_v2 import _plan_source_process
-
-    workspace = membership.pop("pnpm-workspace.yaml", None)
-    _node_package(tmp_path, manager=manager, **membership)
-    if workspace:
-        (tmp_path / "pnpm-workspace.yaml").write_text(workspace)
-    member = tmp_path / "packages" / "chat"
-    member.mkdir(parents=True)
-    (member / "package.json").write_text('{"name":"chat"}')
-    process = _plan_source_process(tmp_path, **_node_plan_kwargs(member))
-    assert process.working_directory == "."
-    assert process.source_component == "packages/chat"
-
-@pytest.mark.parametrize(
-    "manager,root_manifest",
-    [
-        ("npm@10.9.2", {"workspaces": ["apps/*"]}),
-        ("npm@10.9.2", {}),
-        # pnpm ignores package.json workspaces.
-        ("pnpm@9.15.4", {"workspaces": ["examples/*"]}),
-    ],
-)
-def test_native_node_refuses_a_parent_package_that_does_not_list_it(
-    tmp_path: Path, manager: str, root_manifest: dict
-) -> None:
-    """A parent ``packageManager`` installs only its own workspace, never an unlisted nested package."""
-    from fi.alk.harness.bundle_author_v2 import _plan_source_process
-
-    manifest = {"name": "root", "packageManager": manager, **root_manifest}
-    (tmp_path / "package.json").write_text(json.dumps(manifest))
-    (tmp_path / ("pnpm-lock.yaml" if manager.startswith("pnpm@") else "package-lock.json")).write_text("{}")
-    member = tmp_path / "examples" / "chat"
-    member.mkdir(parents=True)
-    (member / "package.json").write_text('{"name":"chat"}')
-    (member / "package-lock.json").write_text('{"lockfileVersion": 3}')
-    with pytest.raises(BundleAuthorError, match="runtime_node_package_manager_missing"):
-        _plan_source_process(tmp_path, **_node_plan_kwargs(member))
 
 def test_native_node_probe_ignores_modules_planted_in_the_source(tmp_path: Path) -> None:
     """The probe runs in the source tree, so a submitted ``shutil.py`` must not stand in for the stdlib."""
@@ -7070,7 +7063,7 @@ def test_native_node_json_agent_seals_into_a_bundle(tmp_path: Path) -> None:
         p for p in manifest.processes if p.name == manifest.runtime.control_service
     )
     assert agent.run_command == ["node", "server.js"]
-    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
     context = output / agent.working_directory
     assert (context / "server.js").read_text() == _NODE_CHAT_SERVER
     assert (context / "package-lock.json").is_file()
@@ -9153,16 +9146,15 @@ def test_subfolder_node_runs_from_subfolder(tmp_path):
 
     assert agent.working_directory == "agents/a"
     assert agent.run_command == ["node", "server.js"]
-    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
 
 
-def test_compose_node_sidecar_in_a_workspace_member_changes_folder_once(tmp_path):
+def test_compose_node_sidecar_installs_in_its_build_context(tmp_path):
     source = _repo(
         tmp_path,
         {
             "agent.py": "print('agent')\n",
             "requirements.txt": "\n",
-            "tools/api/package.json": '{"name":"tools-api"}',
             "tools/api/server.js": _NODE_CHAT_SERVER,
             "compose.yml": (
                 "services:\n"
@@ -9175,50 +9167,33 @@ def test_compose_node_sidecar_in_a_workspace_member_changes_folder_once(tmp_path
             ),
         },
     )
-    _node_package(source, workspaces=["tools/*"])
+    _node_package(source / "tools/api")
 
     plan = resolve_environment_plan(source, _job(connector="auto"))
 
     tools = next(process for process in plan.processes if process.name == "tools-api")
-    assert tools.working_directory == "."
-    assert tools.run_command == [
-        "sh",
-        "-c",
-        'cd "./$1" && shift && exec "$@"',
-        "alk-source-process",
-        "tools/api",
-        "node",
-        "server.js",
-    ]
-    assert tools.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+    assert tools.working_directory == "tools/api"
+    assert tools.run_command == ["node", "server.js"]
+    assert tools.build_commands[-1] == _NPM_INSTALL_ARGV
 
 
-def test_subfolder_node_from_its_dockerfile_cmd_changes_folder_once(tmp_path):
-    """With no declared language or command, the Dockerfile CMD makes it Node, and Node enters its folder once."""
+def test_subfolder_node_from_its_dockerfile_cmd_starts_in_its_folder(tmp_path):
+    """With no declared language or command, the Dockerfile CMD makes it Node, run from its own folder."""
     source = _repo(
         tmp_path,
         {
-            "agents/a/package.json": '{"name":"a"}',
             "agents/a/server.js": _NODE_CHAT_SERVER,
             "agents/a/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
         },
     )
-    _node_package(source, workspaces=["agents/*"])
+    _node_package(source / "agents/a")
     runtime = {"interface": _NODE_JSON_INTERFACE}
 
     agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
 
-    assert agent.working_directory == "."
-    assert agent.run_command == [
-        "sh",
-        "-c",
-        'cd "./$1" && shift && exec "$@"',
-        "alk-source-process",
-        "agents/a",
-        "node",
-        "server.js",
-    ]
-    assert agent.build_commands[-1] == ["corepack", "npm", "ci", "--ignore-scripts"]
+    assert agent.working_directory == "agents/a"
+    assert agent.run_command == ["node", "server.js"]
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
 
 
 def test_node_workdir_under_a_python_root_starts_in_its_workdir(tmp_path):
@@ -9227,11 +9202,10 @@ def test_node_workdir_under_a_python_root_starts_in_its_workdir(tmp_path):
         tmp_path,
         {
             "pyproject.toml": _PROJECT,
-            "apps/chat/package.json": '{"name":"chat"}',
             "apps/chat/server.js": _NODE_CHAT_SERVER,
         },
     )
-    _node_package(source, workspaces=["apps/*"])
+    _node_package(source / "apps/chat")
 
     plan = resolve_environment_plan(
         source,
@@ -9248,23 +9222,14 @@ def test_node_workdir_under_a_python_root_starts_in_its_workdir(tmp_path):
     )
 
     agent = _agent_of(plan)
-    assert agent.working_directory == "."
-    assert agent.run_command == [
-        "sh",
-        "-c",
-        'cd "./$1" && shift && exec "$@"',
-        "alk-source-process",
-        "apps/chat",
-        "node",
-        "server.js",
-    ]
+    assert agent.working_directory == "apps/chat"
+    assert agent.run_command == ["node", "server.js"]
 
 
 def test_compose_node_control_service_requires_an_http_interface(tmp_path):
     source = _repo(
         tmp_path,
         {
-            "agent/package.json": '{"name":"agent"}',
             "agent/server.js": _NODE_CHAT_SERVER,
             "compose.yml": (
                 "services:\n"
@@ -9274,7 +9239,7 @@ def test_compose_node_control_service_requires_an_http_interface(tmp_path):
             ),
         },
     )
-    _node_package(source, workspaces=["agent"])
+    _node_package(source / "agent")
     runtime = {
         "language": "node",
         "execution": "compose",
@@ -9301,7 +9266,7 @@ def test_compose_node_control_service_requires_an_http_interface(tmp_path):
         contract_interface_kind="http",
         contract_runtime={**runtime, "interface": _NODE_JSON_INTERFACE},
     )
-    assert _agent_of(plan).run_command[-2:] == ["node", "server.js"]
+    assert _agent_of(plan).run_command == ["node", "server.js"]
 
 
 @pytest.mark.parametrize("excluded", ["package-lock.json", "*.json", "*-lock.json"])
