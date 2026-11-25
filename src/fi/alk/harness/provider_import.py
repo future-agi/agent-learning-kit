@@ -127,9 +127,11 @@ def _rewritten_as_url(value: str) -> bool:
 _LARGEST_WHOLE_PROMPT = 1024 * 1024
 
 
-# Set on a fetched profile when its sanitizer changed a text of the prompt: what is left may
-# be cut, and can't be told from a whole prompt.
-PROMPT_REWRITTEN = "prompt_rewritten_by_sanitizer"
+# What a fetch found when it compared the prompt's texts before and after the profile's
+# sanitizer: "unchanged", or "changed", where what is left may be cut. A fetched profile with
+# no such record, such as one cached before fetches made it, is not taken as whole.
+PROMPT_CHECK = "prompt_check"
+_FETCHED = frozenset({"retell", "vapi"})
 
 
 def _prompt_texts(profile: Mapping[str, Any]) -> list[Any] | None:
@@ -164,20 +166,20 @@ def whole_prompt(profile: Mapping[str, Any]) -> str | None:
     """The agent's whole instructions from a provider profile, or None where code can't take
     every text of them, or where taking them would cut them."""
     texts = _prompt_texts(profile)
-    if not texts or not all(isinstance(text, str) and text.strip() for text in texts):
+    if not texts or not all(isinstance(text, str) for text in texts):
         return None
-    if profile.get(PROMPT_REWRITTEN):
+    if profile.get("provider") in _FETCHED and profile.get(PROMPT_CHECK) != "unchanged":
         return None
-    if profile.get("provider") in {"retell", "vapi"} and any(
-        _rewritten_as_url(text) for text in texts
-    ):
-        # Fetched profiles were sanitized, and one rewritten as an address may have been cut;
-        # a profile fetched before the sanitizer said so is judged by its text.
+    # Measured before anything is built from the texts: a character is at least one byte, so
+    # texts with more characters than the limit are over it in bytes too.
+    joins = len("\n\n") * (len(texts) - 1)
+    if sum(len(text) for text in texts) + joins > _LARGEST_WHOLE_PROMPT:
         return None
-    whole = "\n\n".join(texts)
-    if len(whole.encode("utf-8")) > _LARGEST_WHOLE_PROMPT:
+    if not all(text.strip() for text in texts):
         return None
-    return whole
+    if sum(len(text.encode("utf-8")) for text in texts) + joins > _LARGEST_WHOLE_PROMPT:
+        return None
+    return "\n\n".join(texts)
 
 
 def inspect_provider_target(
@@ -278,8 +280,9 @@ def inspect_provider_target(
                 "retell-llm and conversation-flow"
             )
     safe = _safe_profile_value(profile)
-    if _prompt_texts(safe) != _prompt_texts(profile):
-        safe[PROMPT_REWRITTEN] = True
+    safe[PROMPT_CHECK] = (
+        "unchanged" if _prompt_texts(safe) == _prompt_texts(profile) else "changed"
+    )
     return safe
 
 

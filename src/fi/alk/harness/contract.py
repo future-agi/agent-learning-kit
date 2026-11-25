@@ -1176,6 +1176,18 @@ def _reached(one: Dependency) -> str:
     return "; ".join(said)
 
 
+def field_value(payload: Any, field: str) -> Any:
+    """A field's value in a payload under its own name or the first alias that has one, as
+    AgentContract reads it, or None."""
+    if not isinstance(payload, dict):
+        return None
+    for key in (field, *_ALIASES.get(field, ())):
+        value = payload.get(key)
+        if value:
+            return value
+    return None
+
+
 def prompt_quote(payload: Any) -> str:
     """The quote of the prompt as AgentContract reads it from a payload: under its own name or
     the first alias that has one, a list joined by lines. The save holds it before validating."""

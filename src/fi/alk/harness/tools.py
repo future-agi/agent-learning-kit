@@ -41,6 +41,7 @@ from .backends import tool, tool_server
 from .backends.files import secret_text
 
 from .contract import (
+    field_value,
     prompt_quote,
     CALL_DIRECTIONS,
     AgentContract,
@@ -641,15 +642,10 @@ def _modules_as_the_process_imports_them(
 _ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
-def _provider_prompt_copied(
-    contract: AgentContract, profile: dict[str, Any] | None
-) -> AgentContract:
+def _provider_prompt_copied(contract: AgentContract, whole: str | None) -> AgentContract:
     """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
-    profile is in force and code can take every text of it. Otherwise it is left as checked:
-    the reading's quote, nothing marked."""
-    from .provider_import import whole_prompt
-
-    whole = whole_prompt(profile) if profile is not None else None
+    profile is in force and code could take every text of it (``whole``). Otherwise it is left
+    as checked: the reading's quote, nothing marked."""
     if whole is None:
         return contract
     return contract.model_copy(
@@ -899,7 +895,8 @@ def contract_tools(
     from .save_checker import SAVE_DEADLINE, ChildKeepsEnding, NotInTime, Saved
     from .provider_import import whole_prompt
 
-    # The provider's whole prompt, when one is in force and code can take every text of it.
+    # The provider's whole prompt, when one is in force and code can take every text of it:
+    # taken once, here, and copied by every save of this stage.
     provider_prompt = whole_prompt(provider_profile) if provider_profile is not None else None
 
     events_schema = CompletedToolEvents.model_json_schema()
@@ -2104,11 +2101,14 @@ def contract_tools(
                 )
             payload["chosen_evals"] = wanted
 
+        # As the contract will read it: only an explicit false opts out, null is the default.
+        conversational = payload.get("conversational")
         thin = [
             (
                 "prompt",
-                bool(payload.get("conversational", True))
-                and not payload.get("hard_constraints")
+                (conversational is None or bool(conversational))
+                # Rules under any name the contract accepts for them.
+                and not field_value(payload, "hard_constraints")
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
                 and not payload.get("system_prompt_from")
@@ -2119,6 +2119,13 @@ def contract_tools(
                     "agent. Its prompt and rules are in the provider definition you were shown: "
                     "quote the prompt in system_prompt_excerpt, with ... where you leave text "
                     "out, and record its rules in hard_constraints."
+                    if provider_profile
+                    # Named by the build but unreadable: in force, empty, and never shown.
+                    else "no hard_constraints and no system_prompt_excerpt, for a "
+                    "conversational agent. The build named a provider definition for it, but "
+                    "that definition could not be read, so its prompt is not available here and "
+                    "lines in this repository are not it. Record in hard_constraints any rules "
+                    "you can tell the agent follows, or send the contract again as it is."
                     if provider_profile is not None
                     else "no hard_constraints and no system_prompt_excerpt, for a conversational "
                     "agent. Its prompt usually exists and often lives away from the main agent "
@@ -2221,7 +2228,7 @@ def contract_tools(
                 "instead. Don't submit this one again."
             )
         result = _save_contract(
-            _provider_prompt_copied(checked.contract, provider_profile), destination
+            _provider_prompt_copied(checked.contract, provider_prompt), destination
         )
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
