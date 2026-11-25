@@ -33,7 +33,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
@@ -61,7 +61,7 @@ def _scenario(key: str):
 def _grade(built: Path, key: str, steps=None) -> dict[str, str | None]:
     """Every deterministic check of `key` after `steps` (the reference solution by default)."""
     scenario = _scenario(key)
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         scenario, built / WORLD, with_solution=True, steps=steps
     )
     try:
@@ -747,7 +747,7 @@ EXPECTED_REFUSALS = {
     "key", sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
 )
 def test_every_reference_step_succeeds(built: Path, key: str) -> None:
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     world.close()
     failed = [(c.name, c.error) for c in calls if not c.ok and (key, c.name) not in EXPECTED_REFUSALS]
     assert not failed, failed
@@ -758,7 +758,7 @@ def test_every_reference_step_succeeds(built: Path, key: str) -> None:
 
 def test_every_scenario_signs_its_caller_in(built: Path) -> None:
     for path in sorted(p for p in (SUITE / "scenarios").iterdir() if p.is_dir()):
-        world, _calls, _refused, _ = _run(_scenario(path.name), built / WORLD, with_solution=False)
+        world, _calls, _refused, _ = run_steps(_scenario(path.name), built / WORLD, with_solution=False)
         try:
             caller = world.state()["session_caller"][0]["actor_id"]
             assert caller, path.name
@@ -975,7 +975,7 @@ def test_the_cancellation_the_draft_confirms_is_scheduled(built: Path) -> None:
     """Rishav finding 3: after the reference, KiteWorks' cancellation is in the records the draft
     states it from, so the reference is a true example."""
     key = "email_term_end_cancellation_draft_reply"
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         state = world.state()
         sub = next(s for s in state["subscriptions"] if s["subscription_id"] == "sub_11")
@@ -992,7 +992,7 @@ def test_a_draft_claiming_an_unscheduled_cancellation_is_refused(built: Path) ->
     """The same draft, with no cancellation scheduled, claims something that is not done."""
     key = "email_term_end_cancellation_draft_reply"
     scenario = _without_seeded_cancellation(key)
-    world, calls, _refused, _ = _run(scenario, built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(scenario, built / WORLD, with_solution=True)
     try:
         goal = load_catalogue(SUITE).named("draft_created_for_review")
         said = run_check(goal.check, world, calls, name=goal.name, reference=reference_of(scenario.solution)).said
@@ -1003,7 +1003,7 @@ def test_a_draft_claiming_an_unscheduled_cancellation_is_refused(built: Path) ->
     steps = [copy.deepcopy(step) for step in scenario.solution]
     steps[-1].arguments["body"] = ("Hi Karen, we have your request to cancel at the end of the current term on 2026-11-01. "
                                    "It is not scheduled yet: please confirm it with the billing desk in chat and we will reply here once it is.")
-    world, calls, _refused, _ = _run(scenario, built / WORLD, with_solution=True, steps=steps)
+    world, calls, _refused, _ = run_steps(scenario, built / WORLD, with_solution=True, steps=steps)
     try:
         said = run_check(goal.check, world, calls, name=goal.name, reference=reference_of(scenario.solution)).said
         assert not said, said
@@ -1014,7 +1014,7 @@ def test_a_draft_claiming_an_unscheduled_cancellation_is_refused(built: Path) ->
 def test_a_slack_reply_claiming_an_unscheduled_change_is_refused(built: Path) -> None:
     key = "slack_reply_renewal_terms_approved_post"
     text = "LunarOps' subscription has been cancelled and is set to end on 2027-09-01."
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=False)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=False)
     try:
         world.change("slack_approvals", "APP-BL-403", {"approved_text": text}, by="approval_id")
         world.change("session_caller", "default", {"actor_id": "U_BL11"}, by="id")
@@ -1061,7 +1061,7 @@ def test_every_scenario_names_its_decision_and_repeats_say_what_differs() -> Non
 
 def test_a_refused_replacement_leaves_the_pending_change_in_place(built: Path) -> None:
     key = "new_change_replaces_a_pending_one"
-    world, _calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=False)
+    world, _calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=False)
     try:
         call = {"tenant_id": "T405", "actor_id": "U405_ADMIN", "target_plan_id": "enterprise", "target_seats": 20,
                 "effective_timing": "end_of_period", "confirmation_code": "confirmed", "request_key": "R405",
@@ -1147,7 +1147,7 @@ def test_the_enriched_history_has_depth_and_distractors(built: Path) -> None:
 
 def test_a_slack_post_replays_with_its_key_and_posts_once(built: Path) -> None:
     key = "slack_reply_retried_after_a_dropped_chat"
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         post = next(c for c in calls if c.name == "slack_send_message")
         again = world.call("slack_send_message", post.arguments)

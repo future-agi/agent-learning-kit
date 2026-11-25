@@ -36,8 +36,7 @@ classifiers = [
 dependencies = [
   "claude-agent-sdk>=0.2.140,<0.3",
   "cryptography>=43",
-  # 1.5.1 sends a different exporter key in simulations; stopgap until TH-10547 decides it
-  "fi-instrumentation-otel>=0.1.16,<1.5.1",
+  "fi-instrumentation-otel>=0.1.16",
   "gepa>=0.0.17",
   # 2.8 imports newer otel semconv than the livekit-agents pin allows
   "google-adk>=2.7.1,<2.8",

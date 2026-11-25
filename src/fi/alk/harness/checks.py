@@ -26,10 +26,18 @@ from __future__ import annotations
 import ast
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .actors import is_pre_run
-from .world.handler_child import evaluate_authored, same_id
+from .world.handler_child import (
+    answered,
+    came_before,
+    evaluate_authored,
+    exactly_once,
+    same_id,
+    same_value,
+    succeeded,
+)
 from .world.handler_child import takes_reference as _takes_reference
 from .world.runtime import Call, GeneratedWorld
 from .world_door import AGENT, is_committed, is_read, logged_as, named_alike, row_arguments, same_write
@@ -151,8 +159,6 @@ def check_reads(checker: object) -> tuple[str, ...]:
     return tuple(out)
 
 
-
-
 # What the action log says of a call the world timed out on: refused before its commit, or committed with the answer
 # lost (`world_door._faulted`).
 TIMED_OUT = ("timeout_before_commit", "response_lost")
@@ -238,13 +244,23 @@ def committed_writes(world: Any) -> list[dict[str, Any]]:
     ]
 
 
-# Read-only helpers every check is given beside `world` and `calls`.
-CHECK_HELPERS = {
-    "same_id": same_id,
-    "retried_timeouts": retried_timeouts,
-    "repeated_commits": repeated_commits,
-    "committed_writes": committed_writes,
+# Read-only helpers every check is given beside `world` and `calls`, each with whether it reads what a call came to
+# (went through, answered, committed, timed out): a check that uses one is never proof of a step that did not run, as
+# a call recorded but not run came to nothing. One table, so a new helper is never given without saying which.
+_HELPERS: dict[str, tuple[Callable[..., Any], bool]] = {
+    "answered": (answered, True),
+    "succeeded": (succeeded, True),
+    "came_before": (came_before, True),
+    "exactly_once": (exactly_once, True),
+    "same_id": (same_id, False),
+    "same_value": (same_value, False),
+    "retried_timeouts": (retried_timeouts, True),
+    "repeated_commits": (repeated_commits, True),
+    "committed_writes": (committed_writes, True),
 }
+CHECK_HELPERS = {name: helper for name, (helper, _reads) in _HELPERS.items()}
+# The helpers that read what a call came to.
+OUTCOME_HELPERS = frozenset(name for name, (_helper, reads) in _HELPERS.items() if reads)
 
 
 def check_namespace() -> dict[str, Any]:

@@ -22,6 +22,7 @@ import os
 import random
 import sys
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -141,6 +142,153 @@ def same_id(first: Any, second: Any) -> bool:
     return bool(mine) and mine == theirs
 
 
+# A number as text: an optional sign, a currency (a symbol, a code or a word, before or after), thousands commas, a
+# fraction. A leading zero (`007`) is an identifier's, never a number's.
+_NUMBER_TEXT = re.compile(
+    r"^(?P<sign>[-+]?)(?P<before>US\$|[$€£₹]|[A-Za-z]{3}(?=\s?\d))?\s?"
+    r"(?P<digits>(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?)\s?(?P<after>[A-Za-z]+\.?)?$"
+)
+# A currency symbol and the ISO 4217 code it stands for; any other currency is written as its code.
+_CURRENCIES = {"$": "USD", "us$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}
+
+
+def _number(value: Any) -> tuple[str, decimal.Decimal] | None:
+    """A number and the currency it is written in ("" for none), by symbol or ISO code: `$89` and `89 USD` are one
+    currency. A word after the number (`89 dollars`, `89 items`) makes it something other than an amount."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, decimal.Decimal)):
+        return "", decimal.Decimal(str(value))
+    found = _NUMBER_TEXT.match(value.strip()) if isinstance(value, str) else None
+    if not found or (found["before"] and found["after"]):
+        return None
+    marker = found["before"] or found["after"] or ""
+    currency = _CURRENCIES.get(marker.casefold(), marker.upper() if len(marker) in (0, 3) else None)
+    if currency is None:
+        return None
+    return currency, decimal.Decimal(found["sign"] + found["digits"].replace(",", ""))
+
+
+def _same_amount(mine: tuple[str, decimal.Decimal], theirs: tuple[str, decimal.Decimal]) -> bool:
+    """One amount: the same number, and never two different currencies. A bare number matches an amount in one
+    currency, since the world often holds the number and the person says the currency."""
+    return mine[1] == theirs[1] and (not mine[0] or not theirs[0] or mine[0] == theirs[0])
+
+
+def _iso(value: Any) -> datetime.date | datetime.time | datetime.datetime | None:
+    """A date, time or date and time written in ISO 8601, read by the standard library; anything else is None."""
+    if not isinstance(value, str) or not value.strip() or value.strip().isdigit():
+        return None
+    for kind in (datetime.date, datetime.datetime, datetime.time):
+        try:
+            return kind.fromisoformat(value.strip())
+        except ValueError:
+            continue
+    return None
+
+
+def same_value(first: Any, second: Any) -> bool:
+    """Whether two values are the same value however they were written: a number by its value (`89`, `89.0`,
+    `"$89.00"`, `"89 USD"`; two different currencies never match), an ISO 8601 date or time by its value
+    (`14:00` and `14:00:00`), and any other text as `same_id` reads it (case and separators ignored). A date said in
+    words is compared as text: write the reference in the form the world holds. Lists and objects compare item by
+    item.
+
+    It never makes two different values the same: another number, moment or id is still different."""
+    if first is None or second is None:
+        return first is None and second is None
+    if isinstance(first, bool) or isinstance(second, bool):
+        return type(first) is type(second) and first == second
+    if isinstance(first, Mapping) or isinstance(second, Mapping):
+        return (
+            isinstance(first, Mapping)
+            and isinstance(second, Mapping)
+            and first.keys() == second.keys()
+            and all(same_value(first[key], second[key]) for key in first)
+        )
+    if isinstance(first, (list, tuple)) or isinstance(second, (list, tuple)):
+        return (
+            isinstance(first, (list, tuple))
+            and isinstance(second, (list, tuple))
+            and len(first) == len(second)
+            and all(same_value(one, two) for one, two in zip(first, second))
+        )
+    amounts = _number(first), _number(second)
+    if amounts[0] is not None and amounts[1] is not None:
+        return _same_amount(*amounts)
+    moments = _iso(first), _iso(second)
+    if moments[0] is not None and moments[1] is not None:
+        return moments[0] == moments[1]
+    return same_id(first, second)
+
+
+def _with(call: Any, arguments: Mapping[str, Any]) -> bool:
+    given = getattr(call, "arguments", None) or {}
+    return all(same_value(given.get(field), value) for field, value in arguments.items())
+
+
+def answered(calls: Sequence[Any], name: str, **arguments: Any) -> list[Any]:
+    """The calls of tool `name` the world answered: each that went through and each its own rule turned down, a
+    not-found included; never one that crashed or a fault failed. What "the agent looked X up" or "tried X" reads, so a
+    lookup that correctly finds nothing still counts. `arguments` keeps only the calls made with those values."""
+    return [
+        call
+        for call in calls
+        if call.name == name
+        and (getattr(call, "ok", False) is True or getattr(call, "refusal_code", "") == "world_rule")
+        and _with(call, arguments)
+    ]
+
+
+def succeeded(calls: Sequence[Any], name: str, **arguments: Any) -> list[Any]:
+    """The calls of tool `name` that went through: what "the agent did X" reads. `arguments` keeps only the calls
+    made with those values."""
+    return [
+        call
+        for call in calls
+        if call.name == name
+        and getattr(call, "ok", False) is True
+        and not getattr(call, "refused", False)
+        and _with(call, arguments)
+    ]
+
+
+def came_before(calls: Sequence[Any], earlier: str, later: str, **arguments: Any) -> bool:
+    """Whether the world answered a call of `earlier` (`answered`, with these `arguments`) before the agent's first
+    attempt at `later`, whatever came of that attempt. True when the agent never attempted `later`: a step that must
+    come before something only fails when that something happened without it."""
+    first = next((at for at, call in enumerate(calls) if call.name == later), None)
+    return first is None or bool(answered(list(calls)[:first], earlier, **arguments))
+
+
+def exactly_once(calls: Sequence[Any], name: str, **arguments: Any) -> bool:
+    """Whether exactly one call of tool `name` with these `arguments` took effect: each that went through
+    (`succeeded`), and each other one the world committed although its answer was lost (`response_lost`), each call
+    counted once, so a retry after a lost answer counts twice. A try the world refused is not counted. Where the world keeps an action log,
+    `repeated_commits(world, reference)` reads the commits themselves."""
+    lost = [
+        call
+        for call in calls
+        if call.name == name
+        and getattr(call, "error", "") == "response_lost"
+        and getattr(call, "ok", False) is not True
+        and not getattr(call, "refused", False)
+        and _with(call, arguments)
+    ]
+    return len(succeeded(calls, name, **arguments)) + len(lost) == 1
+
+
+# What a check is given wherever it runs: these read only the values and calls they are handed.
+PURE_HELPERS = {
+    "answered": answered,
+    "succeeded": succeeded,
+    "came_before": came_before,
+    "exactly_once": exactly_once,
+    "same_id": same_id,
+    "same_value": same_value,
+}
+
+
 def takes_reference(checker: object) -> bool:
     """Whether a check, or its source, is written `check(world, calls, reference)`."""
     import ast
@@ -183,8 +331,9 @@ def evaluate_authored(
 
     # The names every check is given wherever it runs (`checks.check_namespace`), so a check that
     # proves while authoring never fails here on a helper such as `same_id`. In process the caller
-    # passes them all; this child, which imports nothing from the kit, has `same_id` alone.
-    namespace: dict[str, Any] = {"same_id": same_id, **(helpers or {})}
+    # passes them all; this child, which imports nothing from the kit, has the ones that read only
+    # what they are handed (the rest read the world's action log).
+    namespace: dict[str, Any] = {**PURE_HELPERS, **(helpers or {})}
     filename = (
         f"<check:{name}>"
         if kind == "check"
@@ -322,6 +471,7 @@ class _Call:
     error: str = ""
     refused: bool = False
     at: float = 0.0
+    refusal_code: str = ""
 
 
 def _call(value: dict[str, Any]) -> _Call:
@@ -333,6 +483,7 @@ def _call(value: dict[str, Any]) -> _Call:
         error=str(value.get("error") or ""),
         refused=bool(value.get("refused", False)),
         at=float(value.get("at") or 0.0),
+        refusal_code=str(value.get("refusal_code") or ""),
     )
 
 

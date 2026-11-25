@@ -24,7 +24,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run, play_reference_step
+from fi.alk.harness.prove import play_reference_step, run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
@@ -50,7 +50,7 @@ def _scenario(key: str):
 def _grade(built: Path, key: str, steps=None) -> dict[str, str | None]:
     """Every deterministic check of `key` after `steps` (the reference solution by default)."""
     scenario = _scenario(key)
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         scenario, built / WORLD, with_solution=True, steps=steps
     )
     try:
@@ -437,7 +437,7 @@ def test_a_write_that_fails_partway_leaves_nothing_behind(built: Path, key: str,
     store fails on `failing`, after the first of the paired writes has run: nothing the call wrote
     may survive, and the same request retried afterwards succeeds with both records in place."""
     scenario = _scenario(key)
-    world, _calls, _refused, _ = _run(scenario, built / WORLD, with_solution=False)
+    world, _calls, _refused, _ = run_steps(scenario, built / WORLD, with_solution=False)
     try:
         steps = list(scenario.solution)
         at = next(i for i, step in enumerate(steps) if step.tool == tool)
@@ -482,7 +482,7 @@ EXPECTED_REFUSALS = {
     "key", sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
 )
 def test_every_reference_step_succeeds(built: Path, key: str) -> None:
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         failed = {(key, c.name): c.error for c in calls if not c.ok}
     finally:
@@ -612,7 +612,7 @@ def test_a_request_key_replays_only_the_same_request(built: Path) -> None:
 
 def test_the_competing_booking_races_only_for_a_bookable_unheld_slot(built: Path) -> None:
     scenario = _scenario("v12_s03_last_slot_taken_during_confirmation")
-    world, _calls, _refused, _ = _run(scenario, built / WORLD, with_solution=False)
+    world, _calls, _refused, _ = run_steps(scenario, built / WORLD, with_solution=False)
     try:
         slot = {"customer_id": "CU05", "staff_id": "ST03", "location_id": "L1", "start_time": "2026-10-30T10:00"}
         wrong = world.call("book_appointment", {**slot, "service_id": "SV1", "confirmed": True, "request_key": "C-1"})
@@ -981,13 +981,13 @@ def test_a_failed_replacement_leaves_the_original_booked(built: Path, key: str) 
     steps = list(scenario.solution)
     at = next(i for i, s in enumerate(steps) if s.tool == "reschedule_appointment")
     # Where the replacement would land, learnt from a clean run of the reference.
-    world, calls, _r, _ = _run(scenario, built / WORLD, with_solution=True)
+    world, calls, _r, _ = run_steps(scenario, built / WORLD, with_solution=True)
     try:
         moved = next(c for c in calls if c.name == "reschedule_appointment").result["replacement"]
         calendar = next(r["calendar_id"] for r in world.state()["staff"] if r["staff_id"] == moved["staff_id"])
     finally:
         world.close()
-    world, _calls, _r, _ = _run(scenario, built / WORLD, with_solution=False)
+    world, _calls, _r, _ = run_steps(scenario, built / WORLD, with_solution=False)
     try:
         for step in steps[:at]:
             play_reference_step(world, step)
@@ -1018,7 +1018,7 @@ def test_a_failed_replacement_hold_leaves_the_original_held(built: Path) -> None
     refused, and because the reference releases the old hold only after, the customer still holds 10:00."""
     scenario = _scenario("switch_the_hold_to_another_time")
     steps = list(scenario.solution)
-    world, _calls, _r, _ = _run(scenario, built / WORLD, with_solution=False)
+    world, _calls, _r, _ = run_steps(scenario, built / WORLD, with_solution=False)
     try:
         replacement = [i for i, s in enumerate(steps) if s.tool == "hold_slot"][-1]
         for step in steps[:replacement]:
@@ -1120,7 +1120,7 @@ def test_the_email_history_workflows_have_depth(built: Path) -> None:
 def test_the_cancellation_policy_for_an_appointment_needs_no_customer_id_for_its_own_customer(built: Path) -> None:
     """customer_id is optional on get_cancellation_policy: without it the appointment is the signed-in
     customer's own, and another customer's appointment is still refused."""
-    world, *_ = _run(_scenario("pickup_mailbox_claimed_waiver_checked"), built / WORLD, with_solution=False)
+    world, *_ = run_steps(_scenario("pickup_mailbox_claimed_waiver_checked"), built / WORLD, with_solution=False)
     try:
         own = world.call("get_cancellation_policy", {"appointment_id": "A429"})
         assert own.ok and own.result["appointment_id"] == "A429" and "fee_applies_cents" in own.result, own.error
@@ -1138,7 +1138,7 @@ def test_a_full_day_of_slots_survives_a_trimmed_view(built: Path) -> None:
     so a right "8:00 am to 7:00 pm" read as unsupported. free_ranges carries the whole day up front."""
     from fi.alk.harness.judge import _dump
 
-    world, calls, *_ = _run(_scenario("privacy_who_else_booked_with_staff_not_disclosed"), built / WORLD, with_solution=True)
+    world, calls, *_ = run_steps(_scenario("privacy_who_else_booked_with_staff_not_disclosed"), built / WORLD, with_solution=True)
     world.close()
     result = next(c.result for c in calls if c.name == "list_slots")
     assert len(result["slots"]) > 20
@@ -1156,7 +1156,7 @@ def test_the_customer_s_own_hold_does_not_block_their_move(built: Path) -> None:
     at = max(i for i, step in enumerate(steps) if step.tool == "reschedule_appointment")
     move = steps[at].arguments
     hold = {"customer_id": "CU440", "service_id": "SV2", "staff_id": "ST01", "location_id": "L1", "start_time": move["new_start_time"], "utc_offset": "-05:00"}
-    world, *_ = _run(scenario, built / WORLD, with_solution=False)
+    world, *_ = run_steps(scenario, built / WORLD, with_solution=False)
     try:
         for step in steps[:at]:
             play_reference_step(world, step)
@@ -1168,7 +1168,7 @@ def test_the_customer_s_own_hold_does_not_block_their_move(built: Path) -> None:
         assert row["status"] == "converted"
     finally:
         world.close()
-    world, *_ = _run(scenario, built / WORLD, with_solution=False)
+    world, *_ = run_steps(scenario, built / WORLD, with_solution=False)
     try:
         for step in steps[:at]:
             play_reference_step(world, step)
@@ -1190,7 +1190,7 @@ def _judge_conversation(built: Path, key: str, goal: str, messages: list[dict]):
 
     scenario = _scenario(key)
     sub_goal = load_catalogue(SUITE).named(goal)
-    world, calls, _refused, _ = _run(scenario, built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(scenario, built / WORLD, with_solution=True)
     try:
         return asyncio.run(judge_sub_goal(sub_goal, _Inspected(world), calls, messages=messages, scenario=scenario))
     finally:

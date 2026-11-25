@@ -29,7 +29,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
@@ -57,7 +57,7 @@ def _scenario(key: str):
 def _grade(built: Path, key: str, steps=None) -> dict[str, str | None]:
     """Every deterministic check of `key` after `steps` (the reference solution by default)."""
     scenario = _scenario(key)
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         scenario, built / WORLD, with_solution=True, steps=steps
     )
     try:
@@ -563,7 +563,7 @@ def test_the_store_refuses_what_the_plan_says_must_never_happen(built: Path) -> 
         world.close()
     # A person's draft on a thread is never overwritten by another draft.
     key = "email_human_draft_preserved_on_thread"
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         _scenario(key), built / WORLD, with_solution=True,
         steps=_plus(key, "create_draft", to=["rachel.green@example.com"], subject="Re: store credit",
                     body="Your store credit is available.", replyToMessageId="rmsg_015"),
@@ -582,7 +582,7 @@ def test_the_store_refuses_what_the_plan_says_must_never_happen(built: Path) -> 
           "items": [{"sku": "AP05", "quantity": 1, "reason": "does_not_fit"}]}),
     ):
         scenario = _scenario(key)
-        world, calls, _refused, _ = _run(
+        world, calls, _refused, _ = run_steps(
             scenario, built / WORLD, with_solution=True,
             steps=_plus(key, "create_return", **extra),
         )
@@ -631,7 +631,7 @@ EXPECTED_REFUSALS = {
     "key", sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
 )
 def test_every_reference_step_succeeds(built: Path, key: str) -> None:
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         failed = [(c.name, c.error) for c in calls if not c.ok and (key, c.name) not in EXPECTED_REFUSALS]
         assert not failed, failed
@@ -805,7 +805,7 @@ def test_an_item_marked_not_returnable_is_refused(built: Path) -> None:
 
 def test_an_earlier_exchange_is_shown_on_the_order(built: Path) -> None:
     key = "exc_already_exchanged_line_refusal"
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         order = next(c for c in calls if c.name == "get_order").result
         line = order["items"][0]
@@ -878,7 +878,7 @@ def test_drafts_quoting_a_customer_are_listed_only_to_them(built: Path) -> None:
     draft listing are both refused to someone else and both served to her."""
     key = "email_human_draft_preserved_on_thread"
     for caller, entitled in (("C02", False), ("C18", True)):
-        world, _calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=False)
+        world, _calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=False)
         try:
             world.change("session_caller", "default", {"customer_id": caller}, by="id")
             balance = world.call("get_store_credit_balance", {"customer_id": "C18", "postal_code": "10014"})
@@ -1071,7 +1071,7 @@ def test_a_size_exchange_ships_a_size_the_item_comes_in(built: Path) -> None:
                 step.arguments.pop("replacement_size", None)
                 if size:
                     step.arguments["replacement_size"] = size
-        world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True, steps=steps)
+        world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True, steps=steps)
         try:
             refused = next(c for c in calls if c.name == "create_exchange")
             assert not refused.ok and word in refused.error, (size, refused.error)

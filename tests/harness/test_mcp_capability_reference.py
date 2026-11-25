@@ -15,7 +15,7 @@ import pytest
 from fi.alk import environments
 from fi.alk.environments import designed
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import (
     WORLD,
     PolicyProfile,
@@ -102,7 +102,7 @@ def test_reference_solutions_answer_with_the_official_result_fields(
     ):
         scenario = read_folder(suite, folder.name)
         assert scenario is not None
-        world, calls, _refused, _ = _run(scenario, world_root, with_solution=True)
+        world, calls, _refused, _ = run_steps(scenario, world_root, with_solution=True)
         try:
             for call in calls:
                 spec = reference["tools"].get(call.name)

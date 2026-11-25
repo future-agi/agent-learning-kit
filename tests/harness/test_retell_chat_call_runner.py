@@ -20,7 +20,7 @@ from test_world_call_transactions import pg_world  # noqa: F401 - a fixture
 
 from fi.alk.harness import retell_chat_call_runner as retell
 from fi.alk.harness import chat_call_runner as chat
-from fi.alk.harness.chat_call_runner import _HostedChatTarget
+from fi.alk.harness.chat_call_runner import HostedChatTarget
 from fi.alk.harness.hosted_scheduler import CallCancelled
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.retell_chat_call_runner import (
@@ -186,7 +186,7 @@ def test_retell_chat_uses_authored_scenario_document_for_selected_trial(
 
     monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
     monkeypatch.setattr(retell, "_scenario_document", load_document)
-    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(retell, "_drive_conversation", _single_exchange)
     adapter = _Adapter()
     runner = retell.RetellChatCallRunner(adapter, context)
@@ -258,7 +258,7 @@ def _bound_run(tmp_path, monkeypatch, read_trace, reported=("find_orders",)):
     )
     cleared = []
     monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
-    monkeypatch.setattr(retell, "_tool_world", lambda *_args: world)
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: world)
     monkeypatch.setattr(retell, "_drive_conversation", _single_exchange)
     monkeypatch.setattr(
         retell, "_bind_call", lambda *_args: _RequestBinding(dsn="dsn", token="t")
@@ -267,7 +267,7 @@ def _bound_run(tmp_path, monkeypatch, read_trace, reported=("find_orders",)):
         retell, "_find_postgres_endpoint", lambda _r: SimpleNamespace(address="dsn")
     )
     monkeypatch.setattr(retell, "_clear_tool_trace_calls", cleared.append)
-    monkeypatch.setattr(retell, "_collect_tool_trace_calls", read_trace)
+    monkeypatch.setattr(retell, "collect_tool_trace_calls", read_trace)
 
     async def upload_trace(*_args, **_kwargs):
         return None
@@ -392,7 +392,7 @@ def test_postgres_a_bound_retell_chat_reads_the_call_the_world_traced(
         )
 
     monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
-    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(retell, "_drive_conversation", conversation)
     monkeypatch.setattr(
         retell, "_bind_call", lambda *_args: _RequestBinding(dsn=url, token="t")
@@ -440,7 +440,7 @@ def test_hosted_chat_target_stops_normally_on_provider_terminal_response() -> No
                 },
             )
 
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=Wrapper(),
         contract=SimpleNamespace(runtime=None),
         world=SimpleNamespace(calls=[]),
@@ -469,7 +469,7 @@ class _ClosingWrapper:
 def _stoppable_runner(tmp_path, monkeypatch, *, drive, close=None):
     stopped = {"value": False}
     monkeypatch.setattr(retell, "RetellChatWrapper", lambda **_kwargs: _ClosingWrapper(close))
-    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(retell, "_drive_conversation", drive)
     adapter = _Adapter()
     runner = retell.RetellChatCallRunner(adapter, replace(_context(tmp_path), stop_requested=lambda: stopped["value"]))

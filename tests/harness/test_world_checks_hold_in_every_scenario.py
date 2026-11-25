@@ -20,7 +20,7 @@ from fi.alk import environments
 from fi.alk.environments import designed
 from fi.alk.harness.checks import run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 
 VERTICALS = (
@@ -55,7 +55,7 @@ def _breaks(vertical: str, root: Path) -> set[tuple[str, str, str]]:
     for folder in sorted(p for p in (here / "suite" / "scenarios").iterdir() if p.is_dir()):
         scenario = read_folder(here / "suite", folder.name)
         for with_solution in (False, True):
-            world, *_ = _run(scenario, root / WORLD, with_solution=with_solution)
+            world, *_ = run_steps(scenario, root / WORLD, with_solution=with_solution)
             try:
                 found |= {
                     (vertical, folder.name, name)

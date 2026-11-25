@@ -39,7 +39,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run, prove
+from fi.alk.harness.prove import prove, run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
@@ -66,7 +66,7 @@ def _scenario(key: str):
 def _grade(built: Path, key: str, steps=None) -> dict[str, str | None]:
     """Every deterministic check of `key` after `steps` (the reference solution by default)."""
     scenario = _scenario(key)
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         scenario, built / WORLD, with_solution=True, steps=steps
     )
     try:
@@ -233,7 +233,7 @@ EXPECTED_REFUSALS = {
     "key", sorted(path.name for path in (SUITE / "scenarios").iterdir() if path.is_dir())
 )
 def test_every_reference_step_succeeds(built: Path, key: str) -> None:
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         failed = [(c.name, c.arguments, c.error) for c in calls if not c.ok and (key, c.name) not in EXPECTED_REFUSALS]
         assert not failed, failed
@@ -247,7 +247,7 @@ def test_every_reference_step_succeeds(built: Path, key: str) -> None:
 def test_every_scenario_names_the_person_in_the_conversation(built: Path) -> None:
     for path in sorted(p for p in (SUITE / "scenarios").iterdir() if p.is_dir()):
         scenario = _scenario(path.name)
-        world, *_ = _run(scenario, built / WORLD, with_solution=False)
+        world, *_ = run_steps(scenario, built / WORLD, with_solution=False)
         try:
             caller = world.state()["session_caller"][0]["employee_id"]
             assert caller and caller in scenario.instruction, (path.name, caller)
@@ -790,21 +790,21 @@ def test_the_hr_system_refuses_what_the_plan_says_must_never_happen(built: Path)
     """A team view for a non-manager, an amendment that keeps its old approval, and reasons or leave
     types in a manager's team view are refused or absent in the HR tools themselves."""
     key = "non_manager_team_absences_view_refused"
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         team = [c for c in calls if c.name == "get_team_absences"]
         assert team and not any(c.ok for c in team), team
     finally:
         world.close()
     key = "amend_approved_leave_request_dates"
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         request = next(r for r in world.state()["leave_requests"] if r["request_id"] == "REQ-4102")
         assert request["status"] == "pending", request
     finally:
         world.close()
     key = "manager_inquiry_medical_diagnosis_withheld"
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         shown = json.dumps([c.result for c in calls if c.name == "get_team_absences" and c.ok])
         assert shown != "[]"
@@ -1057,7 +1057,7 @@ def test_a_stored_reply_that_misstates_the_hr_system_fails(built: Path, key: str
             step.arguments["message"] = step.arguments["message"].replace(true, false)
     # The same approval, issued for the false text, so the post itself goes through.
     wrong = scenario.model_copy(update={"setup_code": scenario.setup_code.replace(true, false), "solution": steps})
-    world, calls, _refused, _ = _run(wrong, built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(wrong, built / WORLD, with_solution=True)
     try:
         assert any(c.name == "slack_send_message" and c.ok for c in calls), [c.error for c in calls]
         goal = load_catalogue(SUITE).named("slack_reply_in_thread")
@@ -1102,7 +1102,7 @@ def test_every_scenario_names_its_decision_and_repeats_say_what_differs() -> Non
 def test_a_failed_date_change_leaves_the_original_request_intact(built: Path, key, caller, arguments, says) -> None:
     """Changing dates is one atomic amendment, never cancel-then-rebook: a replacement the HR system
     refuses leaves the original request, its status and the balance exactly as they were."""
-    world, *_ = _run(_scenario(key), built / WORLD, with_solution=False)
+    world, *_ = run_steps(_scenario(key), built / WORLD, with_solution=False)
     try:
         before = world.state()
         call = world.call("amend_leave_request", dict(arguments))

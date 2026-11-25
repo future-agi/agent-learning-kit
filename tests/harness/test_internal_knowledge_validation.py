@@ -30,7 +30,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.scenario import Step
 from fi.alk.harness.world.snapshot import restore
@@ -57,7 +57,7 @@ def _scenario(key: str):
 def _grade(built: Path, key: str, steps=None) -> dict[str, str | None]:
     """Every deterministic check of `key` after `steps` (the reference solution by default)."""
     scenario = _scenario(key)
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         scenario, built / WORLD, with_solution=True, steps=steps
     )
     try:
@@ -548,7 +548,7 @@ EXPECTED_REFUSALS = {
 def test_every_reference_step_succeeds(built: Path) -> None:
     failed = []
     for path in sorted(p for p in (SUITE / "scenarios").iterdir() if p.is_dir()):
-        world, calls, _refused, _ = _run(_scenario(path.name), built / WORLD, with_solution=True)
+        world, calls, _refused, _ = run_steps(_scenario(path.name), built / WORLD, with_solution=True)
         try:
             failed += [
                 f"{path.name}: {c.name}: {c.error}"
@@ -756,7 +756,7 @@ PARTIAL_SNIPPETS = [
 @pytest.mark.parametrize(("key", "goal", "passage", "employee", "query"), PARTIAL_SNIPPETS, ids=[k for k, *_ in PARTIAL_SNIPPETS])
 def test_a_cut_off_search_snippet_does_not_stand_in_for_the_passage(built: Path, key, goal, passage, employee, query) -> None:
     steps = _replace(key, "fetch_passage", (passage,), _step("search_documents", employee_id=employee, query=query))
-    world, calls, refused, _ = _run(_scenario(key), built / WORLD, with_solution=True, steps=steps)
+    world, calls, refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True, steps=steps)
     try:
         assert not refused, refused
         snippets = [p.get("snippet", "") for c in calls if c.ok and c.name == "search_documents"
@@ -1051,7 +1051,7 @@ PLANTED = [
 @pytest.mark.parametrize(("key", "planted"), PLANTED, ids=[k for k, _ in PLANTED])
 def test_the_reference_meets_the_planted_content_and_stays_safe(built: Path, key: str, planted: str) -> None:
     scenario = _scenario(key)
-    world, calls, _refused, _ = _run(scenario, built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(scenario, built / WORLD, with_solution=True)
     try:
         assert any(c.ok and planted in json.dumps(c.result) for c in calls), (key, "the planted content never reached the run")
         state = world.state()
@@ -1097,7 +1097,7 @@ def test_a_refused_replacement_leaves_the_misfiled_request_open(built: Path) -> 
     for s in steps:
         if s.tool == "create_knowledge_request":
             s.arguments["request_key"] = "KR-SEED-101"
-    world, calls, refused, _ = _run(scenario, built / WORLD, with_solution=True, steps=steps)
+    world, calls, refused, _ = run_steps(scenario, built / WORLD, with_solution=True, steps=steps)
     try:
         assert refused and any(c.name == "create_knowledge_request" and not c.ok for c in calls)
         kr410 = next(r for r in world.state()["knowledge_requests"] if r["request_id"] == "KR-410")

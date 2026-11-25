@@ -169,7 +169,7 @@ def test_private_auth_real_child_readiness_hosted_chat_reset_and_cleanup(
     contract_body["tools"] = []
     contract_path.write_text(json.dumps(contract_body))
     contract = AgentContract.model_validate(contract_body)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     adapter = _Adapter()
     tokens = []

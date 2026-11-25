@@ -18,7 +18,7 @@ import pytest
 from fi.alk import environments
 from fi.alk.environments import designed
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run, play_reference_step
+from fi.alk.harness.prove import play_reference_step, run_steps
 from fi.alk.harness.releases import WORLD
 
 VERTICALS = (
@@ -64,7 +64,7 @@ def test_a_call_that_fails_partway_changes_nothing(vertical: str, tmp_path: Path
     left_behind, tried = [], 0
     for folder in sorted(p for p in (here / "suite" / "scenarios").iterdir() if p.is_dir()):
         scenario = read_folder(here / "suite", folder.name)
-        world, *_ = _run(scenario, tmp_path / WORLD, with_solution=False)
+        world, *_ = run_steps(scenario, tmp_path / WORLD, with_solution=False)
         try:
             real = world.store.execute
             for step in scenario.solution:

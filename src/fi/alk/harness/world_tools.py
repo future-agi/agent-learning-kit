@@ -34,7 +34,7 @@ from psycopg import conninfo, sql
 
 from fi.alk.harness.bindings import BoundResult, run_bound_call
 from fi.alk.harness.world.handler_host import isolation_mode, run_handler
-from fi.alk.harness.world.runtime import ToolError
+from fi.alk.harness.world.runtime import WORLD_RULE, ToolError
 
 # A handler is a few statements against one world; anything slower is a broken handler, and
 # without a bound one stuck call would hold the world for the rest of the run.
@@ -42,7 +42,7 @@ STATEMENT_TIMEOUT_MS = 30_000
 ATTACHED_CALL_SECONDS = 30.0
 ATTACHED_START_SECONDS = 60.0
 # A call whose trace rows could not be written is marked here, so its trial is read as unmeasured
-# rather than as one whose trace is complete without it (`call_runner._collect_tool_trace_calls`).
+# rather than as one whose trace is complete without it (`call_runner.collect_tool_trace_calls`).
 TRACE_FAILURES_TABLE = "_alk_trace_failures"
 TRACE_FAILURES_SQL = (
     f"CREATE TABLE IF NOT EXISTS {TRACE_FAILURES_TABLE} (id bigserial PRIMARY KEY, "
@@ -472,7 +472,7 @@ class WorldTools:
         ] or [(agent_tool, arguments, outcome.result, outcome.error)]
         cursor = connection.execute("SELECT * FROM _alk_tool_trace LIMIT 0")
         # A world seeded before outcomes were logged has no column for one.
-        logs_outcome = "outcome" in {one.name for one in cursor.description}
+        logged = {one.name for one in cursor.description}
         for name, step_arguments, result, error in steps:
             row = {
                 "name": name,
@@ -486,8 +486,11 @@ class WorldTools:
                 "tool_call_id": tool_call_id,
                 "status": outcome.status,
             }
-            if logs_outcome:
+            if "outcome" in logged:
                 row["outcome"] = _OUTCOMES.get(outcome.status, "faulted")
+            if "refusal_code" in logged and outcome.status == "refused":
+                # The handler's own refusal, which `checks.answered` counts as an answer.
+                row["refusal_code"] = WORLD_RULE
             connection.execute(
                 f"INSERT INTO _alk_tool_trace ({', '.join(row)}) "  # noqa: S608 - fixed columns
                 f"VALUES ({', '.join(['%s'] * len(row))})",

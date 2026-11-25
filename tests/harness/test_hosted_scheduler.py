@@ -5479,8 +5479,11 @@ def test_a_duplicate_commit_fails_the_scenario(monkeypatch) -> None:
     assert receipt.reason == (
         "The agent repeated issue_refund after its answer was lost, and the world committed it twice."
     )
+    # On the receipt as a field too, so the platform never reads it from the words.
+    assert receipt.call.duplicate_commits == 1
     clean, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=_call_outcome(turns=2))
     assert clean.status == "passed" and clean.failure is None
+    assert clean.call.duplicate_commits == 0
 
 
 def test_a_check_reading_an_unreadable_log_is_unmeasured_not_passed(monkeypatch) -> None:
@@ -5701,3 +5704,22 @@ def test_an_actor_who_waited_and_never_spoke_says_why_it_waited_in_the_verdict()
     missing = hs._call_actors_missing(scenario, replace(_call_outcome(), call_actors=(waited,)))
 
     assert missing == "Jordan (not_delivered: waited (already handled))"
+
+
+def test_a_door_failure_leaves_the_trial_unmeasured_unless_the_world_committed_a_write_twice(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {}
+
+    ours = replace(_call_outcome(turns=2), world_failures=("The world failed on the agent's refund call.",))
+    passing = [FakeSubGoal("refunded", lambda w, c: None)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=ours)
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+
+    # A check can fail because of the call the door failed on: never the agent's failure.
+    failing = [FakeSubGoal("refunded", lambda w, c: "not refunded")]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=failing, outcome=ours)
+    assert receipt.status == "errored" and receipt.failure.code == "evidence_unmeasured"
+
+    twice = replace(ours, duplicates=({"action": "orders.issue_refund", "name": "issue_refund"},))
+    receipt, _ = _two_judged(monkeypatch, _all, goals=passing, outcome=twice)
+    assert receipt.status == "failed"

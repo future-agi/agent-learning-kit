@@ -15,7 +15,7 @@ import pytest
 from fi.alk import environments
 from fi.alk.environments import designed
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run, play_reference_step
+from fi.alk.harness.prove import play_reference_step, run_steps
 from fi.alk.harness.releases import WORLD
 
 VERTICALS = ("hr", "internal_it", "saas_subscriptions", "sales_intake", "internal_knowledge")
@@ -29,7 +29,7 @@ def _posted(here: Path, world_root: Path):
         scenario = read_folder(here / "suite", folder.name)
         if not any(s.tool == "slack_send_message" for s in scenario.solution):
             continue
-        world, *_ = _run(scenario, world_root, with_solution=False)
+        world, *_ = run_steps(scenario, world_root, with_solution=False)
         for step in scenario.solution:
             if step.tool == "slack_send_message" and not step.arguments.get("request_key"):
                 step.arguments["request_key"] = f"RETRY-{folder.name}"
@@ -80,7 +80,7 @@ def test_the_desk_reads_the_approved_text_before_posting(vertical: str, tmp_path
         at = next((i for i, s in enumerate(scenario.solution) if s.tool == "slack_send_message" and s.arguments.get("approval_id")), None)
         if at is None:
             continue
-        world, *_ = _run(scenario, tmp_path / WORLD, with_solution=False)
+        world, *_ = run_steps(scenario, tmp_path / WORLD, with_solution=False)
         try:
             for step in scenario.solution[:at]:
                 play_reference_step(world, step)

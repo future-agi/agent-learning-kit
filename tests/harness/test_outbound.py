@@ -732,6 +732,56 @@ def test_terminal_payload_rejects_a_non_terminal_stage() -> None:
         )
 
 
+def test_terminal_payload_accepts_the_certification_provenance_echo() -> None:
+    # Campaign provenance passthrough: the terminal event returns the job's
+    # `metadata.certification` block verbatim so the platform can bind the
+    # terminal attempt to the campaign/case that ordered it. Optional field —
+    # `extra="forbid"` would reject it if the contract did not name it.
+    record = _event(
+        OutboundEventType.TERMINAL,
+        HarnessStage.COMPLETED,
+        {
+            "stage": "completed",
+            "reason": None,
+            "failure": None,
+            "scenario_counts": {
+                "passed": 1,
+                "failed": 0,
+                "errored": 0,
+                "skipped": 0,
+            },
+            "certification": {
+                "campaign_id": "cmp-123",
+                "case_key": "cert-case",
+                "suite_digest": "a" * 64,
+            },
+        },
+    )
+    assert record["payload"]["certification"]["campaign_id"] == "cmp-123"
+
+
+def test_terminal_payload_still_forbids_other_extra_keys() -> None:
+    # The provenance echo opens `certification` only — any other extension to
+    # the terminal payload remains a contract violation.
+    with pytest.raises(ValidationError):
+        _event(
+            OutboundEventType.TERMINAL,
+            HarnessStage.COMPLETED,
+            {
+                "stage": "completed",
+                "reason": None,
+                "failure": None,
+                "scenario_counts": {
+                    "passed": 1,
+                    "failed": 0,
+                    "errored": 0,
+                    "skipped": 0,
+                },
+                "job_metadata": {"anything": 1},
+            },
+        )
+
+
 def test_scenario_started_scenario_attempt_is_closed_to_one_or_two() -> None:
     with pytest.raises(ValidationError):
         _event(
@@ -1976,6 +2026,16 @@ def test_build_result_receipt_matches_the_contract_shaped_example() -> None:
     ResultReceiptDraft.model_validate(
         receipt
     )  # round-trips through the model unchanged
+
+
+def test_a_receipt_carries_its_duplicate_commits_and_one_without_any_is_unchanged() -> None:
+    plain = _passed_receipt()
+    assert "duplicate_commits" not in plain["call"]
+    call = {**plain["call"], "duplicate_commits": 2}
+    receipt = _passed_receipt(status=ScenarioStatus.FAILED, call=call)
+    assert receipt["call"]["duplicate_commits"] == 2
+    assert receipt["digest"] == whole_object_digest({k: v for k, v in receipt.items() if k != "digest"})
+    ResultReceiptDraft.model_validate(receipt)
 
 
 def test_target_latency_normalization_matches_outbound_bounds() -> None:

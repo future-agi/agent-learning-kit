@@ -498,7 +498,7 @@ def _runner_code_for(tmp_path: Path, monkeypatch, status: int) -> str:
     async def failed(*_args, **_kwargs):
         raise HTTPCallFailure({"success": False, "status_code": status, "failure_stage": "http"})
 
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", failed)
     runtime = EnvironmentRuntime(
         runtime_id="runtime",

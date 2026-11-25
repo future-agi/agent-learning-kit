@@ -76,7 +76,7 @@ def _metered_run(tmp_path, monkeypatch, reporter, conversation):
 
     context = dataclasses.replace(_context(tmp_path), usage_reporter=reporter)
     monkeypatch.setattr(chat_call_runner, "HTTPAgentWrapper", Wrapper)
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
     monkeypatch.setattr(
         chat_worker, "run_json_worker", _in_process_worker(tmp_path, reporter.events)
@@ -228,7 +228,7 @@ def test_isolated_chat_worker_preserves_private_runtime_auth(tmp_path, monkeypat
 
     monkeypatch.setattr(chat_worker, "run_json_worker", worker)
     monkeypatch.setattr(chat_call_runner.HTTPAgentWrapper, "_request_json", request_json)
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat_call_runner, "_drive_conversation", _single_exchange)
     outcome = asyncio.run(
         chat_worker.IsolatedChatCallRunner(adapter, context).run(
@@ -289,7 +289,7 @@ def test_isolated_chat_worker_uses_authored_scenario_for_selected_trial(
     }
     result_path = tmp_path / "worker-result.json"
     monkeypatch.setattr(chat_call_runner, "HTTPAgentWrapper", Wrapper)
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat_call_runner, "_drive_conversation", _single_exchange)
     monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
@@ -622,7 +622,7 @@ def test_a_text_call_run_in_the_worker_is_checked_and_recorded_with_its_tokens(
     monkeypatch.delenv("ALK_SIMULATOR_FUNDING", raising=False)
     monkeypatch.setattr(chat_worker, "run_json_worker", worker)
     monkeypatch.setattr(chat_call_runner, "HTTPAgentWrapper", Wrapper)
-    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat_call_runner, "_drive_conversation", exchange_with_tokens)
 
     asyncio.run(

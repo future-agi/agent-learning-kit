@@ -236,6 +236,7 @@ def _call_record(value: Any) -> dict[str, Any]:
         "error": str(getattr(value, "error", "") or ""),
         "refused": bool(getattr(value, "refused", False)),
         "at": float(getattr(value, "at", 0.0) or 0.0),
+        "refusal_code": str(getattr(value, "refusal_code", "") or ""),
     }
 
 

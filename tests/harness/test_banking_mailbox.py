@@ -16,7 +16,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 
 HERE = Path(environments.__file__).parent / "banking"
@@ -40,7 +40,7 @@ def _grade(built: Path, key: str, swap: dict[str, str]) -> dict[str, str | None]
         for name, value in swap.items():
             if name in step.arguments:
                 step.arguments[name] = value
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         scenario, built / WORLD, with_solution=True, steps=steps
     )
     try:

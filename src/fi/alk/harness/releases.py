@@ -1275,6 +1275,8 @@ def _prove_all(
                 world_root,
                 postgres_only=attached,
                 state_changing=state_changing,
+                # Sealing rests on what code proves, so no judge is asked about a cited rule.
+                conflict_judge=lambda _expected, _rule: (None, ""),
             )
             results[entry.key] = {
                 "holds": proof.holds,

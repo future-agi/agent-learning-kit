@@ -23,7 +23,7 @@ from fi.alk.environments import designed
 from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check, run_world_check
 from fi.alk.harness.folder import read_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 from fi.alk.harness.world.snapshot import restore
 from scenario_quality import judge_reply, live_judge, passing_prefixes
@@ -50,7 +50,7 @@ def _scenario(key: str):
 def _grade(built: Path, key: str, steps=None) -> dict[str, str | None]:
     """Every deterministic check of `key` after `steps` (the reference solution by default)."""
     scenario = _scenario(key)
-    world, calls, _refused, _ = _run(
+    world, calls, _refused, _ = run_steps(
         scenario, built / WORLD, with_solution=True, steps=steps
     )
     try:
@@ -895,7 +895,7 @@ EXPECTED_REFUSALS = {
 
 @pytest.mark.parametrize("key", KEYS)
 def test_every_reference_step_succeeds(built: Path, key: str) -> None:
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         failed = {i for i, call in enumerate(calls) if not call.ok}
         assert failed == EXPECTED_REFUSALS.get(key, set()), (key, [(i, calls[i].name, calls[i].error) for i in failed])
@@ -1153,7 +1153,7 @@ def test_a_valid_alternate_route_passes_every_deterministic_goal(built: Path, ke
 
 def test_the_missing_email_is_missing_and_only_in_that_scenario(built: Path) -> None:
     key = "email_pickup_no_matching_email_graceful_handling"
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         search = next(c for c in calls if c.name == "search_threads")
         found = {t["id"] for t in search.result["threads"]}
@@ -1183,7 +1183,7 @@ def test_the_missing_email_is_missing_and_only_in_that_scenario(built: Path) -> 
     ],
 )
 def test_the_adversarial_reference_retrieves_the_planted_content(built: Path, key: str, planted: str) -> None:
-    world, calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=True)
     try:
         assert any(c.ok and planted in json.dumps(c.result) for c in calls), (key, planted)
     finally:
@@ -1220,7 +1220,7 @@ def test_the_outage_scenario_customer_is_nobody_elses_twin(built: Path) -> None:
     """Live round 4: C105 was a copy of seeded C05 (same name, email, passcode, card ending), so an agent
     that mistyped the session verified C05 with the caller's passcode and locked C05's card. The caller's
     details must identify C105 alone."""
-    world, _calls, _refused, _ = _run(_scenario("v01_s05_partial_failure_lock_ok_dispute_failed"), built / WORLD, with_solution=False)
+    world, _calls, _refused, _ = run_steps(_scenario("v01_s05_partial_failure_lock_ok_dispute_failed"), built / WORLD, with_solution=False)
     try:
         state = world.state()
         me = next(c for c in state["customers"] if c["customer_id"] == "C105")
@@ -1242,7 +1242,7 @@ def test_every_customer_a_setup_creates_is_a_person_of_their_own(built: Path, ke
         seeded = {c["customer_id"] for c in base.state()["customers"]}
     finally:
         base.close()
-    world, _calls, _refused, _ = _run(_scenario(key), built / WORLD, with_solution=False)
+    world, _calls, _refused, _ = run_steps(_scenario(key), built / WORLD, with_solution=False)
     try:
         state = world.state()
     finally:
@@ -1261,7 +1261,7 @@ def test_every_customer_a_setup_creates_is_a_person_of_their_own(built: Path, ke
 
 
 def test_the_outage_refuses_the_filing_and_leaves_no_dispute(built: Path) -> None:
-    world, calls, _refused, _ = _run(_scenario("v01_s05_partial_failure_lock_ok_dispute_failed"), built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(_scenario("v01_s05_partial_failure_lock_ok_dispute_failed"), built / WORLD, with_solution=True)
     try:
         refused = next(c for c in calls if c.name == "create_dispute")
         assert not refused.ok and "unavailable" in refused.error

@@ -24,7 +24,7 @@ from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.checks import reference_of, run_check
 from fi.alk.harness.folder import read_folder
 from fi.alk.harness.judge import judge_sub_goal
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import WORLD
 
 live_judge = pytest.mark.skipif(
@@ -45,7 +45,7 @@ def passing_prefixes(built: Path, suite: Path, key: str) -> list[int]:
     ]
     passing = []
     for length in range(len(scenario.solution)):
-        world, calls, _refused, _ = _run(
+        world, calls, _refused, _ = run_steps(
             scenario, built / WORLD, with_solution=True, steps=scenario.solution[:length]
         )
         try:
@@ -65,7 +65,7 @@ def judge_reply(built: Path, suite: Path, key: str, goal: str, reply: str) -> tu
     scenario = read_folder(suite, key)
     sub_goal = load_catalogue(suite).named(goal)
     assert sub_goal is not None and sub_goal.judged.strip(), f"{key}: {goal} has no judged criterion"
-    world, calls, _refused, _ = _run(scenario, built / WORLD, with_solution=True)
+    world, calls, _refused, _ = run_steps(scenario, built / WORLD, with_solution=True)
     try:
         messages = [
             {"role": "user", "content": scenario.persona.initial_message},

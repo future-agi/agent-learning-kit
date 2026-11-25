@@ -51,7 +51,7 @@ def _run(monkeypatch, turns):
         said[:] = [m["content"] for m in conversation if m["role"] == "tool"]
         return {"role": "assistant", "tool_calls": next(script)}
 
-    monkeypatch.setattr(judge_module, "_complete", _complete)
+    monkeypatch.setattr(judge_module, "chat_completion", _complete)
     verdicts = asyncio.run(joint_judge.judge_sub_goals_jointly(GOALS, _World(), [], messages=SAID))
     return verdicts, prompts, said
 

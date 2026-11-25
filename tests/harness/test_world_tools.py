@@ -119,7 +119,7 @@ def _runtime(dsn: str):
 
 
 def _read(dsn: str):
-    return cr._collect_tool_trace_calls(_runtime(dsn), strict=True)
+    return cr.collect_tool_trace_calls(_runtime(dsn), strict=True)
 
 
 def test_a_routed_call_is_graded_by_the_environment_s_operations_not_the_customer_s_tool(

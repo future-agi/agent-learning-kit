@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 from enum import Enum
 from typing import Any
@@ -51,6 +52,40 @@ class RepairPhase(str, Enum):
     SCENARIOS = "scenarios"
 
 
+DEFAULT_HELD_CASE_SECONDS = 1200.0
+HELD_CASE_MAX_SECONDS = 4 * 3600.0
+
+
+# Held-case time a build gets for each case it was asked for, above the 20-minute floor: a thousand cases get the cap.
+HELD_CASE_SECONDS_PER_CASE = 30.0
+DEFAULT_HELD_CASE_ROUNDS = 3
+HELD_CASE_MAX_ROUNDS = 10
+
+
+def held_case_repair_seconds(cases: int = 0) -> float:
+    """The held-case repair budget: `ALK_HELD_CASE_REPAIR_SECONDS` when it is a usable number of seconds (0 turns the
+    rounds off), else 20 minutes or 30 s for each of the `cases` the build was asked for, whichever is longer, up to
+    four hours."""
+    scaled = min(HELD_CASE_MAX_SECONDS, max(DEFAULT_HELD_CASE_SECONDS, HELD_CASE_SECONDS_PER_CASE * max(cases, 0)))
+    raw = os.getenv("ALK_HELD_CASE_REPAIR_SECONDS", "").strip()
+    if not raw:
+        return scaled
+    try:
+        configured = float(raw)
+    except ValueError:
+        return scaled
+    return configured if 0.0 <= configured <= HELD_CASE_MAX_SECONDS else scaled
+
+
+def held_case_rounds() -> int:
+    """How many times held cases go back to the writer: `ALK_HELD_CASE_ROUNDS` (0 to 10), else 3."""
+    try:
+        configured = int(os.getenv("ALK_HELD_CASE_ROUNDS", "").strip())
+    except ValueError:
+        return DEFAULT_HELD_CASE_ROUNDS
+    return configured if 0 <= configured <= HELD_CASE_MAX_ROUNDS else DEFAULT_HELD_CASE_ROUNDS
+
+
 class RepairBudgets(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -58,6 +93,12 @@ class RepairBudgets(BaseModel):
     runtime_patches: int = Field(default=8, ge=0, le=10)
     environment_patches: int = Field(default=4, ge=0, le=10)
     scenario_patches: int = Field(default=2, ge=0, le=10)
+    # Wall time, from the first round, that handing held cases back to the writer may add to a validation: its
+    # rewrites and the validations they cause. When it runs out the cases stay held with their reason; the build never
+    # fails for it. Generous by default (`ALK_HELD_CASE_REPAIR_SECONDS`, 20 minutes).
+    held_case_seconds: float = Field(default_factory=lambda: held_case_repair_seconds(), ge=0, le=HELD_CASE_MAX_SECONDS)
+    # Rounds of handing held cases back (`ALK_HELD_CASE_ROUNDS`); each round is followed by a full live validation.
+    held_case_rounds: int = Field(default_factory=held_case_rounds, ge=0, le=HELD_CASE_MAX_ROUNDS)
     infrastructure_retries_per_candidate: int = Field(default=2, ge=0, le=5)
     infrastructure_initial_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
     infrastructure_max_backoff_seconds: float = Field(default=30.0, ge=0, le=300)

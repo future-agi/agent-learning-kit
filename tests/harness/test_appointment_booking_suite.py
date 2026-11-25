@@ -12,7 +12,7 @@ from fi.alk.environments.appointment_booking import build, suite
 from fi.alk.harness.catalogue import save_catalogue
 from fi.alk.harness.checks import run_check
 from fi.alk.harness.folder import write_folder
-from fi.alk.harness.prove import _run
+from fi.alk.harness.prove import run_steps
 from fi.alk.harness.releases import (
     WORLD,
     PolicyProfile,
@@ -42,7 +42,7 @@ def world_root(environment, tmp_path) -> Path:
 def _outcome(world_root: Path, scenario_name: str, steps: list[Step], sub_goal: str):
     scenario = next(one for one in suite.scenarios() if one.name == scenario_name)
     played = scenario.model_copy(update={"solution": steps})
-    world, calls, refused, _ = _run(played, world_root, with_solution=True)
+    world, calls, refused, _ = run_steps(played, world_root, with_solution=True)
     try:
         assert not refused, refused
         return run_check(suite.CHECKS[sub_goal][1], world, calls, name=sub_goal)

@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -103,6 +104,9 @@ _SECRET_MARKERS = (
 )
 # Too short to look for anywhere in a key, so only where a word ends: `auth` is not `author`.
 _SECRET_ENDINGS = ("auth", "pass", "pwd")
+# Query parameters a signed or keyed address carries, and the longest value of another that is kept.
+_SIGNED_ENDINGS = ("sig", "signature", "key", "code", "jwt", "session", "sid")
+_LONGEST_PLAIN_QUERY_VALUE = 15
 # Maps whose names say nothing about whether a value is a credential (`X-Client-Auth`,
 # `X-Tenant`): every value is withheld, and only the names are kept.
 _WITHHELD_MAPS = ("headers", "queryparams", "queryparameters")
@@ -149,7 +153,7 @@ def _safe_profile_value(value: Any, key: str = "") -> Any:
         }
     if isinstance(value, list):
         return [_safe_profile_value(item, key) for item in value]
-    if isinstance(value, str) and "://" in value:
+    if isinstance(value, str) and (_rewritten_as_url(value) or _holds_credential_url(value)):
         return _redact_text(value, [])
     return value
 
@@ -168,6 +172,79 @@ def _safe_schemas(schemas: Mapping[str, Any]) -> dict[str, Any]:
                 dict.fromkeys(_SCHEMA_VALUES & schema.keys(), "[redacted]")
             )
     return safe
+
+
+def _holds_credential_url(value: str) -> bool:
+    """Whether an address inside longer text may carry a credential: userinfo, or a query or
+    fragment that names one or holds a value long enough to be one. Any other is left as written,
+    so the prompt it stands in stays whole."""
+    for token in value.split():
+        _scheme, separator, rest = token.partition("://")
+        if not separator:
+            continue
+        if "@" in rest:
+            return True
+        for part in re.split(r"[?#&;]", rest)[1:]:
+            name, given, item = part.partition("=")
+            if _secret_key(name) or _compact_key(name).endswith(_SIGNED_ENDINGS):
+                return True
+            if len(item if given else name) > _LONGEST_PLAIN_QUERY_VALUE:
+                return True
+    return False
+
+
+def _rewritten_as_url(value: str) -> bool:
+    """Whether the profile's sanitizer reads this text as an address: its query and fragment
+    are dropped, so a prompt that begins with one may come back cut."""
+    if "://" not in value:
+        return False
+    parsed = urlsplit(value)
+    return bool(parsed.scheme and parsed.netloc)
+
+
+# The most a whole prompt is copied at: the same limit as a prompt copied from the source.
+_LARGEST_WHOLE_PROMPT = 1024 * 1024
+
+
+def whole_prompt(profile: Mapping[str, Any]) -> str | None:
+    """The agent's whole instructions from a provider profile, or None where code can't take
+    every text of them, or where taking them would cut them.
+
+    Phone and LiveKit carry the prompt the user gave. Retell's one general prompt is whole when
+    there are no states; with states or a conversation flow it is only a part. Vapi's are the
+    system messages of the assistant's model, in order.
+    """
+    provider = str(profile.get("provider") or "")
+    texts: list[Any]
+    if provider in {"phone", "livekit"}:
+        texts = [profile.get("system_prompt")]
+    elif provider == "retell":
+        if profile.get("response_engine_type") != "retell-llm" or profile.get("states"):
+            return None
+        texts = [profile.get("general_prompt")]
+    elif provider == "vapi":
+        model = profile.get("model")
+        messages = model.get("messages") if isinstance(model, Mapping) else None
+        if not isinstance(messages, list):
+            return None
+        texts = [
+            message.get("content")
+            for message in messages
+            if isinstance(message, Mapping) and message.get("role") == "system"
+        ]
+    else:
+        return None
+    if not texts or not all(isinstance(text, str) and text.strip() for text in texts):
+        return None
+    if provider in {"retell", "vapi"} and any(
+        _rewritten_as_url(text) for text in texts
+    ):
+        # Fetched profiles were sanitized, and one rewritten as an address may have been cut.
+        return None
+    whole = "\n\n".join(texts)
+    if len(whole.encode("utf-8")) > _LARGEST_WHOLE_PROMPT:
+        return None
+    return whole
 
 
 def inspect_provider_target(

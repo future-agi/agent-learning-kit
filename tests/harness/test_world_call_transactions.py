@@ -294,8 +294,8 @@ def test_postgres_a_write_whose_trace_cannot_be_written_is_undone_and_the_trial_
     assert _trace_names(url) == []
     assert call_runner._read_tool_trace(runtime) is None
     with pytest.raises(call_runner.ToolCaptureFailed, match="ran untraced"):
-        call_runner._collect_tool_trace_calls(runtime, strict=True)
-    assert call_runner._collect_tool_trace_calls(runtime) == ()
+        call_runner.collect_tool_trace_calls(runtime, strict=True)
+    assert call_runner.collect_tool_trace_calls(runtime) == ()
     _allow_inserts(url, "_alk_tool_trace")
     # The next scenario starts from a clean slate: clearing the trace clears the marks with it.
     call_runner._clear_tool_trace_calls(url)
