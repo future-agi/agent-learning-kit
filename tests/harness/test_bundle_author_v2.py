@@ -9308,6 +9308,45 @@ def test_compose_bun_control_service_admission_is_unchanged(tmp_path, declared):
     assert agent.working_directory == "agent"
 
 
+def test_compose_node_control_service_starts_in_runtime_workdir(tmp_path):
+    """A Compose build context at the repository root still launches the Node package at runtime.workdir."""
+    source = _repo(
+        tmp_path,
+        {
+            "server.js": "throw new Error('root marker must not start');\n",
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: .\n"
+                "    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source)
+    _node_package(source / "agent")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "execution": "compose",
+            "compose_file": "compose.yml",
+            "service": "agent",
+            "workdir": "agent",
+            "command": ["node", "server.js"],
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "agent"
+    assert agent.run_command == ["node", "server.js"]
+
+
 def test_compose_node_control_service_gets_no_python_tracer(tmp_path):
     """Only the Compose command makes this agent Node, so no runtime field can switch the Python tracer off."""
     source = _repo(

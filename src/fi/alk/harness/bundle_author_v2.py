@@ -3259,7 +3259,12 @@ def resolve_environment_plan(
                     else ""
                 ),
                 name=service_name,
-                root=service_root,
+                # A declared Node service starts in its runtime.workdir, not the build context.
+                root=(
+                    _runtime_component(root, runtime_workdir, python_project=False)
+                    if service_node and declared_runtime and runtime_workdir.strip()
+                    else service_root
+                ),
                 entry=entry,
                 control=service_name == control_name,
                 needs_secrets=needs_target_secrets and service_name == control_name,
