@@ -899,7 +899,7 @@ def test_a_migration_that_needs_a_superuser_says_where_the_statement_belongs(tmp
     assert said.count("seed/seed_failed") == 1
 
 
-def _migrated(migration: str, seed: str, *, alk_table: bool = False):
+def _migrated(migration: str, seed: str, *, alk_table: bool = False, adopt: bool = True):
     """A baseline whose migrations ran as the migrations login and whose seed ran as the superuser; the check, and a
     runner for each login."""
     parts = urlsplit(_REAL)
@@ -921,11 +921,145 @@ def _migrated(migration: str, seed: str, *, alk_table: bool = False):
         "THEN CREATE ROLE alk_world_tools NOLOGIN; END IF; END $$")
     migrator = pr.migrator_credentials(**{k: v for k, v in checked.items()})
     run(migrator, baseline, migration)
+    if not adopt:
+        return superuser, migrator, baseline, checked, set(), run
+    pr._adopt_harness_tables(**checked)
     before = pr.seed_escalation_snapshot(**checked)
     run(superuser, baseline, seed)
     if alk_table:
         run(superuser, baseline, "CREATE TABLE _alk_action_keys (key text PRIMARY KEY)")
     return superuser, migrator, baseline, checked, before, run
+
+
+def build_authored_store(
+    tmp_path: Path, generic: bool, schema: str, world: tuple[str, ...] = (
+        "CREATE TABLE users (id TEXT, tags TEXT)", "INSERT INTO users VALUES ('user-1', 'priority')"
+    ),
+) -> tuple[list[str], list[str]]:
+    """A bundle authored the way the platform authors one, on the generic path (`seed/source-schema.sql`) or the
+    other (`seed/world.sql`), with ``schema`` as the source's own; its store then built into a fresh baseline as
+    the build does: migrations as the migrations' login, the harness's tables taken over, the seed as the superuser,
+    the check. Returns the store's migrations and the owner of each `_alk_*` table."""
+    import sqlite3
+
+    import test_bundle_author_v2 as author_tests
+
+    from fi.alk.harness.bundle_author_v2 import author_bundle_v2
+
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(schema, encoding="utf-8")
+    authoring = author_tests._authoring(tmp_path)
+    (authoring / "runtime-validation.json").write_text('{"status":"certified"}\n', encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        for statement in world:
+            database.execute(statement)
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=author_tests._job(connector="http", metadata={"generic_harness_v1": True} if generic else None),
+        authoring=authoring,
+        output=output,
+    )
+    store = manifest.seed.stores[0]
+    parts = urlsplit(_REAL)
+    superuser = pr.EngineCredentials(parts.username, parts.password or "")
+    baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
+    checked = {"port": parts.port or 5432, "credentials": superuser, "baseline_db": baseline,
+               "sql_runner": pr.default_sql_runner, "process_name": "db"}
+
+    def run(dbname: str, statement: str):
+        return pr.default_sql_runner(
+            host=parts.hostname or "localhost", port=parts.port or 5432, user=superuser.username,
+            password=superuser.password, dbname=dbname, statement=statement,
+        )
+
+    run("postgres", f'CREATE DATABASE "{baseline}"')
+    try:
+        before: set = set()
+
+        def after_migrations() -> None:
+            pr._adopt_harness_tables(**checked)
+            before.update(pr.seed_escalation_snapshot(**checked))
+
+        pr.apply_store_seed(
+            store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=output, port=checked["port"], dbname=baseline,
+            credentials=superuser, process_name="db", sync_run=pr.subprocess.run,
+            source_digest=manifest.provenance.source_digest, after_migrations=after_migrations,
+            migration_credentials=pr.migrator_credentials(**checked),
+        )
+        pr._refuse_seed_escalation(**checked, before_seed=before)
+        owners = run(baseline, "SELECT DISTINCT pg_get_userbyid(relowner) FROM pg_class WHERE relname LIKE '\\_alk\\_%'")
+        return list(store.migrations), sorted(str(row[0]) for row in owners or [])
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+_EVIL = "CREATE FUNCTION evil() RETURNS boolean LANGUAGE sql AS 'SELECT true'; "
+_PLANTED = {
+    "check": _EVIL + "CREATE TABLE _alk_trial_faults (trial_id text PRIMARY KEY, faults jsonb CHECK (evil()))",
+    "default": _EVIL + "CREATE TABLE _alk_trial_faults (trial_id text PRIMARY KEY, seen boolean DEFAULT evil())",
+    "domain": "CREATE FUNCTION evil(text) RETURNS boolean LANGUAGE sql AS 'SELECT true'; "
+    "CREATE DOMAIN keyed AS text CHECK (evil(VALUE)); CREATE TABLE _alk_action_keys (key keyed PRIMARY KEY)",
+    "index": "CREATE FUNCTION evil(text) RETURNS text LANGUAGE sql IMMUTABLE AS 'SELECT $1'; "
+    "CREATE TABLE _alk_action_keys (key text PRIMARY KEY); CREATE INDEX ON _alk_action_keys (evil(key))",
+    "grant": "CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text); "
+    "GRANT INSERT ON _alk_tool_trace TO PUBLIC",
+    "view": "CREATE TABLE riders_log (id int); CREATE VIEW _alk_tool_trace AS SELECT * FROM riders_log",
+}
+
+
+@real_postgres
+@pytest.mark.parametrize("planted", sorted(_PLANTED))
+def test_a_harness_table_a_migration_made_that_runs_code_refuses_the_build(planted):
+    """E1-a: the migrations' login makes the harness's tables (the bundle's prefix); one that would run anything but
+    the system's own code when the harness or the door writes it refuses the build before it is taken over."""
+    superuser, _migrator, baseline, checked, _before, run = _migrated(_PLANTED[planted], "", adopt=False)
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._adopt_harness_tables(**checked)
+        assert "harness table" in str(refused.value)
+        assert run(superuser, baseline, "SELECT count(*) FROM pg_class WHERE relname LIKE '\\_alk\\_%' "
+                   "AND pg_get_userbyid(relowner) = 'alk_migrator' AND relkind IN ('r', 'v')") == [(1,)]
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    "planted",
+    (*sorted(_PLANTED), "catalog"),
+)
+def test_a_harness_table_the_seed_made_that_runs_code_refuses_the_build_whoever_owns_it(planted):
+    """E1-a: a superuser-owned harness table with no trigger still refuses the build when a check, default, domain,
+    index, grant or view would run code, even code planted in `pg_catalog`."""
+    seed = _PLANTED.get(planted) or (
+        "CREATE FUNCTION pg_catalog.evil() RETURNS boolean LANGUAGE sql AS 'SELECT true'; "
+        "CREATE TABLE _alk_trial_faults (trial_id text PRIMARY KEY, seen boolean DEFAULT pg_catalog.evil())"
+    )
+    superuser, _migrator, baseline, checked, before, run = _migrated("", seed)
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._refuse_seed_escalation(**checked, before_seed=before)
+        assert "harness table" in str(refused.value)
+    finally:
+        if planted == "catalog":
+            run(superuser, baseline, "DROP FUNCTION IF EXISTS pg_catalog.evil() CASCADE")
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+@pytest.mark.parametrize(("generic", "migration"), ((True, "seed/source-schema.sql"), (False, "seed/world.sql")))
+def test_both_authoring_paths_build_with_the_harness_tables_in_their_migration(tmp_path: Path, generic, migration):
+    """The bundle's harness prefix rides in its migration file on both paths: the migrations' login makes the
+    harness's tables, the harness takes them over, and the build passes with every one of them the superuser's."""
+    migrations, owners = build_authored_store(
+        tmp_path, generic, "CREATE TABLE users (id TEXT PRIMARY KEY, tags TEXT);\n"
+    )
+
+    assert migrations == [migration]
+    assert owners == [urlsplit(_REAL).username]
 
 
 def _dropped(superuser, baseline, run) -> None:
@@ -1006,7 +1140,8 @@ def test_a_migration_s_security_definer_function_cannot_reach_the_harness_tables
             "harness table",
         ),
         # E1 without a trigger: a harness table the migrations own is refused too.
-        ("CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text)", "harness table"),
+        # The bundle's own prefix makes the harness's tables in its migration: a plain one is taken over.
+        ("CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text)", None),
         # E3: functions in public that an unqualified call in a harness statement would resolve to.
         (
             "CREATE FUNCTION public.unnest(text[]) RETURNS SETOF text LANGUAGE sql AS $$ SELECT 'x' $$",
@@ -1021,13 +1156,20 @@ def test_a_migration_s_security_definer_function_cannot_reach_the_harness_tables
     ],
 )
 def test_harness_tables_and_system_names_are_the_harness_s_alone(migration, refused):
-    superuser, _migrator, baseline, checked, before, run = _migrated(migration, "")
+    superuser, _migrator, baseline, checked, _before, run = _migrated(migration, "", adopt=False)
+
+    def build() -> None:
+        pr._adopt_harness_tables(**checked)
+        pr._refuse_seed_escalation(**checked, before_seed=pr.seed_escalation_snapshot(**checked))
+
     try:
         if refused is None:
-            pr._refuse_seed_escalation(**checked, before_seed=before)
+            build()
+            assert run(superuser, baseline, "SELECT count(*) FROM pg_class WHERE relname LIKE '\\_alk\\_%' "
+                       "AND pg_get_userbyid(relowner) = 'alk_migrator'") == [(0,)]
         else:
             with pytest.raises(pr.ProcessRuntimeError) as raised:
-                pr._refuse_seed_escalation(**checked, before_seed=before)
+                build()
             assert refused in str(raised.value)
     finally:
         _dropped(superuser, baseline, run)

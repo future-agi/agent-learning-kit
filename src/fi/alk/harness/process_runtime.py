@@ -71,6 +71,7 @@ from .world_roles import (
     DOOR_ROLE_GROUP,
     DOOR_TABLE_RIGHTS,
     HARNESS_ONLY_TABLES,
+    HARNESS_TABLES_WITH_CODE,
     WORLD_DOOR_DATABASE_URL,
     door_role_name,
     has_world_door,
@@ -5317,6 +5318,13 @@ def _freeze_one_store(
         def _snapshot_before_seed() -> None:
             # What the source's own migrations made: the seed check below refuses only what the seed adds or changes.
             if process.engine is ManagedEngine.POSTGRES and credentials is not None:
+                _adopt_harness_tables(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
+                )
                 before_seed.update(
                     seed_escalation_snapshot(
                         port=port,
@@ -5759,9 +5767,57 @@ def _seed_escalations(
 
     # Code that runs with rights its caller lacks is refused whoever made it: the migrations' login cannot make it,
     # so only the seed or a superuser can have.
-    ours = found("postgres", queries.our_roles) | found("postgres", queries.code) | found(baseline_db, queries.code)
+    ours = (
+        found("postgres", queries.our_roles)
+        | found("postgres", queries.code)
+        | found(baseline_db, queries.code)
+        | found(baseline_db, queries.harness_tables)
+    )
     others = found("postgres", queries.other_roles)
     return ours, others
+
+
+def _adopt_harness_tables(
+    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+) -> None:
+    """After the migrations, which make the harness's own tables (the bundle's prefix) as the migrations' login: each
+    `_alk_*` table must run no code of anyone's, and is then the superuser's, so nothing the migrations made can
+    change it or act through it. A table that runs code refuses the build, whoever made it."""
+
+    def run(statement: str, read_only: bool = False) -> Any:
+        return _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=baseline_db,
+            statement=statement,
+            read_only=read_only,
+        )
+
+    found = [str(row[0]) for row in run(HARNESS_TABLES_WITH_CODE, read_only=True) or [] if row]
+    if found:
+        raise ProcessRuntimeError(
+            "baseline",
+            "seed_failed",
+            seed_escalation_reason(process_name, found),
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
+        )
+    # Tables first: a sequence a table owns moves with it, and one that is linked to a table cannot be moved alone.
+    run(
+        "DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.oid, c.relkind FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname LIKE '\\_alk\\_%' "
+        "AND c.relkind IN ('r', 'S') AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+        "AND n.nspname NOT LIKE 'pg\\_%' ORDER BY c.relkind DESC LOOP "
+        "IF (SELECT relowner FROM pg_class WHERE oid = r.oid) <> "
+        "(SELECT oid FROM pg_roles WHERE rolname = current_user) THEN "
+        "EXECUTE format('ALTER %s %s OWNER TO CURRENT_USER', "
+        "CASE r.relkind WHEN 'r' THEN 'TABLE' ELSE 'SEQUENCE' END, r.oid::regclass); END IF; END LOOP; END $$"
+    )
 
 
 # The login a source's migrations run as: it owns only what its migrations make, so code a migration makes runs with

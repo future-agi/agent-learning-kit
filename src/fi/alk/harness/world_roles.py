@@ -65,6 +65,42 @@ class SeedEscalationQueries(NamedTuple):
     other_roles: str
     # In a database: code that runs as its owner whoever calls it, or on any DDL.
     code: str
+    # In a database: a harness table (`_alk_*`) that would run anything but the system's own code when the harness or
+    # the door writes it, whoever made it.
+    harness_tables: str = ""
+
+
+# A harness table's rows are written by the superuser and the door: the table may run no code of anyone's. Any
+# trigger, rule, row policy, partition or parent, any grant, or anything the table, its defaults, constraints or
+# indexes use that the system did not make (a function, type, domain, operator, collation or operator class with an
+# oid past the system's own, wherever it lives, `pg_catalog` included) refuses the build.
+_HARNESS_FROM = "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+_HARNESS_WHERE = (
+    "WHERE c.relname LIKE '\\_alk\\_%' AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+    "AND n.nspname NOT LIKE 'pg\\_%'"
+)
+_FIRST_USER_OID = 16384
+HARNESS_TABLES_WITH_CODE = (
+    "SELECT 'harness table ' || c.oid::regclass::text || ' is not a plain table', c.relkind::text "
+    f"{_HARNESS_FROM}{_HARNESS_WHERE} AND (c.relkind NOT IN ('r', 'S', 'i') OR c.relispartition "
+    "OR EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid)) "
+    "UNION ALL SELECT 'harness table ' || c.oid::regclass::text || ' carries a trigger, rule, row policy or grant', "
+    "md5(coalesce(c.relacl::text, '') || c.relrowsecurity::text || c.relhasrules::text) "
+    f"{_HARNESS_FROM}{_HARNESS_WHERE} AND c.relkind = 'r' AND (c.relacl IS NOT NULL OR c.relrowsecurity OR c.relhasrules "
+    "OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal) "
+    "OR EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)) "
+    "UNION ALL SELECT DISTINCT 'harness table ' || c.oid::regclass::text || ' uses code the system did not make: ' "
+    "|| pg_describe_object(d.refclassid, d.refobjid, 0), d.refobjid::text "
+    f"{_HARNESS_FROM}JOIN pg_depend d ON ("
+    "(d.classid = 'pg_class'::regclass AND (d.objid = c.oid "
+    "OR d.objid IN (SELECT x.indexrelid FROM pg_index x WHERE x.indrelid = c.oid))) "
+    "OR (d.classid = 'pg_attrdef'::regclass AND d.objid IN (SELECT a.oid FROM pg_attrdef a WHERE a.adrelid = c.oid)) "
+    "OR (d.classid = 'pg_constraint'::regclass "
+    "AND d.objid IN (SELECT k.oid FROM pg_constraint k WHERE k.conrelid = c.oid))) "
+    "AND d.refclassid IN ('pg_proc'::regclass, 'pg_type'::regclass, 'pg_operator'::regclass, "
+    "'pg_collation'::regclass, 'pg_opclass'::regclass, 'pg_opfamily'::regclass) "
+    f"{_HARNESS_WHERE} AND c.relkind = 'r' AND d.refobjid >= {_FIRST_USER_OID}"
+)
 
 
 def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
@@ -139,7 +175,7 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_operator'::regclass AND d.objid = o.oid "
         "AND d.deptype = 'e')"
     )
-    return SeedEscalationQueries(our_roles, other_roles, code)
+    return SeedEscalationQueries(our_roles, other_roles, code, HARNESS_TABLES_WITH_CODE)
 
 
 def seed_escalation_reason(process_name: str, found: Iterable[str]) -> str:
