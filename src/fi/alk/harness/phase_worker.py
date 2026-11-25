@@ -57,6 +57,7 @@ async def main() -> None:
                     admin_dsn=state.get("admin_dsn"),
                     restore_as_role=bool(state.get("restore_as_role")),
                     reader_dsn=state.get("reader_dsn"),
+                    log_dsn=state.get("log_dsn"),
                 ),
                 state["world_index"],
                 rng,

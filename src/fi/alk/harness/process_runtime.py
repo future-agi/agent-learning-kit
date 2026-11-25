@@ -73,7 +73,8 @@ from .world_roles import (
     DOOR_TABLE_RIGHTS,
     HARNESS_ONLY_TABLES,
     HARNESS_RELNAME,
-    STORE_ROLE_GROUP,
+    LOG_ROLE_GROUP,
+    LOG_ROLE_PREFIX,
     HARNESS_TABLES_WITH_CODE,
     PG_CATALOG_PLANTS,
     STORE_ROLE_PREFIX,
@@ -83,6 +84,7 @@ from .world_roles import (
     has_world_door,
     seed_escalation_queries,
     seed_escalation_reason,
+    log_role_name,
     store_role_name,
     world_role_name,
 )
@@ -217,6 +219,8 @@ class RuntimeEndpoint(BaseModel):
     door_address: str | None = None
     # The world's store role (`store_role`): the harness's reads and resets of the world's rows.
     store_address: str | None = None
+    # The world's log reader (`log_role`): the harness's reads of its own log and marker.
+    log_address: str | None = None
 
 
 class EnvironmentRuntime(BaseModel):
@@ -798,6 +802,15 @@ def store_role(credentials: EngineCredentials, world_index: int) -> EngineCreden
     return _derived_role(credentials, store_role_name(world_index))
 
 
+def log_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's log reader, derived the same way as the world's: reads the harness's log and marker, nothing else."""
+    return _derived_role(credentials, log_role_name(world_index))
+
+
+def _log_role_of(credentials: EngineCredentials, role: EngineCredentials) -> EngineCredentials:
+    return _derived_role(credentials, LOG_ROLE_PREFIX + role.username[len(WORLD_ROLE_PREFIX):])
+
+
 def _store_role_of(credentials: EngineCredentials, role: EngineCredentials) -> EngineCredentials:
     return _derived_role(credentials, STORE_ROLE_PREFIX + role.username[len(WORLD_ROLE_PREFIX):])
 
@@ -820,6 +833,7 @@ def _engine_diagnostic_secrets(
                     world_role(value, world_index),
                     door_role(value, world_index),
                     store_role(value, world_index),
+                    log_role(value, world_index),
                 ):
                     secrets_by_name[f"{name}:{role.username}"] = role.password
     return secrets_by_name
@@ -944,6 +958,14 @@ def build_endpoints(
                 world_index=world_index,
                 credentials=store_role(engine_credentials, world_index),
             )
+        log_address = None
+        if tool_address is not None:
+            log_address = render_capability_address(
+                capability,
+                port=port,
+                world_index=world_index,
+                credentials=log_role(engine_credentials, world_index),
+            )
         door_address = None
         if door and tool_address is not None:
             door_address = render_capability_address(
@@ -960,6 +982,7 @@ def build_endpoints(
             tool_address=tool_address,
             door_address=door_address,
             store_address=store_address,
+            log_address=log_address,
         )
     return endpoints
 
@@ -4731,14 +4754,14 @@ def sentinel_credentials(
     world_roles: bool = False,
 ) -> EngineCredentials | None:
     """Who reads a Postgres store's sentinel, at the baseline and at every reset: never the harness. At the baseline
-    the restricted login the bundle's files ran as; at a reset with world roles, that world's store role. Only with
+    the restricted login the bundle's files ran as; at a reset with world roles, that world's log reader. Only with
     one fixed user (no roles at all) is it the harness, as every other process is."""
     if engine is not ManagedEngine.POSTGRES or credentials is None:
         return credentials
     if login is not None:
         return login
     if world_roles and world_index is not None and credentials.world_secret:
-        return store_role(credentials, world_index)
+        return log_role(credentials, world_index)
     return credentials
 
 
@@ -6114,8 +6137,8 @@ _HARNESS_SHAPE = (
 def _harness_names_elsewhere() -> str:
     return (
         "SELECT 'schema ' || n.nspname::text || ' is named like one of the harness''s roles' FROM pg_namespace n "
-        f"WHERE n.nspname ~ '^({WORLD_ROLE_PREFIX}|{STORE_ROLE_PREFIX}|{DOOR_ROLE_PREFIX})[0-9]+$' "
-        f"OR n.nspname IN ('{MIGRATOR_ROLE}', '{WORLD_ROLE_GROUP}', '{DOOR_ROLE_GROUP}', '{STORE_ROLE_GROUP}') "
+        f"WHERE n.nspname ~ '^({WORLD_ROLE_PREFIX}|{STORE_ROLE_PREFIX}|{DOOR_ROLE_PREFIX}|{LOG_ROLE_PREFIX})[0-9]+$' "
+        f"OR n.nspname IN ('{MIGRATOR_ROLE}', '{WORLD_ROLE_GROUP}', '{DOOR_ROLE_GROUP}', '{LOG_ROLE_GROUP}') "
         "UNION ALL SELECT 'relation ' || n.nspname::text || '.' || c.relname::text || ' is named like a harness "
         "table outside public' FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         f"WHERE {HARNESS_RELNAME} AND n.nspname <> 'public' AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
@@ -6744,7 +6767,7 @@ def _grant_world_role_group(
         "END LOOP; END $$",
     )
     if not door:
-        _grant_store_role_group(run, baseline_db)
+        _grant_log_role_group(run, baseline_db)
         return
     door_group = f'"{DOOR_ROLE_GROUP}"'
     run(
@@ -6778,22 +6801,22 @@ def _grant_world_role_group(
         f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); "
         "END IF; END $$",
     )
-    _grant_store_role_group(run, baseline_db)
+    _grant_log_role_group(run, baseline_db)
 
 
-def _grant_store_role_group(run: Callable[[str, str], None], baseline_db: str) -> None:
-    """The group every world's store role belongs to may read the log (checks read the world's events) and the seed's
-    marker (each reset reads it), and nothing else of the harness's."""
+def _grant_log_role_group(run: Callable[[str, str], None], baseline_db: str) -> None:
+    """The group every world's log reader belongs to may read the log (checks read the world's events) and the seed's
+    marker (each reset reads it), and nothing else. No world's role, store role or door is in it."""
     run(
         "postgres",
-        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{STORE_ROLE_GROUP}') "
-        f'THEN CREATE ROLE "{STORE_ROLE_GROUP}" NOLOGIN; END IF; END $$',
+        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{LOG_ROLE_GROUP}') "
+        f'THEN CREATE ROLE "{LOG_ROLE_GROUP}" NOLOGIN; END IF; END $$',
     )
     for table in ("_alk_tool_trace", "harness_seed_sentinel"):
         run(
             baseline_db,
             f"DO $$ BEGIN IF to_regclass('public.{table}') IS NOT NULL THEN "
-            f'GRANT SELECT ON public.{table} TO "{STORE_ROLE_GROUP}"; END IF; END $$',
+            f'GRANT SELECT ON public.{table} TO "{LOG_ROLE_GROUP}"; END IF; END $$',
         )
 
 
@@ -6873,13 +6896,21 @@ def _reset_template_database(
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
             f"'{store.username}') THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
-            f"DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = '{STORE_ROLE_GROUP}') THEN "
-            f'GRANT "{STORE_ROLE_GROUP}" TO "{store.username}"; END IF; END $$',
             f'ALTER ROLE "{store.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
             f"PASSWORD '{store.password}'",
             "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
             f"EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"{store.username}\"'; END IF; END $$",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{store.username}"',
+        ]
+        # The world's log reader: in no world group, only the log group's read of the log and the marker.
+        reader = _log_role_of(credentials, role)
+        statements += [
+            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+            f"'{reader.username}') THEN CREATE ROLE \"{reader.username}\" LOGIN IN ROLE "
+            f'"{LOG_ROLE_GROUP}"; END IF; END $$',
+            f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
+            f"PASSWORD '{reader.password}'",
+            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{reader.username}"',
         ]
     if role is not None and door is not None:
         statements += [

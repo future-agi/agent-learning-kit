@@ -20,8 +20,10 @@ DOOR_ROLE_PREFIX = "alk_d"
 # World N's store role: reads and resets the world's rows for the harness past their row security, with the world
 # group's rights and nothing more; never the agent's tools' role.
 STORE_ROLE_PREFIX = "alk_s"
-# Every world's store role belongs to it: the harness's read-only grants on its own tables (the log, the marker).
-STORE_ROLE_GROUP = "alk_world_store"
+# World N's log reader: in no world group and running no world SQL, it alone reads the harness's log and marker for
+# the harness (a check's events, a reset's sentinel), pinned and read-only.
+LOG_ROLE_PREFIX = "alk_l"
+LOG_ROLE_GROUP = "alk_world_log"
 # The harness's own relations, by name, in SQL over `pg_class c`: its `_alk_*` tables and the seed's marker.
 HARNESS_RELNAME = "(c.relname LIKE '\\_alk\\_%' OR c.relname = 'harness_seed_sentinel')"
 # The door's address, rendered only into the door's own processes.
@@ -49,6 +51,11 @@ HARNESS_ONLY_TABLES = ("harness_seed_sentinel",)
 def world_role_name(world_index: int) -> str:
     """World N's own login role."""
     return f"{WORLD_ROLE_PREFIX}{world_index}"
+
+
+def log_role_name(world_index: int) -> str:
+    """World N's log reader (`LOG_ROLE_PREFIX`)."""
+    return f"{LOG_ROLE_PREFIX}{world_index}"
 
 
 def store_role_name(world_index: int) -> str:
@@ -136,8 +143,8 @@ HARNESS_TABLES_WITH_CODE = (
 def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
     """The queries for a world group ``world_group``, the group every world's role is a member of."""
     our_role = (
-        f"(r.rolname IN ('{world_group}', '{DOOR_ROLE_GROUP}', '{STORE_ROLE_GROUP}') "
-        f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$')"
+        f"(r.rolname IN ('{world_group}', '{DOOR_ROLE_GROUP}', '{LOG_ROLE_GROUP}') "
+        f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX}|{STORE_ROLE_PREFIX}|{LOG_ROLE_PREFIX})[0-9]+$')"
     )
     our_roles = (
         "SELECT 'role ' || r.rolname || ' has an attribute the harness never gives it', '' "
@@ -149,7 +156,7 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         f"WHERE {our_role} AND NOT ("
         f"(g.rolname = '{world_group}' AND (r.rolname ~ '^({WORLD_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$' "
         f"OR r.rolname = '{DOOR_ROLE_GROUP}')) "
-        f"OR (g.rolname = '{STORE_ROLE_GROUP}' AND r.rolname ~ '^{STORE_ROLE_PREFIX}[0-9]+$') "
+        f"OR (g.rolname = '{LOG_ROLE_GROUP}' AND r.rolname ~ '^{LOG_ROLE_PREFIX}[0-9]+$') "
         f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$'))"
     )
     other_roles = (
@@ -175,6 +182,14 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         "JOIN pg_roles o ON o.oid = p.proowner "
         "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') "
         f"AND ((p.prosecdef AND {owner_reaches}) OR (NOT l.lanpltrusted AND l.lanname NOT IN ('internal', 'c')))"
+        # A trigger or rule set to fire even with triggers suspended (ENABLE ALWAYS / REPLICA): a reset, whoever runs
+        # it, would run the world's code. Refused at the build, not first met at a reset.
+        " UNION ALL SELECT 'trigger ' || t.tgname::text || ' on ' || t.tgrelid::regclass::text || ' is set to fire even "
+        "with triggers suspended (ENABLE ALWAYS or REPLICA)', t.oid::text FROM pg_trigger t "
+        "WHERE NOT t.tgisinternal AND t.tgenabled IN ('A', 'R')"
+        " UNION ALL SELECT 'rule ' || r.rulename::text || ' on ' || r.ev_class::regclass::text || ' is set to fire even "
+        "with triggers suspended (ENABLE ALWAYS or REPLICA)', r.oid::text FROM pg_rewrite r "
+        "WHERE r.ev_enabled IN ('A', 'R')"
         # A harness table someone else made, or one with a trigger or rule: the harness adopts a table it finds
         # (CREATE TABLE IF NOT EXISTS), and a superuser or the door writing it would run that code.
         " UNION ALL SELECT 'harness table ' || c.oid::regclass::text || ' made by another role or carrying a trigger "

@@ -87,13 +87,17 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         # The world's store role: the group's rights, past row security, and replica mode for a reset.
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_s3') THEN "
         'CREATE ROLE "alk_s3" LOGIN IN ROLE "alk_world_tools"; END IF; END $$',
-        "DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_store') THEN "
-        'GRANT "alk_world_store" TO "alk_s3"; END IF; END $$',
         'ALTER ROLE "alk_s3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
         f"PASSWORD '{pr.store_role(_CREDENTIALS, 3).password}'",
         "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
         "EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"alk_s3\"'; END IF; END $$",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_s3"',
+        # The world's log reader: in no world group, only the log group's read of the log and the marker.
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_l3') THEN "
+        'CREATE ROLE "alk_l3" LOGIN IN ROLE "alk_world_log"; END IF; END $$',
+        'ALTER ROLE "alk_l3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
+        f"PASSWORD '{pr.log_role(_CREDENTIALS, 3).password}'",
+        'GRANT CONNECT ON DATABASE "w3" TO "alk_l3"',
         'ALTER DATABASE "w3" ALLOW_CONNECTIONS true',
     ]
 
@@ -615,6 +619,7 @@ def door_worlds(monkeypatch):
 
         # World 0's store role, for the tests that read and reset it as the harness does.
         make.store_url = url(pr.store_role(superuser, 0))
+        make.log_url = url(pr.log_role(superuser, 0))
         return (
             url(superuser),
             url(pr.world_role(superuser, 0)),
@@ -1508,7 +1513,8 @@ def test_actors_read_a_world_s_rows_with_its_own_role(monkeypatch):
     )
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     database = SimpleNamespace(
-        protocol="postgres", address="superuser-url", tool_address="world-url", store_address="store-url"
+        protocol="postgres", address="superuser-url", tool_address="world-url", store_address="store-url",
+        log_address="log-url",
     )
     runtime = SimpleNamespace(endpoints={"db": database})
     call_runner._world_records(runtime)
@@ -1547,7 +1553,7 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
         connection.execute(_WORLD_CODE)
         connection.execute("TRUNCATE audit.ran_as")
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
-    endpoint = SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+    endpoint = SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url, log_address=door_worlds.log_url)
     store = chat_call_runner._HostedToolStore(attached_world_store(endpoint))
     role, reader = urlsplit(world).username, urlsplit(door_worlds.store_url).username
 
@@ -1900,7 +1906,7 @@ def test_the_store_reads_and_resets_a_row_secured_world_while_the_tools_stay_und
         )
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = attached_world_store(
-        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url, log_address=door_worlds.log_url)
     )
     tools = chat_call_runner._HostedToolStore(store)
 
@@ -1913,7 +1919,7 @@ def test_the_store_reads_and_resets_a_row_secured_world_while_the_tools_stay_und
     assert sorted(row["name"] for row in store.table("riders")) == ["ada", "bo"]
 
 
-def test_a_sentinel_is_read_as_the_login_at_the_baseline_and_the_store_role_at_a_reset_never_the_harness():
+def test_a_sentinel_is_read_as_the_login_at_the_baseline_and_the_log_reader_at_a_reset_never_the_harness():
     """Auditor B, items 1-2: one rule for both callers. The baseline reads the sentinel as the restricted login, a
     reset with world roles as that world's store role; only with one fixed user (no roles) is it the harness."""
     harness = pr.EngineCredentials("harness", "x", world_secret="s")
@@ -1921,7 +1927,7 @@ def test_a_sentinel_is_read_as_the_login_at_the_baseline_and_the_store_role_at_a
     postgres = pr.ManagedEngine.POSTGRES
 
     assert pr.sentinel_credentials(postgres, harness, login=login) is login
-    assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=True) == pr.store_role(harness, 2)
+    assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=True) == pr.log_role(harness, 2)
     assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=False) is harness
     other = next(engine for engine in pr.ManagedEngine if engine is not postgres)
     assert pr.sentinel_credentials(other, harness, login=login) is harness
@@ -1989,7 +1995,7 @@ def test_the_store_role_s_reads_and_snapshot_never_reach_a_world_shadow(door_wor
         )
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = attached_world_store(
-        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url, log_address=door_worlds.log_url)
     )
 
     snapshot = store.freeze()
@@ -2037,13 +2043,19 @@ def test_checks_read_a_door_bundle_s_log_as_the_store_role(door_worlds, monkeypa
     )
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = attached_world_store(
-        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url, log_address=door_worlds.log_url)
     )
 
-    events = HostedWorld.events(SimpleNamespace(query=store.query))
+    world = SimpleNamespace(_store=store, query=store.query)
+    world._read_log = lambda statement: HostedWorld._read_log(world, statement)
+    events = HostedWorld.events(world)
     assert [(row["name"], row["outcome"]) for row in events] == [("refund", "committed")]
+    # R2-2: the store role, which resets the world and runs its code, has no right on the log; the log reader only
+    # reads it.
+    with pytest.raises(Exception, match="permission denied"):
+        store.query("SELECT * FROM public._alk_tool_trace")
     with pytest.raises(Exception):
-        store.query("INSERT INTO public._alk_tool_trace (name, arguments, ok, at) VALUES ('x', '{}', true, 0)")
+        store.read_log("INSERT INTO public._alk_tool_trace (name, arguments, ok, at) VALUES ('x', '{}', true, 0)")
 
 
 @real_postgres
@@ -2263,6 +2275,65 @@ def test_with_world_roles_psql_runs_a_bundle_s_sql_as_an_account_that_is_not_the
     assert "-X" in one["argv"]
     copied = Path(one["argv"][one["argv"].index("-f") + 1])
     assert copied != tmp_path / "schema.sql" and oct(copied.stat().st_mode & 0o777) == "0o644"
+
+
+@real_postgres
+def test_a_world_check_constraint_run_by_the_reset_cannot_copy_the_log(door_worlds, monkeypatch):
+    """R2-2 repro A: a customer CHECK calls a function that copies the harness's log into a schema the reset never
+    clears. The store role that resets the world has no right on the log, so nothing is copied."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores.postgres import attached_world_store
+
+    superuser, world, door, _reset = door_worlds(True)
+    world_door.PostgresLog(door).write(
+        {"name": "refund", "arguments": {}, "result": None, "ok": False, "error": "supervisor rule 7", "at": 1.0,
+         "action_id": "a1", "outcome": "refused", "actor_id": "agent"}
+    )
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "CREATE SCHEMA stash; GRANT USAGE, CREATE ON SCHEMA stash TO PUBLIC; "
+            "CREATE TABLE stash.leaked (row text); GRANT ALL ON stash.leaked TO PUBLIC; "
+            "CREATE FUNCTION public.copy_log(text) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
+            "INSERT INTO stash.leaked SELECT t::text FROM public._alk_tool_trace t; RETURN true; "
+            "EXCEPTION WHEN insufficient_privilege THEN RETURN true; END $$; "
+            "INSERT INTO riders (name) VALUES ('ada'); ALTER TABLE riders ADD CONSTRAINT leak CHECK (public.copy_log(name))"
+        )
+        # Adding the constraint checked the existing row as the harness here; only the reset is under test.
+        connection.execute("TRUNCATE stash.leaked")
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = attached_world_store(
+        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url,
+                        log_address=door_worlds.log_url)
+    )
+    snapshot = store.freeze()
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT count(*) FROM stash.leaked").fetchone() == (0,)
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    "planted",
+    (
+        "CREATE TABLE public.riders (id int PRIMARY KEY, name text); "
+        "CREATE RULE leak AS ON INSERT TO public.riders DO ALSO SELECT 1; "
+        "ALTER TABLE public.riders ENABLE ALWAYS RULE leak",
+        "CREATE TABLE public.riders (id int PRIMARY KEY, name text); "
+        "CREATE FUNCTION public.noted() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; "
+        "CREATE TRIGGER noted AFTER INSERT ON public.riders FOR EACH ROW EXECUTE FUNCTION public.noted(); "
+        "ALTER TABLE public.riders ENABLE ALWAYS TRIGGER noted",
+    ),
+)
+def test_a_rule_or_trigger_set_to_fire_with_triggers_suspended_refuses_the_build(planted):
+    """R2-2 repro B and R2-4: ENABLE ALWAYS / REPLICA rules and triggers would run the world's code during every
+    reset; the build refuses them instead of a reset first meeting them."""
+    superuser, _migrator, baseline, checked, before, run = _migrated(_full_prefix() + ";\n" + planted, "")
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._refuse_seed_escalation(**checked, before_seed=before)
+        assert "set to fire even with triggers suspended" in str(refused.value)
+    finally:
+        _dropped(superuser, baseline, run)
 
 
 def _pg_dump_schema(owner: str) -> str:

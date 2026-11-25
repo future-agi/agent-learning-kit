@@ -140,6 +140,7 @@ class HostedWorld(HttpObservationHandle):
             "admin_dsn": getattr(self._store, "_admin_dsn", None),
             "restore_as_role": bool(getattr(self._store, "_restore_as_role", False)),
             "reader_dsn": getattr(self._store, "_reader_dsn", None),
+            "log_dsn": getattr(self._store, "_log_dsn", None),
             "world_index": self.world_index,
             "rng": self.rng.getstate(),
             "baseline": self._baseline_row_counts,
@@ -269,6 +270,11 @@ class HostedWorld(HttpObservationHandle):
         Writable, and not on `ReadOnlyWorld`."""
         return self._store
 
+    def _read_log(self, statement: str) -> list[dict[str, Any]]:
+        """The harness's own log, read as the world's log reader where the store has one."""
+        reader = getattr(self._store, "read_log", None)
+        return reader(statement) if reader is not None else self.query(statement)
+
     def events(
         self, actor_id: str | None = None, outcome: str | None = None
     ) -> list[dict[str, Any]]:
@@ -277,10 +283,10 @@ class HostedWorld(HttpObservationHandle):
         from ..world_door import EvidenceUnavailable, is_attempt, logged_outcome
 
         try:
-            rows = self.query("SELECT * FROM public._alk_tool_trace ORDER BY at, id")
+            rows = self._read_log("SELECT * FROM public._alk_tool_trace ORDER BY at, id")
         except Exception as exc:  # noqa: BLE001 - told apart below: no log, or a log out of reach
             try:
-                present = self.query("SELECT to_regclass('public._alk_tool_trace') IS NOT NULL AS present")
+                present = self._read_log("SELECT to_regclass('public._alk_tool_trace') IS NOT NULL AS present")
             except Exception:  # noqa: BLE001 - the database itself is out of reach
                 raise EvidenceUnavailable("the world's action log could not be read") from exc
             if present and not present[0].get("present"):

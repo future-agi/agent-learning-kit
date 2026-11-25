@@ -42,7 +42,9 @@ _SYSTEM_FIRST = "-c search_path=pg_catalog,public,pg_temp"
 _TRIGGERS_FIRING_ANYWAY = (
     "SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgenabled IN ('A', 'R')"
+    "WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgenabled IN ('A', 'R') "
+    "UNION ALL SELECT c.relname, r.rulename FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND r.ev_enabled IN ('A', 'R')"
 )
 # Each foreign key between two of the world's tables: (child, parent).
 _FOREIGN_KEYS = (
@@ -60,9 +62,14 @@ def attached_world_store(endpoint: Any) -> AttachedPostgresStore:
     from ...privilege import IsolationMode, isolation_mode
 
     if isolation_mode() is IsolationMode.PER_USER:
-        if not getattr(endpoint, "tool_address", None) or not getattr(endpoint, "store_address", None):
+        if not all(getattr(endpoint, name, None) for name in ("tool_address", "store_address", "log_address")):
             raise StoreError("no_world_role: a world's SQL runs only with its own roles, and none was given")
-        return AttachedPostgresStore(endpoint.tool_address, restore_as_role=True, reader_dsn=endpoint.store_address)
+        return AttachedPostgresStore(
+            endpoint.tool_address,
+            restore_as_role=True,
+            reader_dsn=endpoint.store_address,
+            log_dsn=endpoint.log_address,
+        )
     return AttachedPostgresStore(system_first(endpoint.address), admin_dsn=endpoint.address)
 
 
@@ -154,6 +161,14 @@ class PostgresStore(ContainerStore):
         """
         # A check's read names the world's tables as the world's own SQL does: system functions first, read-only.
         return self._read(self._reader_address(), statement, params, _SYSTEM_FIRST)
+
+    def read_log(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+        """A read of the harness's own tables (every name qualified) as the world's log reader, on the system's own
+        path and read-only; the store's reader where there is none (one fixed user)."""
+        log = getattr(self, "_log_dsn", None)
+        if not log:
+            return self.query(statement, params)
+        return self._read(log, statement, params, PINNED_SEARCH_PATH)
 
     def query_as_world(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         """``query`` as the agent's tools' own role, under the world's row security: a handler's read."""
@@ -570,11 +585,14 @@ class AttachedPostgresStore(PostgresStore):
         admin_dsn: str | None = None,
         restore_as_role: bool = False,
         reader_dsn: str | None = None,
+        log_dsn: str | None = None,
     ) -> None:
         self._external_dsn = dsn
         # The world's store role (with world roles): the harness's reads, snapshot and reset of the world's rows,
         # past their row security; ``dsn`` stays the agent's tools' own role, under it.
         self._reader_dsn = reader_dsn
+        # The world's log reader: the harness's own log and marker, read by a role that runs no world SQL.
+        self._log_dsn = log_dsn
         # The harness's own address for a snapshot and a restore (one fixed user), or a reset run as ``dsn`` itself,
         # the world's role (`attached_world_store`).
         self._admin_dsn = admin_dsn
