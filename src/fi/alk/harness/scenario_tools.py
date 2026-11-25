@@ -1688,6 +1688,12 @@ def accept_scenario(
         return _err("Not kept. " + " ".join(unlisted))
     if unknown := _budgets_for_unknown_workers(scenario, world_root):
         return _err("Not kept. " + unknown)
+    from .understand import load as load_contract
+
+    try:
+        contract = load_contract(world_root)
+    except (OSError, ValueError):
+        contract = None
     if reading := [
         fault.action
         for fault in scenario.faults
