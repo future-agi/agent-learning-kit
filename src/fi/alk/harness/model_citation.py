@@ -870,14 +870,17 @@ def _reads(text: str, spans, setting: str) -> list[tuple[int, int, bool]]:
     return found
 
 
-def _is_the_default(text: str, read: tuple[int, int, bool], name: str) -> bool:
+def _is_the_default(
+    text: str, read: tuple[int, int, bool], name: str, *, next_argument: bool = True
+) -> bool:
     """Whether ``name`` is the default written for the setting read at ``read``: the next
-    argument or a fallback after it, in quotes, or a shell default (${X:-gpt-4o}, ${X-gpt-4o})."""
+    argument (unless ``next_argument`` is False) or a fallback after it, in quotes, or a shell
+    default (${X:-gpt-4o}, ${X-gpt-4o})."""
     _, end, shell = read
     if shell:
         return text.startswith(f":-{name}}}", end) or text.startswith(f"-{name}}}", end)
     after = _DEFAULT_AFTER.match(text, end)
-    if after is None:
+    if after is None or (not next_argument and text[end:after.start(1)].strip() == ","):
         return False
     start = after.end()
     return text.startswith(name, start) and text.startswith(after.group(1), start + len(name))
@@ -903,11 +906,25 @@ def _whose_default(line: str, comment: int, inside: list[tuple[int, int]], name:
     return [
         line[start : end - 1 if line[end - 1] in _QUOTES else end]
         for start, end, shell in _reads_on_line(line, comment, inside, strings, names)
-        if _is_the_default(line, (start, end, shell), name)
+        # A name read off something and then another argument is a value passed beside the
+        # model (make_llm(settings.OPENAI_API_KEY, "gpt-4o")), not a lookup's default.
+        if _is_the_default(
+            line, (start, end, shell), name, next_argument=not _read_off_something(line, start)
+        )
     ]
 
 
-def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
+def _read_off_something(line: str, start: int) -> bool:
+    """Whether the name starting at ``start`` is bare and read off something (settings.X)."""
+    before = start - 1
+    while before >= 0 and line[before] in " \t":
+        before -= 1
+    return before >= 0 and line[before] == "."
+
+
+def model_problems(
+    contract: AgentContract, source_root: Path, *, beside: str = ""
+) -> list[str]:
     """Problems with contract.model, checked against the cited line. On success, strips name,
     provider and setting and stores path as the resolved file relative to the root, in POSIX
     form. Resolves one path (charged to the save's budget) and reads at most one file.
@@ -918,7 +935,9 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     setting shaped like a credential, a name that is a credential's default, or a name the
     credential scan would mask is refused: a credential's default is a placeholder or a leak,
     never a model. A name given alone that is the default of a model's setting on the line is
-    refused once, asking for the setting."""
+    refused once, asking for the setting. ``beside`` is a name refused with the setting: when it
+    is written on the cited line as a value, the setting is read beside the model, not as it,
+    and is refused."""
     model = contract.model
     if model is None:
         return []
@@ -1104,6 +1123,19 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
                 f"model: the name {shown_name} is not the default written on line {model.line} "
                 f"of {shown_path}; give as name the default the line gives {shown_setting}, or "
                 "leave name out if it gives none"
+            ]
+        if beside and named_on(
+            cited_line,
+            beside,
+            config=config,
+            yaml=suffix in _YAML_SUFFIXES,
+            block=block,
+            scanned=(comment, inside),
+            **scan,
+        ):
+            return [
+                f"model: line {model.line} of {shown_path} names {beside[:100]} as a value beside "
+                f"{shown_setting}, so {shown_setting} is not where the model comes from"
             ]
     elif name and not named_on(
         cited_line,

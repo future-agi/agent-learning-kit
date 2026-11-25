@@ -4543,6 +4543,9 @@ def test_a_name_alone_that_is_a_settings_default_is_refused_asking_for_the_setti
     [
         pytest.param('model = kwargs.get("model", "gpt-4o")', id="a-keyword-argument"),
         pytest.param('TEMPERATURE = os.getenv("TEMPERATURE", "gpt-4o")', id="not-a-models-setting"),
+        # A credential passed beside the model as another argument: not its default.
+        pytest.param('llm = make_llm(settings.OPENAI_API_KEY, "gpt-4o")', id="a-credential-attribute-then-the-model"),
+        pytest.param('llm = make_llm(config.OPENAI_MODEL, "gpt-4o")', id="a-setting-attribute-then-the-model"),
     ],
 )
 def test_a_name_alone_that_is_the_default_of_no_models_setting_is_kept(root, written):
@@ -4689,6 +4692,50 @@ def test_a_name_that_is_not_the_default_is_left_out_the_second_time_keeping_the_
         "path": "agent.py",
         "line": 2,
     }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("ft:gpt-4o-mini-2024-07-18:acme::9xYz1234", id="fine-tune"),
+        pytest.param(
+            "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3",
+            id="a-64-hex-version",
+        ),
+        pytest.param("arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc123def456", id="bedrock-arn"),
+        pytest.param("projects/my-proj/locations/us-central1/endpoints/1234567890123456789", id="vertex-endpoint"),
+    ],
+)
+def test_real_model_ids_are_not_taken_for_credentials(root, name):
+    (root / "llm.py").write_text(f'# the model\nMODEL = "{name}"\n', encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": "llm.py", "line": 2})
+
+    assert problems == []
+    assert contract.model.name == name
+
+
+def test_a_setting_read_beside_a_model_named_on_the_line_is_never_kept(tmp_path, root):
+    # Dileep's case through the tool: the setting passes alone, but the name refused with it is
+    # written on the line as a value, so the setting sits beside the model, not under it.
+    (root / "agent.py").write_text(
+        'import os\nllm = ChatOpenAI(model="gpt-4o", timeout=int(os.getenv("LLM_TIMEOUT", "30")))\n',
+        encoding="utf-8",
+    )
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    beside = payload(
+        hard_constraints=["Be polite."],
+        model={"name": "gpt-4o", "setting": "LLM_TIMEOUT", "path": "agent.py", "line": 2},
+    )
+
+    first = submit(beside)
+    assert first.get("is_error")
+
+    second = submit(beside)
+
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
 
 
 def test_a_typescript_setting_is_saved_through_the_tool(tmp_path, root):

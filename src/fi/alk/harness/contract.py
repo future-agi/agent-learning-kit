@@ -280,8 +280,9 @@ class ModelSource(BaseModel):
     """The model the agent talks to the person with, and the line its name is written on.
 
     When the code reads the model from an environment variable, ``setting`` is that variable's
-    name and the cited line looks it up; ``name`` is then only the default written on that line
-    (empty when there is none), not the model the customer's run uses."""
+    name in capitals and the statement the cited line starts reads it; ``name`` is then only the
+    default written for it there (empty when there is none), not the model the customer's run
+    uses."""
 
     provider: str = ""
     name: str = ""

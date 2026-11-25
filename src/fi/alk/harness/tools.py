@@ -475,8 +475,10 @@ def _checked_against_source(
                 droppable = bool(setting) and not names_a_credential(setting)
                 if asked is not None and "model" in asked:
                     if model is not None and droppable:
-                        model.name = ""
-                        if model_problems(contract, source_root):
+                        # A name refused with the setting and written on the line as a value
+                        # means the setting sits beside the model, so the setting goes too.
+                        refused_name, model.name = model.name.strip(), ""
+                        if model_problems(contract, source_root, beside=refused_name):
                             contract.model = None
                     else:
                         contract.model = None
@@ -1083,9 +1085,11 @@ def contract_tools(
                     "out when it doesn't say), name exactly as written (letters, digits and "
                     ". _ : / @ - only), and the file (relative to "
                     "the source root) and line the name is written on. When the code reads the "
-                    "model from an environment variable (os.getenv(\"OPENAI_MODEL\", "
-                    "\"gpt-4o\")), give the variable's name as setting, cite the line "
-                    "that looks it up, and give as name the default written there, or no name "
+                    "model from an environment variable, in any language "
+                    "(os.getenv(\"OPENAI_MODEL\", \"gpt-4o\"), "
+                    "process.env.OPENAI_MODEL ?? \"gpt-4o\"), give the variable's name, in "
+                    "capitals, as setting, cite the line the code reads it on (where a wrapped "
+                    "call starts), and give as name the default written for it, or no name "
                     "when it has none. One model; a voice agent's speech-to-text and "
                     "text-to-speech models don't count. Leave model out when the name is only "
                     "fetched from elsewhere at run time.",
