@@ -107,6 +107,56 @@ def test_stage_settles_reported_vertex_usage_once(monkeypatch, ending):
         assert ledger["total_usd"] == round(priced(model, 1000, 200, 300), 6)
 
 
+@pytest.mark.parametrize("method", ["stream", "resume"])
+def test_closing_vertex_stream_settles_usage_before_next_turn(monkeypatch, method):
+    from types import SimpleNamespace
+
+    from google.adk.runners import Runner
+
+    from fi.alk.harness import spend
+    from fi.alk.harness.backends import SessionSpec
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiBackend, priced
+    from fi.alk.harness.session import Stage
+
+    model = "gemini-3.7-flash"
+    monkeypatch.setattr(spend, "_stages", {})
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+
+    async def events(self, **kwargs):
+        yield SimpleNamespace(
+            content=SimpleNamespace(parts=[SimpleNamespace(text="Hello back")]),
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=1000, candidates_token_count=200,
+                cached_content_token_count=300,
+            ),
+            is_final_response=lambda: True,
+        )
+
+    def assert_ledger(count):
+        ledger = spend.snapshot()
+        entry, = ledger["stages"]
+        assert entry["priced"] == count
+        assert entry["tokens_in"] == 1000 * count
+        assert entry["tokens_out"] == 200 * count
+        assert entry["tokens_cached"] == 300 * count
+        assert ledger["total_usd"] == round(count * priced(model, 1000, 200, 300), 6)
+
+    async def run():
+        async with Stage(SessionSpec(system_prompt="Reply", model=model),
+                         backend=VertexGeminiBackend(), name="builder") as stage:
+            stream = stage.stream("Hello") if method == "stream" else stage.resume("inv-1")
+            assert (await anext(stream)).text == "Hello back"
+            await stream.aclose()
+            assert_ledger(1)
+            assert (await stage.say("Again")).outcome == "success"
+            assert_ledger(2)
+        assert_ledger(2)
+
+    monkeypatch.setattr(Runner, "run_async", events)
+    asyncio.run(run())
+
+
 def test_successful_authoring_save_is_terminal() -> None:
     assert _successful_terminal_save(
         "mcp__world__save_world", {"content": "Saved to /work/authoring."}

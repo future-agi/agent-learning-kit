@@ -310,8 +310,12 @@ class Stage:
         for one in said:
             self.channel.record("said", one, stage=self.name)
         await self._session.send(folded_in(message, said))
-        async for event in self._pending_events():
-            yield event
+        try:
+            async for event in self._pending_events():
+                yield event
+        except GeneratorExit:
+            self._record_interrupted_usage()
+            raise
 
     async def resume(self, invocation_id: str) -> AsyncIterator[Event]:
         """Resume one interrupted provider invocation."""
@@ -321,8 +325,12 @@ class Stage:
         if resume is None:
             raise RuntimeError("the selected backend cannot resume interrupted turns")
         await resume(invocation_id)
-        async for event in self._pending_events():
-            yield event
+        try:
+            async for event in self._pending_events():
+                yield event
+        except GeneratorExit:
+            self._record_interrupted_usage()
+            raise
 
     async def _pending_events(self) -> AsyncIterator[Event]:
         turn = Turn()
