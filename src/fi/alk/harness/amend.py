@@ -32,6 +32,7 @@ from .contract import (
 )
 
 CONTRACT = CONTRACT_FILE
+MAX_RULE_CHARS = 2000
 
 
 def _kept_shape(written: Any, before: Any) -> Any:
@@ -118,6 +119,8 @@ def add_rule(
     rule = rule.strip()
     if not rule:
         return False, "no rule given"
+    if len(rule) > MAX_RULE_CHARS:
+        return False, f"a rule can be at most {MAX_RULE_CHARS} characters; this one has {len(rule)}. Ask for a shorter rule"
     if not why.strip():
         return False, "say why: an unexplained rule is indistinguishable from a guess"
     # Both sides are compared as they are saved: a contract held from an older save can still
