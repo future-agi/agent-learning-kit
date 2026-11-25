@@ -964,18 +964,20 @@ async def upload_browser_state(
     blocked: list[dict[str, Any]] | None,
     *,
     why: str = NO_WORLD_DOOR,
+    action_log: list[dict[str, Any]] | None = None,
 ) -> str | None:
-    """The world_state file for a world with a browser and no door: it says the world's records were not recorded,
-    and holds no tables or action log in their place. A lost upload never fails the trial."""
+    """The world_state file for a world with a browser whose records were not kept. With no door it says the world's
+    records were not recorded, and holds no tables or action log in their place. Where a door stood but the world's
+    end could not be read, it holds the door's ``action_log`` and says only the tables are missing. A lost upload
+    never fails the trial."""
     from .outbound import ArtifactKind
 
-    body = {
-        "schema": BROWSER_STATE_SCHEMA,
-        "recorded": False,
-        "why": why,
-        "not_held": ["tables", "action_log"],
-        **browser_file_body(evidence, blocked),
-    }
+    held = (
+        {"recorded": False, "not_held": ["tables", "action_log"]}
+        if action_log is None
+        else {"not_held": ["tables"], "action_log": [dict(row) for row in action_log]}
+    )
+    body = {"schema": BROWSER_STATE_SCHEMA, "why": why, **held, **browser_file_body(evidence, blocked)}
     try:
         return await adapter.upload_artifact(
             json.dumps(body, sort_keys=True, default=str).encode("utf-8"),

@@ -2719,8 +2719,9 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
             if asked.exists():
                 record.write_text(
                     json.dumps(
-                        {"complete": True, "rows": [], "screenshots": [{"file": "shot-001-end.jpg"}],
-                         "sealed": asked.read_text()}
+                        {"complete": True, "rows": [{"kind": "click", "target": "button Buy"},
+                                                    {"kind": "typing", "target": "textbox Search", "text": "red"}],
+                         "screenshots": [{"file": "shot-001-end.jpg"}], "sealed": asked.read_text()}
                     )
                 )
                 return
@@ -2749,6 +2750,8 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
     assert adapter.kinds.index("transcript") < adapter.kinds.index("screenshot")
     # The platform reads a call's recordings as proof of a voice call: a chat trial's screenshots are never named there.
     assert outcome.recording_artifacts == ()
+    # The browser's clicks and typing are the world's record, never the agent's tool calls.
+    assert outcome.calls == ()
 
 
 @pytest.mark.parametrize("include_tools", [False, True])
@@ -2820,8 +2823,15 @@ def test_a_browser_trial_with_no_door_keeps_a_world_state_file_saying_the_world_
     )
     [(_, end)] = [one for one in adapter.stored if one[0] == "world_state"]
     body = json.loads(end)
-    assert (body["schema"], body["recorded"], body["browser"]) == (BROWSER_STATE_SCHEMA, False, {"state": "not_used"})
-    assert body["why"] == ("world_end_unreadable" if include_tools else "no_world_door")
+    assert (body["schema"], body["browser"]) == (BROWSER_STATE_SCHEMA, {"state": "not_used"})
+    if include_tools:
+        # A door stood but the world's end could not be read: the file holds the door's log and says only the tables
+        # are missing, never that the world was not recorded.
+        assert (body["why"], body["not_held"], body["action_log"]) == ("world_end_unreadable", ["tables"], [])
+        assert "recorded" not in body and "tables" not in body
+    else:
+        assert (body["recorded"], body["why"], body["not_held"]) == (False, "no_world_door", ["tables", "action_log"])
+        assert "action_log" not in body and "tables" not in body
     assert body["blocked"] == [{"host": "www.example.com", "method": "GET", "via": "browser", "count": 1}]
     [(_, transcript)] = [one for one in adapter.stored if one[0] == "transcript"]
     world = json.loads(transcript)["world_actors"]

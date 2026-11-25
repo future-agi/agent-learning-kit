@@ -1369,7 +1369,8 @@ class HostedChatCallRunner:
             if browser is not None and not kept:
                 # The world's end could not be read: the browser's record is still kept, in a file saying so.
                 kept = await upload_browser_state(
-                    self._adapter, scenario.scenario_key, browser, refused, why=WORLD_END_UNREADABLE
+                    self._adapter, scenario.scenario_key, browser, refused, why=WORLD_END_UNREADABLE,
+                    action_log=door_log,
                 )
             # `door` says a door stood for these counts, so a reader never takes a record from before it for one.
             world_record = {

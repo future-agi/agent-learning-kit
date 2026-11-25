@@ -5988,3 +5988,5 @@ def test_a_browser_screenshot_is_kept_where_a_recording_is(level, kept) -> None:
     assert (ob.ArtifactKind.SCREENSHOT not in forbidden) is kept
     assert (ob.ArtifactKind.RECORDING_COMBINED not in forbidden) is kept
     assert not ob.is_reserved_artifact_kind(ob.ArtifactKind.SCREENSHOT)
+    # Admitted after recordings, with the optional kinds, so it never crowds a recording out of the budget.
+    assert ob.priority_class(ob.ArtifactKind.SCREENSHOT) == 2

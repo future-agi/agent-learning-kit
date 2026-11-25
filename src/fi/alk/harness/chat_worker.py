@@ -156,6 +156,16 @@ class IsolatedChatCallRunner:
             data = base64.b64decode(artifact["data"], validate=True)
             if artifact["kind"] == "transcript":
                 data = _with_stored_end_state(data, artifact_ids)
+            if artifact["kind"] == ArtifactKind.SCREENSHOT.value:
+                # A screenshot that could not be stored never fails the trial: it is said below.
+                try:
+                    artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
+                        data, kind=ArtifactKind.SCREENSHOT, scenario_key=scenario.scenario_key
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("a browser screenshot was not stored: %s", type(exc).__name__)
+                    artifact_ids[artifact["id"]] = None
+                continue
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
                 data,
                 kind=ArtifactKind(artifact["kind"]),

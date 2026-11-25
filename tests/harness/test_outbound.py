@@ -3734,6 +3734,16 @@ def test_artifacts_client_content_type_defaults_by_kind() -> None:
     assert platform.received_headers[-1]["Content-Type"] == "application/octet-stream"
 
 
+def test_a_browser_screenshot_is_sent_as_a_jpeg() -> None:
+    # The browser's screenshots are JPEG: the platform serves them back with the type they were sent with.
+    platform = _platform()
+    client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
+    data = b"\xff\xd8\xff\xe0 screenshot bytes"
+    client.upload(hashlib.sha256(data).hexdigest(), data, kind=ArtifactKind.SCREENSHOT, scenario_key="k1")
+    assert platform.received_headers[-1]["Content-Type"] == "image/jpeg"
+    assert platform.received_headers[-1]["X-Artifact-Kind"] == "screenshot"
+
+
 def test_artifacts_client_detects_wave_recording_bytes() -> None:
     platform = _platform()
     client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)

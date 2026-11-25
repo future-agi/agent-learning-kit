@@ -3065,6 +3065,8 @@ _DEFAULT_ARTIFACT_CONTENT_TYPES: dict[ArtifactKind, str] = {
     ArtifactKind.RECORDING_ASSISTANT: "video/mp4",
     ArtifactKind.TRANSCRIPT: "application/json",
     ArtifactKind.RESULT: "application/json",
+    # The browser's screenshots are taken as JPEG.
+    ArtifactKind.SCREENSHOT: "image/jpeg",
 }
 
 

@@ -755,7 +755,8 @@ def test_the_transcript_names_the_end_state_by_the_id_it_was_stored_under():
     assert _with_stored_end_state(plain, {}) == plain
 
 
-def test_a_screenshot_the_platform_did_not_keep_is_said_and_never_named(tmp_path, monkeypatch):
+@pytest.mark.parametrize("raises", [False, True])
+def test_a_screenshot_the_platform_did_not_keep_is_said_and_never_named(tmp_path, monkeypatch, raises):
     context = _context(tmp_path)
 
     class Refuses:
@@ -764,7 +765,11 @@ def test_a_screenshot_the_platform_did_not_keep_is_said_and_never_named(tmp_path
 
         async def upload_artifact(self, data, *, kind, **_kwargs):
             self.kinds.append(kind.value)
-            return None if kind.value == "screenshot" else f"stored-{len(self.kinds)}"
+            if kind.value == "screenshot":
+                if raises:
+                    raise RuntimeError("upload failed")
+                return None
+            return f"stored-{len(self.kinds)}"
 
     async def worker(module, payload, **_kwargs):
         return {
