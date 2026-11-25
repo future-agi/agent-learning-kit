@@ -90,7 +90,7 @@
       ],
       "expect_state": {
         "handoffs.count": 0,
-        "disputes.count": 1
+        "disputes.count": 6
       }
     }
   ],

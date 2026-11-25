@@ -4,66 +4,80 @@
   "notes": "Seeded 25 mailbox threads and 31 messages (three threads are conversations: the company's reply and the customer's follow-up, one of them a correction that supersedes the first request), 13 labels, clean starting drafts, 8 Gmail MCP tools in the official server's shape, 5 policy rules, 8 sub-goals, and simulator prompt.",
   "sequences": [
     {
+      "name": "search_and_label_inbox",
       "calls": [
         {
+          "tool": "search_threads",
           "arguments": {
-            "q": "label:UNREAD"
-          },
-          "tool": "search_threads"
+            "query": "label:UNREAD"
+          }
         },
         {
+          "tool": "label_thread",
           "arguments": {
-            "add_label_ids": [
+            "threadId": "T-01",
+            "labelIds": [
               "TRIAGED"
-            ],
-            "remove_label_ids": [
+            ]
+          }
+        },
+        {
+          "tool": "unlabel_thread",
+          "arguments": {
+            "threadId": "T-01",
+            "labelIds": [
               "UNREAD"
-            ],
-            "thread_id": "T-01"
-          },
-          "tool": "label_thread"
+            ]
+          }
         }
       ],
       "expect_state": {
         "gmail_thread_labels.count": 51
-      },
-      "name": "search_and_label_inbox"
+      }
     },
     {
+      "name": "triage_and_draft_escalation",
       "calls": [
         {
+          "tool": "get_thread",
           "arguments": {
-            "thread_id": "T-07"
-          },
-          "tool": "get_thread"
+            "threadId": "T-07"
+          }
         },
         {
+          "tool": "label_thread",
           "arguments": {
-            "add_label_ids": [
+            "threadId": "T-07",
+            "labelIds": [
               "TRIAGED"
-            ],
-            "remove_label_ids": [
-              "UNREAD"
-            ],
-            "thread_id": "T-07"
-          },
-          "tool": "label_thread"
+            ]
+          }
         },
         {
+          "tool": "unlabel_thread",
           "arguments": {
-            "body": "David, our on-call engineering team is actively investigating the outage.",
-            "recipient": "david@enterprise.com",
+            "threadId": "T-07",
+            "labelIds": [
+              "UNREAD"
+            ]
+          }
+        },
+        {
+          "tool": "create_draft",
+          "arguments": {
+            "to": [
+              "david@enterprise.com"
+            ],
             "subject": "Re: URGENT: Production outage on US-East cluster",
-            "thread_id": "T-07"
-          },
-          "tool": "create_draft"
+            "body": "David, our on-call engineering team is actively investigating the outage.",
+            "replyToMessageId": "M-07"
+          }
         }
       ],
       "expect_state": {
         "gmail_drafts.count": 1,
         "gmail_thread_labels.count": 51
-      },
-      "name": "triage_and_draft_escalation"
+      }
     }
   ],
   "world_checks": {

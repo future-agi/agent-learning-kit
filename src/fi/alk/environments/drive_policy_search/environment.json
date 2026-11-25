@@ -4,33 +4,32 @@
   "notes": "Google Drive policy search world with 30 documents, 5 users with folder ACLs, 5 verified read-only tools, and 6 proved sub-goals.",
   "sequences": [
     {
+      "name": "search_and_read_policy_flow",
       "calls": [
         {
+          "tool": "search_files",
           "arguments": {
-            "page_size": 2,
-            "page_token": "0",
-            "query": "travel"
-          },
-          "tool": "search_files"
+            "query": "fullText contains 'travel'",
+            "pageSize": 2
+          }
         },
         {
+          "tool": "get_file_metadata",
           "arguments": {
-            "file_id": "file_travel_v2_active"
-          },
-          "tool": "get_file_metadata"
+            "fileId": "file_travel_v2_active"
+          }
         },
         {
+          "tool": "read_file_content",
           "arguments": {
-            "file_id": "file_travel_v2_active"
-          },
-          "tool": "read_file_content"
+            "fileId": "file_travel_v2_active"
+          }
         }
       ],
       "expect_state": {
         "drive_files.count": 30,
         "drive_users.count": 5
-      },
-      "name": "search_and_read_policy_flow"
+      }
     }
   ],
   "world_checks": {

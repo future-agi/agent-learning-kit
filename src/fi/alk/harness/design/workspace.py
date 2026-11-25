@@ -62,6 +62,7 @@ from ..world.snapshot import (
     save,
     saved,
 )
+from ..world.tools import TEMPLATE_GAPS, template_gaps
 from .schema import unseeded_schema
 
 DESIGN = "design.json"
@@ -198,6 +199,7 @@ def open_design(
     workspace.mkdir(parents=True, exist_ok=True)
     if template is not None:
         design = _unpack(workspace, design, Path(template[0]), Path(template[1]))
+        _record_gaps(workspace, design)
     # Written last, so a failed unpack leaves no design and opening again lays it out afresh.
     save_design(workspace, design)
     return design
@@ -248,6 +250,15 @@ def _unpack(
             "inherited_schema": unseeded_schema(environment_root / WORLD / DATABASE),
             "base_environment": _rows(environment_root / WORLD / DATABASE),
         }
+    )
+
+
+def _record_gaps(workspace: Path, design: Design) -> None:
+    from .contract import design_contract
+
+    gaps = template_gaps(design_contract(workspace, design), workspace)
+    (workspace / TEMPLATE_GAPS).write_text(
+        json.dumps(gaps, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
 
