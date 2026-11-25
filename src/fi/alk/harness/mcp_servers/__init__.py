@@ -40,8 +40,8 @@ REGISTRY = {
         argv=(sys.executable, "-m", "fi.alk.harness.mcp_servers.sql"),
         attach=frozenset({DATABASE_READER}),
         about=(
-            "query(sql): one read-only SELECT over the attached tables, at most 200 rows; returns "
-            "{columns, rows, truncated}"
+            "query(sql): one read-only SELECT over the attached tables, at most 200 rows "
+            "(256 KB); returns {columns, rows, truncated}"
         ),
         attachable=frozenset({"query"}),
     ),
