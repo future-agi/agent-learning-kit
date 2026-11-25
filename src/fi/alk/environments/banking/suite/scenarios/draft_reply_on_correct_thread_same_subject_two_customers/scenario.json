@@ -51,7 +51,9 @@
         "threadId": "th_c01_complaint"
       },
       "environment_arguments": {},
-      "fixed": {}
+      "fixed": {
+        "threadId": "record: th_c01_complaint, Alice's thread about the Target charge"
+      }
     },
     {
       "tool": "create_draft",

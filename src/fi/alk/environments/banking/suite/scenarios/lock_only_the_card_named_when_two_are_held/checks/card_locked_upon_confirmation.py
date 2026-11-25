@@ -14,18 +14,26 @@ def check(world, calls, reference=None):
         card_row = next((x for x in cards if x.get("card_id") == card_id), None)
         if not card_row or card_row.get("status") != "locked":
             return f"not done: card {card_id} is not locked in database"
-    missing = _evidence_missing(world, calls, reference)
+    # Where a dispute is filed too, the card comes from the chat and the evidence settles the charge:
+    # a lock placed first is right, and the dispute's own check holds the order.
+    disputed = any(step.get("tool") == "create_dispute" for step in reference or ())
+    missing = _evidence_missing(world, calls, reference, None if disputed else "lock_card")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read" + ("" if disputed else " before lock_card")
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, write=None):
     """The evidence the reference says the decision rests on (the targets of its get_thread,
     get_message, read_file_content and lookup_merchant_descriptor steps, marked fixed), and which
     of them this run never retrieved by any valid path. Only content counts: a thread is read when
     a get_thread returned its message bodies or a get_message returned the body of its latest
     message (the one that governs); a search listing carries snippets only, so it locates a thread
-    but does not read it. A file is read when read_file_content returned it (not an old revision)."""
+    but does not read it. A file is read when read_file_content returned it (not an old revision).
+    With `write`, only what was read before the first successful call of that tool counts: evidence
+    read after the decision was acted on did not inform it."""
+    if write:
+        acted = next((i for i, c in enumerate(calls) if c.name == write and c.ok), len(calls))
+        calls = calls[:acted]
     state = world.state()
     thread_of = {m["id"]: m["thread_id"] for m in state.get("gmail_messages", [])}
     latest = {}

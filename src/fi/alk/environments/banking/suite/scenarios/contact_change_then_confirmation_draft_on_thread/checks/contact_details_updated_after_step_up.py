@@ -26,18 +26,23 @@ def check(world, calls, reference=None):
             return f"not done: the customer's {field} is not {value!r} in database"
         if not any(ch.get("customer_id") == c.arguments.get("customer_id") and ch.get("field") == field and ch.get("new_value") == value for ch in changes):
             return f"not done: no contact_change_requests row records the {field} change"
-    missing = _evidence_missing(world, calls, reference)
+    missing = _evidence_missing(world, calls, reference, "update_contact_details")
     if missing:
-        return f"done blind: the decision rests on {', '.join(missing)}, which was never read"
+        return f"done blind: the decision rests on {', '.join(missing)}, which was never read before update_contact_details"
     return None
 
-def _evidence_missing(world, calls, reference):
+def _evidence_missing(world, calls, reference, write=None):
     """The evidence the reference says the decision rests on (the targets of its get_thread,
     get_message, read_file_content and lookup_merchant_descriptor steps, marked fixed), and which
     of them this run never retrieved by any valid path. Only content counts: a thread is read when
     a get_thread returned its message bodies or a get_message returned the body of its latest
     message (the one that governs); a search listing carries snippets only, so it locates a thread
-    but does not read it. A file is read when read_file_content returned it (not an old revision)."""
+    but does not read it. A file is read when read_file_content returned it (not an old revision).
+    With `write`, only what was read before the first successful call of that tool counts: evidence
+    read after the decision was acted on did not inform it."""
+    if write:
+        acted = next((i for i, c in enumerate(calls) if c.name == write and c.ok), len(calls))
+        calls = calls[:acted]
     state = world.state()
     thread_of = {m["id"]: m["thread_id"] for m in state.get("gmail_messages", [])}
     latest = {}
