@@ -342,7 +342,7 @@ class _Toolbox:
 
         from fi.alk.harness import mcp_toolbox_adapter
 
-        def execute(tool_name, spec, arguments, *, database_url, trace_path):
+        def execute(tool_name, spec, arguments, *, database_url, trace_path, records_url=""):
             order = store["orders"].get(arguments["order_id"])
             if spec["statement"] == "lookup":
                 return json.dumps(order)

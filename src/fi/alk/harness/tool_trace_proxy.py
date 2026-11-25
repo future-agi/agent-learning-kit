@@ -65,6 +65,9 @@ except ImportError:  # pragma: no cover - imported as part of the package
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# The world's rows are written with the world's own role, never the door's (`world_roles.WORLD_RECORDS_DATABASE_URL`);
+# a bundle sealed before it has only the door's.
+RECORDS_DATABASE_URL = os.environ.get("WORLD_RECORDS_DATABASE_URL", "") or DATABASE_URL
 # This trial's worker channels, {token: worker id}: a worker reaches the world under /w/<token>/.
 WORKER_CHANNELS_FILE = os.environ.get("WORKER_CHANNELS_FILE", "")
 # The sealed per-worker allow-lists beside this file, {"worker:<id>": {"allow": [...]}}; a bundle without it does not
@@ -188,7 +191,7 @@ def _channel_worker(token: str) -> str:
 
 def door() -> WorldDoor:
     return WorldDoor(
-        Routed(HttpExecutor(UPSTREAM), RecordExecutor(PostgresRecords(DATABASE_URL))),
+        Routed(HttpExecutor(UPSTREAM), RecordExecutor(PostgresRecords(RECORDS_DATABASE_URL))),
         PostgresLog(DATABASE_URL),
         PostgresRoster(DATABASE_URL),
         faults=_trial_faults,

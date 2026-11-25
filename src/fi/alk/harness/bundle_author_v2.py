@@ -2129,6 +2129,7 @@ def _tool_proxy_process(read_actions: list[str] | None = None) -> SourceProcess:
         "PORT": "{{PORT_tool-proxy}}",
         "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
         "DATABASE_URL": "{{WORLD_DOOR_DATABASE_URL}}",
+        "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
         # This world's worker channels, {token: worker id}, written by the runner.
         "WORKER_CHANNELS_FILE": "{{WORLD_DIR}}/worker-channels.json",
     }
@@ -2488,6 +2489,7 @@ def _world_door_process(read_tools: list[str]) -> SourceProcess:
     environment = {
         "PORT": "{{PORT_world-door}}",
         "DATABASE_URL": "{{WORLD_DOOR_DATABASE_URL}}",
+        "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
     }
     if read_tools:
         environment["READ_ACTIONS"] = ",".join(read_tools)
@@ -2624,6 +2626,7 @@ def _mcp_toolbox_process() -> SourceProcess:
         environment={
             "PORT": "{{PORT_mcp-toolbox}}",
             "DATABASE_URL": "{{WORLD_DOOR_DATABASE_URL}}",
+        "WORLD_RECORDS_DATABASE_URL": "{{WORLD_DATABASE_URL}}",
             "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),

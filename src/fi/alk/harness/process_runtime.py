@@ -4285,6 +4285,46 @@ def apply_seed_file(
         )
 
 
+# Statements a dump makes that only say who owns what or describe an extension: the migrations' login may not run
+# them, and skipping them leaves its own objects its own (pg_restore --no-owner). Whole statements on one line only.
+_OWNERSHIP_ONLY = re.compile(
+    r"^\s*(ALTER\s+[A-Za-z ]+?\s+.+\s+OWNER\s+TO\s+[^;\s]+"
+    r"|COMMENT\s+ON\s+EXTENSION\s+\S+\s+IS\s+'(?:[^']|'')*')\s*;\s*$",
+    re.IGNORECASE,
+)
+_DOLLAR_QUOTE = re.compile(r"\$[A-Za-z_][A-Za-z_0-9]*\$|\$\$")
+
+
+def _without_ownership(file: Path) -> tuple[Path, int]:
+    """A migration file without the dump's ownership and extension-comment statements, and how many it left out; the
+    file itself when it has none. Lines inside a dollar-quoted body (a function's) are never touched."""
+    if file.suffix.lower() != ".sql":
+        return file, 0
+    try:
+        lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
+    except (OSError, UnicodeDecodeError):
+        return file, 0
+    kept: list[str] = []
+    open_tag: str | None = None
+    skipped = 0
+    for line in lines:
+        if open_tag is None and _OWNERSHIP_ONLY.match(line):
+            skipped += 1
+            kept.append("-- left out by the harness (ownership): " + line.strip() + "\n")
+            continue
+        kept.append(line)
+        for tag in _DOLLAR_QUOTE.findall(line):
+            open_tag = tag if open_tag is None else (None if tag == open_tag else open_tag)
+    if not skipped:
+        return file, 0
+    descriptor, name = tempfile.mkstemp(prefix="migration-", suffix=".sql")
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.writelines(kept)
+    # The store's own user runs psql on it.
+    os.chmod(name, 0o644)
+    return Path(name), skipped
+
+
 def apply_store_seed(
     store: StoreEntry,
     *,
@@ -4310,9 +4350,19 @@ def apply_store_seed(
     for files in (store.migrations, store.seed_files):
         as_migration = files is store.migrations and migration_credentials is not None
         for relative_path in files:
+            path = bundle_dir / relative_path
+            if as_migration:
+                path, skipped = _without_ownership(path)
+                if skipped:
+                    logger.info(
+                        "migration_ownership_statements_left_out process=%s file=%s count=%d",
+                        process_name,
+                        relative_path,
+                        skipped,
+                    )
             try:
                 apply_seed_file(
-                    engine, bundle_dir / relative_path, port=port, dbname=dbname,
+                    engine, path, port=port, dbname=dbname,
                     credentials=migration_credentials if as_migration else credentials, process_name=process_name,
                     sync_run=sync_run, user=user, group=group, rabbitmq_import=rabbitmq_import,
                     source_digest=source_digest, generic_artifact_root=generic_artifact_root,
@@ -5661,7 +5711,7 @@ def _seed_escalations(
     return ours, others
 
 
-# The login a source's migrations run as: it owns the baseline and nothing else, so code a migration makes runs with
+# The login a source's migrations run as: it owns only what its migrations make, so code a migration makes runs with
 # no more than this role's rights, and no right on the harness's tables is ever its.
 MIGRATOR_ROLE = "alk_migrator"
 
@@ -5669,8 +5719,9 @@ MIGRATOR_ROLE = "alk_migrator"
 def migrator_credentials(
     *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
 ) -> EngineCredentials:
-    """Make (or refresh) the migrations' login with a new password and hand it the baseline and its public schema. It
-    is no superuser and can make no role or database: a migration that needs more is refused by Postgres itself."""
+    """Make (or refresh) the migrations' login with a new password and let it create in the superuser's baseline and
+    its `public`. It is no superuser and can make no role or database: a migration that needs more is refused
+    by Postgres itself."""
     password = secrets.token_hex(24)
 
     def run(dbname: str, statement: str) -> None:
@@ -5696,8 +5747,11 @@ def migrator_credentials(
         f'ALTER ROLE "{MIGRATOR_ROLE}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS '
         f"PASSWORD '{password}'",
     )
-    run("postgres", f'ALTER DATABASE "{baseline_db}" OWNER TO "{MIGRATOR_ROLE}"')
-    run(baseline_db, f'ALTER SCHEMA public OWNER TO "{MIGRATOR_ROLE}"')
+    # The database and its `public` stay the superuser's (since Postgres 15 `public` belongs to whoever owns the
+    # database): the migrations may create schemas, trusted extensions and objects in `public`, never drop or alter
+    # what they do not own there, a harness table included.
+    run("postgres", f'GRANT CONNECT, CREATE, TEMPORARY ON DATABASE "{baseline_db}" TO "{MIGRATOR_ROLE}"')
+    run(baseline_db, f'GRANT USAGE, CREATE ON SCHEMA public TO "{MIGRATOR_ROLE}"')
     return EngineCredentials(MIGRATOR_ROLE, password)
 
 
