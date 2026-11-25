@@ -20,7 +20,7 @@ from fi.simulate.agent.wrapper import (
 
 from .call_runner import ArtifactUploader, CallRunnerContext, RETELL_API_KEY_ALIAS
 from .chat_call_runner import (
-    _HostedChatTarget,
+    HostedChatTarget,
     _check_text_usage,
     _conversation_scenario,
     _drive_conversation,
@@ -29,7 +29,7 @@ from .chat_call_runner import (
     _scenario_document,
     _sealed_through_stop,
     _stopped_call,
-    _tool_world,
+    tool_world,
     _within_stop_bound,
 )
 from .contract import AgentContract
@@ -320,14 +320,14 @@ class RetellChatCallRunner:
             getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
         )
         conversation_scenario = _conversation_scenario(document)
-        target_world = _tool_world(
+        target_world = tool_world(
             self._context.bundle_dir,
             self._contract,
             runtime,
             self._context.source_directory,
             self._context.handler_channel,
         )
-        target = _HostedChatTarget(
+        target = HostedChatTarget(
             wrapper=wrapper,
             contract=self._contract,
             world=target_world,

@@ -17,7 +17,7 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
    repo today (see `_collect_http_tool_calls`'s docstring — a verified finding, not an assumption)
    and is intentionally left returning zero calls rather than inventing a capture proxy.
    `tool_trace` is read from the world's own postgres database against an unpinned, isolated
-   convention (see `_collect_tool_trace_calls`'s docstring). Either way, zero calls captured is
+   convention (see `collect_tool_trace_calls`'s docstring). Either way, zero calls captured is
    never fabricated into something else — the scheduler's own `evidence_missing` retry-once policy
    is the contract-correct handling for "no evidence."
 3. **Uploading artifacts.** The transcript and any produced recordings are uploaded through the
@@ -72,6 +72,8 @@ from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_ac
 from .actor_meter import ActorMeter
 from .world_door import (
     NOT_STOPPED,
+    door_failure,
+    world_failed,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
     DOOR_FILE,
@@ -233,7 +235,7 @@ _RUN_SECONDS_PAD_SECONDS = 60.0
 _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 
 # Unpinned by any contract and no producer exists yet. Isolated as one
-# constant + two functions (`_clear_tool_trace_calls`, `_collect_tool_trace_calls`) so a real
+# constant + two functions (`_clear_tool_trace_calls`, `collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
 
@@ -1239,7 +1241,7 @@ def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
-def _collect_tool_trace_calls(
+def collect_tool_trace_calls(
     runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
@@ -1296,6 +1298,7 @@ def _collect_tool_trace_calls(
                 error=error,
                 refused=refused,
                 at=at,
+                endpoint=str(record.get("endpoint") or ""),
                 # The worker the world saw make it, by the channel it came through.
                 worker_id=str(record.get("worker_id") or ""),
                 refusal_code=str(record.get("refusal_code") or "") if refused else "",
@@ -1380,7 +1383,7 @@ def collect_seam_calls(
             # The bundle's seed creates the table, so a missing one is a failed capture too. The file's span lines
             # still count when the database cannot be read.
             try:
-                found = list(_collect_tool_trace_calls(runtime, strict=strict))
+                found = list(collect_tool_trace_calls(runtime, strict=strict))
             except ToolCaptureFailed as exc:
                 unread = unread or exc
         # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span
@@ -2236,6 +2239,24 @@ def _names_action(entry: Mapping[str, Any], action: str) -> bool:
 UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
 
 
+def world_failure_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Why the door failed on the agent's calls by its own fault, one reason per `world_failed` notice."""
+    return tuple(str(one.get("message")) for one in notices if one.get("code") == "world_failed")
+
+
+def world_failure_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
+    """One notice for each of the agent's calls the action log shows the world or its door failed on with no test
+    condition holding it: the trial cannot say what the agent would have done with an answer, so it is unmeasured,
+    never the agent's. Read from the log, so every runner and every route sees it."""
+    return [
+        {"code": "world_failed",
+         "message": f"The world failed on the agent's {row.get('name') or row.get('action')} call, so this trial "
+                    "cannot be graded."}
+        for row in log or ()
+        if isinstance(row, Mapping) and world_failed(row)
+    ]
+
+
 def missing_evidence(notices: Sequence[Mapping[str, Any]], records: Mapping[str, Any] | None) -> dict[str, str]:
     """Each kind of evidence a trial is missing or could not read, with why: the action log (`tool_calls`) when it
     could not be read or a call ran without the door recording it, and the records before and after (`world_state`)
@@ -2941,7 +2962,7 @@ _SPAN_SOURCE = "otel"
 _MISSING = object()
 
 
-def _collect_file_tool_calls(
+def collect_file_tool_calls(
     runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
     return _with_span_calls((), runtime, strict=strict)
@@ -3070,15 +3091,17 @@ def _read_file_tool_calls(
                 arguments = {"raw": arguments}
         if not isinstance(arguments, dict):
             arguments = {}
-        is_error = bool(record.get("is_error", False))
         output = record.get("output")
+        # The proxy's failure answer the agent's tool handed back as its value is a failed call, never a result.
+        failed = door_failure(_structured(output))
+        is_error = bool(record.get("is_error", False)) or failed is not None
         raw_at = record.get("at")
         call = Call(
             name=name,
             arguments=arguments,
             result=None if is_error else _structured(output),
             ok=not is_error,
-            error=str(output) if is_error and output is not None else None,
+            error=failed or (str(output) if is_error and output is not None else None),
             **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
             handoff=record.get("kind") == "handoff",
@@ -4853,7 +4876,12 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls) + hand_off_notices(runtime) + tool_span_notices(runtime, calls, silent=False)
+        trial_notices += (
+            repeated_untimed_notices(calls)
+            + hand_off_notices(runtime)
+            + tool_span_notices(runtime, calls, silent=False)
+            + world_failure_notices(action_log)
+        )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
@@ -5015,6 +5043,7 @@ class CallRunnerImpl:
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(trial_notices),
+            world_failures=world_failure_reasons(trial_notices),
             missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
