@@ -106,6 +106,7 @@ def test_a_continued_design_waits_for_its_answer_and_finishes(tmp_path, monkeypa
         settle_proposal(workspace, APPROVE)
         stages.append(load_design(workspace).stage)
         (workspace / PENDING_QUESTION).unlink()
+        (workspace / OUTPUT).mkdir()
         (workspace / OUTPUT / RESULT).write_text(json.dumps({"status": "completed"}))
         (workspace / FINISHED_MARKER).write_text(json.dumps({"status": "completed"}))
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Literal
@@ -83,14 +84,14 @@ def failed(output: Path, workspace: Path, code: str, message: str) -> int:
 
 
 def _forget_unfinished(output: Path, workspace: Path) -> None:
-    """Drop the result of an earlier attempt that did not complete."""
+    """Drop the output of an earlier attempt that did not complete."""
     try:
         result = json.loads((output / RESULT).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         result = {}
     if result.get("status") != "completed":
         (workspace / FINISHED_MARKER).unlink(missing_ok=True)
-        (output / RESULT).unlink(missing_ok=True)
+        shutil.rmtree(output, ignore_errors=True)
 
 
 def run_hosted(args: argparse.Namespace) -> int:
