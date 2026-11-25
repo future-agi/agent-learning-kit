@@ -2745,16 +2745,20 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
         metadata={"browser": {"state": "started", "state_path": str(state), "record_path": str(record)}},
     )
     adapter = Kinds()
-    # The door's log as the trial seals it: the proxy's per-host counts of the browser's refusals.
-    proxied = [
-        {"host": "www.example.com", "method": "GET", "via": "browser", "count": 3},
-        {"host": "fonts.example.com", "method": "CONNECT", "via": "browser", "count": 4},
-    ]
     from fi.alk.harness.call_runner import TrialRecords
+    from fi.alk.harness.world_door import EGRESS_BLOCKED
 
+    # The door's log as the proxy writes it: one refused row for each of the browser's requests off the list. The
+    # agent's blocked list is built from it, never from the world's records, which carry only the tables' changes.
+    def refused(host: str, method: str) -> dict[str, Any]:
+        return {"actor_id": "agent", "outcome": "refused", "refusal_code": EGRESS_BLOCKED,
+                "arguments": {"host": host, "method": method, "via": "browser"}}
+
+    log = [refused("www.example.com", "GET")] * 3 + [refused("fonts.example.com", "CONNECT")] * 4
+    monkeypatch.setattr(chat, "_trial_log", lambda *_args, **_kwargs: list(log))
     monkeypatch.setattr(
         TrialRecords, "end",
-        lambda self, *_args, **_kwargs: {"state_changes": [{"who": "agent", "attempted": 0, "blocked": proxied}]},
+        lambda self, *_args, **_kwargs: {"records": {"changes": [], "skipped": [], "truncated": 0}, "start": None},
     )
     outcome = asyncio.run(
         chat.HostedChatCallRunner(adapter, _context(tmp_path)).run(
