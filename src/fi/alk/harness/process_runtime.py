@@ -80,7 +80,7 @@ from .world_roles import (
     world_role_name,
 )
 from .egress_proxy import EgressProxy
-from .world_door import HARNESS_TABLES_DDL, PostgresLog
+from .world_door import HARNESS_TABLES_DDL, PINNED_SEARCH_PATH, SEED_SENTINEL_QUERY, PostgresLog
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -3330,6 +3330,8 @@ def default_sql_runner(
         password=password,
         dbname=dbname,
         autocommit=True,
+        # The harness's own statements: nothing in `public` stands in for the system's code (`PINNED_SEARCH_PATH`).
+        options=PINNED_SEARCH_PATH,
     ) as connection:
         if read_only:
             connection.execute("SET default_transaction_read_only = on")
@@ -4443,6 +4445,11 @@ def apply_store_seed(
 # --- §2c sentinel checking ---------------------------------------------------------------------
 
 
+# The seed's sentinel as a bundle sealed before the harness named its tables with their schema asks it; the harness
+# runs it on the system's own search path, where only the schema-named table is found.
+_LEGACY_SENTINEL_QUERIES = {"SELECT id FROM harness_seed_sentinel WHERE id='ready'": SEED_SENTINEL_QUERY}
+
+
 def check_sentinel(
     store: StoreEntry,
     *,
@@ -4476,7 +4483,7 @@ def check_sentinel(
             user=credentials.username,
             password=credentials.password,
             dbname=dbname,
-            statement=sentinel.query,  # type: ignore[arg-type]
+            statement=_LEGACY_SENTINEL_QUERIES.get(str(sentinel.query), sentinel.query),  # type: ignore[arg-type]
             read_only=True,  # N8, p6-review-r2: customer-authored content, §2c calls this a read.
         )
         actual = str(rows[0][0]) if rows and rows[0] else None
@@ -4940,7 +4947,7 @@ def _measure_postgres_row_counts(
             user=credentials.username,
             password=credentials.password,
             dbname=dbname,
-            statement=f'SELECT COUNT(*) FROM "{safe_table}"',
+            statement=f'SELECT COUNT(*) FROM public."{safe_table}"',
             read_only=True,  # N8, p6-review-r2.
         )
         counts[table] = int(result[0][0]) if result and result[0] else 0
@@ -5994,7 +6001,7 @@ def _grant_world_role_group(
         "END IF; END $$",
     )
     tables = [*DOOR_TABLE_RIGHTS, *HARNESS_ONLY_TABLES]
-    names = ", ".join(f"'{table}'" for table in tables)
+    names = ", ".join(f"'public.{table}'" for table in tables)
     # The tables and the sequences behind their columns (the log's id): nobody but the harness and the door.
     run(
         baseline_db,
@@ -6009,12 +6016,12 @@ def _grant_world_role_group(
     for table, rights in DOOR_TABLE_RIGHTS.items():
         run(
             baseline_db,
-            f"DO $$ BEGIN IF to_regclass('{table}') IS NOT NULL THEN "
-            f"GRANT {rights} ON {table} TO {door_group}; END IF; END $$",
+            f"DO $$ BEGIN IF to_regclass('public.{table}') IS NOT NULL THEN "
+            f"GRANT {rights} ON public.{table} TO {door_group}; END IF; END $$",
         )
     run(
         baseline_db,
-        "DO $$ DECLARE q text := pg_get_serial_sequence('_alk_tool_trace', 'id'); BEGIN "
+        "DO $$ DECLARE q text := pg_get_serial_sequence('public._alk_tool_trace', 'id'); BEGIN "
         f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); "
         "END IF; END $$",
     )
@@ -6364,8 +6371,8 @@ def _run_canary_probe(
             password=credentials.password,
             dbname="w0",
             statement=(
-                f'CREATE TABLE "{_CONFORMANCE_CANARY_NAME}" (marker text); '
-                f"INSERT INTO \"{_CONFORMANCE_CANARY_NAME}\" VALUES ('{_CONFORMANCE_MARKER}')"
+                f'CREATE TABLE public."{_CONFORMANCE_CANARY_NAME}" (marker text); '
+                f"INSERT INTO public.\"{_CONFORMANCE_CANARY_NAME}\" VALUES ('{_CONFORMANCE_MARKER}')"
             ),
         )
         rows = _call_sql(
@@ -6377,7 +6384,7 @@ def _run_canary_probe(
             user=credentials.username,
             password=credentials.password,
             dbname="w1",
-            statement=f"SELECT to_regclass('{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
+            statement=f"SELECT to_regclass('public.{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
             read_only=True,  # N8, p6-review-r2.
         )
         return not (rows and rows[0] and rows[0][0])
@@ -6470,7 +6477,7 @@ def _verify_canary_absent(
             user=credentials.username,
             password=credentials.password,
             dbname="w0",
-            statement=f"SELECT to_regclass('{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
+            statement=f"SELECT to_regclass('public.{_CONFORMANCE_CANARY_NAME}') IS NOT NULL",
             read_only=True,  # N8, p6-review-r2.
         )
         return not (rows and rows[0] and rows[0][0])

@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
@@ -31,6 +31,20 @@ from fi.alk.harness.world_door import HARNESS_TABLES_DDL, PostgresLog
 from fi.alk.harness.world_roles import seed_escalation_queries
 
 _CREDENTIALS = pr.EngineCredentials("harness", "pw", world_secret="job-secret")
+
+
+def _customer_sql(
+    *, host: str, port: int, user: str, password: str, dbname: str, statement: str, read_only: bool = False
+) -> list:
+    """A source's or seed's own SQL, as `psql` runs it: on the default search path, unlike the harness's own runner."""
+    with psycopg.connect(
+        host=host, port=port, user=user, password=password, dbname=dbname, autocommit=True
+    ) as connection:
+        cursor = connection.execute(statement)
+        try:
+            return cursor.fetchall()
+        except psycopg.ProgrammingError:
+            return []
 
 
 def _recording() -> tuple[list[str], object]:
@@ -203,7 +217,7 @@ def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(tmp_path:
     assert "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC" in statements[:sealed]
     assert not [s for s in statements if "GRANT CREATE" in s or "GRANT ALL" in s]
     # Each trial's tables are made before the baseline's tables are measured, so a world counts them like its own.
-    made = [i for i, s in enumerate(statements) if s.startswith("CREATE TABLE IF NOT EXISTS _alk_trial_faults")]
+    made = [i for i, s in enumerate(statements) if s.startswith("CREATE TABLE IF NOT EXISTS public._alk_trial_faults")]
     measured = next(i for i, s in enumerate(statements) if s.startswith("SELECT tablename FROM pg_tables"))
     assert made and made[0] < measured < granted
 
@@ -253,7 +267,7 @@ def worlds():
     baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
 
     def run(dbname: str, statement: str) -> None:
-        pr.default_sql_runner(
+        _customer_sql(
             host=host,
             port=port,
             user=superuser.username,
@@ -544,7 +558,7 @@ def door_worlds(monkeypatch):
         made.append(baseline)
 
         def run(dbname: str, statement: str) -> None:
-            pr.default_sql_runner(
+            _customer_sql(
                 host=host, port=port, user=superuser.username, password=superuser.password,
                 dbname=dbname, statement=statement,
             )
@@ -597,7 +611,7 @@ def door_worlds(monkeypatch):
     yield make
     world_door._TRIAL_SCHEMA_MADE.clear()
     for index in (0, 1):
-        pr.default_sql_runner(
+        _customer_sql(
             host=host, port=port, user=parts.username, password=parts.password or "", dbname="postgres",
             statement=f'DROP DATABASE IF EXISTS "w{index}" WITH (FORCE)',
         )
@@ -606,7 +620,7 @@ def door_worlds(monkeypatch):
             f'ALTER DATABASE "{baseline}" WITH IS_TEMPLATE false',
             f'DROP DATABASE IF EXISTS "{baseline}"',
         ):
-            pr.default_sql_runner(
+            _customer_sql(
                 host=host, port=port, user=parts.username, password=parts.password or "", dbname="postgres",
                 statement=statement,
             )
@@ -795,7 +809,7 @@ def test_a_seed_that_escalates_fails_the_build_against_a_real_server(planted, un
     baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
 
     def run(dbname: str, statement: str) -> None:
-        pr.default_sql_runner(
+        _customer_sql(
             host=host, port=port, user=superuser.username, password=superuser.password, dbname=dbname,
             statement=statement,
         )
@@ -911,7 +925,7 @@ def _migrated(migration: str, seed: str, *, alk_table: bool = False, adopt: bool
 
     def run(creds, dbname: str, statement: str):
         if statement:
-            return pr.default_sql_runner(
+            return _customer_sql(
                 host=host, port=port, user=creds.username, password=creds.password, dbname=dbname, statement=statement,
             )
         return None
@@ -970,7 +984,7 @@ def build_authored_store(
                "sql_runner": pr.default_sql_runner, "process_name": "db"}
 
     def run(dbname: str, statement: str):
-        return pr.default_sql_runner(
+        return _customer_sql(
             host=parts.hostname or "localhost", port=parts.port or 5432, user=superuser.username,
             password=superuser.password, dbname=dbname, statement=statement,
         )
@@ -1325,6 +1339,55 @@ def test_every_door_process_writes_the_world_s_rows_with_the_world_s_role(monkey
     assert opened == ["world-url", "door-url"]
 
 
+@real_postgres
+def test_a_domain_typed_shadow_a_migration_planted_never_runs_in_the_harness_s_own_sessions():
+    """E3: a migration's `public.format(public.dt, text)` takes only a domain over a system type, so no name check
+    can call it a shadow, and on the default search path it wins `format('...', text)` in the harness's grants. The
+    harness's sessions run on the system's own path, where it is never found."""
+    shadow = (
+        "CREATE DOMAIN public.dt AS text; CREATE FUNCTION public.format(public.dt, text) RETURNS text "
+        "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'shadow ran'; END $$"
+    )
+    superuser, _migrator, baseline, checked, before, run = _migrated(author._TOOL_TRACE_DDL + shadow, "")
+    try:
+        pr._refuse_seed_escalation(**checked, before_seed=before)
+        pr._make_harness_tables(**checked)
+        pr._grant_world_role_group(**checked, door=True)
+        assert run(superuser, baseline, f"SELECT has_table_privilege('{pr.DOOR_ROLE_GROUP}', "
+                   "'public._alk_tool_trace', 'INSERT')") == [(True,)]
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_harness_tables_in_a_schema_named_after_the_superuser_never_stand_in_for_the_harness_s_own():
+    """E1-b: a migration makes a schema named as the superuser (first on its default path, `$user`) and harness
+    tables in it. The harness still makes and writes its own in `public`."""
+    name = urlsplit(_REAL).username
+    planted = (
+        f'CREATE SCHEMA "{name}"; '
+        f'CREATE TABLE "{name}"._alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL); '
+        f'CREATE TABLE "{name}"._alk_tool_trace (id bigserial PRIMARY KEY, name text)'
+    )
+    superuser, _migrator, baseline, checked, before, run = _migrated(planted + ";\n" + author._TOOL_TRACE_DDL, "")
+    try:
+        pr._refuse_seed_escalation(**checked, before_seed=before)
+        pr._make_harness_tables(**checked)
+        made = run(superuser, baseline, "SELECT to_regclass('public._alk_trial_faults') IS NOT NULL")
+        assert made == [(True,)]
+        url = urlunsplit(urlsplit(_REAL)._replace(path=f"/{baseline}"))
+        world_door.PostgresLog(url).write(
+            {"name": "x", "arguments": {}, "result": None, "ok": True, "error": "", "at": 1.0, "action_id": "a1",
+             "outcome": "committed", "actor_id": "agent"}
+        )
+        counts = run(superuser, baseline, f'SELECT (SELECT count(*) FROM public._alk_tool_trace), '
+                     f'(SELECT count(*) FROM "{name}"._alk_tool_trace)')
+        assert counts == [(1, 0)]
+    finally:
+        run(superuser, baseline, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+        _dropped(superuser, baseline, run)
+
+
 def _pg_dump_schema(owner: str) -> str:
     """A schema file as `pg_dump --schema-only` writes it, owners and the plpgsql comment included."""
     return (
@@ -1472,7 +1535,7 @@ def test_a_grant_to_public_changes_a_function_s_fingerprint():
 
 def _as_superuser(dbname: str, statement: str) -> None:
     parts = urlsplit(_REAL)
-    pr.default_sql_runner(
+    _customer_sql(
         host=parts.hostname or "localhost",
         port=parts.port or 5432,
         user=parts.username,

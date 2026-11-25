@@ -77,9 +77,10 @@ def _execute(
     finally:
         try:
             # The world's own call log, as the tool proxy keeps it: what reached the world.
-            with psycopg.connect(database_url, autocommit=True) as log:
+            # The door's role, on the system's own search path (`world_door.PINNED_SEARCH_PATH`; this file ships alone).
+            with psycopg.connect(database_url, autocommit=True, options="-c search_path=pg_catalog,pg_temp") as log:
                 log.execute(
-                    "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
+                    "INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at) "
                     "VALUES (%s, %s, %s, %s, %s, %s)",
                     (
                         tool_name,

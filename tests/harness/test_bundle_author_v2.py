@@ -6409,12 +6409,12 @@ def test_a_world_without_actors_gets_the_full_action_log(tmp_path: Path) -> None
 
     without = _action_log_seed(tmp_path)
     assert "actor_id text" in without and "outcome text" in without and "effect text" in without
-    assert "INSERT INTO _alk_actors" not in without
+    assert "INSERT INTO public._alk_actors" not in without
     (tmp_path / "actors.json").write_text(
         '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
     )
     with_actors = _action_log_seed(tmp_path)
-    assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
+    assert "actor_id text" in with_actors and "INSERT INTO public._alk_actors" in with_actors
 
 
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).

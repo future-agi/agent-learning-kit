@@ -71,6 +71,7 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
+    pinned_options,
     NOT_STOPPED,
     door_failure,
     world_failed,
@@ -381,7 +382,7 @@ def _held_rows(dsn: str) -> list[dict[str, Any]]:
     """The door's latest rows that carry a fault: only what the hold is read from, bounded in rows and time."""
     with _read_only(dsn, timeout_ms=500) as connection:
         cursor = connection.execute(
-            f'SELECT at, fault FROM "{_TOOL_TRACE_TABLE}" WHERE fault IS NOT NULL '  # noqa: S608 - fixed identifier
+            f'SELECT at, fault FROM public."{_TOOL_TRACE_TABLE}" WHERE fault IS NOT NULL '  # noqa: S608 - fixed identifier
             f"ORDER BY at DESC LIMIT {_HOLD_ROWS}"
         )
         return [{"at": at, "fault": fault} for at, fault in cursor.fetchall()]
@@ -1079,11 +1080,11 @@ def _clear_tool_trace_calls(dsn: str) -> None:
     try:
         import psycopg
 
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
-            connection.execute(f'DELETE FROM "{_TOOL_TRACE_TABLE}"')  # noqa: S608 - fixed identifier, no interpolated user input
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            connection.execute(f'DELETE FROM public."{_TOOL_TRACE_TABLE}"')  # noqa: S608 - fixed identifier, no interpolated user input
             # The keys actors' actions claimed go with the rows they guard.
             connection.execute(
-                "DO $$ BEGIN IF to_regclass('_alk_action_keys') IS NOT NULL THEN DELETE FROM _alk_action_keys; END IF; END $$"
+                "DO $$ BEGIN IF to_regclass('public._alk_action_keys') IS NOT NULL THEN DELETE FROM public._alk_action_keys; END IF; END $$"
             )
     except Exception as exc:  # noqa: BLE001 - best-effort housekeeping only, never a call-blocking failure
         # WHY: never log exc_info / str(exc) here -- a psycopg connection failure embeds the raw
@@ -1230,12 +1231,12 @@ def _read_only(dsn: str, timeout_ms: int | None = None) -> Any:
     options = "-c default_transaction_read_only=on"
     if timeout_ms is not None:
         options += f" -c statement_timeout={timeout_ms}"
-    return psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=options)
+    return psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=pinned_options(options))
 
 
 def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
     cursor = connection.execute(
-        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
+        f'SELECT * FROM public."{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
     )
     columns = [description[0] for description in cursor.description or []]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
@@ -1762,7 +1763,7 @@ def trial_faults_readable(dsn: str) -> bool:
     """Whether the faults this runner wrote for the trial read back as the door reads them: a list of faults."""
     try:
         with _read_only(dsn) as connection:
-            row = connection.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
+            row = connection.execute("SELECT faults FROM public._alk_trial_faults WHERE id = 1").fetchone()
     except Exception as exc:  # noqa: BLE001 - whatever broke, the door could not have read them either
         logger.warning("trial faults unreadable: %s", type(exc).__name__)
         return False
@@ -1939,9 +1940,9 @@ def read_trial_deadlines(address: str) -> tuple[float | None, dict[str, float]]:
     import psycopg
 
     try:
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             row = connection.execute(
-                "SELECT worker_deadline_at, worker_deadlines FROM _alk_trial_faults WHERE id = 1"
+                "SELECT worker_deadline_at, worker_deadlines FROM public._alk_trial_faults WHERE id = 1"
             ).fetchone()
     except psycopg.Error:
         return None, {}
@@ -1973,16 +1974,16 @@ def read_worker_stops(runtime: EnvironmentRuntime, since: float | None = None) -
         import psycopg
         from psycopg import errors
 
-        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             connection.execute(f"SET lock_timeout = '{_SEAL_LOCK_TIMEOUT}'")
             try:
                 # No DDL here: an ALTER would lock the table, and the row lock is what orders a stop and the seal.
-                connection.execute("UPDATE _alk_trial_faults SET sealed_at = %s WHERE id = 1", (time.time(),))
+                connection.execute("UPDATE public._alk_trial_faults SET sealed_at = %s WHERE id = 1", (time.time(),))
             except (errors.UndefinedTable, errors.UndefinedColumn):
                 # No trial row this harness wrote (it adds the column with the row): no stop can be claimed either.
                 pass
             rows = connection.execute(
-                "SELECT worker, process, at, reason FROM _alk_worker_stops ORDER BY at ASC"
+                "SELECT worker, process, at, reason FROM public._alk_worker_stops ORDER BY at ASC"
             ).fetchall()
     except Exception as exc:  # noqa: BLE001 - a seal that timed out on a stop under way, or a world out of reach
         logger.warning("worker stops could not be sealed: %s", type(exc).__name__)
@@ -2033,8 +2034,8 @@ def read_worker_runs(runtime: EnvironmentRuntime, since: float | None = None) ->
     def read() -> set[str]:
         import psycopg
 
-        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
-            rows = connection.execute("SELECT worker, at FROM _alk_worker_runs").fetchall()
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            rows = connection.execute("SELECT worker, at FROM public._alk_worker_runs").fetchall()
         return {
             str(worker)
             for worker, at in rows
@@ -2056,9 +2057,9 @@ def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
         def clear() -> None:
             import psycopg
 
-            with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
-                connection.execute("DELETE FROM _alk_worker_stops")
-                connection.execute("DELETE FROM _alk_worker_runs")
+            with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+                connection.execute("DELETE FROM public._alk_worker_stops")
+                connection.execute("DELETE FROM public._alk_worker_runs")
 
         _on_trial_tables(database.address, clear)
     except Exception as exc:  # noqa: BLE001 - a world database out of reach never fails a trial that stops no one
@@ -2086,9 +2087,9 @@ def _write_trial_state(
     import psycopg
 
     def write() -> None:
-        with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             connection.execute(
-                "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at, "
+                "INSERT INTO public._alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at, "
                 "started_at) VALUES (1, %s::jsonb, %s, %s::jsonb, NULL, %s) ON CONFLICT (id) DO UPDATE SET "
                 "faults = EXCLUDED.faults, worker_deadline_at = EXCLUDED.worker_deadline_at, "
                 "worker_deadlines = EXCLUDED.worker_deadlines, sealed_at = NULL, started_at = EXCLUDED.started_at",

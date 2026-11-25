@@ -527,28 +527,28 @@ SHARED_ADDRESS = "shared_address"
 
 # Kept in the world's database, never in a file the agent's process could read or rewrite.
 # Known limit: a connection with the world's role can write it until per-user database isolation is on.
-TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
+TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS public._alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 # When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
-TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
+TRIAL_DEADLINE_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
 # Each named worker's own deadline, {worker id: epoch seconds}, when the scenario gives a budget per worker.
-TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
+TRIAL_WORKER_DEADLINES_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadlines JSONB"
 # When this trial's call read its stopped workers to seal them; a worker's process is never ended after it, so a stop
 # is sealed or never made. Null until then, and again at each trial's start.
-TRIAL_SEALED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
+TRIAL_SEALED_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS sealed_at DOUBLE PRECISION"
 # When this trial started: a stop row from before it is an earlier trial's, left by a clear that failed.
-TRIAL_STARTED_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS started_at DOUBLE PRECISION"
+TRIAL_STARTED_DDL = "ALTER TABLE public._alk_trial_faults ADD COLUMN IF NOT EXISTS started_at DOUBLE PRECISION"
 
 
 # The workers the harness stopped in this trial, written by whoever ended a worker past its deadline (the scheduler ends
 # its process, the in-process door its task); cleared at each trial's start.
 WORKER_STOPS_DDL = (
-    "CREATE TABLE IF NOT EXISTS _alk_worker_stops "
+    "CREATE TABLE IF NOT EXISTS public._alk_worker_stops "
     "(worker TEXT PRIMARY KEY, process TEXT NOT NULL, at DOUBLE PRECISION NOT NULL, reason TEXT NOT NULL)"
 )
 
 # The workers the in-process door saw run as a task of their own this trial, so ones it could stop at their deadline;
 # only the run shows how the framework runs a worker. Cleared at each trial's start.
-WORKER_RUNS_DDL = "CREATE TABLE IF NOT EXISTS _alk_worker_runs (worker TEXT PRIMARY KEY, at DOUBLE PRECISION NOT NULL)"
+WORKER_RUNS_DDL = "CREATE TABLE IF NOT EXISTS public._alk_worker_runs (worker TEXT PRIMARY KEY, at DOUBLE PRECISION NOT NULL)"
 
 # This trial's tables in the order they are made, and the columns they then have.
 TRIAL_TABLES_DDL = (
@@ -562,7 +562,7 @@ def ddl_columns(*statements: str) -> dict[str, tuple[str, ...]]:
     this module writes them) have run, read from the statements themselves so no list is kept beside them."""
     columns: dict[str, list[str]] = {}
     for statement in (one.strip() for text in statements for one in text.split(";") if one.strip()):
-        created = re.match(r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*)\)\s*$", statement, re.S)
+        created = re.match(r"CREATE TABLE IF NOT EXISTS (?:public\.)?(\w+)\s*\((.*)\)\s*$", statement, re.S)
         if created:
             depth, part, parts = 0, "", []
             for char in created.group(2):
@@ -576,7 +576,9 @@ def ddl_columns(*statements: str) -> dict[str, tuple[str, ...]]:
             names = [one.split()[0] for one in parts if one.split() and one.split()[0].upper() not in _TABLE_CONSTRAINTS]
             columns.setdefault(created.group(1), []).extend(names)
             continue
-        for table, column in re.findall(r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+)", statement):
+        for table, column in re.findall(
+            r"ALTER TABLE (?:public\.)?(\w+) ADD COLUMN IF NOT EXISTS (\w+)", statement
+        ):
             columns.setdefault(table, []).append(column)
     return {table: tuple(names) for table, names in columns.items()}
 
@@ -585,12 +587,27 @@ _TABLE_CONSTRAINTS = frozenset({"PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN", "C
 _TRIAL_TABLE_COLUMNS = ddl_columns(*TRIAL_TABLES_DDL)
 
 
+# Every session the harness or the door opens as the superuser or the door's role: nothing a source or seed defines
+# in `public` (a function, operator or table named like one of ours) can stand in for the system's own, so every
+# harness table is named with its schema (`public._alk_*`).
+PINNED_SEARCH_PATH = "-c search_path=pg_catalog,pg_temp"
+
+
+def pinned_options(options: str = "") -> str:
+    """Connection options with the pinned search path added."""
+    return f"{options} {PINNED_SEARCH_PATH}".strip()
+
+
+# The baseline's seed sentinel, the harness's own table, named with its schema.
+SEED_SENTINEL_QUERY = "SELECT id FROM public.harness_seed_sentinel WHERE id='ready'"
+
+
 def _tables_made(connection: Any, tables: Mapping[str, Sequence[str]]) -> bool:
     """Whether each table already exists with its columns. Read from the catalog, which any role may read: Postgres
     refuses even `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` to a role that does not own the table."""
     rows = connection.execute(
         "SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
-        "WHERE c.oid IN (SELECT to_regclass(t) FROM unnest(%s::text[]) AS t) AND a.attnum > 0 AND NOT a.attisdropped",
+        "WHERE c.oid IN (SELECT to_regclass('public.' || t) FROM unnest(%s::text[]) AS t) AND a.attnum > 0 AND NOT a.attisdropped",
         (list(tables),),
     ).fetchall()
     found: dict[str, set[str]] = {}
@@ -615,7 +632,7 @@ def _trial_schema(address: str) -> None:
             return
         import psycopg
 
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             # Made in the world's template: a door's own role, which owns none of them, uses them as they are.
             if not _tables_made(connection, _TRIAL_TABLE_COLUMNS):
                 for statement in TRIAL_TABLES_DDL:
@@ -658,10 +675,10 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
     import psycopg
 
     def claim() -> bool:
-        with psycopg.connect(address, connect_timeout=5) as connection:
+        with psycopg.connect(address, connect_timeout=5, options=pinned_options()) as connection:
             with connection.transaction():
                 row = connection.execute(
-                    "SELECT sealed_at, worker_deadline_at, worker_deadlines, started_at FROM _alk_trial_faults WHERE id = 1 "
+                    "SELECT sealed_at, worker_deadline_at, worker_deadlines, started_at FROM public._alk_trial_faults WHERE id = 1 "
                     "FOR UPDATE"
                 ).fetchone()
                 if row is None or row[0] is not None:
@@ -678,7 +695,7 @@ def claim_worker_stop(address: str, worker: str, process: str, stop: Callable[[]
                 # an earlier trial's row (left by a clear that failed, so from before this trial started) is replaced
                 # whole by this stop, so this trial's seal reads only what happened in it.
                 connection.execute(
-                    "INSERT INTO _alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
+                    "INSERT INTO public._alk_worker_stops (worker, process, at, reason) VALUES (%s, %s, %s, %s) "
                     "ON CONFLICT (worker) DO UPDATE SET process = EXCLUDED.process, at = EXCLUDED.at, reason = CASE "
                     "WHEN _alk_worker_stops.reason = %s AND _alk_worker_stops.at >= %s THEN _alk_worker_stops.reason "
                     "ELSE EXCLUDED.reason END",
@@ -694,10 +711,10 @@ def mark_worker_run(address: str, worker: str) -> None:
     import psycopg
 
     def mark() -> None:
-        with psycopg.connect(address, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
             connection.execute(
                 # An earlier trial's row, left by a clear that failed, takes this run's time, so this trial reads it.
-                "INSERT INTO _alk_worker_runs (worker, at) VALUES (%s, %s) "
+                "INSERT INTO public._alk_worker_runs (worker, at) VALUES (%s, %s) "
                 "ON CONFLICT (worker) DO UPDATE SET at = EXCLUDED.at",
                 (worker, time.time()),
             )
@@ -1550,16 +1567,16 @@ _BASIC = "name, arguments, result, ok, error, at"
 # Written when the table has them: how a call was made, the path it went to, and the scenario's fault the door applied on it.
 _CALL_COLUMNS = ("method", "fault", "endpoint")
 _CALL_COLUMNS_DDL = (
-    "ALTER TABLE IF EXISTS _alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
+    "ALTER TABLE IF EXISTS public._alk_tool_trace ADD COLUMN IF NOT EXISTS method text, ADD COLUMN IF NOT EXISTS fault jsonb, "
     "ADD COLUMN IF NOT EXISTS endpoint text"
 )
 # Each actor key a door claimed before its action ran, so no later door runs it again; beside the log, which a
 # failed write can leave without the row.
 _KEYS_TABLE_DDL = (
-    "CREATE TABLE IF NOT EXISTS _alk_action_keys "
+    "CREATE TABLE IF NOT EXISTS public._alk_action_keys "
     "(actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (actor_id, idempotency_key))"
 )
-_KEYS_RESPONSE_DDL = "ALTER TABLE _alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
+_KEYS_RESPONSE_DDL = "ALTER TABLE public._alk_action_keys ADD COLUMN IF NOT EXISTS response JSONB"
 _KEYS_DDL = f"{_KEYS_TABLE_DDL};{_KEYS_RESPONSE_DDL}"
 # The harness's own tables in a world, made on the baseline before the world role's grant: the grant then covers them
 # and every world copy has them. A world role can neither create a table nor alter one it does not own.
@@ -1583,11 +1600,11 @@ class PostgresLog:
         self._call_columns_tried = False
         self._keys_made = False
 
-    def _connect(self, **options: Any) -> Any:
+    def _connect(self, options: str = "") -> Any:
         import psycopg
 
         return psycopg.connect(
-            self.dsn, autocommit=True, connect_timeout=self.connect_seconds, **options
+            self.dsn, autocommit=True, connect_timeout=self.connect_seconds, options=pinned_options(options)
         )
 
     def _table_columns(self) -> frozenset[str]:
@@ -1595,7 +1612,7 @@ class PostgresLog:
         if self._columns is None:
             try:
                 with self._connect() as connection:
-                    cursor = connection.execute("SELECT * FROM _alk_tool_trace LIMIT 0")
+                    cursor = connection.execute("SELECT * FROM public._alk_tool_trace LIMIT 0")
                     self._columns = frozenset(one[0] for one in cursor.description or [])
             except Exception:  # noqa: BLE001 - unknown this time, asked again next time
                 return frozenset()
@@ -1649,13 +1666,13 @@ class PostgresLog:
         ]
         with self._connect() as connection:
             connection.execute(
-                f"INSERT INTO _alk_tool_trace({columns}) VALUES ({', '.join('%s' for _ in keys)})",  # noqa: S608 - fixed columns
+                f"INSERT INTO public._alk_tool_trace({columns}) VALUES ({', '.join('%s' for _ in keys)})",  # noqa: S608 - fixed columns
                 values,
             )
 
     def rows(self) -> list[dict[str, Any]]:
         with self._connect(options="-c default_transaction_read_only=on") as connection:
-            cursor = connection.execute("SELECT * FROM _alk_tool_trace ORDER BY at ASC")
+            cursor = connection.execute("SELECT * FROM public._alk_tool_trace ORDER BY at ASC")
             columns = [one[0] for one in cursor.description or []]
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
@@ -1663,7 +1680,7 @@ class PostgresLog:
         action = _ACTION if self._records_action() else "NULL"
         with self._connect() as connection:
             row = connection.execute(
-                f"SELECT {action}, arguments, result FROM _alk_tool_trace "  # noqa: S608 - a fixed column name
+                f"SELECT {action}, arguments, result FROM public._alk_tool_trace "  # noqa: S608 - a fixed column name
                 "WHERE idempotency_key = %s AND actor_id = %s AND outcome = 'committed' ORDER BY at LIMIT 1",
                 (key, actor),
             ).fetchone()
@@ -1671,7 +1688,7 @@ class PostgresLog:
                 return None
             self._keys_table(connection)
             kept = connection.execute(
-                "SELECT response FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+                "SELECT response FROM public._alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
             ).fetchone()
         return (row[0], row[1], row[2], kept[0] if kept and isinstance(kept[0], dict) else None)
 
@@ -1693,14 +1710,14 @@ class PostgresLog:
         with self._connect() as connection:
             self._keys_table(connection)
             row = connection.execute(
-                "INSERT INTO _alk_action_keys (actor_id, idempotency_key, state) VALUES (%s, %s, 'pending') "
+                "INSERT INTO public._alk_action_keys (actor_id, idempotency_key, state) VALUES (%s, %s, 'pending') "
                 "ON CONFLICT DO NOTHING RETURNING state",
                 (actor, key),
             ).fetchone()
             if row is not None:
                 return None
             found = connection.execute(
-                "SELECT state FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+                "SELECT state FROM public._alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
             ).fetchone()
         return str(found[0]) if found else "pending"
 
@@ -1708,12 +1725,12 @@ class PostgresLog:
         with self._connect() as connection:
             if state is None:
                 connection.execute(
-                    "DELETE FROM _alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
+                    "DELETE FROM public._alk_action_keys WHERE actor_id = %s AND idempotency_key = %s", (actor, key)
                 )
             else:
                 self._keys_table(connection)
                 connection.execute(
-                    "UPDATE _alk_action_keys SET state = %s, response = %s::jsonb "
+                    "UPDATE public._alk_action_keys SET state = %s, response = %s::jsonb "
                     "WHERE actor_id = %s AND idempotency_key = %s",
                     (state, json.dumps(response) if response is not None else None, actor, key),
                 )
@@ -1741,7 +1758,7 @@ class PostgresLog:
             row = connection.execute(
                 "SELECT COALESCE(SUM(CASE WHEN error = %s AND jsonb_typeof(arguments -> 'count') = 'number' "
                 "THEN GREATEST((arguments ->> 'count')::numeric::int, 1) ELSE 1 END), 0) "
-                f"FROM _alk_tool_trace WHERE {match}{clause}",
+                f"FROM public._alk_tool_trace WHERE {match}{clause}",
                 (DOOR_OUT_OF_REACH, *params, *extra),
             ).fetchone()
         return int(row[0]) if row else 0
@@ -1757,10 +1774,10 @@ class PostgresRoster:
         import psycopg
 
         with psycopg.connect(
-            self.dsn, autocommit=True, connect_timeout=5
+            self.dsn, autocommit=True, connect_timeout=5, options=pinned_options()
         ) as connection:
             row = connection.execute(
-                "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s",
+                "SELECT permitted_actions, on_behalf_of FROM public._alk_actors WHERE id = %s",
                 (actor_id,),
             ).fetchone()
         return {"permitted_actions": row[0], "on_behalf_of": row[1]} if row else None

@@ -127,30 +127,32 @@ def test_an_allowed_https_connect_is_tunnelled(upstream) -> None:
 
 @pytest.fixture()
 def world_log():
-    """A fresh `_alk_tool_trace` in its own schema of the test database; yields (dsn, rows)."""
+    """A fresh `public._alk_tool_trace` in a database of its own on the test server; yields (dsn, rows)."""
     dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
     if not dsn:
         pytest.skip("set ALK_TEST_POSTGRES_DSN to run the controlled-run egress test")
+    from urllib.parse import urlsplit, urlunsplit
+
     import psycopg
 
-    schema = f"egress_{uuid.uuid4().hex[:12]}"
+    database = f"egress_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(dsn, autocommit=True) as connection:
-        connection.execute(f"CREATE SCHEMA {schema}")
-        connection.execute(f"SET search_path TO {schema}")
+        connection.execute(f'CREATE DATABASE "{database}"')
+    own = urlunsplit(urlsplit(dsn)._replace(path=f"/{database}"))
+    with psycopg.connect(own, autocommit=True) as connection:
         connection.execute(_TOOL_TRACE_DDL)
 
     def rows() -> list[dict]:
-        with psycopg.connect(dsn, autocommit=True) as connection:
-            query = f"SELECT * FROM {schema}._alk_tool_trace ORDER BY at"  # noqa: S608 - the test's own schema
-            cursor = connection.execute(query)
+        with psycopg.connect(own, autocommit=True) as connection:
+            cursor = connection.execute("SELECT * FROM public._alk_tool_trace ORDER BY at")
             columns = [one[0] for one in cursor.description]
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
     try:
-        yield f"{dsn}?options=-csearch_path%3D{schema}", rows
+        yield own, rows
     finally:
         with psycopg.connect(dsn, autocommit=True) as connection:
-            connection.execute(f"DROP SCHEMA {schema} CASCADE")
+            connection.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
 
 
 _AGENT = """

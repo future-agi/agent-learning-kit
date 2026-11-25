@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:  # Beside the proxy in a bundle; the harness package when run from source.
     from world_door import (
+        pinned_options,
         AGENT,
         HttpExecutor,
         PostgresLog,
@@ -38,6 +39,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
     )
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
+        pinned_options,
         AGENT,
         HttpExecutor,
         PostgresLog,
@@ -100,9 +102,11 @@ def _trial_row(column: str, *, strict: bool = False) -> tuple | None:
             if _FAULTS_CONNECTION is None or _FAULTS_CONNECTION.closed:
                 import psycopg
 
-                _FAULTS_CONNECTION = psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=5)
+                _FAULTS_CONNECTION = psycopg.connect(
+                    DATABASE_URL, autocommit=True, connect_timeout=5, options=pinned_options()
+                )
             return _FAULTS_CONNECTION.execute(
-                f"SELECT {column} FROM _alk_trial_faults WHERE id = 1"  # noqa: S608 - a fixed column name
+                f"SELECT {column} FROM public._alk_trial_faults WHERE id = 1"  # noqa: S608 - a fixed column name
             ).fetchone()
         except Exception as exc:  # noqa: BLE001 - no table or column: nothing was ever set this trial
             if strict and type(exc).__name__ not in {"UndefinedTable", "UndefinedColumn"}:
