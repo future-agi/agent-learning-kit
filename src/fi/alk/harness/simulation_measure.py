@@ -108,6 +108,17 @@ _flagged_calls: set = set()
 _write = None
 
 
+def _after_fork() -> None:
+    # The thread holding the old lock and the parent's watcher may not exist here.
+    global _lock
+    _lock = threading.Lock()
+    _state["watching"] = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork)
+
+
 def register(patches: dict, write, mark) -> bool:
     """Add this module's patches to the mark hook's, when the sandbox asks for measuring, names
     where its spans go, and gives the simulation's mark: the resource pairs (the mark and the
