@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import os
 import random
+import sys
 
 import pytest
 
 from fi.alk.harness.checks import run_check, run_world_check
 from fi.alk.harness.folder import apply_setup, check_ready
 from fi.alk.harness.scenario import Scenario
+from fi.alk.harness.world import handler_host
+from fi.alk.harness.world.handle import HostedWorld
 from fi.alk.harness.world.runtime import Call, GeneratedWorld
 
 
@@ -212,3 +215,116 @@ def test_isolated_check_preserves_in_process_verdicts(monkeypatch, body: str) ->
         local.said,
         local.broken,
     )
+
+
+class _Rows:
+    """The little of a hosted world's store these checks read."""
+
+    def query(self, *_args):
+        return []
+
+    def read_log(self, *_args):
+        return []
+
+    def state(self, only=None):
+        return {}
+
+
+def _hosted(**extra) -> HostedWorld:
+    return HostedWorld(
+        _Rows(), 0, random.Random(0), {}, _validate_baseline=False, **extra
+    )
+
+
+def test_a_submitted_agents_hosted_check_runs_in_process_with_every_helper(
+    monkeypatch,
+) -> None:
+    """The hosted image turns handler isolation on for every job. Only a release's code is
+    authored with its environment; a submitted agent's live proof reads the whole world handle
+    and every call field, as it did before."""
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    world = _hosted()
+    calls = [
+        Call(name="ask", arguments={}, ok=None, refused=None, error=None, worker_id="w1")
+    ]
+    source = (
+        "def check(world, calls, reference):\n"
+        "    if repeated_commits(world, reference) or committed_writes(world):\n"
+        "        return 'a write'\n"
+        "    if world.events() != []:\n"
+        "        return 'an event'\n"
+        "    if calls[0].ok is not None or calls[0].worker_id != 'w1':\n"
+        "        return f'{calls[0].ok!r} {calls[0].worker_id!r}'\n"
+    )
+
+    outcome = run_check(source, world, calls)
+    applied = apply_setup(
+        Scenario(
+            name="s",
+            setup_code="def setup(world):\n    return str(callable(world.write_file))\n",
+        ),
+        world,
+    )
+
+    assert outcome.held, outcome.said
+    assert applied.said == "True"
+
+
+def test_a_releases_hosted_code_is_isolated(monkeypatch) -> None:
+    monkeypatch.setenv("BUILDER_REVIEW_CANARY", "visible-secret")
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    source = (
+        "import os\n"
+        "def check(world, calls):\n"
+        "    return os.environ.get('BUILDER_REVIEW_CANARY')\n"
+    )
+
+    assert run_check(source, _hosted(isolated=True), []).held
+    assert not run_check(source, _hosted(), []).held
+
+
+def test_an_isolated_check_reads_a_step_that_did_not_run_as_neither_ok_nor_failed(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    source = (
+        "def check(world, calls):\n"
+        "    seen = [call.ok for call in calls]\n"
+        "    return None if seen == [None, True, False] else str(seen)\n"
+    )
+
+    outcome = run_check(
+        source,
+        _world(),
+        [Call(name="ask", arguments={}, ok=ok) for ok in (None, True, False)],
+    )
+
+    assert outcome.held, outcome.said
+
+
+def test_a_child_that_cannot_run_is_not_the_authors_broken_check(monkeypatch) -> None:
+    """A verdict from a child that never ran would also prove a check that has to fail."""
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    monkeypatch.setattr(
+        handler_host,
+        "_command",
+        lambda _mode: [sys.executable, "-c", "raise SystemExit('no namespace here')"],
+    )
+    with pytest.raises(handler_host.HandlerHostError, match="no namespace here"):
+        run_check("def check(world, calls):\n    return None\n", _world(), [])
+    with pytest.raises(handler_host.HandlerHostError):
+        apply_setup(
+            Scenario(name="s", setup_code="def setup(world):\n    pass\n"), _world()
+        )
+
+
+def test_a_check_that_never_finishes_is_no_verdict() -> None:
+    with pytest.raises(handler_host.HandlerTimeout):
+        handler_host.run_authored(
+            "def check(world, calls):\n    while True:\n        pass\n",
+            _world(),
+            kind="check",
+            name="spin",
+            mode="process",
+            timeout=1.0,
+        )

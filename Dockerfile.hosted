@@ -93,6 +93,8 @@ RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     && rm -rf /var/lib/apt/lists/* /root/.cache/uv \
     && alk-chromium --version
 
+# The two users that run environment-authored handlers map an id from a range of their own
+# (handler_host). svc-tools' is clear of those useradd may hand out from 100000 up.
 RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \
     && groupadd --gid 2001 svc-agent \
@@ -103,8 +105,8 @@ RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2003 --gid 2003 --create-home --shell /usr/sbin/nologin svc-data \
     && groupadd --gid 2004 svc-door \
     && useradd --uid 2004 --gid 2004 --create-home --shell /usr/sbin/nologin svc-door \
-    && echo 'svc-control:100000:65536' >> /etc/subuid \
-    && echo 'svc-control:100000:65536' >> /etc/subgid \
+    && printf 'svc-control:100000:65536\nsvc-tools:524288:1\n' >> /etc/subuid \
+    && printf 'svc-control:100000:65536\nsvc-tools:524288:1\n' >> /etc/subgid \
     && install -d -o svc-control -g svc-control -m 0755 /work /work/artifacts \
     && install -d -o svc-control -g svc-control -m 0700 /run/futureagi /run/user/2000 \
     && install -d -o root -g root -m 0755 /opt/alk
@@ -165,7 +167,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && rm /tmp/alk-install-start
 
 # ALK_HANDLER_ISOLATION: a designed or released environment's handlers run in a user namespace as
-# a uid from svc-control's subordinate range, with no network and none of its files (handler_host).
+# a uid from its caller's subordinate range (svc-control builds and proves; a world's tool server is
+# svc-tools), with no network and none of its files (handler_host).
 # Interpreters here never write bytecode, and a run starts fresh ones for every conversation, so
 # compile it once. The sources cannot change, so nothing checks the cache against them. A
 # third-party file that does not parse must not fail the build; ALK's own workers must compile.
