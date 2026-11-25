@@ -351,12 +351,12 @@ def open_stage(
                 else ""
             )
             + (
-            f"Every writer comes back with a report: what it wrote, and what of its brief it "
-            f"could not cover. Read those, then call suite_progress, which names the cells still "
-            f"empty without returning a scenario body. The next round goes out the same way, in "
-            f"one message, for what is still missing. Repeat until suite_progress reports the "
-            f"count. Never say work is running on the strength of a brief you did not see "
-            f"accepted, and check suite_progress before you believe your own count.")
+            "Every writer comes back with a report: what it wrote, and what of its brief it "
+            "could not cover. Read those, then call suite_progress, which names the cells still "
+            "empty without returning a scenario body. The next round goes out the same way, in "
+            "one message, for what is still missing. Repeat until suite_progress reports the "
+            "count. Never say work is running on the strength of a brief you did not see "
+            "accepted, and check suite_progress before you believe your own count.")
             + (
                 f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
                 f"including the calls your writers make: a writer reads the world in its own "
