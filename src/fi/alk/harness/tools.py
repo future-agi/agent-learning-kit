@@ -638,6 +638,19 @@ def _modules_as_the_process_imports_them(
 _ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
+def without_local_state(contract: AgentContract) -> AgentContract:
+    return contract.model_copy(
+        update={
+            "data_schema": {},
+            "base_environment": {},
+            "tools": [
+                tool.model_copy(update={"tables_read": [], "tables_changed": []})
+                for tool in contract.tools
+            ],
+        }
+    )
+
+
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
     # write_contract writes beside the file and moves it into place: a write that fails partway
     # leaves the contract an earlier call was told was saved as it was.
@@ -854,6 +867,7 @@ def contract_tools(
     subfolder: str | None = None,
     save_checks: Mode | None = None,
     save_stand_in: str | None = None,
+    provider_owned_state: bool = False,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -2181,7 +2195,12 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        result = _save_contract(checked.contract, destination)
+        result = _save_contract(
+            without_local_state(checked.contract)
+            if provider_owned_state
+            else checked.contract,
+            destination,
+        )
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result
