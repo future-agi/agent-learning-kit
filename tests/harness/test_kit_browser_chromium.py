@@ -13,6 +13,7 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import request
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -203,7 +204,7 @@ def test_the_browser_opens_its_site_and_refuses_another_which_is_logged_as_the_a
     assert "page /cart" in shop
     assert "outside the test world" in other
     hosts = [row["arguments"]["host"] for row in log.rows()[before:]]
-    assert "www.example.com" in hosts
+    assert hosts.count("www.example.com") >= 1
     assert {row["arguments"]["via"] for row in log.rows()[before:]} == {"browser"}
 
 
@@ -349,7 +350,7 @@ def test_a_page_s_own_script_cannot_write_the_record(browser) -> None:
 
     _run(kit, steps)
     rows = _settled(kit)["rows"]
-    assert not any("forged.example" in row["url"] for row in rows)
+    assert not any(urlsplit(row["url"]).hostname == "forged.example" for row in rows)
     # Only what the browser itself was made to do: a page's own click() or made-up event is not the agent's.
     assert not any(row.get("target", {}).get("text") == "forged-click" for row in rows)
     assert not any(row.get("target", {}).get("label") == "forged-typing" for row in rows)

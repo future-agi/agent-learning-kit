@@ -390,6 +390,23 @@ def evaluations_of(result: Any) -> list[dict[str, Any]]:
     return [one for one in judged if one["name"]]
 
 
+def unmeasured_of(result: Any) -> list[dict[str, Any]]:
+    """The evals this run could not measure, each with its cause and reason.
+
+    Kept out of ``harness_evaluations`` on purpose: a platform that reads every entry there as a
+    pass or a fail would store one of these as a failed eval. Not measured is neither.
+    """
+    return [
+        {
+            "name": str(getattr(item, "kind", "")),
+            "cause": str(getattr(item, "unmeasured", "")),
+            "reason": str(getattr(item, "why", ""))[:2000],
+        }
+        for item in getattr(result, "conduct", None) or []
+        if getattr(item, "unmeasured", "")
+    ]
+
+
 def conversation_seconds(result: Any) -> int:
     """Return user-visible conversation time, excluding setup and retry waits."""
     exchanges = getattr(result, "exchanges", None) or []
@@ -430,14 +447,16 @@ def result_of(result: Any) -> dict[str, Any]:
     problems = list(getattr(result, "problems", None) or [])
     grading_failures = list(getattr(result, "grading_failures", None) or [])
     evaluations = evaluations_of(result)
+    unmeasured = unmeasured_of(result)
     evaluation_coverage = {
-        "expected": len(evaluations),
+        "expected": len(evaluations) + len(unmeasured),
         "executed": sum(
             1 for evaluation in evaluations if not evaluation.get("grading_error")
         ),
         "failed": sum(
             1 for evaluation in evaluations if evaluation.get("grading_error")
         ),
+        "unmeasured": len(unmeasured),
         "complete": not grading_failures,
     }
     payload: dict[str, Any] = {
@@ -458,6 +477,8 @@ def result_of(result: Any) -> dict[str, Any]:
             # execution evidence and stay namespaced in metadata rather than
             # being sent through the removed SDK `evaluations` input field.
             "harness_evaluations": evaluations,
+            # Evals not measured, apart from the verdicts above (see ``unmeasured_of``).
+            "harness_unmeasured": unmeasured,
             "harness_eval_coverage": evaluation_coverage,
             "harness_failure_classification": (
                 "grading_failure" if grading_failures else ""

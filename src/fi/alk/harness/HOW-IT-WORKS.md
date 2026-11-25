@@ -120,15 +120,20 @@ gets its DevTools address in `ALK_BROWSER_CDP_URL`: a relay in front of the brow
 for the world's life, which counts the clients that attach. The browser's requests go through a
 refusing proxy of its own whose list is the sites and nothing else: never loopback, and never a
 site whose name resolves to loopback; Chromium sends loopback through it too, and QUIC and WebRTC
-are off. A refusal is logged as the agent's `egress_blocked` attempt marked `via: browser`, only
-while a client holds the browser: at the world's door where its database keeps the log, else in a
-kit-owned file cut at each trial, capped, cleaned, with the query part of an address removed. The
-browser's own service traffic is pointed at `kit-browser.invalid` and never logged. A trial
-says `browser_not_used` when no client attached, and `browser_not_started` when the job has sites
-for an agent not read as needing a browser. That bound holds for the environment's browser only:
-the agent's own code, or a browser it starts itself, is bound by the sandbox's firewall. It covers
-what the browser is asked to load, not a client that changes the browser's own settings through
-its DevTools address.
+are off. A refusal is logged as the agent's `egress_blocked` attempt marked `via: browser`, once a
+client has attached to the browser running now and until that browser stops: at the world's door
+where its database keeps the log, else in a kit-owned file cut at each trial, capped, cleaned, with
+the query part of an address removed. Before that, and for the browser's own service traffic
+(pointed at `kit-browser.invalid`), nothing is logged. The proxy sees a host, not who in the browser
+asked, so its count holds a page's own requests (scripts, fonts, a favicon) as well as the agent's
+navigations; the browser record tells them apart. A trial says `browser_not_used` when no client
+attached, and `browser_not_started` when the job has sites for an agent not read as needing a
+browser; both are reported, not graded. The relay serves as many clients as the egress proxy does
+and lets a connection idle both ways go after as long as the longest call allowed. That bound holds
+for the environment's browser only: the agent's own code, or a browser it starts itself, is bound by
+the sandbox's firewall. It covers what the browser is asked to load over the network, not local
+files the agent's user can read, nor a client that changes the browser's own settings through its
+DevTools address.
 
 **The browser record** (`browser_record.py`). Beside each world's browser the kit runs a recorder
 on the browser's own port, which never counts as the agent's attach. It keeps, in order and with
@@ -150,8 +155,8 @@ file, apart from the action log, and the sealed world record carries its counts 
 with a door adds it to the end state it stores; a world with no door still stores the file, under
 `futureagi.browser-world-state.v1`, saying the world's records were not recorded (`not_held`)
 rather than carrying empty tables. Where a door stood but the world's end could not be read, the
-same file holds the door's action log and says only the tables are missing. With no client attached the record says `not_used`, never an
-empty list, and a refusal list that could not be read says so. Screenshots are uploaded last, as
+same file holds the door's action log and says only the tables are missing. With no client
+attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. Screenshots are uploaded last, as
 the `screenshot` kind, kept from `traces-and-recordings` up; one the platform does not keep, or
 past what an isolated worker's result can carry, never fails the trial: the trial says so.
 

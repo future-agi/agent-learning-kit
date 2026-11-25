@@ -12,13 +12,19 @@ Two bounds hold, and they are not the same:
 - The sandbox as a whole reaches the firewall's wider list. The agent's own code, or a browser it
   starts itself, is bound only by that.
 
-The first bound covers what the browser is asked to load. It does not hold against a client that
-changes the browser's own settings through its DevTools address, which that address allows; a
-filter between the agent and the browser would be needed for that.
+The first bound covers what the browser is asked to load over the network. It does not hold against a
+client that changes the browser's own settings through its DevTools address, which that address
+allows; a filter between the agent and the browser would be needed for that. Nor does it cover
+local files: the browser can open what the agent's user can read, as the agent itself can.
 
 The browser runs as the agent's user with a bare environment, starts on an empty profile at each
 reset, and its own background traffic is switched off as far as Chromium's switches allow. What it
-still asks for on its own is never logged as the agent's attempt.
+asks for before a client attaches is never logged as the agent's attempt.
+
+What the proxy logs is per host: it sees a host name, not who asked. Once a client has attached, a
+refused request is logged whether the agent's navigation asked for it or a page it opened did (a
+script, a font, a favicon), and a refused https site is asked for again by the browser itself.
+Telling those apart is the browser record's work, from inside the browser.
 """
 
 from __future__ import annotations
@@ -27,8 +33,10 @@ import ipaddress
 import json
 import logging
 import os
+import select
 import shutil
 import socket
+import stat
 import threading
 import time
 import uuid
@@ -36,7 +44,15 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-from .egress_proxy import EgressProxy, RefusedAddress, host_allowed
+from .egress_proxy import (
+    _CLIENT_SECONDS,
+    _PIECE,
+    EgressProxy,
+    RefusedAddress,
+    _max_clients,
+    _tunnel_seconds,
+    host_allowed,
+)
 from .world_door import ActionLog
 
 logger = logging.getLogger(__name__)
@@ -47,8 +63,11 @@ BROWSER_NOT_STARTED = "browser_not_started"
 # Where Chromium's own account, messaging and update services are pointed instead of Google's: a
 # name that resolves nowhere (`.invalid` is reserved), refused by the browser's proxy and never logged.
 HOUSEKEEPING_HOST = "kit-browser.invalid"
-# How long Chromium may take to open its DevTools port.
+# How long Chromium may take to open its DevTools port, and how often to look.
 _START_SECONDS = 30.0
+_START_POLL_SECONDS = 0.05
+# How much of a browser's output a start failure quotes.
+_FAILURE_TAIL = 1024
 
 # Features that fetch on their own. Chromium reads only the last `--disable-features`, so they are one switch.
 _QUIET_FEATURES = (
@@ -154,9 +173,10 @@ def _resolve(host: str) -> str:
 class BrowserProxy(EgressProxy):
     """The browser's own refusing proxy: the environment's sites, never loopback, and nothing else.
 
-    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, only while a
-    client holds the browser: before that only the browser itself can have asked. A request for the
-    housekeeping name is never logged.
+    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, once a client
+    has attached to the browser now running, and until it stops: before that only the browser itself can
+    have asked. It is logged by host, whoever in the browser asked. A request for the housekeeping name is
+    never logged.
     """
 
     via = "browser"
@@ -219,6 +239,10 @@ class DevToolsRelay:
         self._lock = threading.Lock()
         self._upstream: int | None = None
         self._attached = 0
+        # The same bounds as the egress proxy beside it: so many clients at once, and a connection idle both ways
+        # as long as the longest call the runner allows.
+        self._slots = threading.BoundedSemaphore(_max_clients())
+        self._idle = _tunnel_seconds()
         self._listener = socket.create_server(("127.0.0.1", 0))
         self._closed = False
         self._write()
@@ -239,9 +263,15 @@ class DevToolsRelay:
             self._attached = 0
             self._write()
 
+    def release(self) -> None:
+        """No browser behind the relay: no client is taken to hold one until the next ``target``. The count in the
+        state file stays, for the trial that ended to be read."""
+        with self._lock:
+            self._upstream = None
+
     def attached(self) -> bool:
         with self._lock:
-            return self._attached > 0
+            return self._upstream is not None and self._attached > 0
 
     def close(self) -> None:
         self._closed = True
@@ -264,7 +294,17 @@ class DevToolsRelay:
                 client, _ = self._listener.accept()
             except OSError:
                 return
-            threading.Thread(target=self._relay, args=(client,), daemon=True).start()
+            if not self._slots.acquire(blocking=False):
+                logger.warning("browser: a DevTools client was turned away, the relay holds as many as it serves")
+                client.close()
+                continue
+            threading.Thread(target=self._held, args=(client,), daemon=True).start()
+
+    def _held(self, client: socket.socket) -> None:
+        try:
+            self._relay(client)
+        finally:
+            self._slots.release()
 
     def _relay(self, client: socket.socket) -> None:
         with self._lock:
@@ -273,10 +313,15 @@ class DevToolsRelay:
             client.close()
             return
         try:
-            client.settimeout(30)
-            first = client.recv(65536)
-            upstream = socket.create_connection(("127.0.0.1", port), timeout=30)
+            client.settimeout(_CLIENT_SECONDS)
+            first = client.recv(_PIECE)
         except OSError:
+            client.close()
+            return
+        try:
+            upstream = socket.create_connection(("127.0.0.1", port), timeout=_CLIENT_SECONDS)
+        except OSError:
+            logger.warning("browser: the relay could not reach the browser on its DevTools port %s", port)
             client.close()
             return
         if first.startswith(b"GET /devtools/"):
@@ -290,24 +335,31 @@ class DevToolsRelay:
             client.close()
             upstream.close()
             return
-        client.settimeout(None)
-        upstream.settimeout(None)
-        threading.Thread(target=_pump, args=(upstream, client), daemon=True).start()
-        _pump(client, upstream)
+        _pipe(client, upstream, self._idle)
 
 
-def _pump(source: socket.socket, sink: socket.socket) -> None:
+def _pipe(client: socket.socket, upstream: socket.socket, idle: float) -> None:
+    """Carry bytes both ways until either side closes, or neither sends for ``idle`` seconds."""
+    sockets = [client, upstream]
     try:
-        while data := source.recv(65536):
-            sink.sendall(data)
-    except OSError:
-        pass
+        while True:
+            ready, _, _ = select.select(sockets, [], [], idle)
+            if not ready:
+                return
+            for one in ready:
+                data = one.recv(_PIECE)
+                if not data:
+                    return
+                (upstream if one is client else client).sendall(data)
+    except (OSError, ValueError):
+        return
     finally:
-        for one in (source, sink):
+        for one in sockets:
             try:
                 one.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+            one.close()
 
 
 class KitBrowser:
@@ -326,6 +378,7 @@ class KitBrowser:
         stop: Callable[[Any], None],
         prepare: Callable[[Path], None] = lambda path: None,
         connect: Callable[[str, int], socket.socket] | None = None,
+        retain_log: Callable[[Path], None] | None = None,
         recorder: Any = None,
     ) -> None:
         self.binary = binary
@@ -340,6 +393,7 @@ class KitBrowser:
         self._launch = launch
         self._stop = stop
         self._prepare = prepare
+        self._retain_log = retain_log
         self._handle: Any = None
 
     def environment(self) -> dict[str, str]:
@@ -386,6 +440,9 @@ class KitBrowser:
         self.relay.target(port)
 
     def stop(self) -> None:
+        """Stop the browser. From here no refusal is the agent's until the next browser has started and a client
+        attached to it."""
+        self.relay.release()
         if self.recorder is not None:
             self.recorder.detach()
         handle, self._handle = self._handle, None
@@ -400,9 +457,11 @@ class KitBrowser:
         self.proxy.close()
 
     def _devtools_port(self, profile: Path) -> int:
-        """The port Chromium chose, from the file it writes in its profile once its DevTools port is open."""
+        """The port Chromium chose, from the file it writes in its profile once its DevTools port is open. A browser
+        that exits first, or never opens it, is stopped; its output is kept and the end of it quoted."""
         written = profile / "DevToolsActivePort"
         deadline = time.monotonic() + _START_SECONDS
+        exited = False
         while time.monotonic() < deadline:
             try:
                 first = written.read_text(encoding="utf-8").split("\n", 1)[0].strip()
@@ -412,12 +471,57 @@ class KitBrowser:
                 return int(first)
             running = getattr(self._handle, "is_running", None)
             if callable(running) and not running():
+                exited = True
                 break
-            time.sleep(0.05)
+            time.sleep(_START_POLL_SECONDS)
+        code = _exit_code(self._handle)
         self.stop()
-        raise RuntimeError(
-            f"the browser did not open its DevTools port within {_START_SECONDS:.0f} seconds"
-        )
+        log_path = self.directory / "browser.log"
+        if self._retain_log is not None:
+            try:
+                self._retain_log(log_path)
+            except Exception:  # noqa: BLE001 - the start failure is reported whatever becomes of its log
+                logger.warning("browser: its output could not be kept", exc_info=True)
+        said = _log_tail(log_path)
+        if exited:
+            what = "the browser exited before it opened its DevTools port" + (
+                f" (exit code {code})" if code is not None else ""
+            )
+        else:
+            what = f"the browser did not open its DevTools port within {_START_SECONDS:.0f} seconds"
+        raise RuntimeError(f"{what}: {said}" if said else what)
+
+
+def _exit_code(handle: Any) -> int | None:
+    popen = getattr(handle, "popen", None)
+    code = popen.poll() if popen is not None else None
+    return code if isinstance(code, int) else None
+
+
+def _log_tail(path: Path) -> str:
+    """The end of the browser's output, which its own user can write: a regular file only, never followed through a
+    link, read for a bounded size, and cleaned as the kit cleans what it sends."""
+    from .outbound import redact_outbound_text
+
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return ""
+        offset = max(0, info.st_size - _FAILURE_TAIL)
+        os.lseek(fd, offset, os.SEEK_SET)
+        raw = os.read(fd, _FAILURE_TAIL)
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+    if offset:
+        raw = raw.partition(b"\n")[2]
+    text = " ".join(raw.decode("utf-8", errors="replace").split())
+    return "".join(one for one in redact_outbound_text(text) if one.isprintable())
 
 
 def browser_notices(runtime: Any) -> list[dict[str, Any]]:

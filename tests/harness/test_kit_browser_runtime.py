@@ -19,6 +19,7 @@ from test_process_runtime import (
     _sql_spy_provider,
 )
 
+from fi.alk.harness import browser_runtime as br
 from fi.alk.harness import kit_browser
 from fi.alk.harness import process_runtime as pr
 from fi.alk.harness.kit_browser import BROWSER_CDP_URL_ENV
@@ -29,6 +30,7 @@ class _FakeBrowser:
         self.world_index = world_index
         self.log = log
         self.starts = 0
+        self.stops = 0
         self.closed = False
 
     def environment(self) -> dict[str, str]:
@@ -42,6 +44,9 @@ class _FakeBrowser:
 
     def start(self) -> None:
         self.starts += 1
+
+    def stop(self) -> None:
+        self.stops += 1
 
     def close(self) -> None:
         self.closed = True
@@ -106,6 +111,40 @@ def test_each_spawn_of_the_world_starts_a_new_browser_and_a_reset_never_keeps_th
     assert agent.terminated
 
 
+def test_a_reset_stops_the_last_browser_before_the_world_s_records_are_sealed_again(tmp_path, monkeypatch) -> None:
+    # A page still open in the last trial's browser must not reach the world once its records are sealed again.
+    manifest, freeze, context, made, _ = _browser_world(tmp_path)
+    first = _spawn(manifest, freeze, context)
+    [browser] = made
+    order: list[str] = []
+    stop = browser.stop
+    monkeypatch.setattr(browser, "stop", lambda: (order.append("browser stopped"), stop())[1])
+    seal = pr._seal_world_store
+    monkeypatch.setattr(pr, "_seal_world_store", lambda *a, **k: (order.append("sealed"), seal(*a, **k))[1])
+    _spawn(manifest, freeze, context, first.handles, keep_processes=True)
+    assert order and order[0] == "browser stopped"
+
+
+@pytest.mark.parametrize("error", [OSError("no such file"), RuntimeError("did not open its DevTools port")])
+def test_a_browser_that_does_not_start_fails_the_spawn(tmp_path, error) -> None:
+    manifest, freeze, context, _, _ = _browser_world(tmp_path)
+
+    class _Broken:
+        def start(self) -> None:
+            raise error
+
+    context = dataclasses.replace(context, browser_factory=lambda world_index, log: _Broken())
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        _spawn(manifest, freeze, context)
+    assert (raised.value.code, raised.value.domain) == ("spawn_failed", pr.FailureDomain.INFRASTRUCTURE)
+
+
+def test_a_contract_that_cannot_be_read_is_logged_not_taken_silently_for_no_browser(tmp_path, caplog) -> None:
+    (tmp_path / "contract.json").write_text("{not json")
+    assert br.contract_needs_browser(tmp_path) is False
+    assert "contract" in caplog.text and caplog.records[-1].exc_info is not None
+
+
 def test_sites_for_an_agent_that_needs_no_browser_start_none(tmp_path) -> None:
     manifest, freeze, context, made, environments = _browser_world(
         tmp_path, needs_browser=False
@@ -118,11 +157,11 @@ def test_sites_for_an_agent_that_needs_no_browser_start_none(tmp_path) -> None:
 def test_the_world_s_runtime_says_what_became_of_its_browser(tmp_path) -> None:
     manifest, freeze, context, made, _ = _browser_world(tmp_path)
     _spawn(manifest, freeze, context)
-    assert pr._browser_metadata(context, 0) == {"browser": made[0].metadata()}
+    assert br.browser_metadata(context, 0) == {"browser": made[0].metadata()}
     no_need = dataclasses.replace(context, needs_browser=False)
-    assert pr._browser_metadata(no_need, 0) == {"browser": {"state": "not_started"}}
+    assert br.browser_metadata(no_need, 0) == {"browser": {"state": "not_started"}}
     assert (
-        pr._browser_metadata(
+        br.browser_metadata(
             dataclasses.replace(context, browser_allowed_sites=None), 0
         )
         == {}
@@ -143,7 +182,7 @@ def test_the_job_s_browser_sites_are_read_for_the_spawn(
     tmp_path, metadata, expected
 ) -> None:
     (tmp_path / "job.json").write_text(json.dumps({"metadata": metadata}))
-    assert pr._read_browser_allowed_sites(tmp_path) == expected
+    assert br.read_browser_allowed_sites(tmp_path) == expected
 
 
 def test_browser_sites_that_are_wrong_fail_the_spawn(tmp_path) -> None:
@@ -151,31 +190,31 @@ def test_browser_sites_that_are_wrong_fail_the_spawn(tmp_path) -> None:
         json.dumps({"metadata": {"browser_allowed_sites": ["http://x.com/"]}})
     )
     with pytest.raises(pr.ProcessRuntimeError) as raised:
-        pr._read_browser_allowed_sites(tmp_path)
+        br.read_browser_allowed_sites(tmp_path)
     assert raised.value.code == "spawn_failed"
 
 
 def test_the_contract_says_whether_the_agent_needs_a_browser(tmp_path) -> None:
-    assert pr._contract_needs_browser(tmp_path) is False
+    assert br.contract_needs_browser(tmp_path) is False
     contract = {
         "agent": "shopper",
         "one_liner": "Buys things on websites.",
         "modality": "chat",
     }
     (tmp_path / "contract.json").write_text(json.dumps(contract))
-    assert pr._contract_needs_browser(tmp_path) is False
+    assert br.contract_needs_browser(tmp_path) is False
     (tmp_path / "contract.json").write_text(
         json.dumps({**contract, "environment_needs": ["browser"]})
     )
-    assert pr._contract_needs_browser(tmp_path) is True
+    assert br.contract_needs_browser(tmp_path) is True
     (tmp_path / "contract.json").write_text("{not json")
-    assert pr._contract_needs_browser(tmp_path) is False
+    assert br.contract_needs_browser(tmp_path) is False
 
 
 def test_closing_the_world_s_browsers_closes_each(tmp_path) -> None:
     manifest, freeze, context, made, _ = _browser_world(tmp_path)
     _spawn(manifest, freeze, context)
-    pr._close_browsers(context)
+    br.close_browsers(context)
     assert made[0].closed
     assert context.browsers == {}
 
@@ -185,7 +224,7 @@ def test_removing_one_world_closes_that_world_s_browser_alone(tmp_path) -> None:
     _spawn(manifest, freeze, context)
     other = _FakeBrowser(1, None)
     context.browsers[1] = other
-    pr._close_browsers(context, 0)
+    br.close_browsers(context, 0)
     assert made[0].closed and not other.closed
     assert context.browsers == {1: other}
 
@@ -226,7 +265,7 @@ def test_the_kit_runs_the_browser_as_the_agent_s_user_with_nothing_of_its_own(
     context, launched, chowned = _factory_context(
         tmp_path, resolver=_fake_user_resolver({"svc-agent": (1234, 5678)})
     )
-    browser = pr._kit_browser_factory(context)(0, None)
+    browser = br.kit_browser_factory(context)(0, None)
     try:
         browser.start()
     finally:
@@ -247,7 +286,7 @@ def test_a_hosted_world_with_no_agent_user_starts_no_browser(tmp_path, monkeypat
     monkeypatch.setattr(kit_browser, "chromium_binary", lambda: "/opt/alk-chromium")
     context, launched, _ = _factory_context(tmp_path, resolver=lambda name: None, require=True)
     with pytest.raises(pr.ProcessRuntimeError) as raised:
-        pr._kit_browser_factory(context)
+        br.kit_browser_factory(context)
     assert raised.value.code == "spawn_failed"
     assert launched == []
 
@@ -256,7 +295,7 @@ def test_an_image_with_no_browser_fails_the_spawn(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(kit_browser, "chromium_binary", lambda: None)
     context, _, _ = _factory_context(tmp_path, resolver=lambda name: None)
     with pytest.raises(pr.ProcessRuntimeError) as raised:
-        pr._kit_browser_factory(context)
+        br.kit_browser_factory(context)
     assert raised.value.code == "spawn_failed"
 
 
@@ -275,7 +314,7 @@ def _browser_provider(tmp_path, monkeypatch):
         environments[argv[0]] = dict(env)
         return FakeHandle()
 
-    monkeypatch.setattr(pr, "_kit_browser_factory", lambda context: factory)
+    monkeypatch.setattr(br, "kit_browser_factory", lambda context: factory)
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     (bundle_dir / "contract.json").write_text(

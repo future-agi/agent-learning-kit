@@ -1484,7 +1484,8 @@ class HostedChatCallRunner:
         said += unenforced_deadline_notices(unenforced) + stopped_notices
         said += repeated_untimed_notices(transcript.calls) + hand_off_notices(runtime)
         said += tool_span_notices(runtime, transcript.calls)
-        # Whether the environment's browser was started, and used: an unused browser never reads as a clean trial.
+        # Whether the environment's browser was started, and used. Said, not graded: a task may need no browsing, so
+        # an unused browser does not change the trial's reading, only what it reports.
         said += browser_notices(runtime)
         if said:
             transcript.notices = said
