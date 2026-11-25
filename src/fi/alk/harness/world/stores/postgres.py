@@ -48,10 +48,23 @@ _TRIGGERS_FIRING_ANYWAY = (
 )
 # Each foreign key between two of the world's tables: (child, parent).
 _FOREIGN_KEYS = (
-    "SELECT c.relname, p.relname FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid "
-    "JOIN pg_class p ON p.oid = k.confrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE k.contype = 'f' AND n.nspname = 'public'"
+    "SELECT cn.nspname, c.relname, pn.nspname, p.relname FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid "
+    "JOIN pg_class p ON p.oid = k.confrelid JOIN pg_namespace cn ON cn.oid = c.relnamespace "
+    "JOIN pg_namespace pn ON pn.oid = p.relnamespace WHERE k.contype = 'f'"
 )
+# Every schema of the world's own: a reset puts back every one, not only `public`.
+_CUSTOMER_SCHEMA = "schemaname NOT IN ('pg_catalog', 'information_schema') AND schemaname NOT LIKE 'pg\\_%'"
+# The login that owns the world's tables: a reset by the store role runs as it, with the customer's own rights.
+_TABLE_OWNER = "alk_migrator"
+
+
+def _key(schema: str, table: str) -> str:
+    """A table's key in a snapshot: its bare name in `public`, `schema.table` elsewhere."""
+    return table if schema == "public" else f"{schema}.{table}"
+
+
+def _ident(schema: str, name: str) -> str:
+    return '"' + schema.replace('"', '""') + '"."' + name.replace('"', '""') + '"'
 
 
 def attached_world_store(endpoint: Any) -> AttachedPostgresStore:
@@ -212,7 +225,79 @@ class PostgresStore(ContainerStore):
             names = [name for name in names if not name.startswith("_alk_") and name != "harness_seed_sentinel"]
         return names
 
-    def _primary_key(self, connection: Any, table: str) -> list[str]:
+    def _reset_tables(self, connection: Any) -> list[tuple[str, str]]:
+        """Every table of the world's own, in every customer schema: (schema, table). The harness's own are left out
+        for a reset by the store role, which has no right on them."""
+        rows = connection.execute(
+            f"SELECT schemaname, tablename FROM pg_tables WHERE {_CUSTOMER_SCHEMA} ORDER BY schemaname, tablename"
+        ).fetchall()
+        tables = [(str(schema), str(table)) for schema, table in rows]
+        if getattr(self, "_restore_as_role", False):
+            tables = [
+                (schema, table)
+                for schema, table in tables
+                if not (schema == "public" and (table.startswith("_alk_") or table == "harness_seed_sentinel"))
+            ]
+        return tables
+
+    def _column_kinds(self, connection: Any, schema: str, table: str) -> dict[str, tuple[str, str, str]]:
+        """Each column's (type, identity, generated): a stored generated column is never written back, and an
+        identity column that is always generated takes its value back only with OVERRIDING SYSTEM VALUE."""
+        rows = connection.execute(
+            "SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attidentity::text, a.attgenerated::text "
+            "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = %s AND c.relname = %s AND a.attnum > 0 AND NOT a.attisdropped",
+            (schema, table),
+        ).fetchall()
+        return {str(name): (str(kind), str(identity), str(generated)) for name, kind, identity, generated in rows}
+
+    def _put_back(self, connection: Any, schema: str, table: str, rows: list[dict[str, Any]]) -> None:
+        """A table's rows as the snapshot held them, generated columns left to the table and identity values kept."""
+        if not rows:
+            return
+        kinds = self._column_kinds(connection, schema, table)
+        types = self._column_types(connection, table, schema)
+        columns = [column for column in rows[0] if kinds.get(column, ("", "", ""))[2] != "s"]
+        overriding = any(kinds.get(column, ("", "", ""))[1] == "a" for column in columns)
+        quoted = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        statement = (
+            f"INSERT INTO {_ident(schema, table)} ({quoted}) "  # noqa: S608 - listed names, quoted
+            + ("OVERRIDING SYSTEM VALUE " if overriding else "")
+            + f"VALUES ({placeholders})"
+        )
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                statement,
+                [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
+            )
+
+    def _counters(self, connection: Any) -> dict[str, Any]:
+        rows = connection.execute(
+            f"SELECT schemaname, sequencename, last_value FROM pg_sequences WHERE {_CUSTOMER_SCHEMA}"
+        ).fetchall()
+        return {
+            _key(str(schema), str(sequence)): value
+            for schema, sequence, value in rows
+            if value is not None
+            and not (getattr(self, "_restore_as_role", False) and schema == "public" and str(sequence).startswith("_alk_"))
+        }
+
+    def _set_counters(self, connection: Any, counters: dict[str, Any]) -> None:
+        """Each of the world's sequences back where the snapshot found it; one the snapshot never saw used, to its
+        start."""
+        for schema, sequence, start in connection.execute(
+            f"SELECT schemaname, sequencename, start_value FROM pg_sequences WHERE {_CUSTOMER_SCHEMA}"
+        ).fetchall():
+            if getattr(self, "_restore_as_role", False) and schema == "public" and str(sequence).startswith("_alk_"):
+                continue
+            value = counters.get(_key(str(schema), str(sequence)))
+            connection.execute(
+                "SELECT pg_catalog.setval(%s::regclass, %s, %s)",
+                (_ident(str(schema), str(sequence)), value if value is not None else start, value is not None),
+            )
+
+    def _primary_key(self, connection: Any, table: str, schema: str = "public") -> list[str]:
         """The primary key columns, used only to read rows back in a stable order.
 
         Joined through ``pg_class``/``pg_namespace`` rather than a ``%s::regclass`` cast over an
@@ -227,14 +312,14 @@ class PostgresStore(ContainerStore):
               JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
               JOIN pg_class c ON c.oid = i.indrelid
               JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname = 'public' AND c.relname = %s AND i.indisprimary
+             WHERE n.nspname = %s AND c.relname = %s AND i.indisprimary
              ORDER BY array_position(i.indkey, a.attnum)
             """,
-            (table,),
+            (schema, table),
         ).fetchall()
         return [row[0] for row in rows]
 
-    def _column_types(self, connection: Any, table: str) -> dict[str, str]:
+    def _column_types(self, connection: Any, table: str, schema: str = "public") -> dict[str, str]:
         """Return declared column types so writes use the source schema's representation.
 
         New managed clusters are always UTF-8, but an externally attached or older SQL_ASCII
@@ -246,9 +331,9 @@ class PostgresStore(ContainerStore):
             """
             SELECT column_name, data_type
               FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = %s
+             WHERE table_schema = %s AND table_name = %s
             """,
-            (table,),
+            (schema, table),
         ).fetchall()
 
         def text(value: Any) -> str:
@@ -256,7 +341,7 @@ class PostgresStore(ContainerStore):
 
         return {text(row[0]): text(row[1]) for row in rows}
 
-    def _select_ordered(self, connection: Any, table: str) -> list[dict[str, Any]]:
+    def _select_ordered(self, connection: Any, table: str, schema: str = "public") -> list[dict[str, Any]]:
         """Every row of one table, ordered by its primary key where it has one.
 
         Without that order the same data comes back in whatever sequence the heap happens to
@@ -266,8 +351,8 @@ class PostgresStore(ContainerStore):
         wrote itself.
         """
         sql = _psycopg().sql
-        key = self._primary_key(connection, table)
-        statement = sql.SQL("SELECT * FROM {}").format(sql.Identifier("public", table))
+        key = self._primary_key(connection, table, schema)
+        statement = sql.SQL("SELECT * FROM {}").format(sql.Identifier(schema, table))
         if key:
             statement += sql.SQL(" ORDER BY ") + sql.SQL(", ").join(
                 sql.Identifier(column) for column in key
@@ -318,16 +403,11 @@ class PostgresStore(ContainerStore):
     def freeze(self) -> Snapshot:
         """Rows and sequence counters, which together are the whole mutable state."""
         with self._admin_connect() as connection:
-            counters = {
-                row[0]: row[1]
-                for row in connection.execute(
-                    "SELECT sequencename, last_value FROM pg_sequences "
-                    "WHERE schemaname = 'public'"
-                ).fetchall()
-                if row[1] is not None
-                and not (getattr(self, "_restore_as_role", False) and str(row[0]).startswith("_alk_"))
+            counters = self._counters(connection)
+            rows = {
+                _key(schema, table): self._select_ordered(connection, table, schema)
+                for schema, table in self._reset_tables(connection)
             }
-            rows = {table: self._select_ordered(connection, table) for table in self._tables(connection)}
         return Snapshot(rows=rows, counters=counters)
 
     def restore(self, snapshot: Snapshot) -> None:
@@ -343,7 +423,7 @@ class PostgresStore(ContainerStore):
             self._restore_as_role_itself(snapshot)
             return
         with self._admin_connect() as connection:
-            tables = self._tables(connection)
+            tables = self._reset_tables(connection)
             if not tables:
                 return
             firing = connection.execute(_TRIGGERS_FIRING_ANYWAY).fetchall()
@@ -353,47 +433,26 @@ class PostgresStore(ContainerStore):
                     + ", ".join(sorted(f"{table}.{trigger}" for table, trigger in firing))
                     + " are set to fire in replica mode (ENABLE ALWAYS or ENABLE REPLICA)"
                 )
-            listed = ", ".join('public."' + table.replace('"', '""') + '"' for table in tables)
+            listed = ", ".join(_ident(schema, table) for schema, table in tables)
             # Suspended before the truncate too, so neither it nor a row put back fires a trigger of the world's.
             connection.execute("SET session_replication_role = replica")
             try:
                 # One statement, so Postgres resolves the dependency order between them itself.
                 connection.execute(f"TRUNCATE TABLE {listed} RESTART IDENTITY CASCADE")
-                for table, rows in snapshot.rows.items():
-                    if not rows or table not in tables:
-                        continue
-                    columns = list(rows[0])
-                    types = self._column_types(connection, table)
-                    quoted = ", ".join(f'"{column}"' for column in columns)
-                    placeholders = ", ".join(["%s"] * len(columns))
-                    statement = (
-                        f'INSERT INTO public."{table}" ({quoted}) VALUES ({placeholders})'
-                    )
-                    with connection.cursor() as cursor:
-                        cursor.executemany(
-                            statement,
-                            [
-                                tuple(
-                                    _adapt(row.get(column), types.get(column, ""))
-                                    for column in columns
-                                )
-                                for row in rows
-                            ],
-                        )
+                for schema, table in tables:
+                    self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
             finally:
                 connection.execute("SET session_replication_role = DEFAULT")
-
-            for sequence, value in snapshot.counters.items():
-                connection.execute(
-                    "SELECT pg_catalog.setval(%s::regclass, %s, true)", (f'public."{sequence}"', value)
-                )
+            self._set_counters(connection, snapshot.counters)
 
     def _restore_as_role_itself(self, snapshot: Snapshot) -> None:
-        """A reset as the world's own role, which may neither truncate nor suspend triggers: every row deleted and put
-        back in foreign-key order inside one transaction, and each sequence set back. Whatever of the world's runs
-        (a trigger) runs with no more than that role's rights."""
+        """A reset by the world's store role, as the tables' owner: the customer's own rights and no more (no row
+        security bypassed but the owner's), so the world's code a reset runs (a check, an index) has only those.
+        Every row deleted and put back in foreign-key order inside one transaction, with the world's triggers and
+        foreign-key checks suspended, a table that forces row security relieved for the load only, and each sequence
+        set back."""
         with self._reader_connect(writable=True) as connection:
-            tables = self._tables(connection)
+            tables = self._reset_tables(connection)
             if not tables:
                 return
             firing = connection.execute(_TRIGGERS_FIRING_ANYWAY).fetchall()
@@ -403,42 +462,47 @@ class PostgresStore(ContainerStore):
                     + ", ".join(sorted(f"{table}.{trigger}" for table, trigger in firing))
                     + " are set to fire in replica mode (ENABLE ALWAYS or ENABLE REPLICA)"
                 )
-            parents: dict[str, set[str]] = {table: set() for table in tables}
-            for child, parent in connection.execute(_FOREIGN_KEYS).fetchall():
-                if child in parents and parent in parents and child != parent:
-                    parents[child].add(parent)
-            order: list[str] = []
+            parents: dict[tuple[str, str], set[tuple[str, str]]] = {table: set() for table in tables}
+            for child_schema, child, parent_schema, parent in connection.execute(_FOREIGN_KEYS).fetchall():
+                one, other = (str(child_schema), str(child)), (str(parent_schema), str(parent))
+                if one in parents and other in parents and one != other:
+                    parents[one].add(other)
+            order: list[tuple[str, str]] = []
             while len(order) < len(tables):
                 ready = [t for t in tables if t not in order and parents[t] <= set(order)]
                 order.extend(ready or [t for t in tables if t not in order])
             with connection.transaction():
+                forced: list[tuple[str, str]] = []
+                owned = connection.execute(
+                    "SELECT coalesce(bool_and(pg_get_userbyid(c.relowner) = %s), false) FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'r' AND (n.nspname, c.relname) "
+                    "IN (SELECT * FROM unnest(%s::text[], %s::text[]))",
+                    (_TABLE_OWNER, [schema for schema, _ in tables], [table for _, table in tables]),
+                ).fetchone()[0]
+                if getattr(self, "_reader_dsn", None) and owned:
+                    # As the owner the build made them as: the customer's own rights, not the store role's bypass.
+                    connection.execute(f'SET LOCAL ROLE "{_TABLE_OWNER}"')
+                    forced = [
+                        (str(schema), str(table))
+                        for schema, table in connection.execute(
+                            "SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                            "WHERE c.relkind = 'r' AND c.relforcerowsecurity"
+                        ).fetchall()
+                        if (str(schema), str(table)) in parents
+                    ]
+                    for schema, table in forced:
+                        connection.execute(f"ALTER TABLE {_ident(schema, table)} NO FORCE ROW LEVEL SECURITY")
                 if getattr(self, "_reader_dsn", None):
-                    # The store role may suspend the world's triggers and foreign-key checks for its own reset.
+                    # The owner, or the store role, may suspend the world's triggers and foreign-key checks for its
+                    # own reset.
                     connection.execute("SET LOCAL session_replication_role = replica")
-                for table in reversed(order):
-                    connection.execute(f'DELETE FROM public."{table}"')  # noqa: S608 - a listed table
-                for table in order:
-                    rows = snapshot.rows.get(table) or []
-                    if not rows:
-                        continue
-                    columns = list(rows[0])
-                    types = self._column_types(connection, table)
-                    quoted = ", ".join(f'"{column}"' for column in columns)
-                    placeholders = ", ".join(["%s"] * len(columns))
-                    with connection.cursor() as cursor:
-                        cursor.executemany(
-                            f'INSERT INTO public."{table}" ({quoted}) VALUES ({placeholders})',  # noqa: S608
-                            [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
-                        )
-                for sequence, start in connection.execute(
-                    "SELECT sequencename, start_value FROM pg_sequences WHERE schemaname = 'public' "
-                    "AND sequencename NOT LIKE '\\_alk\\_%'"
-                ).fetchall():
-                    value = snapshot.counters.get(sequence)
-                    connection.execute(
-                        "SELECT pg_catalog.setval(%s::regclass, %s, %s)",
-                        (f'public."{sequence}"', value if value is not None else start, value is not None),
-                    )
+                for schema, table in reversed(order):
+                    connection.execute(f"DELETE FROM {_ident(schema, table)}")  # noqa: S608 - a listed table
+                for schema, table in order:
+                    self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
+                self._set_counters(connection, snapshot.counters)
+                for schema, table in forced:
+                    connection.execute(f"ALTER TABLE {_ident(schema, table)} FORCE ROW LEVEL SECURITY")
 
     def save_to(self, path: str | Path) -> None:
         """Save both the records and the DDL a fresh Postgres store needs."""

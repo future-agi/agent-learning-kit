@@ -93,7 +93,7 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
         "EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"alk_s3\"'; END IF; END $$",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_s3"',
-        *pr._only_member_of("alk_s3", "alk_world_tools"),
+        *pr._only_member_of("alk_s3", "alk_world_tools", may_become="alk_migrator"),
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_l3') THEN "
         'CREATE ROLE "alk_l3" LOGIN IN ROLE "alk_world_log"; END IF; END $$',
@@ -1538,7 +1538,7 @@ _WORLD_CODE = (
     "CREATE DOMAIN public.dt AS text; CREATE FUNCTION public.format(public.dt, text) RETURNS text "
     "LANGUAGE sql AS 'SELECT current_user::text'; "
     "CREATE SCHEMA audit; GRANT USAGE ON SCHEMA audit TO PUBLIC; "
-    "CREATE TABLE audit.ran_as (who text); GRANT INSERT, SELECT ON audit.ran_as TO PUBLIC; "
+    "CREATE TABLE audit.ran_as (who text); GRANT SELECT, INSERT, UPDATE, DELETE ON audit.ran_as TO PUBLIC; "
     "CREATE FUNCTION note() RETURNS trigger LANGUAGE plpgsql AS "
     "$$ BEGIN INSERT INTO audit.ran_as VALUES (current_user); RETURN NULL; END $$; "
     "CREATE TRIGGER noted AFTER INSERT ON riders FOR EACH ROW EXECUTE FUNCTION note(); "
@@ -1569,6 +1569,9 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
     assert store._store.query("SELECT format('who %s', name) AS who FROM riders") == [{"who": reader}]
     snapshot = store._store.freeze()
     store.execute("INSERT INTO riders (name) VALUES ('bo')")
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        # The handler's insert fired the world's trigger as the world's own role.
+        assert {row[0] for row in connection.execute("SELECT who FROM audit.ran_as").fetchall()} == {role}
     # Auditor B, item 14: a trigger set to fire even in replica mode refuses the store role's reset.
     with pytest.raises(StoreError, match="riders.noted"):
         store._store.restore(snapshot)
@@ -1577,9 +1580,9 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
     store._store.restore(snapshot)
     assert [row["name"] for row in store.records("riders")] == ["ada"]
     with psycopg.connect(superuser, autocommit=True) as connection:
-        ran = {row[0] for row in connection.execute("SELECT who FROM audit.ran_as").fetchall()}
-    # The handler's insert fires as the world's role; the reset runs none of the world's triggers.
-    assert ran == {role}
+        ran = connection.execute("SELECT who FROM audit.ran_as").fetchall()
+    # A2: the reset put back the `audit` schema too (empty, as the snapshot found it), and fired no trigger itself.
+    assert ran == []
     with pytest.raises(StoreError, match="no_world_role"):
         attached_world_store(SimpleNamespace(address=superuser, tool_address=None, store_address=None))
 
@@ -2294,7 +2297,8 @@ def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_
             "SELECT g.rolname FROM pg_auth_members a JOIN pg_roles g ON g.oid = a.roleid "
             "JOIN pg_roles r ON r.oid = a.member WHERE r.rolname = 'alk_s0' ORDER BY 1"
         ).fetchall()
-    assert groups == [("alk_world_tools",)]
+    # The one group, and the tables' owner it may become (never inheriting its rights) for a reset.
+    assert groups == [("alk_migrator",), ("alk_world_tools",)]
 
 
 @real_postgres
@@ -2383,6 +2387,113 @@ def test_a_real_pg_dump_schema_dump_builds_through_the_driver(tmp_path: Path):
             run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
     finally:
         _customer_sql(**admin, dbname="postgres", statement=f'DROP DATABASE IF EXISTS "{source}" WITH (FORCE)')
+
+
+def _world_store(door_worlds, superuser, world, roles: bool = True):
+    from fi.alk.harness.world.stores.postgres import attached_world_store
+
+    return attached_world_store(
+        SimpleNamespace(
+            address=superuser,
+            tool_address=world if roles else None,
+            store_address=door_worlds.store_url if roles else None,
+            log_address=door_worlds.log_url if roles else None,
+        )
+    )
+
+
+@real_postgres
+def test_a_row_in_another_customer_schema_never_outlives_a_reset(door_worlds, monkeypatch):
+    """A2: the reset puts back every schema of the world's own, not only public."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "CREATE SCHEMA ext; GRANT USAGE ON SCHEMA ext TO PUBLIC; CREATE TABLE ext.notes (id int PRIMARY KEY, body "
+            "text); GRANT SELECT, INSERT, UPDATE, DELETE ON ext.notes TO PUBLIC; INSERT INTO ext.notes VALUES (1, 'seed')"
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute("INSERT INTO ext.notes VALUES (2, 'from the last trial')")
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT id, body FROM ext.notes ORDER BY id").fetchall() == [(1, "seed")]
+
+
+@real_postgres
+def test_a_reset_runs_the_world_s_code_as_the_tables_owner_and_puts_back_rows_row_security_hides(
+    door_worlds, monkeypatch
+):
+    """A3: with the tables the restricted login's, as a build makes them, the store role resets as that owner: a
+    customer CHECK the reset runs sees the customer's own rights (no bypass of its own), and rows row security hides
+    from the agent come back; a table that forces row security still forces it after."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    parts = urlsplit(_REAL)
+    pr.migrator_credentials(port=parts.port or 5432, credentials=pr.EngineCredentials(parts.username, parts.password),
+                            baseline_db="postgres", sql_runner=pr.default_sql_runner, process_name="db")
+    store_role = urlsplit(door_worlds.store_url).username
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            f'GRANT "{pr.MIGRATOR_ROLE}" TO "{store_role}" WITH INHERIT FALSE, SET TRUE; '
+            "CREATE SCHEMA trail; GRANT USAGE ON SCHEMA trail TO PUBLIC; "
+            "CREATE TABLE trail.seen (who text); GRANT SELECT, INSERT, UPDATE, DELETE ON trail.seen TO PUBLIC; "
+            "CREATE FUNCTION public.note(text) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
+            "INSERT INTO trail.seen VALUES (current_user); RETURN true; END $$; "
+            "CREATE TABLE public.secrets (id int PRIMARY KEY, owner text CHECK (public.note(owner))); "
+            "INSERT INTO public.secrets VALUES (1, 'ada'), (2, 'bo'); "
+            "ALTER TABLE public.secrets ENABLE ROW LEVEL SECURITY; ALTER TABLE public.secrets FORCE ROW LEVEL SECURITY; "
+            "CREATE POLICY mine ON public.secrets USING (owner = 'ada'); "
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON public.secrets TO alk_world_tools; "
+            f'ALTER TABLE public.secrets OWNER TO "{pr.MIGRATOR_ROLE}"; ALTER TABLE riders OWNER TO "{pr.MIGRATOR_ROLE}"; '
+            f'ALTER FUNCTION public.note(text) OWNER TO "{pr.MIGRATOR_ROLE}"; '
+            f'ALTER TABLE trail.seen OWNER TO "{pr.MIGRATOR_ROLE}"; TRUNCATE trail.seen'
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("DELETE FROM public.secrets; TRUNCATE trail.seen")
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT id FROM public.secrets ORDER BY id").fetchall() == [(1,), (2,)]
+        assert {row[0] for row in connection.execute("SELECT who FROM trail.seen").fetchall()} == {pr.MIGRATOR_ROLE}
+        assert connection.execute("SELECT relforcerowsecurity FROM pg_class WHERE relname = 'secrets'").fetchone() \
+            == (True,)
+
+
+@real_postgres
+@pytest.mark.parametrize("roles", (True, False))
+def test_identity_and_generated_columns_come_back_on_either_reset(door_worlds, monkeypatch, roles):
+    """A's I5: a GENERATED ALWAYS identity column takes its values back with OVERRIDING SYSTEM VALUE, and a stored
+    generated column is left to the table, on the store role's reset and the harness's own (one fixed user)."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "CREATE TABLE public.tickets (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, price int, "
+            "doubled int GENERATED ALWAYS AS (price * 2) STORED); "
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON public.tickets TO alk_world_tools; "
+            "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO alk_world_tools; "
+            "INSERT INTO public.tickets (price) VALUES (5), (7)"
+        )
+    mode = privilege.IsolationMode.PER_USER if roles else privilege.IsolationMode.FIXED_USER
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: mode)
+    store = _world_store(door_worlds, superuser, world, roles=roles)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("DELETE FROM public.tickets WHERE price = 5; INSERT INTO public.tickets (price) VALUES (9)")
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT id, price, doubled FROM public.tickets ORDER BY id").fetchall() == [
+            (1, 5, 10), (2, 7, 14)
+        ]
+        assert connection.execute("INSERT INTO public.tickets (price) VALUES (1) RETURNING id").fetchone() == (3,)
 
 
 def _pg_dump_schema(owner: str) -> str:

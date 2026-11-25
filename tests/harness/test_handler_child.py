@@ -116,6 +116,7 @@ def _runtime(tool_address: str | None = _WORLD_DSN) -> EnvironmentRuntime:
                 address=_DSN,
                 tool_address=tool_address,
                 store_address="postgresql://store-role@db/world" if tool_address else None,
+                log_address="postgresql://log-reader@db/world" if tool_address else None,
             )
         },
     )

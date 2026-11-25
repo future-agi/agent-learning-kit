@@ -5590,27 +5590,32 @@ def _freeze_one_store(
         sentinel_dbname = (
             baseline_dbname if process.engine is ManagedEngine.POSTGRES else None
         )
-        if not check_sentinel(
-            store,
-            engine=process.engine,
-            host="localhost",
-            port=port,
-            dbname=sentinel_dbname,
-            credentials=sentinel_credentials(process.engine, credentials, login=login),
-            sql_runner=context.sql_runner,
-            redis_runner=context.redis_runner,
-            rabbitmq_inspector=context.rabbitmq_inspector,
-            process_name=process.name,
-            stage="baseline",
-        ):
-            raise ProcessRuntimeError(
-                "baseline",
-                "seed_failed",
-                f"{process.name}: sentinel check failed against the freshly seeded baseline",
-                process=process.name,
-                domain=FailureDomain.ENVIRONMENT,
+        try:
+            if not check_sentinel(
+                store,
+                engine=process.engine,
+                host="localhost",
+                port=port,
+                dbname=sentinel_dbname,
+                credentials=sentinel_credentials(process.engine, credentials, login=login),
+                sql_runner=context.sql_runner,
+                redis_runner=context.redis_runner,
+                rabbitmq_inspector=context.rabbitmq_inspector,
+                process_name=process.name,
+                stage="baseline",
+            ):
+                raise ProcessRuntimeError(
+                    "baseline",
+                    "seed_failed",
+                    f"{process.name}: sentinel check failed against the freshly seeded baseline",
+                    process=process.name,
+                    domain=FailureDomain.ENVIRONMENT,
+                )
+        finally:
+            # Whether the sentinel passed or not, the login can no longer log in.
+            retire_login(
+                login, port=port, credentials=credentials, sql_runner=context.sql_runner, process_name=process.name
             )
-        retire_login(login, port=port, credentials=credentials, sql_runner=context.sql_runner, process_name=process.name)
 
         row_counts: dict[str, int] = {}
         seed_digest: dict[str, str] = {}
@@ -6600,6 +6605,24 @@ def _end_sessions_of(
         statement="SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
         f"WHERE usename = '{login.username}' AND pid <> pg_backend_pid()",
     )
+    # Ending a session is asynchronous: wait (briefly) until none is left, so a check that follows sees them gone.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        left = _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname="postgres",
+            statement=f"SELECT count(*) FROM pg_stat_activity WHERE usename = '{login.username}'",
+            read_only=True,
+        )
+        if not left or not left[0] or not left[0][0]:
+            return
+        time.sleep(0.05)
 
 
 def store_login(
@@ -6841,16 +6864,24 @@ def _grant_log_readers(run: Callable[[str, str], None], baseline_db: str) -> Non
         )
 
 
-def _only_member_of(role: str, group: str) -> list[str]:
+def _only_member_of(role: str, group: str, *, may_become: str | None = None) -> list[str]:
     """A per-world role in its one group and no other: roles outlive a build, and a group an older harness gave one
-    would otherwise stay."""
-    return [
+    would otherwise stay. ``may_become``: a role it may switch to (SET ROLE) without inheriting its rights."""
+    allowed = ", ".join(f"'{name}'" for name in (group, may_become) if name)
+    statements = [
         "DO $$ DECLARE g text; BEGIN FOR g IN SELECT gr.rolname FROM pg_auth_members a "
         "JOIN pg_roles gr ON gr.oid = a.roleid JOIN pg_roles r ON r.oid = a.member "
-        f"WHERE r.rolname = '{role}' AND gr.rolname <> '{group}' LOOP "
+        f"WHERE r.rolname = '{role}' AND gr.rolname NOT IN ({allowed}) LOOP "
         f"EXECUTE format('REVOKE %I FROM %I', g, '{role}'); END LOOP; END $$",
         f'GRANT "{group}" TO "{role}"',
     ]
+    if may_become:
+        statements.append(
+            f"DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = '{may_become}') THEN "
+            f'REVOKE "{may_become}" FROM "{role}"; GRANT "{may_become}" TO "{role}" WITH INHERIT FALSE, SET TRUE; '
+            "END IF; END $$"
+        )
+    return statements
 
 
 def _reset_template_database(
@@ -6935,7 +6966,8 @@ def _reset_template_database(
             "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
             f"EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"{store.username}\"'; END IF; END $$",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{store.username}"',
-            *_only_member_of(store.username, WORLD_ROLE_GROUP),
+            # The store role resets the world as the tables' owner (`SET ROLE`), never inheriting its rights.
+            *_only_member_of(store.username, WORLD_ROLE_GROUP, may_become=MIGRATOR_ROLE),
         ]
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         reader = _log_role_of(credentials, role)
