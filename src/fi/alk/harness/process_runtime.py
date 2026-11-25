@@ -4285,19 +4285,73 @@ def apply_seed_file(
         )
 
 
-# Statements a dump makes that only say who owns what or describe an extension: the migrations' login may not run
-# them, and skipping them leaves its own objects its own (pg_restore --no-owner). Whole statements on one line only.
-_OWNERSHIP_ONLY = re.compile(
-    r"^\s*(ALTER\s+[A-Za-z ]+?\s+.+\s+OWNER\s+TO\s+[^;\s]+"
-    r"|COMMENT\s+ON\s+EXTENSION\s+\S+\s+IS\s+'(?:[^']|'')*')\s*;\s*$",
-    re.IGNORECASE,
+# The statements `pg_dump` writes that only say who owns what or describe an extension, in its exact one-line shapes:
+# the migrations' login may not run them, and skipping them leaves its own objects its own (pg_restore --no-owner).
+# Anything else, a rename of a column called `owner` or a second statement on the line, does not match.
+_IDENT = r'(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)'
+_QUALIFIED = rf"{_IDENT}(?:\.{_IDENT})*"
+_ARGUMENTS = r'\((?:[^;()"\']|"(?:[^"]|"")*"|\([^;()]*\))*\)'
+_OWNED_KINDS = (
+    "TABLE|SEQUENCE|VIEW|MATERIALIZED VIEW|FOREIGN TABLE|SCHEMA|TYPE|DOMAIN|COLLATION|CONVERSION|STATISTICS"
+    "|TEXT SEARCH CONFIGURATION|TEXT SEARCH DICTIONARY|SERVER|FOREIGN DATA WRAPPER|PUBLICATION|SUBSCRIPTION"
+    "|EVENT TRIGGER|LANGUAGE|PROCEDURAL LANGUAGE|DATABASE"
 )
-_DOLLAR_QUOTE = re.compile(r"\$[A-Za-z_][A-Za-z_0-9]*\$|\$\$")
+_OWNERSHIP_ONLY = re.compile(
+    r"^(?:(?:"
+    rf"ALTER (?:{_OWNED_KINDS}) {_QUALIFIED}"
+    rf"|ALTER (?:FUNCTION|PROCEDURE|AGGREGATE|ROUTINE) {_QUALIFIED}{_ARGUMENTS}"
+    rf"|ALTER OPERATOR (?:{_IDENT}\.)?[-+*/<>=~!@#%^&|`?]+ {_ARGUMENTS}"
+    rf"|ALTER OPERATOR (?:CLASS|FAMILY) {_QUALIFIED} USING {_IDENT}"
+    r"|ALTER LARGE OBJECT [0-9]+"
+    rf") OWNER TO {_IDENT};"
+    rf"|COMMENT ON EXTENSION {_IDENT} IS '(?:[^']|'')*';"
+    r")\s*$"
+)
+_TOKEN = re.compile(r"--|/\*|\*/|'|\"|\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$")
+
+
+def _sql_state_after(line: str, state: str | None) -> str | None:
+    """Where a line leaves the SQL lexer: None between statements' text, or inside a "'" string, a '"' name, a
+    block comment ("/*" with its depth) or a dollar-quoted body (its tag). Dollar tags count only outside comments,
+    strings and names, and a "--" comment ends with its line."""
+    position = 0
+    while True:
+        if state is not None and state.startswith("$"):
+            closing = line.find(state, position)
+            if closing < 0:
+                return state
+            position, state = closing + len(state), None
+            continue
+        match = _TOKEN.search(line, position)
+        if match is None:
+            return state
+        token, position = match.group(), match.end()
+        if state is None:
+            if token == "--":
+                return None
+            if token == "/*":
+                state = "/*1"
+            elif token in ("'", '"'):
+                state = token
+            elif token.startswith("$"):
+                before = line[match.start() - 1] if match.start() else " "
+                if not (before.isalnum() or before in "_$"):
+                    state = token
+        elif state in ("'", '"'):
+            if token == state:
+                if line.startswith(state, position):
+                    position += 1
+                else:
+                    state = None
+        elif state.startswith("/*"):
+            depth = int(state[2:]) + (1 if token == "/*" else -1 if token == "*/" else 0)
+            state = f"/*{depth}" if depth else None
 
 
 def _without_ownership(file: Path) -> tuple[Path, int]:
     """A migration file without the dump's ownership and extension-comment statements, and how many it left out; the
-    file itself when it has none. Lines inside a dollar-quoted body (a function's) are never touched."""
+    file itself when it has none. Only a line that starts outside any string, comment or dollar-quoted body is
+    considered."""
     if file.suffix.lower() != ".sql":
         return file, 0
     try:
@@ -4305,16 +4359,15 @@ def _without_ownership(file: Path) -> tuple[Path, int]:
     except (OSError, UnicodeDecodeError):
         return file, 0
     kept: list[str] = []
-    open_tag: str | None = None
+    state: str | None = None
     skipped = 0
     for line in lines:
-        if open_tag is None and _OWNERSHIP_ONLY.match(line):
+        if state is None and _OWNERSHIP_ONLY.match(line):
             skipped += 1
             kept.append("-- left out by the harness (ownership): " + line.strip() + "\n")
             continue
         kept.append(line)
-        for tag in _DOLLAR_QUOTE.findall(line):
-            open_tag = tag if open_tag is None else (None if tag == open_tag else open_tag)
+        state = _sql_state_after(line, state)
     if not skipped:
         return file, 0
     descriptor, name = tempfile.mkstemp(prefix="migration-", suffix=".sql")

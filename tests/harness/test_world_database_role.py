@@ -1167,6 +1167,82 @@ def test_a_dump_s_ownership_statements_are_left_out_and_function_bodies_kept(tmp
     assert pr._without_ownership(tmp_path / "schema.json") == (tmp_path / "schema.json", 0)
 
 
+_NOT_OWNERSHIP = (
+    "ALTER TABLE accounts RENAME COLUMN owner TO owner_id;\n",
+    "ALTER TABLE public.a OWNER TO x; DROP TABLE public.b;\n",
+    "ALTER TABLE public.a RENAME TO c; ALTER TABLE public.b OWNER TO x;\n",
+    "COMMENT ON EXTENSION plpgsql IS 'a'; DROP TABLE public.b;\n",
+    "alter table public.a owner to x;\n",
+)
+
+
+@pytest.mark.parametrize("line", _NOT_OWNERSHIP)
+def test_a_line_that_is_not_one_of_pg_dump_s_ownership_shapes_is_kept(tmp_path: Path, line: str):
+    file = tmp_path / "schema.sql"
+    file.write_text(line, encoding="utf-8")
+
+    assert pr._without_ownership(file) == (file, 0)
+
+
+@pytest.mark.parametrize(
+    "opening",
+    (
+        "-- a note about $b$ prices\n",
+        "INSERT INTO prices (label) VALUES ('costs $$');\n",
+        "/* $x$ in a /* nested */ comment */\n",
+        'CREATE TABLE "odd$t$name" (id int);\n',
+    ),
+)
+def test_a_dollar_sign_in_a_comment_string_or_name_does_not_hide_later_ownership_lines(tmp_path: Path, opening: str):
+    file = tmp_path / "schema.sql"
+    file.write_text(opening + "ALTER TABLE public.items OWNER TO postgres;\n", encoding="utf-8")
+
+    filtered, skipped = pr._without_ownership(file)
+
+    assert skipped == 1
+    assert filtered.read_text(encoding="utf-8").startswith(opening)
+
+
+def test_pg_dump_s_other_ownership_shapes_are_left_out(tmp_path: Path):
+    file = tmp_path / "schema.sql"
+    file.write_text(
+        'ALTER FUNCTION public.f(integer, character varying, "Odd"[]) OWNER TO "the owner";\n'
+        "ALTER MATERIALIZED VIEW public.m OWNER TO postgres;\n"
+        "ALTER OPERATOR public.=== (integer, integer) OWNER TO postgres;\n"
+        "ALTER OPERATOR CLASS public.c USING btree OWNER TO postgres;\n"
+        "ALTER SCHEMA app OWNER TO postgres;\n",
+        encoding="utf-8",
+    )
+
+    assert pr._without_ownership(file)[1] == 5
+
+
+@real_postgres
+def test_a_migration_renaming_an_owner_column_builds_and_keeps_its_rename(tmp_path: Path):
+    superuser, migrator, baseline, checked, before, run = _migrated("", "")
+    try:
+        file = tmp_path / "schema.sql"
+        file.write_text(
+            "CREATE TABLE accounts (id integer, owner text);\n"
+            "INSERT INTO accounts VALUES (1, 'costs $$');\n"
+            "-- $b$\n"
+            "ALTER TABLE accounts RENAME COLUMN owner TO owner_id;\n"
+            f'ALTER TABLE public.accounts OWNER TO "{superuser.username}";\n',
+            encoding="utf-8",
+        )
+        filtered, skipped = pr._without_ownership(file)
+        assert skipped == 1
+        run(migrator, baseline, filtered.read_text(encoding="utf-8"))
+        pr._refuse_seed_escalation(**checked, before_seed=before)
+        columns = run(
+            superuser, baseline,
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'accounts' ORDER BY ordinal_position",
+        )
+        assert columns == [("id",), ("owner_id",)]
+    finally:
+        _dropped(superuser, baseline, run)
+
+
 @real_postgres
 def test_a_pg_dump_schema_with_owners_builds_as_the_migrations_login(tmp_path: Path):
     superuser, migrator, baseline, checked, before, run = _migrated("", "")
