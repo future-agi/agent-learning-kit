@@ -57,6 +57,9 @@ except ImportError:  # pragma: no cover - imported as part of the package
     )
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# The world's rows are written with the world's own role, never the door's; a bundle sealed before it has only
+# the door's.
+RECORDS_DATABASE_URL = os.environ.get("WORLD_RECORDS_DATABASE_URL", "") or DATABASE_URL
 # The tools the contract declares read-only, by name: logged as reads.
 READ_TOOLS = frozenset(one for one in os.environ.get("READ_ACTIONS", "").split(",") if one)
 # Longest the door waits for the agent to report a call it let run; the call itself is the agent's.
@@ -128,7 +131,10 @@ class InProcessDoor:
         self.pending: dict[str, _Pending] = {}
         self._lock = threading.Lock()
         self.door = door if door is not None else WorldDoor(
-            Routed(_AgentRuns(self.pending), RecordExecutor(PostgresRecords(DATABASE_URL)) if DATABASE_URL else None),
+            Routed(
+                _AgentRuns(self.pending),
+                RecordExecutor(PostgresRecords(RECORDS_DATABASE_URL)) if RECORDS_DATABASE_URL else None,
+            ),
             PostgresLog(DATABASE_URL),
             PostgresRoster(DATABASE_URL) if DATABASE_URL else DictRoster({}),
             faults=_proxy._trial_faults,
@@ -237,7 +243,7 @@ def _decided(outcome: Outcome | None) -> bool:
 def _held(outcome: Outcome) -> dict[str, Any]:
     """What the agent's tool says instead of running, from the scenario's fault the door applied."""
     fault = outcome.fault or {}
-    detail = outcome.reason or outcome.outcome
+    detail = outcome.detail
     if outcome.body is not None:
         try:
             detail = str(json.loads(outcome.body).get("detail") or detail)

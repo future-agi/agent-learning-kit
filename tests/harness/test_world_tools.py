@@ -245,3 +245,122 @@ def test_a_refusal_that_keeps_its_writes_still_reads_refused(dsn) -> None:
     assert [row["outcome"] for row in cr._read_action_log(dsn)] == ["refused"]
     (call,) = _read(dsn)
     assert (call.ok, call.refused) == (False, True)
+
+
+def test_a_release_s_world_is_seeded_and_served_without_the_superuser(
+    tmp_path, monkeypatch
+):
+    """As hosted runs have it: the seed runs as the restricted login, which can make no role, and
+    the tool server connects as the world's own role, which can make no table."""
+    import subprocess
+    from urllib.parse import urlsplit, urlunsplit
+
+    import psycopg
+
+    from fi.alk.harness import process_runtime as pr
+    from fi.alk.harness import releases
+    from fi.alk.harness.bundle_v2 import StoreEntry
+    from fi.alk.harness.mcp_servers import READER_ROLE
+    from fi.alk.harness.world_tools import TRACE_FAILURES_SQL, TRACE_FAILURES_TABLE
+
+    reader = SimpleNamespace(tables=["bookings"])
+    monkeypatch.setattr(
+        releases,
+        "load_servers",
+        lambda _root: [SimpleNamespace(attach=SimpleNamespace(database_reader=reader))],
+    )
+    (tmp_path / "world.sql").write_text(
+        WORLD_SEED_PREFIX
+        + REQUEST_BINDING_SQL
+        + f"{TRACE_FAILURES_SQL};\n"
+        + 'CREATE TABLE "bookings" (id text PRIMARY KEY);\n'
+        + releases.reader_grants_sql(tmp_path),
+        encoding="utf-8",
+    )
+    parts = urlsplit(os.environ["ALK_TEST_POSTGRES_DSN"])
+    host, port = parts.hostname or "localhost", parts.port or 5432
+    superuser = pr.EngineCredentials(
+        parts.username, parts.password or "", world_secret=uuid.uuid4().hex
+    )
+    baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
+    world = f"alk_world_{uuid.uuid4().hex[:8]}"
+    index = uuid.uuid4().int % 100_000 + 1_000
+    engine = dict(
+        port=port,
+        credentials=superuser,
+        sql_runner=pr.default_sql_runner,
+        process_name="world-db",
+    )
+    admin = os.environ["ALK_TEST_POSTGRES_DSN"]
+    with psycopg.connect(admin, autocommit=True) as connection:
+        connection.execute(f'CREATE DATABASE "{baseline}"')
+    try:
+        login = pr.seed_store_safely(
+            StoreEntry.model_construct(
+                capability="world_db", migrations=["world.sql"], seed_files=[]
+            ),
+            engine=pr.ManagedEngine.POSTGRES,
+            bundle_dir=tmp_path,
+            dbname=baseline,
+            sync_run=subprocess.run,
+            **engine,
+        )
+        pr.retire_login(
+            login,
+            port=port,
+            credentials=superuser,
+            sql_runner=pr.default_sql_runner,
+            process_name="world-db",
+        )
+        pr._make_harness_tables(baseline_db=baseline, **engine)
+        # A release's bundle has no process of the door's, so its tool server writes the log.
+        pr._grant_world_role_group(baseline_db=baseline, door=False, **engine)
+        role = pr.world_role(superuser, index)
+        pr._reset_template_database(
+            host=host,
+            port=port,
+            credentials=superuser,
+            world_db=world,
+            template_db=baseline,
+            sql_runner=pr.default_sql_runner,
+            process_name="world-db",
+            isolate=True,
+            role=role,
+        )
+
+        def address(user: str, password: str) -> str:
+            at = f"{user}:{password}@" if password else f"{user}@"
+            return urlunsplit(
+                (parts.scheme, f"{at}{host}:{port}", f"/{world}", parts.query, "")
+            )
+
+        as_harness = address(superuser.username, superuser.password)
+        tools = _world(address(role.username, role.password))
+        tools.call("change_booking", {"id": "B1"})
+        tools.call("change_booking", {"id": "locked"})
+        done, refused = _read(as_harness)
+        assert (done.ok, done.refused) == (True, False)
+        # The handler's own refusal is an answer, as it is in a proof.
+        assert (refused.ok, refused.refused, refused.refusal_code) == (
+            False,
+            True,
+            "world_rule",
+        )
+        with psycopg.connect(as_harness, autocommit=True) as connection:
+            assert connection.execute(
+                "SELECT has_table_privilege(%s, 'public.bookings', 'SELECT')",
+                (READER_ROLE,),
+            ).fetchone() == (True,)
+            # A call that ran and could not be logged is marked, so its trial is never read as complete.
+            connection.execute("ALTER TABLE _alk_tool_trace ADD CHECK (name <> 'find_booking')")
+            assert tools.call("find_booking", {"id": "B1"}) is not None
+            assert connection.execute(
+                f"SELECT count(*) FROM {TRACE_FAILURES_TABLE}"
+            ).fetchone() == (1,)
+        with pytest.raises(cr.ToolCaptureFailed):
+            _read(as_harness)
+    finally:
+        with psycopg.connect(admin, autocommit=True) as connection:
+            connection.execute(f'DROP DATABASE IF EXISTS "{world}" WITH (FORCE)')
+            connection.execute(f'ALTER DATABASE "{baseline}" WITH IS_TEMPLATE false')
+            connection.execute(f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')

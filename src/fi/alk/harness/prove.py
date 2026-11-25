@@ -68,6 +68,7 @@ from .world.runtime import (
 from .world.snapshot import read_manifest, restore, source_state
 from .world.stores.postgres import PostgresStore
 from .world_door import (
+    logged_outcome,
     RecordExecutor,
     ToolCall,
     fault_numbered,
@@ -1256,7 +1257,7 @@ class _WorldActors:
                 row
                 for row in ordered
                 if (actor_id is None or (row.get("actor_id") or "agent") == actor_id)
-                and (outcome is None or (row.get("outcome") or ("committed" if row.get("ok") else "refused")) == outcome)
+                and (outcome is None or logged_outcome(row) == outcome)
             ]
 
         return events

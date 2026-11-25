@@ -522,7 +522,7 @@ def _literal(value: str | None) -> str:
 def actors_seed(listing: ActorList) -> str:
     """The world's own table of who may do what, read by the tool proxy on every actor request."""
     rows = "".join(
-        "INSERT INTO _alk_actors(id, kind, side, role, permitted_actions, identities, on_behalf_of) "
+        "INSERT INTO public._alk_actors(id, kind, side, role, permitted_actions, identities, on_behalf_of) "
         f"VALUES ({_literal(one.id)}, {_literal(one.kind)}, {_literal(one.side)}, {_literal(one.role)}, "
         f"{_literal(json.dumps(one.permitted_actions))}::jsonb, {_literal(json.dumps(one.identities))}::jsonb, "
         f"{_literal(one.on_behalf_of)}) ON CONFLICT (id) DO NOTHING;\n"
@@ -532,7 +532,7 @@ def actors_seed(listing: ActorList) -> str:
 
 
 ACTORS_DDL = (
-    "CREATE TABLE IF NOT EXISTS _alk_actors (id text PRIMARY KEY, kind text, side text, role text, "
+    "CREATE TABLE IF NOT EXISTS public._alk_actors (id text PRIMARY KEY, kind text, side text, role text, "
     "permitted_actions jsonb NOT NULL DEFAULT '[]', identities jsonb NOT NULL DEFAULT '{}', on_behalf_of text);\n"
 )
 

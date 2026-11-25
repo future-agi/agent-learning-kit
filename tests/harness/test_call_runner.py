@@ -2059,8 +2059,8 @@ class _FakeConnection:
         if "_alk_trace_failures" in statement:  # no call ran untraced
             return _FakeCursor([(False,)], ["present"])
         if "to_regclass" in statement:
-            # A world without the trial tables yet: the presence read finds none of them.
-            return _FakeCursor([(False, [])], ["present", "columns"])
+            # A world without the trial tables yet: the catalog read finds none of their columns.
+            return _FakeCursor([], ["relname", "attname"])
         if "_alk_worker_stops" in statement:
             # No worker was stopped: the rows are the door's log, not stops.
             return _FakeCursor([], self._columns)

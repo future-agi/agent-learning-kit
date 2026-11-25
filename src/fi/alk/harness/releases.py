@@ -285,7 +285,9 @@ def reader_grants_sql(environment_root: Path) -> str:
     if not tables:
         return ""
     return (
-        f"DO $$ BEGIN CREATE ROLE {READER_ROLE} NOLOGIN; "
+        # A hosted seed's login makes no role: the harness has made this one by then.
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+        f"'{READER_ROLE}') THEN CREATE ROLE {READER_ROLE} NOLOGIN; END IF; "
         "EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;\n"
         + "".join(f'GRANT SELECT ON "{table}" TO {READER_ROLE};\n' for table in tables)
     )
@@ -1988,11 +1990,14 @@ def world_seed_sql(environment_root: str | Path, profile: PolicyProfile) -> str:
     """
     from .bundle_author_v2 import WORLD_SEED_PREFIX, _sql_literal, _sqlite_sql
     from .request_binding import REQUEST_BINDING_SQL
+    from .world_tools import TRACE_FAILURES_SQL
 
     environment_root = Path(environment_root)
     return (
         WORLD_SEED_PREFIX
         + REQUEST_BINDING_SQL
+        # Made here, since a world's own role can make no table.
+        + f"{TRACE_FAILURES_SQL};\n"
         + _sqlite_sql(environment_root / WORLD / "world.sqlite")
         + "".join(
             f"UPDATE {POLICY_TABLE} SET value = {_sql_literal(json.dumps(value))} "
@@ -2090,7 +2095,7 @@ def compose_bundle(
     records `_alk_tool_trace`, and the provider target is imported against that server.
     """
     from .bundle import CapabilityProtocol
-    from .bundle_author_v2 import WORLD_SEED_SENTINEL_QUERY, _managed_world_db
+    from .bundle_author_v2 import _managed_world_db
     from .bundle_v2 import (
         BUNDLE_V2_MANIFEST,
         BUNDLE_V2_SCHEMA_VERSION,
@@ -2117,6 +2122,7 @@ def compose_bundle(
     from .provider_import import ProviderImportSpec
     from .provider_lifecycle import ProviderType
     from .release_tool_server import BINDING_FILE
+    from .world_door import SEED_SENTINEL_QUERY
 
     releases_root, output = Path(releases_root), Path(output)
     manifest = load_run_manifest(manifest_path)
@@ -2317,7 +2323,7 @@ def compose_bundle(
                             ),
                         ),
                         sentinel=Sentinel(
-                            query=WORLD_SEED_SENTINEL_QUERY, expected="ready"
+                            query=SEED_SENTINEL_QUERY, expected="ready"
                         ),
                     )
                 ]

@@ -523,7 +523,10 @@ class WorldTools:
             failure = type(exc).__name__
         try:
             with psycopg.connect(self.database_url, autocommit=True) as connection:
-                connection.execute(TRACE_FAILURES_SQL)
+                if connection.execute(
+                    "SELECT to_regclass(%s) IS NULL", (TRACE_FAILURES_TABLE,)
+                ).fetchone()[0]:
+                    connection.execute(TRACE_FAILURES_SQL)
                 connection.execute(
                     f"INSERT INTO {TRACE_FAILURES_TABLE} "
                     "(agent_tool, provider_call_id, tool_call_id, error, at) "

@@ -619,6 +619,7 @@ def test_the_runner_writes_a_trial_s_faults_into_the_world_database_never_a_file
 
         def execute(self, sql, params=()):
             ran.append((sql.split()[0], params))
+            return SimpleNamespace(fetchall=lambda: [])
 
     monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda *a, **k: _Connection()))
     database = SimpleNamespace(protocol="postgres", address="postgresql://world")
