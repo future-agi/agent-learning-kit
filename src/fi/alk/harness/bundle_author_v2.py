@@ -5298,7 +5298,7 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 # A table as a schema names it: bare or quoted, with an optional bare or quoted schema.
-_SQL_TABLE = r'(?:"?[A-Za-z_]\w*"?\s*\.\s*)?"?([A-Za-z_]\w*)"?'
+_SQL_TABLE = r'(?:(?P<schema>"[A-Za-z_]\w*"|[A-Za-z_]\w*)\s*\.\s*)?"?(?P<table>[A-Za-z_]\w*)"?'
 # Where a column's type ends in its definition: at its first default or constraint.
 _COLUMN_TYPE_END = re.compile(
     r"\s(?:DEFAULT|NOT|NULL|PRIMARY|REFERENCES|CHECK|UNIQUE|CONSTRAINT|COLLATE|GENERATED)\b",
@@ -5352,43 +5352,66 @@ def _column_kind(definition: str) -> str | None:
 
 
 def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
-    """Column declarations read off the agent's own schema, keyed by table and column: those
-    of each ``CREATE TABLE`` and each ``ALTER TABLE ... ADD COLUMN``. A schema-qualified
-    table is keyed by its own name, as the world names it."""
-    declared: dict[tuple[str, str], str] = {}
+    """Apply public-table column declarations in schema file and statement order."""
+    declared: dict[tuple[str, str], str | None] = {}
+    created: set[str] = set()
+    column = r'"?(?P<column>[A-Za-z_]\w*)"?\s+'
     for path in paths:
-        sql = _sql_code(path.read_text(encoding="utf-8"))
-        for found in re.finditer(
-            rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_SQL_TABLE}\s*\(",
-            sql,
-            re.IGNORECASE,
-        ):
-            depth, at = 1, found.end()
-            while at < len(sql) and depth:
-                depth += (sql[at] == "(") - (sql[at] == ")")
-                at += 1
-            for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
-                words = part.strip().split(None, 1)
-                if len(words) < 2 or words[0].strip('"').upper() in _NOT_COLUMNS:
+        for statement in _sql_code(path.read_text(encoding="utf-8")).split(";"):
+            found = re.search(
+                rf"(?:\b(?P<create>CREATE)\s+TABLE\s+(?P<conditional>IF\s+NOT\s+EXISTS\s+)?|"
+                rf"\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?){_SQL_TABLE}(?=\s|\()",
+                statement,
+                re.IGNORECASE,
+            )
+            if not found:
+                continue
+            schema = found["schema"]
+            if schema and schema != '"public"' and schema.lower() != "public":
+                continue
+            body = statement[found.end() :].strip()
+            table = found["table"].lower()
+            if found["create"]:
+                if found["conditional"] and table in created:
                     continue
-                if kind := _column_kind(words[1]):
-                    declared[(found.group(1).lower(), words[0].strip('"').lower())] = kind
-        for found in re.finditer(
-            rf"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?{_SQL_TABLE}\s+([^;]*)",
-            sql,
-            re.IGNORECASE,
-        ):
-            for part in re.split(r",(?![^()]*\))", found.group(2)):
-                added = re.match(
-                    r'\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s+(.+)',
-                    part,
-                    re.IGNORECASE | re.DOTALL,
-                )
-                if not added or added.group(1).upper() in _NOT_COLUMNS:
+                created.add(table)
+                if not body.startswith("("):
                     continue
-                if kind := _column_kind(added.group(2)):
-                    declared[(found.group(1).lower(), added.group(1).lower())] = kind
-    return declared
+                depth, at = 1, 1
+                while at < len(body) and depth:
+                    depth += (body[at] == "(") - (body[at] == ")")
+                    at += 1
+                body = body[1 : at - 1]
+            for part in re.split(r",(?![^()]*\))", body):
+                definition = part.strip()
+                if found["create"]:
+                    pattern = column + r"(?P<type>.+)"
+                elif re.match(r"DROP\b", definition, re.I):
+                    drop = re.fullmatch(
+                        r'DROP\s+(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?'
+                        r'(?:\s+(?:CASCADE|RESTRICT))?', definition, re.I,
+                    )
+                    if drop:
+                        declared.pop((table, drop[1].lower()), None)
+                    continue
+                elif re.match(r"ALTER\b", definition, re.I):
+                    pattern = (
+                        r"ALTER\s+(?:COLUMN\s+)?" + column + r"(?:SET\s+DATA\s+)?TYPE\s+(?P<type>.+)"
+                    )
+                else:
+                    pattern = (
+                        r"ADD\s+(?:COLUMN\s+)?(?P<conditional>IF\s+NOT\s+EXISTS\s+)?"
+                        + column + r"(?P<type>.+)"
+                    )
+                match = re.match(pattern, definition, re.IGNORECASE | re.DOTALL)
+                if not match or match["column"].upper() in _NOT_COLUMNS:
+                    continue
+                key = table, match["column"].lower()
+                if match.groupdict().get("conditional") and key in declared:
+                    continue
+                definition = re.split(r"\s+USING\b", match["type"], maxsplit=1, flags=re.I)[0]
+                declared[key] = _column_kind(definition)
+    return {key: kind for key, kind in declared.items() if kind is not None}
 
 
 def declared_json_columns(
