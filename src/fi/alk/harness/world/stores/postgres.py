@@ -60,9 +60,9 @@ def attached_world_store(endpoint: Any) -> AttachedPostgresStore:
     from ...privilege import IsolationMode, isolation_mode
 
     if isolation_mode() is IsolationMode.PER_USER:
-        if not getattr(endpoint, "tool_address", None):
-            raise StoreError("no_world_role: a world's SQL runs only with its own role, and none was given")
-        return AttachedPostgresStore(endpoint.tool_address, restore_as_role=True)
+        if not getattr(endpoint, "tool_address", None) or not getattr(endpoint, "store_address", None):
+            raise StoreError("no_world_role: a world's SQL runs only with its own roles, and none was given")
+        return AttachedPostgresStore(endpoint.tool_address, restore_as_role=True, reader_dsn=endpoint.store_address)
     return AttachedPostgresStore(system_first(endpoint.address), admin_dsn=endpoint.address)
 
 
@@ -152,8 +152,23 @@ class PostgresStore(ContainerStore):
         ordinary ``LIKE '%turkey%'`` with nothing to bind then reads its own ``%t`` as an
         unmatched one and raises before the statement ever reaches Postgres.
         """
+        return self._read(self._reader_address(), statement, params)
+
+    def query_as_world(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+        """``query`` as the agent's tools' own role, under the world's row security: a handler's read."""
+        return self._read(self.dsn(), statement, params)
+
+    def _reader_address(self) -> str:
+        return getattr(self, "_reader_dsn", None) or self.dsn()
+
+    def _reader_connect(self) -> Any:
+        """The harness's own reads of the world: the store role where there is one, else the store's connection."""
+        reader = getattr(self, "_reader_dsn", None)
+        return _psycopg().connect(reader, autocommit=True) if reader else self._connect()
+
+    def _read(self, address: str, statement: str, params: Sequence[Any]) -> list[dict[str, Any]]:
         with _psycopg().connect(
-            self.dsn(), autocommit=True, options="-c default_transaction_read_only=on"
+            address, autocommit=True, options="-c default_transaction_read_only=on"
         ) as connection:
             cursor = connection.execute(statement, tuple(params) if params else None)
             columns = [description[0] for description in cursor.description or []]
@@ -251,13 +266,13 @@ class PostgresStore(ContainerStore):
         never pays to read and discard rows for the ones it does not. ``None`` reads every table
         in ``public``, exactly as before.
         """
-        with self._connect() as connection:
+        with self._reader_connect() as connection:
             tables = self._tables(connection) if only is None else list(only)
             return {table: self._select_ordered(connection, table) for table in tables}
 
     def columns(self, name: str) -> list[str]:
         """One table's columns, as the database's catalogue lists them."""
-        with self._connect() as connection:
+        with self._reader_connect() as connection:
             return list(self._column_types(connection, name))
 
     def table(self, name: str) -> list[dict[str, Any]]:
@@ -267,7 +282,7 @@ class PostgresStore(ContainerStore):
         one of them: still a single connection, so reading one table never costs a second round
         trip just to learn how to order it.
         """
-        with self._connect() as connection:
+        with self._reader_connect() as connection:
             return self._select_ordered(connection, name)
 
     # -- how to put it back ----------------------------------------------------------
@@ -277,7 +292,7 @@ class PostgresStore(ContainerStore):
         path; the store's connection when it has no other."""
         admin = getattr(self, "_admin_dsn", None)
         if not admin:
-            return self._connect()
+            return self._reader_connect()
         return _psycopg().connect(admin, autocommit=True, options=PINNED_SEARCH_PATH)
 
     def freeze(self) -> Snapshot:
@@ -357,7 +372,7 @@ class PostgresStore(ContainerStore):
         """A reset as the world's own role, which may neither truncate nor suspend triggers: every row deleted and put
         back in foreign-key order inside one transaction, and each sequence set back. Whatever of the world's runs
         (a trigger) runs with no more than that role's rights."""
-        with self._connect() as connection:
+        with self._reader_connect() as connection:
             tables = self._tables(connection)
             if not tables:
                 return
@@ -370,6 +385,9 @@ class PostgresStore(ContainerStore):
                 ready = [t for t in tables if t not in order and parents[t] <= set(order)]
                 order.extend(ready or [t for t in tables if t not in order])
             with connection.transaction():
+                if getattr(self, "_reader_dsn", None):
+                    # The store role may suspend the world's triggers and foreign-key checks for its own reset.
+                    connection.execute("SET LOCAL session_replication_role = replica")
                 for table in reversed(order):
                     connection.execute(f'DELETE FROM public."{table}"')  # noqa: S608 - a listed table
                 for table in order:
@@ -534,8 +552,17 @@ class AttachedPostgresStore(PostgresStore):
     its process and lifecycle, so closing one scenario must never remove the shared container.
     """
 
-    def __init__(self, dsn: str, admin_dsn: str | None = None, restore_as_role: bool = False) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        admin_dsn: str | None = None,
+        restore_as_role: bool = False,
+        reader_dsn: str | None = None,
+    ) -> None:
         self._external_dsn = dsn
+        # The world's store role (with world roles): the harness's reads, snapshot and reset of the world's rows,
+        # past their row security; ``dsn`` stays the agent's tools' own role, under it.
+        self._reader_dsn = reader_dsn
         # The harness's own address for a snapshot and a restore (one fixed user), or a reset run as ``dsn`` itself,
         # the world's role (`attached_world_store`).
         self._admin_dsn = admin_dsn

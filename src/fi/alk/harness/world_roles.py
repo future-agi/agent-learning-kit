@@ -17,6 +17,9 @@ DOOR_ROLE_GROUP = "alk_door"
 # Each world's own login role, and its door's, named by the world's index after these.
 WORLD_ROLE_PREFIX = "alk_w"
 DOOR_ROLE_PREFIX = "alk_d"
+# World N's store role: reads and resets the world's rows for the harness past their row security, with the world
+# group's rights and nothing more; never the agent's tools' role.
+STORE_ROLE_PREFIX = "alk_s"
 # The door's address, rendered only into the door's own processes.
 WORLD_DOOR_DATABASE_URL = "WORLD_DOOR_DATABASE_URL"
 # The world's own role, given to the door's processes too: the rows of the world (an actor's record change, an MCP
@@ -42,6 +45,11 @@ HARNESS_ONLY_TABLES = ("harness_seed_sentinel",)
 def world_role_name(world_index: int) -> str:
     """World N's own login role."""
     return f"{WORLD_ROLE_PREFIX}{world_index}"
+
+
+def store_role_name(world_index: int) -> str:
+    """World N's store role (`STORE_ROLE_PREFIX`)."""
+    return f"{STORE_ROLE_PREFIX}{world_index}"
 
 
 def door_role_name(world_index: int) -> str:
@@ -80,23 +88,20 @@ _HARNESS_WHERE = (
     "AND n.nspname NOT LIKE 'pg\\_%'"
 )
 _FIRST_USER_OID = 16384
-# A function, operator, type or relation in `pg_catalog` the system did not make and no extension owns: a superuser
-# seed can put one there, and a session on the system's own search path then finds it first. Written with exact
-# oid and "char" comparisons only, so reading it calls nothing such an object could stand in for; run before
-# anything else after the seed.
+# A function, operator, type or relation in `pg_catalog` the system did not make: a session on the system's own search
+# path finds it first. Extension members included: an extension the restricted login may add installs into its own
+# schema, so one in `pg_catalog` was put there (`ALTER EXTENSION ... ADD`) rather than installed. Written with exact
+# oid comparisons only, so reading it calls nothing such an object could stand in for; run before anything else after
+# the seed.
 PG_CATALOG_PLANTS = (
     "SELECT 'function in pg_catalog the system did not make: ' || p.proname::text, p.oid::text FROM pg_proc p "
-    f"WHERE p.pronamespace = 11::oid AND p.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS (SELECT 1 FROM pg_depend d "
-    "WHERE d.classid = 1255::oid AND d.objid = p.oid AND d.deptype = 'e'::\"char\") "
+    f"WHERE p.pronamespace = 11::oid AND p.oid >= {_FIRST_USER_OID}::oid "
     "UNION ALL SELECT 'operator in pg_catalog the system did not make: ' || o.oprname::text, o.oid::text "
-    f"FROM pg_operator o WHERE o.oprnamespace = 11::oid AND o.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS "
-    "(SELECT 1 FROM pg_depend d WHERE d.classid = 2617::oid AND d.objid = o.oid AND d.deptype = 'e'::\"char\") "
+    f"FROM pg_operator o WHERE o.oprnamespace = 11::oid AND o.oid >= {_FIRST_USER_OID}::oid "
     "UNION ALL SELECT 'type in pg_catalog the system did not make: ' || t.typname::text, t.oid::text FROM pg_type t "
-    f"WHERE t.typnamespace = 11::oid AND t.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS (SELECT 1 FROM pg_depend d "
-    "WHERE d.classid = 1247::oid AND d.objid = t.oid AND d.deptype = 'e'::\"char\") "
+    f"WHERE t.typnamespace = 11::oid AND t.oid >= {_FIRST_USER_OID}::oid "
     "UNION ALL SELECT 'relation in pg_catalog the system did not make: ' || c.relname::text, c.oid::text "
-    f"FROM pg_class c WHERE c.relnamespace = 11::oid AND c.oid >= {_FIRST_USER_OID}::oid AND NOT EXISTS "
-    "(SELECT 1 FROM pg_depend d WHERE d.classid = 1259::oid AND d.objid = c.oid AND d.deptype = 'e'::\"char\")"
+    f"FROM pg_class c WHERE c.relnamespace = 11::oid AND c.oid >= {_FIRST_USER_OID}::oid"
 )
 HARNESS_TABLES_WITH_CODE = (
     "SELECT 'harness table ' || c.oid::regclass::text || ' is not a plain table', c.relkind::text "
@@ -128,16 +133,18 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
     """The queries for a world group ``world_group``, the group every world's role is a member of."""
     our_role = (
         f"(r.rolname IN ('{world_group}', '{DOOR_ROLE_GROUP}') "
-        f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX})[0-9]+$')"
+        f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$')"
     )
     our_roles = (
         "SELECT 'role ' || r.rolname || ' has an attribute the harness never gives it', '' "
         f"FROM pg_roles r WHERE {our_role} "
-        "AND (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls) "
+        "AND (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication "
+        f"OR (r.rolbypassrls AND r.rolname !~ '^{STORE_ROLE_PREFIX}[0-9]+$')) "
         "UNION ALL SELECT 'role ' || r.rolname || ' is a member of ' || g.rolname, '' "
         "FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.member JOIN pg_roles g ON g.oid = a.roleid "
         f"WHERE {our_role} AND NOT ("
-        f"(g.rolname = '{world_group}' AND (r.rolname ~ '^{WORLD_ROLE_PREFIX}[0-9]+$' OR r.rolname = '{DOOR_ROLE_GROUP}')) "
+        f"(g.rolname = '{world_group}' AND (r.rolname ~ '^({WORLD_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$' "
+        f"OR r.rolname = '{DOOR_ROLE_GROUP}')) "
         f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$'))"
     )
     other_roles = (

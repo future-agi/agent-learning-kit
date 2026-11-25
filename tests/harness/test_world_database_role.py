@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from dataclasses import replace
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -82,6 +83,14 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         'ALTER ROLE "alk_w3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
         f"PASSWORD '{role.password}'",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_w3"',
+        # The world's store role: the group's rights, past row security, and replica mode for a reset.
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_s3') THEN "
+        'CREATE ROLE "alk_s3" LOGIN IN ROLE "alk_world_tools"; END IF; END $$',
+        'ALTER ROLE "alk_s3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
+        f"PASSWORD '{pr.store_role(_CREDENTIALS, 3).password}'",
+        "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
+        "EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"alk_s3\"'; END IF; END $$",
+        'GRANT CONNECT ON DATABASE "w3" TO "alk_s3"',
         'ALTER DATABASE "w3" ALLOW_CONNECTIONS true',
     ]
 
@@ -601,6 +610,8 @@ def door_worlds(monkeypatch):
         def url(credentials: pr.EngineCredentials, index: int = 0) -> str:
             return f"postgresql://{credentials.username}:{credentials.password}@{host}:{port}/w{index}"
 
+        # World 0's store role, for the tests that read and reset it as the harness does.
+        make.store_url = url(pr.store_role(superuser, 0))
         return (
             url(superuser),
             url(pr.world_role(superuser, 0)),
@@ -1165,7 +1176,7 @@ def test_a_migration_s_security_definer_function_cannot_reach_the_harness_tables
         ),
         # E1 without a trigger: a harness table the migrations own is refused too.
         # The bundle's own prefix makes the harness's tables in its migration: a plain one is taken over.
-        ("CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text)", None),
+        ("CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL)", None),
         # A source's own functions named like system ones build: every session of the harness's and the door's runs on
         # the system's own search path, where they are never found. Each raises if anything of the harness's runs it.
         (
@@ -1220,7 +1231,7 @@ def test_a_migration_s_function_cannot_drop_a_harness_table_through_public():
         "GRANT ALL ON public._alk_tool_trace TO PUBLIC; END $$"
     )
     superuser, _migrator, baseline, checked, before, run = _migrated(
-        swap, "CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text)"
+        swap, "CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL)"
     )
     try:
         pr._refuse_seed_escalation(**checked, before_seed=before)
@@ -1431,7 +1442,7 @@ def test_a_log_in_an_older_shape_with_a_text_ok_refuses_the_build_and_names_the_
     try:
         with pytest.raises(pr.ProcessRuntimeError) as refused:
             pr._adopt_harness_tables(**checked)
-        assert "column ok text, which the harness makes as boolean" in str(refused.value)
+        assert "has column ok text not null, which the harness makes as boolean not null" in str(refused.value)
         assert "Change the migrations" in str(refused.value)
     finally:
         _dropped(superuser, baseline, run)
@@ -1497,14 +1508,22 @@ def test_actors_read_a_world_s_rows_with_its_own_role(monkeypatch):
 
     from fi.alk.harness.world.stores import postgres as stores
 
-    made: list[str] = []
-    monkeypatch.setattr(stores.AttachedPostgresStore, "__init__", lambda self, dsn: made.append(dsn))
-    runtime = SimpleNamespace(
-        endpoints={"db": SimpleNamespace(protocol="postgres", address="superuser-url", tool_address="world-url")}
+    from fi.alk.harness import privilege
+
+    made: list[str | None] = []
+    monkeypatch.setattr(
+        stores.AttachedPostgresStore, "__init__", lambda self, dsn, **kwargs: made.append(kwargs.get("reader_dsn"))
     )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    database = SimpleNamespace(
+        protocol="postgres", address="superuser-url", tool_address="world-url", store_address="store-url"
+    )
+    runtime = SimpleNamespace(endpoints={"db": database})
     call_runner._world_records(runtime)
     call_runner._world_columns(runtime)
-    assert made == ["world-url", "world-url"]
+    assert made == ["store-url", "store-url"]
+    database.store_address = None
+    assert call_runner._world_records(runtime) is None and call_runner._world_columns(runtime) is None
 
 
 _WORLD_CODE = (
@@ -1538,20 +1557,22 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
         connection.execute(_WORLD_CODE)
         connection.execute("TRUNCATE audit.ran_as")
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
-    store = chat_call_runner._HostedToolStore(
-        attached_world_store(SimpleNamespace(address=superuser, tool_address=world))
-    )
-    role = urlsplit(world).username
+    endpoint = SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+    store = chat_call_runner._HostedToolStore(attached_world_store(endpoint))
+    role, reader = urlsplit(world).username, urlsplit(door_worlds.store_url).username
 
     assert store.query("SELECT format('who %s', name) AS who FROM riders") == [{"who": role}]
+    assert store._store.query("SELECT format('who %s', name) AS who FROM riders") == [{"who": reader}]
     snapshot = store._store.freeze()
     store.execute("INSERT INTO riders (name) VALUES ('bo')")
     store._store.restore(snapshot)
     assert [row["name"] for row in store.records("riders")] == ["ada"]
     with psycopg.connect(superuser, autocommit=True) as connection:
-        assert {row[0] for row in connection.execute("SELECT who FROM audit.ran_as").fetchall()} == {role}
+        ran = {row[0] for row in connection.execute("SELECT who FROM audit.ran_as").fetchall()}
+    # The handler's insert fires as the world's role; the reset's ALWAYS trigger as the store role, never the harness.
+    assert ran == {role, reader} and urlsplit(superuser).username not in ran
     with pytest.raises(StoreError, match="no_world_role"):
-        attached_world_store(SimpleNamespace(address=superuser, tool_address=None))
+        attached_world_store(SimpleNamespace(address=superuser, tool_address=None, store_address=None))
 
 
 @real_postgres
@@ -1633,7 +1654,7 @@ def test_a_new_bundle_s_migration_must_make_every_harness_column():
         with pytest.raises(pr.ProcessRuntimeError) as refused:
             pr._adopt_harness_tables(**checked, complete=True)
         assert "public._alk_tool_trace lacks column arguments" in str(refused.value)
-        assert "public._alk_trial_faults lacks column" in str(refused.value)
+        assert "public._alk_trial_faults is missing" in str(refused.value)
         pr._adopt_harness_tables(**checked)
     finally:
         _dropped(superuser, baseline, run)
@@ -1662,6 +1683,250 @@ def test_an_old_bundle_s_door_path_refuses_a_world_with_a_system_named_function(
     with pytest.raises(RuntimeError, match="door_path_refused"):
         mcp_toolbox_adapter._execute("read", spec, {}, database_url=door, trace_path=tmp_path / "trace.jsonl")
     mcp_toolbox_adapter._SHADOW_FREE.clear()
+
+
+@real_postgres
+def test_a_seed_only_store_runs_its_seed_as_the_restricted_login(tmp_path: Path):
+    """A store with seed files and no migrations still gets the restricted login: its seed runs as it (observed with
+    `current_user`), and a statement only a superuser may run is refused."""
+    from fi.alk.harness.bundle_v2 import StoreEntry
+
+    (tmp_path / "who.sql").write_text("CREATE TABLE who AS SELECT current_user::text AS u;\n", encoding="utf-8")
+    (tmp_path / "grab.sql").write_text("CREATE ROLE alk_seed_grab SUPERUSER;\n", encoding="utf-8")
+    store = StoreEntry.model_construct(capability="world_db", migrations=[], seed_files=["who.sql", "grab.sql"])
+    parts = urlsplit(_REAL)
+    host, port = parts.hostname or "localhost", parts.port or 5432
+    superuser = pr.EngineCredentials(parts.username, parts.password or "")
+    baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
+
+    def run(dbname: str, statement: str):
+        return _customer_sql(host=host, port=port, user=superuser.username, password=superuser.password,
+                             dbname=dbname, statement=statement)
+
+    run("postgres", f'CREATE DATABASE "{baseline}"')
+    try:
+        login = pr.store_login(store, engine=pr.ManagedEngine.POSTGRES, port=port, credentials=superuser,
+                               baseline_db=baseline, sql_runner=pr.default_sql_runner, process_name="db")
+        assert login is not None and login.username == pr.MIGRATOR_ROLE
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr.apply_store_seed(
+                store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=tmp_path, port=port, dbname=baseline,
+                credentials=superuser, process_name="db", sync_run=pr.subprocess.run, migration_credentials=login,
+            )
+        assert "permission denied" in str(refused.value)
+        assert run(baseline, "SELECT u FROM who") == [(pr.MIGRATOR_ROLE,)]
+        assert run("postgres", "SELECT count(*) FROM pg_roles WHERE rolname = 'alk_seed_grab'") == [(0,)]
+        none = StoreEntry.model_construct(capability="world_db", migrations=[], seed_files=[])
+        assert pr.store_login(none, engine=pr.ManagedEngine.POSTGRES, port=port, credentials=superuser,
+                              baseline_db=baseline, sql_runner=pr.default_sql_runner, process_name="db") is None
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+def _full_prefix() -> str:
+    from fi.alk.harness.actors import ACTORS_DDL
+
+    return author._TOOL_TRACE_DDL + ACTORS_DDL
+
+
+_UNLIKE_THE_HARNESS = {
+    # Blocker 2: right columns, plus a foreign key that lets a world row's delete cascade into the call log.
+    "cascade": "CREATE TABLE public.workers (name text PRIMARY KEY); ALTER TABLE public._alk_tool_trace ADD CONSTRAINT "
+    "c FOREIGN KEY (worker_id) REFERENCES public.workers (name) ON DELETE CASCADE",
+    "referenced": "CREATE TABLE public.notes (trace bigint REFERENCES public._alk_tool_trace (id) ON DELETE CASCADE)",
+    "not valid": "ALTER TABLE public._alk_tool_trace ADD CONSTRAINT short CHECK (length(name) < 3) NOT VALID",
+    "exclusion": "ALTER TABLE public._alk_action_keys ADD CONSTRAINT x EXCLUDE USING btree (actor_id WITH =)",
+    "replica identity": "ALTER TABLE public._alk_tool_trace REPLICA IDENTITY FULL",
+    "default": "ALTER TABLE public._alk_tool_trace ALTER COLUMN outcome SET DEFAULT 'refused'",
+    "identity": "ALTER TABLE public._alk_worker_runs ADD COLUMN n int GENERATED ALWAYS AS IDENTITY",
+    "generated": "ALTER TABLE public._alk_worker_runs ADD COLUMN twice double precision GENERATED ALWAYS AS (at * 2) "
+    "STORED",
+    "unlogged": "ALTER TABLE public._alk_worker_stops SET UNLOGGED",
+    "row security": "ALTER TABLE public._alk_tool_trace ENABLE ROW LEVEL SECURITY",
+    "index": "CREATE INDEX ON public._alk_tool_trace (name)",
+    # Auditor A, item 2: a failed call never logged, and a second call of a name lost.
+    "check ok": "ALTER TABLE public._alk_tool_trace ADD CONSTRAINT logged_ok CHECK (ok)",
+    "unique name": "ALTER TABLE public._alk_tool_trace ADD CONSTRAINT one_name UNIQUE (name)",
+}
+
+
+@real_postgres
+@pytest.mark.parametrize("change", sorted(_UNLIKE_THE_HARNESS))
+def test_a_harness_table_unlike_the_harness_s_own_refuses_the_build(change):
+    """The one rule for a harness table the migrations made: its whole shape (columns, defaults, identity and
+    generated columns, every constraint and foreign key either way, indexes, persistence, replica identity, row
+    security) is what the harness's own statements make, or the build is refused, old bundle or new."""
+    superuser, _migrator, baseline, checked, _before, run = _migrated(
+        _full_prefix() + ";\n" + _UNLIKE_THE_HARNESS[change], "", adopt=False
+    )
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._adopt_harness_tables(**checked)
+        assert "which the harness" in str(refused.value)
+        assert "Change the migrations" in str(refused.value)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_the_harness_s_own_prefix_matches_its_shape_exactly():
+    superuser, _migrator, baseline, checked, _before, run = _migrated(_full_prefix(), "", adopt=False)
+    try:
+        pr._adopt_harness_tables(**checked, complete=True)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
+def _seeded(tmp_path: Path, schema: str, seed: str):
+    """A store with ``schema`` as its migration and ``seed`` as its seed, built the one way stores are built."""
+    from fi.alk.harness.bundle_v2 import StoreEntry
+
+    (tmp_path / "schema.sql").write_text(_full_prefix() + ";\n" + schema, encoding="utf-8")
+    (tmp_path / "seed.sql").write_text(seed, encoding="utf-8")
+    store = StoreEntry.model_construct(capability="world_db", migrations=["schema.sql"], seed_files=["seed.sql"])
+    parts = urlsplit(_REAL)
+    host, port = parts.hostname or "localhost", parts.port or 5432
+    superuser = pr.EngineCredentials(parts.username, parts.password or "")
+    baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
+
+    def run(dbname: str, statement: str):
+        return _customer_sql(host=host, port=port, user=superuser.username, password=superuser.password,
+                             dbname=dbname, statement=statement)
+
+    run("postgres", f'CREATE DATABASE "{baseline}"')
+    build = lambda: pr.seed_store_safely(  # noqa: E731 - the one call under test
+        store, engine=pr.ManagedEngine.POSTGRES, bundle_dir=tmp_path, port=port, dbname=baseline,
+        credentials=superuser, process_name="db", sync_run=pr.subprocess.run, sql_runner=pr.default_sql_runner,
+        complete=True,
+    )
+    return build, run, baseline
+
+
+_RIDES = (
+    "CREATE TABLE public.riders (id int PRIMARY KEY, name text);\n"
+    "CREATE TABLE public.trips (id int PRIMARY KEY, rider int REFERENCES public.riders (id));\n"
+    "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.name := 'stamped'; "
+    "RETURN NEW; END $$;\n"
+    "CREATE TRIGGER stamped BEFORE INSERT ON public.riders FOR EACH ROW EXECUTE FUNCTION public.stamp();\n"
+)
+
+
+@real_postgres
+def test_a_pg_dump_data_only_disable_triggers_seed_builds_as_the_restricted_login(tmp_path: Path):
+    """A seed written by `pg_dump --data-only --disable-triggers` (trips before riders, triggers suspended) builds as
+    the restricted login: its DISABLE/ENABLE TRIGGER ALL lines become replica mode, which suspends the same."""
+    import subprocess
+
+    parts = urlsplit(_REAL)
+    source = f"alk_source_{uuid.uuid4().hex[:8]}"
+    build, run, baseline = _seeded(tmp_path, _RIDES, "")
+    run("postgres", f'CREATE DATABASE "{source}"')
+    try:
+        run(source, _RIDES + "INSERT INTO public.riders VALUES (1, 'ada'); INSERT INTO public.trips VALUES (7, 1);")
+        run(source, "UPDATE public.riders SET name = 'ada'")
+        dumped = subprocess.run(
+            ["pg_dump", "--data-only", "--disable-triggers", "--table=public.riders", "--table=public.trips",
+             f"--host={parts.hostname}", f"--port={parts.port}", f"--username={parts.username}", source],
+            capture_output=True, text=True, check=True, env={**os.environ, "PGPASSWORD": parts.password or ""},
+        ).stdout
+        assert "DISABLE TRIGGER ALL" in dumped
+        # A pg_dump newer than the test server writes settings that server lacks; the dump is otherwise as written.
+        dumped = "".join(
+            line for line in dumped.splitlines(keepends=True) if not line.startswith("SET transaction_timeout")
+        )
+        (tmp_path / "seed.sql").write_text(dumped, encoding="utf-8")
+        build()
+        assert run(baseline, "SELECT id, name FROM public.riders") == [(1, "ada")]
+        assert run(baseline, "SELECT id, rider FROM public.trips") == [(7, 1)]
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{source}" WITH (FORCE)')
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_a_seed_that_loads_in_replica_mode_builds_as_the_restricted_login(tmp_path: Path):
+    build, run, baseline = _seeded(
+        tmp_path,
+        _RIDES,
+        "SET session_replication_role = replica;\n"
+        "INSERT INTO public.trips VALUES (7, 1);\nINSERT INTO public.riders VALUES (1, 'ada');\n",
+    )
+    try:
+        build()
+        assert run(baseline, "SELECT name FROM public.riders") == [("ada",)]
+        assert run(baseline, "SELECT u FROM (SELECT tableowner AS u FROM pg_tables WHERE tablename = 'riders') o") \
+            == [(pr.MIGRATOR_ROLE,)]
+    finally:
+        run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
+
+
+@real_postgres
+def test_a_function_planted_in_pg_catalog_and_added_to_plpgsql_refuses_the_build():
+    """Auditor A, item 1: a member of a system extension in `pg_catalog` the system did not make is refused like any
+    other plant there; no extension the restricted login may add installs into `pg_catalog`."""
+    superuser, _migrator, baseline, checked, before, run = _migrated(
+        _full_prefix(),
+        "CREATE FUNCTION pg_catalog.format(text, text) RETURNS text LANGUAGE sql AS 'SELECT $1'; "
+        "ALTER EXTENSION plpgsql ADD FUNCTION pg_catalog.format(text, text)",
+    )
+    try:
+        with pytest.raises(pr.ProcessRuntimeError) as refused:
+            pr._refuse_seed_escalation(**checked, before_seed=before)
+        assert "function in pg_catalog the system did not make: format" in str(refused.value)
+    finally:
+        run(superuser, baseline, "ALTER EXTENSION plpgsql DROP FUNCTION pg_catalog.format(text, text); "
+            "DROP FUNCTION IF EXISTS pg_catalog.format(text, text)")
+        _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_the_store_reads_and_resets_a_row_secured_world_while_the_tools_stay_under_its_policies(
+    door_worlds, monkeypatch
+):
+    """Auditor A, item 4: a world table with row security (as Supabase writes one). The harness's store role reads it
+    whole, so checks see the world, and its reset puts every row back; the agent's tools' role stays under the
+    customer's own policies."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness import chat_call_runner, privilege
+    from fi.alk.harness.world.stores.postgres import attached_world_store
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "INSERT INTO riders (name) VALUES ('ada'), ('bo'); ALTER TABLE riders ENABLE ROW LEVEL SECURITY; "
+            "CREATE POLICY only_ada ON riders USING (name = 'ada') WITH CHECK (true)"
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = attached_world_store(
+        SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url)
+    )
+    tools = chat_call_runner._HostedToolStore(store)
+
+    assert sorted(row["name"] for row in store.state()["riders"]) == ["ada", "bo"]
+    assert [row["name"] for row in tools.query("SELECT name FROM riders")] == ["ada"]
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("DELETE FROM riders WHERE name = 'bo'; INSERT INTO riders (name) VALUES ('cy')")
+    store.restore(snapshot)
+    assert sorted(row["name"] for row in store.table("riders")) == ["ada", "bo"]
+
+
+def test_a_bundle_s_own_sentinel_runs_as_the_restricted_login_and_the_harness_s_as_the_harness():
+    """Auditor A, item 6: the harness's own sentinel reads its own marker table; any other a bundle carries is the
+    bundle's SQL, and runs as the restricted login."""
+    from fi.alk.harness.bundle_v2 import StoreEntry
+
+    harness, login = pr.EngineCredentials("harness", "x"), pr.EngineCredentials(pr.MIGRATOR_ROLE, "y")
+    for query, expected in (
+        (pr.SEED_SENTINEL_QUERY, harness),
+        ("SELECT id FROM harness_seed_sentinel WHERE id='ready'", harness),
+        ("SELECT count(*)::text FROM riders", login),
+    ):
+        store = StoreEntry.model_construct(sentinel=SimpleNamespace(query=query))
+        assert pr.sentinel_credentials(store, harness, login) is expected
+    assert pr.sentinel_credentials(StoreEntry.model_construct(sentinel=SimpleNamespace(query="x")), harness, None) \
+        is harness
 
 
 def _pg_dump_schema(owner: str) -> str:

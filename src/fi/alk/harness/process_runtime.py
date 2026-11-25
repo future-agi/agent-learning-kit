@@ -73,11 +73,14 @@ from .world_roles import (
     HARNESS_ONLY_TABLES,
     HARNESS_TABLES_WITH_CODE,
     PG_CATALOG_PLANTS,
+    STORE_ROLE_PREFIX,
+    WORLD_ROLE_PREFIX,
     WORLD_DOOR_DATABASE_URL,
     door_role_name,
     has_world_door,
     seed_escalation_queries,
     seed_escalation_reason,
+    store_role_name,
     world_role_name,
 )
 from .egress_proxy import EgressProxy
@@ -209,6 +212,8 @@ class RuntimeEndpoint(BaseModel):
     tool_address: str | None = None
     # Under per-user isolation, the address as the world's door's own role, for the door's processes only.
     door_address: str | None = None
+    # The world's store role (`store_role`): the harness's reads and resets of the world's rows.
+    store_address: str | None = None
 
 
 class EnvironmentRuntime(BaseModel):
@@ -784,6 +789,16 @@ def world_role(credentials: EngineCredentials, world_index: int) -> EngineCreden
     return _derived_role(credentials, world_role_name(world_index))
 
 
+def store_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
+    """World N's store role, derived the same way as the world's: it reads and resets the world's rows for the
+    harness past their row security, with the world group's rights and no more."""
+    return _derived_role(credentials, store_role_name(world_index))
+
+
+def _store_role_of(credentials: EngineCredentials, role: EngineCredentials) -> EngineCredentials:
+    return _derived_role(credentials, STORE_ROLE_PREFIX + role.username[len(WORLD_ROLE_PREFIX):])
+
+
 def door_role(credentials: EngineCredentials, world_index: int) -> EngineCredentials:
     """World N's door's own database role, derived the same way as the world's."""
     return _derived_role(credentials, door_role_name(world_index))
@@ -798,7 +813,11 @@ def _engine_diagnostic_secrets(
     for name, value in credentials.items():
         if value.world_secret:
             for world_index in range(instances):
-                for role in (world_role(value, world_index), door_role(value, world_index)):
+                for role in (
+                    world_role(value, world_index),
+                    door_role(value, world_index),
+                    store_role(value, world_index),
+                ):
                     secrets_by_name[f"{name}:{role.username}"] = role.password
     return secrets_by_name
 
@@ -914,6 +933,14 @@ def build_endpoints(
                 world_index=world_index,
                 credentials=world_role(engine_credentials, world_index),
             )
+        store_address = None
+        if tool_address is not None:
+            store_address = render_capability_address(
+                capability,
+                port=port,
+                world_index=world_index,
+                credentials=store_role(engine_credentials, world_index),
+            )
         door_address = None
         if door and tool_address is not None:
             door_address = render_capability_address(
@@ -929,6 +956,7 @@ def build_endpoints(
             configuration_name=capability.configuration_name,
             tool_address=tool_address,
             door_address=door_address,
+            store_address=store_address,
         )
     return endpoints
 
@@ -4392,6 +4420,40 @@ def _without_ownership(file: Path) -> tuple[Path, int]:
     return Path(name), skipped
 
 
+# A data dump's `--disable-triggers` lines, as pg_dump writes them: only a superuser may suspend the system's own
+# foreign-key triggers this way, so a file run as the restricted login suspends them with replica mode instead.
+_TRIGGER_TOGGLE = re.compile(rf"^ALTER TABLE (?:ONLY )?{_QUALIFIED} (?:DISABLE|ENABLE) TRIGGER ALL;\s*$")
+
+
+def _without_trigger_toggles(file: Path) -> tuple[Path, int]:
+    """A file without the dump's DISABLE / ENABLE TRIGGER ALL lines, run in replica mode, which suspends the same
+    triggers and foreign-key checks for the load; and how many it left out. The file itself when it has none."""
+    if file.suffix.lower() != ".sql":
+        return file, 0
+    try:
+        lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
+    except (OSError, UnicodeDecodeError):
+        return file, 0
+    kept: list[str] = []
+    state: str | None = None
+    skipped = 0
+    for line in lines:
+        if state is None and _TRIGGER_TOGGLE.match(line):
+            skipped += 1
+            kept.append("-- left out by the harness (replica mode instead): " + line.strip() + "\n")
+            continue
+        kept.append(line)
+        state = _sql_state_after(line, state)
+    if not skipped:
+        return file, 0
+    descriptor, name = tempfile.mkstemp(prefix="seed-", suffix=".sql")
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write("SET session_replication_role = replica;\n")
+        handle.writelines(kept)
+    os.chmod(name, 0o644)
+    return Path(name), skipped
+
+
 def apply_store_seed(
     store: StoreEntry,
     *,
@@ -4429,6 +4491,15 @@ def apply_store_seed(
                         relative_path,
                         skipped,
                     )
+            if as_login:
+                path, toggled = _without_trigger_toggles(path)
+                if toggled:
+                    logger.info(
+                        "trigger_toggles_run_in_replica_mode process=%s file=%s count=%d",
+                        process_name,
+                        relative_path,
+                        toggled,
+                    )
             try:
                 apply_seed_file(
                     engine, path, port=port, dbname=dbname,
@@ -4462,6 +4533,18 @@ def apply_store_seed(
 # The seed's sentinel as a bundle sealed before the harness named its tables with their schema asks it; the harness
 # runs it on the system's own search path, where only the schema-named table is found.
 _LEGACY_SENTINEL_QUERIES = {"SELECT id FROM harness_seed_sentinel WHERE id='ready'": SEED_SENTINEL_QUERY}
+
+
+def sentinel_credentials(
+    store: StoreEntry, credentials: EngineCredentials | None, login: EngineCredentials | None
+) -> EngineCredentials | None:
+    """Who reads the store's sentinel: the harness's own fixed query (its marker table, the superuser's) as the
+    harness, on the system's own path and read-only; any other a bundle carries as the restricted login, like the
+    rest of the bundle's SQL."""
+    query = store.sentinel.query if store.sentinel is not None else None
+    if login is None or _LEGACY_SENTINEL_QUERIES.get(str(query), query) == SEED_SENTINEL_QUERY:
+        return credentials
+    return login
 
 
 def check_sentinel(
@@ -5323,42 +5406,9 @@ def _freeze_one_store(
                 dbname="postgres",
                 statement=f'CREATE DATABASE "{baseline_dbname}"',
             )
-        migrations_as = (
-            migrator_credentials(
-                port=port,
-                credentials=credentials,
-                baseline_db=baseline_dbname,
-                sql_runner=context.sql_runner,
-                process_name=process.name,
-            )
-            if process.engine is ManagedEngine.POSTGRES and credentials is not None and store.migrations
-            else None
-        )
-        before_seed: set[SeedEscalation] = set()
-        harness_tables_complete = (manifest.metadata or {}).get(HARNESS_TABLES_KEY) == HARNESS_TABLES_COMPLETE
-
-        def _snapshot_before_seed() -> None:
-            # What the source's own migrations made: the seed check below refuses only what the seed adds or changes.
-            if process.engine is ManagedEngine.POSTGRES and credentials is not None:
-                _adopt_harness_tables(
-                    port=port,
-                    credentials=credentials,
-                    baseline_db=baseline_dbname,
-                    sql_runner=context.sql_runner,
-                    process_name=process.name,
-                    complete=harness_tables_complete,
-                )
-                before_seed.update(
-                    seed_escalation_snapshot(
-                        port=port,
-                        credentials=credentials,
-                        baseline_db=baseline_dbname,
-                        sql_runner=context.sql_runner,
-                        process_name=process.name,
-                    )
-                )
-
-        apply_store_seed(
+        # Migrations and seed as the restricted login, the harness's tables compared and taken over, and every check
+        # before the sentinel is read: a session on the system's own search path must find nothing the seed planted.
+        login = seed_store_safely(
             store,
             engine=process.engine,
             bundle_dir=context.bundle_dir,
@@ -5367,25 +5417,14 @@ def _freeze_one_store(
             credentials=credentials,
             process_name=process.name,
             sync_run=context.sync_run,
+            sql_runner=context.sql_runner,
             user=handle.uid,
             group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
             source_digest=manifest.provenance.source_digest,
             generic_artifact_root=context.generic_artifact_root,
-            after_migrations=_snapshot_before_seed,
-            migration_credentials=migrations_as,
+            complete=(manifest.metadata or {}).get(HARNESS_TABLES_KEY) == HARNESS_TABLES_COMPLETE,
         )
-        # Before the sentinel is read: a session on the system's own search path must find nothing the seed planted.
-        if process.engine is ManagedEngine.POSTGRES:
-            _refuse_seed_escalation(
-                port=port,
-                credentials=credentials,
-                baseline_db=baseline_dbname,
-                sql_runner=context.sql_runner,
-                process_name=process.name,
-                before_seed=before_seed,
-                complete=harness_tables_complete,
-            )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
         # state is caught at freeze (surfaced as `seed_failed` — the seed's own content did not
@@ -5401,7 +5440,7 @@ def _freeze_one_store(
             host="localhost",
             port=port,
             dbname=sentinel_dbname,
-            credentials=credentials,
+            credentials=sentinel_credentials(store, credentials, login),
             sql_runner=context.sql_runner,
             redis_runner=context.redis_runner,
             rabbitmq_inspector=context.rabbitmq_inspector,
@@ -5741,7 +5780,8 @@ def _seal_world_store(
                 "SpawnContext.bundle_dir is required to re-seed an empty-strategy store",
                 process=process.name,
             )
-        apply_store_seed(
+        # Every world database made from the store's own files: the same restricted login and checks as a baseline.
+        seed_store_safely(
             store,
             engine=process.engine,
             bundle_dir=context.bundle_dir,
@@ -5750,11 +5790,13 @@ def _seal_world_store(
             credentials=credentials,
             process_name=process.name,
             sync_run=context.sync_run,
+            sql_runner=context.sql_runner,
             user=handle.uid,
             group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
             source_digest=manifest.provenance.source_digest,
             generic_artifact_root=context.generic_artifact_root,
+            complete=(manifest.metadata or {}).get(HARNESS_TABLES_KEY) == HARNESS_TABLES_COMPLETE,
         )
     return handle
 
@@ -5802,21 +5844,77 @@ def _seed_escalations(
     return ours, others
 
 
-# What each harness table's columns are, by engine port, as the harness's own statements make them.
-_HARNESS_SHAPES: dict[int, dict[str, dict[str, str]]] = {}
-_HARNESS_COLUMNS = (
-    "SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod) FROM pg_attribute a "
-    "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE '\\_alk\\_%' "
-    "AND a.attnum > 0 AND NOT a.attisdropped"
+# Each harness table's whole shape, by engine port, as the harness's own statements make it on that engine.
+_HARNESS_SHAPES: dict[int, dict[str, dict[tuple[str, str], str]]] = {}
+_HARNESS_TABLE = (
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE '\\_alk\\_%'"
 )
+_HARNESS_RELATION = (
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND c.relkind <> 'i' AND c.relname LIKE '\\_alk\\_%'"
+)
+# One row per part of a harness relation that decides what reading or writing it does: (relation, kind, key, value).
+# The relation itself (its kind, whether logged, replica identity, row security, grants, partitioning), and for a
+# table: each column (type, NOT NULL, default, generated, identity, collation), every constraint (its full definition:
+# NOT VALID, deferrable, exclusion, what it references), every foreign key that references it from anywhere, every
+# index, trigger, rule, row policy and statistics object, and what it inherits or is inherited by. Names the database
+# makes up are left out. The harness's own statements, run in a scratch database, are the shape every one must have.
+_HARNESS_SHAPE = (
+    "SELECT c.relname::text, 'relation', '', 'kind ' || c.relkind::text || ' persistence ' || c.relpersistence::text"
+    " || ' replica identity ' || c.relreplident::text || ' row security ' || c.relrowsecurity::text || '/'"
+    " || c.relforcerowsecurity::text || ' partition ' || c.relispartition::text || ' grants '"
+    f" || coalesce(c.relacl::text, '') FROM pg_class c {_HARNESS_RELATION} "
+    "UNION ALL SELECT c.relname::text, 'column', a.attname::text, format_type(a.atttypid, a.atttypmod) "
+    "|| CASE WHEN a.attnotnull THEN ' not null' ELSE '' END "
+    "|| coalesce(' default ' || pg_get_expr(d.adbin, d.adrelid), '') "
+    "|| CASE WHEN a.attgenerated <> '' THEN ' generated ' || a.attgenerated::text ELSE '' END "
+    "|| CASE WHEN a.attidentity <> '' THEN ' identity ' || a.attidentity::text ELSE '' END "
+    "|| CASE WHEN a.attcollation <> ty.typcollation THEN ' collate ' || coalesce(co.collname::text, '') ELSE '' END "
+    "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_type ty ON ty.oid = a.atttypid "
+    "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+    f"LEFT JOIN pg_collation co ON co.oid = a.attcollation {_HARNESS_TABLE} "
+    "AND a.attnum > 0 AND NOT a.attisdropped "
+    "UNION ALL SELECT c.relname::text, 'constraint', k.contype::text || ' ' || pg_get_constraintdef(k.oid), '' "
+    f"FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid {_HARNESS_TABLE} "
+    "UNION ALL SELECT c.relname::text, 'foreign key from', k.conrelid::regclass::text || ' '"
+    " || pg_get_constraintdef(k.oid), '' "
+    f"FROM pg_constraint k JOIN pg_class c ON c.oid = k.confrelid {_HARNESS_TABLE} AND k.contype = 'f' "
+    "UNION ALL SELECT c.relname::text, 'index', "
+    "regexp_replace(pg_get_indexdef(i.indexrelid), '^CREATE (UNIQUE )?INDEX \\S+ ON ', 'CREATE \\1INDEX ON '), '' "
+    f"FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid {_HARNESS_TABLE} "
+    "UNION ALL SELECT c.relname::text, 'trigger', "
+    "regexp_replace(pg_get_triggerdef(t.oid), '^CREATE (CONSTRAINT )?TRIGGER \\S+ ', 'CREATE \\1TRIGGER ')"
+    " || ' enabled ' || t.tgenabled::text, '' "
+    f"FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid {_HARNESS_TABLE} AND NOT t.tgisinternal "
+    "UNION ALL SELECT c.relname::text, 'rule', r.rulename::text || ' ' || pg_get_ruledef(r.oid), '' "
+    f"FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class {_HARNESS_TABLE} "
+    "UNION ALL SELECT c.relname::text, 'policy', p.polname::text || ' ' || p.polcmd::text || ' '"
+    " || coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' ' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid),"
+    " ''), '' "
+    f"FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid {_HARNESS_TABLE} "
+    "UNION ALL SELECT c.relname::text, 'statistics', coalesce(pg_get_statisticsobjdef_columns(x.oid), ''), '' "
+    f"FROM pg_statistic_ext x JOIN pg_class c ON c.oid = x.stxrelid {_HARNESS_TABLE} "
+    "UNION ALL SELECT c.relname::text, 'inherits', i.inhparent::regclass::text, '' "
+    f"FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid {_HARNESS_TABLE} "
+    "UNION ALL SELECT c.relname::text, 'inherited by', i.inhrelid::regclass::text, '' "
+    f"FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhparent {_HARNESS_TABLE}"
+)
+
+
+def _shape_items(rows: Any) -> dict[str, dict[tuple[str, str], str]]:
+    shape: dict[str, dict[tuple[str, str], str]] = {}
+    for row in rows or []:
+        if len(row) == 4:
+            shape.setdefault(str(row[0]), {})[(str(row[1]), str(row[2]))] = str(row[3])
+    return shape
 
 
 def _harness_table_shapes(
     *, port: int, credentials: EngineCredentials, sql_runner: SqlRunner, process_name: str
-) -> dict[str, dict[str, str]]:
-    """Each harness table's columns and their types, read from a scratch database the harness's own statements made
-    on this engine (so the types are the engine's own spelling); made once per engine."""
+) -> dict[str, dict[tuple[str, str], str]]:
+    """Each harness table's whole shape, read from a scratch database the harness's own statements made on this
+    engine (so every part is the engine's own spelling); made once per engine."""
     if port in _HARNESS_SHAPES:
         return _HARNESS_SHAPES[port]
     from .actors import ACTORS_DDL
@@ -5841,10 +5939,7 @@ def _harness_table_shapes(
     run("postgres", f'CREATE DATABASE "{scratch}" TEMPLATE "template0"')
     try:
         run(scratch, _TOOL_TRACE_DDL + ACTORS_DDL)
-        shapes: dict[str, dict[str, str]] = {}
-        for row in run(scratch, _HARNESS_COLUMNS, read_only=True) or []:
-            if len(row) == 3:
-                shapes.setdefault(str(row[0]), {})[str(row[1])] = str(row[2])
+        shapes = _shape_items(run(scratch, _HARNESS_SHAPE, read_only=True))
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{scratch}"')
     _HARNESS_SHAPES[port] = shapes
@@ -5860,40 +5955,48 @@ def _harness_shape_problems(
     process_name: str,
     complete: bool = False,
 ) -> list[str]:
-    """Each harness table column the harness does not make, or makes with another type: the door and the checks
-    read the table as its own statements made it (a text `ok` stores a failed call as 'false', read as passed). A
-    column it adds later may be missing only in a bundle sealed before that column was kept; a bundle that says its
-    migration makes them all (``complete``) must have every table and every column."""
+    """Each way a harness table differs from what the harness's own statements make: the door and the checks write
+    and read it as they made it, so a column of another type (a text `ok` stores a failed call as 'false'), a foreign
+    key that lets a world row's delete cascade into the log, or any other constraint, index or default the harness
+    does not make refuses the build. A part the harness added later may be missing only in a bundle sealed before it
+    was kept; a bundle that says its migration makes them all (``complete``) must match exactly."""
     shapes = _harness_table_shapes(
         port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name
     )
-    rows = _call_sql(
-        sql_runner,
-        stage="baseline",
-        process_name=process_name,
-        host="localhost",
-        port=port,
-        user=credentials.username,
-        password=credentials.password,
-        dbname=baseline_db,
-        statement=_HARNESS_COLUMNS,
-        read_only=True,
+    found = _shape_items(
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname=baseline_db,
+            statement=_HARNESS_SHAPE,
+            read_only=True,
+        )
     )
     problems = []
-    found: dict[str, set[str]] = {}
-    for table, column, _kind in (row for row in rows or [] if len(row) == 3):
-        found.setdefault(str(table), set()).add(str(column))
     if complete:
-        for table, columns in shapes.items():
-            for column in sorted(set(columns) - found.get(table, set())):
-                problems.append(f"harness table public.{table} lacks column {column}, which the harness makes")
-    for table, column, kind in (row for row in rows or [] if len(row) == 3):
-        expected = shapes.get(str(table), {}).get(str(column))
-        if str(table) in shapes and expected != str(kind):
-            problems.append(
-                f"harness table public.{table} has column {column} {kind}, which the harness makes "
-                + (f"as {expected}" if expected else "nowhere")
-            )
+        for table in sorted(set(found) - set(shapes)):
+            problems.append(f"relation public.{table} is named like a harness table, which the harness never makes")
+    for table, made in shapes.items():
+        have = found.get(table)
+        if have is None:
+            if complete:
+                problems.append(f"harness table public.{table} is missing, which the harness makes")
+            continue
+        for (kind, key), value in have.items():
+            if (kind, key) not in made:
+                problems.append(f"harness table public.{table} has {kind} {key} {value}".rstrip()
+                                + ", which the harness never makes")
+            elif made[(kind, key)] != value:
+                problems.append(f"harness table public.{table} has {kind} {key} {value}".replace("  ", " ")
+                                + f", which the harness makes as {made[(kind, key)]}")
+        if complete:
+            for kind, key in sorted(set(made) - set(have)):
+                problems.append(f"harness table public.{table} lacks {kind} {key}, which the harness makes")
     return sorted(problems)
 
 
@@ -5994,8 +6097,119 @@ def migrator_credentials(
     # database): the migrations may create schemas, trusted extensions and objects in `public`, never drop or alter
     # what they do not own there, a harness table included.
     run("postgres", f'GRANT CONNECT, CREATE, TEMPORARY ON DATABASE "{baseline_db}" TO "{MIGRATOR_ROLE}"')
+    # A data load (`pg_dump --data-only`, `--disable-triggers`) suspends triggers and foreign-key checks with replica
+    # mode: in the login's own session only, and every check runs after the seed (Postgres 15 and later).
+    run(
+        "postgres",
+        "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
+        f"EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"{MIGRATOR_ROLE}\"'; END IF; END $$",
+    )
     run(baseline_db, f'GRANT USAGE, CREATE ON SCHEMA public TO "{MIGRATOR_ROLE}"')
     return EngineCredentials(MIGRATOR_ROLE, password)
+
+
+def seed_store_safely(
+    store: StoreEntry,
+    *,
+    engine: ManagedEngine,
+    bundle_dir: Path,
+    port: int,
+    dbname: str,
+    credentials: EngineCredentials | None,
+    process_name: str,
+    sync_run: Callable[..., subprocess.CompletedProcess],
+    sql_runner: SqlRunner,
+    user: int | None = None,
+    group: int | None = None,
+    rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
+    source_digest: str | None = None,
+    generic_artifact_root: Path | None = None,
+    complete: bool = False,
+) -> EngineCredentials | None:
+    """The one way a store's own files reach a database: on Postgres, migrations and seed run as the restricted
+    login (`store_login`), the harness's tables are compared with what its own statements make and taken over once
+    the migrations ran, and the seed is checked (`_refuse_seed_escalation`) before anything else reads the database.
+    Other engines apply their files as before. Returns the restricted login, for any other SQL of the bundle's."""
+    postgres = engine is ManagedEngine.POSTGRES and credentials is not None
+    login = store_login(
+        store,
+        engine=engine,
+        port=port,
+        credentials=credentials,
+        baseline_db=dbname,
+        sql_runner=sql_runner,
+        process_name=process_name,
+    )
+    before_seed: set[SeedEscalation] = set()
+
+    def after_migrations() -> None:
+        # What the source's own migrations made: the seed check refuses only what the seed adds or changes.
+        if postgres:
+            _adopt_harness_tables(
+                port=port,
+                credentials=credentials,
+                baseline_db=dbname,
+                sql_runner=sql_runner,
+                process_name=process_name,
+                complete=complete,
+            )
+            before_seed.update(
+                seed_escalation_snapshot(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=dbname,
+                    sql_runner=sql_runner,
+                    process_name=process_name,
+                )
+            )
+
+    apply_store_seed(
+        store,
+        engine=engine,
+        bundle_dir=bundle_dir,
+        port=port,
+        dbname=dbname,
+        credentials=credentials,
+        process_name=process_name,
+        sync_run=sync_run,
+        user=user,
+        group=group,
+        rabbitmq_import=rabbitmq_import,
+        source_digest=source_digest,
+        generic_artifact_root=generic_artifact_root,
+        after_migrations=after_migrations,
+        migration_credentials=login,
+    )
+    if postgres:
+        _refuse_seed_escalation(
+            port=port,
+            credentials=credentials,
+            baseline_db=dbname,
+            sql_runner=sql_runner,
+            process_name=process_name,
+            before_seed=before_seed,
+            complete=complete,
+        )
+    return login
+
+
+def store_login(
+    store: StoreEntry,
+    *,
+    engine: ManagedEngine,
+    port: int,
+    credentials: EngineCredentials | None,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
+) -> EngineCredentials | None:
+    """The restricted login a Postgres store's files run as, made whenever any will run: migrations, seed files or
+    both. A store with neither runs nothing, and needs none."""
+    if engine is not ManagedEngine.POSTGRES or credentials is None or not (store.migrations or store.seed_files):
+        return None
+    return migrator_credentials(
+        port=port, credentials=credentials, baseline_db=baseline_db, sql_runner=sql_runner, process_name=process_name
+    )
 
 
 def seed_escalation_snapshot(
@@ -6259,6 +6473,18 @@ def _reset_template_database(
             f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
             f"PASSWORD '{role.password}'",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{role.username}"',
+        ]
+        # The world's store role: the world group's rights, past row security, and replica mode for a reset.
+        store = _store_role_of(credentials, role)
+        statements += [
+            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
+            f"'{store.username}') THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
+            f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
+            f'ALTER ROLE "{store.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
+            f"PASSWORD '{store.password}'",
+            "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
+            f"EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"{store.username}\"'; END IF; END $$",
+            f'GRANT CONNECT ON DATABASE "{world_db}" TO "{store.username}"',
         ]
     if role is not None and door is not None:
         statements += [

@@ -899,16 +899,26 @@ def _build_spec(
     )
 
 
+def _world_reader(endpoint: Any) -> Any:
+    """The world's store for the harness's reads (`attached_world_store`): with world roles its store role, and none
+    for a world without one, never the superuser's address."""
+    from .world.stores import StoreError
+    from .world.stores.postgres import attached_world_store
+
+    try:
+        return attached_world_store(endpoint)
+    except StoreError:
+        logger.warning("world records unread: this world has no role of its own to read them with")
+        return None
+
+
 def _world_records(runtime: Any) -> Callable[[str], list[dict[str, Any]]] | None:
     """The trial's world records, one collection at a time, for an actor's knowledge; None where none can be read."""
     endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
     if endpoint is None:
         return None
-    from .world.stores.postgres import AttachedPostgresStore
-
-    # Read as the world's own role where there is one: a customer's function never runs with the superuser's rights.
-    store = AttachedPostgresStore(endpoint.tool_address or endpoint.address)
-    return store.table
+    store = _world_reader(endpoint)
+    return store.table if store is not None else None
 
 
 def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
@@ -916,9 +926,8 @@ def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
     endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
     if endpoint is None:
         return None
-    from .world.stores.postgres import AttachedPostgresStore
-
-    return AttachedPostgresStore(endpoint.tool_address or endpoint.address).columns
+    store = _world_reader(endpoint)
+    return store.columns if store is not None else None
 
 
 def _resolved_call_actors(

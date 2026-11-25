@@ -296,7 +296,8 @@ class _HostedToolStore:
         return
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
-        return self._store.query(_qmark_to_postgres(sql), params)
+        # A handler's read: the agent's tools' own role, under the world's row security.
+        return self._store.query_as_world(_qmark_to_postgres(sql), params)
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
         return self._store.execute(_qmark_to_postgres(sql), params)

@@ -115,6 +115,7 @@ def _runtime(tool_address: str | None = _WORLD_DSN) -> EnvironmentRuntime:
                 protocol="postgres",
                 address=_DSN,
                 tool_address=tool_address,
+                store_address="postgresql://store-role@db/world" if tool_address else None,
             )
         },
     )
