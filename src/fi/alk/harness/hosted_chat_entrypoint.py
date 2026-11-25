@@ -3411,12 +3411,18 @@ class HostedChatRuntime:
                         )
                     # The turn carries on after the answer (a design builds for an hour), so the
                     # platform settles the question now rather than at turn_completed.
-                    await self.client.emit(
-                        "question_answered",
-                        message_id=message_id,
-                        stage=self.conversation.stage_name,
-                        payload={"reply_message_id": str(command["message_id"])},
-                    )
+                    try:
+                        await self.client.emit(
+                            "question_answered",
+                            message_id=message_id,
+                            stage=self.conversation.stage_name,
+                            payload={"reply_message_id": str(command["message_id"])},
+                        )
+                    except ConversationTransportError as exc:
+                        # A platform without this event refuses it; turn_completed settles the
+                        # question there.
+                        if exc.status != 400:
+                            raise
                     if asked and self.backend_name == "claude":
                         # The CLI's own question tool takes its answers as an allowed, rewritten input.
                         from claude_agent_sdk.types import PermissionResultAllow

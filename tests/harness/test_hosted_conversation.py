@@ -365,6 +365,46 @@ harness_chat:
     assert question["payload"]["options"] == ["app/api.py", "worker.py"]
 
 
+@pytest.mark.parametrize("status", [400, 409, None])
+def test_only_a_platform_that_lacks_question_answered_may_refuse_it(tmp_path, status):
+    from fi.alk.harness.hosted_conversation import ConversationTransportError
+
+    class Platform(QuestionClient):
+        async def emit(self, kind, **kwargs):
+            if kind == "question_answered":
+                raise ConversationTransportError("refused", status=status)
+            return await super().emit(kind, **kwargs)
+
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    reception:
+      enabled: true
+  lifecycle:
+    request_user_input: true
+    interrupt_response: true
+""",
+        encoding="utf-8",
+    )
+    runtime = HostedChatRuntime(
+        client=Platform(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    asked = runtime._ask("AskUserQuestion", {"question": "Which entrypoint?"}, None)
+
+    if status == 400:
+        assert asyncio.run(asked)["content"][0]["text"] == "app/api.py"
+    else:
+        with pytest.raises(ConversationTransportError):
+            asyncio.run(asked)
+
+
 def test_the_adaptation_approval_carries_its_review_as_data(tmp_path):
     policy_path = tmp_path / "policy.yaml"
     policy_path.write_text(
@@ -764,9 +804,10 @@ def test_definite_conversation_errors_do_not_retry(status, monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", unexpected_sleep)
     transport = Transport()
     client = ConversationClient(_capabilities(), transport=transport)
-    with pytest.raises(ConversationTransportError, match=f"HTTP {status}"):
+    with pytest.raises(ConversationTransportError, match=f"HTTP {status}") as refused:
         asyncio.run(client._request("GET", client.capabilities.endpoints.commands))
     assert transport.calls == 1
+    assert refused.value.status == status
 
 
 def test_unavailable_requests_stop_before_platform_stale_window(monkeypatch):
