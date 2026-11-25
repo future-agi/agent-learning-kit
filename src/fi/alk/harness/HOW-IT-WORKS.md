@@ -149,7 +149,8 @@ The record is the world's, never the agent's tool calls: it lives in the trial's
 file, apart from the action log, and the sealed world record carries its counts only. A world
 with a door adds it to the end state it stores; a world with no door still stores the file, under
 `futureagi.browser-world-state.v1`, saying the world's records were not recorded (`not_held`)
-rather than carrying empty tables. With no client attached the record says `not_used`, never an
+rather than carrying empty tables. Where a door stood but the world's end could not be read, the
+same file holds the door's action log and says only the tables are missing. With no client attached the record says `not_used`, never an
 empty list, and a refusal list that could not be read says so. Screenshots are uploaded last, as
 the `screenshot` kind, kept from `traces-and-recordings` up; one the platform does not keep, or
 past what an isolated worker's result can carry, never fails the trial: the trial says so.
