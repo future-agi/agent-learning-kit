@@ -761,6 +761,7 @@ def test_source_free_connect_only_authoring_never_enters_repo_discovery(
         "provider": "retell",
         "general_prompt": "Book appointments.",
         "general_tools": [{"name": "book"}],
+        "tools": [{"name": "book"}],
     }
 
 

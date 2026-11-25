@@ -56,7 +56,9 @@ def _entry(name: str, raw: Mapping[str, Any], modality: str) -> dict[str, Any]:
     kind = _text(raw.get("type"))
     destinations = _destinations(raw) if kind.lower() in _TRANSFER_TYPES else []
     effects = _effects(kind.lower(), destinations, modality)
-    entry: dict[str, Any] = {"name": name, "type": kind}
+    entry: dict[str, Any] = {"name": name}
+    if kind:
+        entry["type"] = kind
     description = (
         _text(function.get("description")) or _text(raw.get("description")) or effects
     )
