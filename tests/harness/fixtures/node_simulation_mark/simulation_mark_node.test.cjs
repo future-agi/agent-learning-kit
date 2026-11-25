@@ -664,3 +664,45 @@ test("a client that copies the request's headers to follow a redirect never copi
   assert.equal(other.seen[0].headers["x-secret-key"], undefined);
   assert.deepEqual(JSON.parse(result.stdout), ["customer-key", null]);
 });
+
+test("a request whose agent picks its own connection is not given the key", async (t) => {
+  const collector = await stub();
+  const other = await stub();
+  t.after(() => {
+    collector.server.close();
+    other.server.close();
+  });
+  const script = `
+    import http from "node:http";
+    import net from "node:net";
+    const elsewhere = () => net.connect(${other.port}, "127.0.0.1");
+    class Elsewhere extends http.Agent {
+      createConnection() { return elsewhere(); }
+    }
+    const patched = new http.Agent();
+    patched.createConnection = elsewhere;
+    const agents = [
+      () => new Elsewhere(),
+      () => new http.Agent({ host: "127.0.0.1", port: ${other.port} }),
+      () => patched,
+      () => { http.globalAgent = new Elsewhere(); return undefined; },
+    ];
+    for (const make of agents) {
+      await new Promise((resolve, reject) => {
+        const req = http.request({
+          host: "127.0.0.1", port: ${collector.port}, path: "/v1/traces", method: "POST", agent: make(),
+          headers: { "content-type": "application/json", "x-api-key": "customer-key" },
+        }, (res) => { res.resume(); res.on("end", resolve); });
+        req.on("error", reject);
+        req.end("{}");
+      });
+    }
+  `;
+  const result = await run(script, envFor(collector));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(collector.seen.length, 0);
+  assert.deepEqual(
+    other.seen.map((sent) => [sent.headers["x-api-key"], sent.headers["x-secret-key"]]),
+    Array(4).fill(["customer-key", undefined]),
+  );
+});

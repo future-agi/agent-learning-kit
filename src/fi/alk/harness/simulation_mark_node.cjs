@@ -443,6 +443,19 @@ function install() {
     };
   }
 
+  /**
+   * Whether the agent connects where the request says: Node's own Agent, with no destination of
+   * its own and its own createConnection. Any other agent (a proxy agent, a subclass, one built
+   * with a host or port) may lead anywhere, so its request is never given the key.
+   */
+  function stockAgent(agent) {
+    if (agent === false || agent === undefined || agent === null) return true;
+    if (agent.constructor !== http.Agent && agent.constructor !== https.Agent) return false;
+    if (Object.prototype.hasOwnProperty.call(agent, "createConnection")) return false;
+    const options = agent.options || {};
+    return !["host", "hostname", "port", "socketPath"].some((name) => options[name] !== undefined);
+  }
+
   function patchRequest(module, defaultProtocol) {
     const original = module.request;
     if (typeof original !== "function" || original[PATCHED]) return;
@@ -460,7 +473,8 @@ function install() {
         const options = args[index] && typeof args[index] === "object" ? args[index] : null;
         const opts = options || {};
         // Where Node sends it: the options over the URL's, the host and port as ClientRequest
-        // reads them. A socket the caller supplies goes wherever it leads, so it is never ours.
+        // reads them. A socket the caller or its agent supplies goes wherever it leads, so it is
+        // never ours.
         const target = url ? { ...nodeUrl.urlToHttpOptions(url), ...opts } : opts;
         const host = target.hostname || target.host || "localhost";
         const port =
@@ -468,6 +482,7 @@ function install() {
         if (
           !target.socketPath &&
           typeof target.createConnection !== "function" &&
+          stockAgent(target.agent === undefined ? module.globalAgent : target.agent) &&
           aimedAtUs(target.method, target.protocol || defaultProtocol, host, port, target.path)
         ) {
           ourRequest = true;
