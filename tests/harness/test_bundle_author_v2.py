@@ -9269,6 +9269,41 @@ def test_compose_node_control_service_requires_an_http_interface(tmp_path):
     assert _agent_of(plan).run_command == ["node", "server.js"]
 
 
+def test_compose_node_control_service_gets_no_python_tracer(tmp_path):
+    """Only the Compose command makes this agent Node, so no runtime field can switch the Python tracer off."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: ./agent\n"
+                "    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source / "agent")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "execution": "compose",
+            "compose_file": "compose.yml",
+            "service": "agent",
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    agent = _agent_of(plan)
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+    assert "HARNESS_TOOL_TRACE" not in agent.environment
+    assert "ALK_OBSERVE_FRAMEWORKS" not in agent.environment
+
+
 @pytest.mark.parametrize("excluded", ["package-lock.json", "*.json", "*-lock.json"])
 def test_native_node_bundle_refuses_to_exclude_its_admitted_lockfile(tmp_path, excluded):
     """Admission checked the lockfile, so the sealed context must carry it to ``npm ci``."""

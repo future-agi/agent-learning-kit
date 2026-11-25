@@ -3833,7 +3833,14 @@ def resolve_environment_plan(
     compose = isinstance(selected, ComposeSelection) or runtime_model.execution == "compose"
     voice = str(contract_modality or "").strip().lower() == "voice"
     trace_environment: dict[str, str] = {}
-    if (runtime_model.command or compose) and not voice:
+    # Read from the planned control process: a Compose command or Dockerfile CMD can be all that makes it Node.
+    node_control = any(
+        isinstance(process, SourceProcess)
+        and process.name == control_name
+        and _NPM_INSTALL in process.build_commands
+        for process in processes
+    )
+    if (runtime_model.command or compose) and not voice and not node_control:
         trace_environment = _source_tool_trace_environment(
             root,
             runtime_model,
@@ -3925,9 +3932,7 @@ def _sdk_tracing_off_until_the_hook(environment: dict[str, str]) -> None:
 def _source_tool_trace_environment(
     source: Path, runtime: Runtime, entries: list[dict[str, Any]]
 ) -> dict[str, str]:
-    if runtime.language.lower() not in {"", "python", "py"} or _native_js_runtime(
-        runtime.language, runtime.command
-    ):
+    if runtime.language.lower() not in {"", "python", "py"}:
         return {}
     declared = []
     for raw in entries:
