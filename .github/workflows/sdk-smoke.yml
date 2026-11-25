@@ -319,10 +319,10 @@ jobs:
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
         # init presets, plus test_config_and_facades hangs) — track those
         # separately so this gate stays green and meaningful.
-        # Deselected below: the two sandbox-server tests are TH-8978, and
-        # test_the_system_prompt_stays_within_budget is out until its budget is decided (the
-        # scenario writer's prompt is 170k characters against a 90k budget set on 23 Sep). (The
-        # run is one folded line, so they are named here rather than beside each --deselect.)
+        # Deselected below: test_the_system_prompt_stays_within_budget is out until its budget
+        # is decided (the scenario writer's prompt is 170k characters against a 90k budget set on
+        # 23 Sep). (The run is one folded line, so it is named here rather than beside its
+        # --deselect.)
         run: >-
           python -m pytest -q
           tests/runtime/test_livekit_engine.py
@@ -335,16 +335,21 @@ jobs:
           tests/test_retell_evidence.py
           tests/test_retell_webcall_bridge.py
           tests/harness/test_process_runtime.py
+          tests/harness/test_multi_agent_compatibility_references.py
           tests/harness/test_source_folder.py
           tests/test_harness_sandbox_server.py
-          --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
-          --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
+          tests/test_harness_refusals.py
           tests/test_harness_generated_runtime.py
           tests/test_harness_service_environments.py
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
           tests/harness/test_controller_env.py
           tests/harness/test_call_runner.py
+          tests/harness/test_tool_evidence.py
+          tests/harness/test_chat_call_runner.py
+          tests/harness/test_http_completed_events.py
+          tests/harness/test_http_native_response.py
+          tests/harness/test_http_sse_stream.py
           tests/test_harness_secrets.py
           tests/test_evals_openai_instrumentor.py
           tests/test_live_mcp_worker_errors.py
@@ -374,6 +379,11 @@ jobs:
           tests/harness/test_hosted_authoring_entrypoint.py
           tests/harness/test_certify_only.py
           tests/harness/test_bundle_author_v2.py
+          tests/harness/test_in_process_door.py
+          tests/harness/test_framework_tool_spans.py
+          tests/harness/test_python_extras.py
+          tests/harness/test_tool_certification.py
+          tests/harness/test_contract.py
           tests/harness/test_tool_module_rewrite.py
           tests/harness/test_reading_routes.py
           tests/harness/test_reading_guidance.py
@@ -424,6 +434,7 @@ jobs:
           tests/harness/test_agent_scan.py
           tests/harness/test_authoring_entrypoint_find_agents.py
           tests/harness/test_seed_contract.py
+          tests/harness/test_browser_environment.py
           tests/test_bump_deployment_values.py
           tests/test_release_workflow.py
           tests/test_e2b_template_build_id.py

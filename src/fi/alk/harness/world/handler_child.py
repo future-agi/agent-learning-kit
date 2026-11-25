@@ -17,12 +17,12 @@ import datetime
 import decimal
 import inspect
 import json
-import re
 import os
 import random
 import sys
 import uuid
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 # A value JSON cannot carry is tagged with its type, so a Decimal or a timestamp a store returns
@@ -152,28 +152,8 @@ def takes_reference(checker: object) -> bool:
         return False
 
 
-_ID_NOISE = re.compile(r"[\s\-_.:/#]")
-
-
-def same_id(first: Any, second: Any) -> bool:
-    """Whether two identifiers name the same record however they were typed or spoken.
-
-    Only separators and case are ignored, so a different number is still different."""
-    if first is None or second is None:
-        return False
-    mine, theirs = (
-        _ID_NOISE.sub("", str(first)).casefold(),
-        _ID_NOISE.sub("", str(second)).casefold(),
-    )
-    # An empty id names no record, so it never matches, not even another empty one.
-    return bool(mine) and mine == theirs
-
-
-def check_namespace() -> dict[str, Any]:
-    """The names every check is given when it runs, wherever it runs (authoring, a hosted trial's phase worker, an
-    injected local world): the helpers authoring tells checks to use, such as ``same_id``. One set, so a check that
-    proves while authoring never fails on a name a trial does not give it."""
-    return {"same_id": same_id}
+if __package__:
+    from .check_helpers import check_namespace, same_id as same_id
 
 
 def evaluate_authored(
@@ -320,29 +300,6 @@ class _Db:
         return self._ask("add", collection, dict(record))
 
 
-@dataclass(frozen=True)
-class _Call:
-    name: str
-    arguments: dict[str, Any]
-    result: Any = None
-    ok: bool = True
-    error: str = ""
-    refused: bool = False
-    at: float = 0.0
-
-
-def _call(value: dict[str, Any]) -> _Call:
-    return _Call(
-        name=str(value.get("name") or ""),
-        arguments=dict(value.get("arguments") or {}),
-        result=value.get("result"),
-        ok=bool(value.get("ok", True)),
-        error=str(value.get("error") or ""),
-        refused=bool(value.get("refused", False)),
-        at=float(value.get("at") or 0.0),
-    )
-
-
 class _World:
     def __init__(self, authored: dict[str, Any]) -> None:
         if authored.get("has_world_index"):
@@ -368,13 +325,16 @@ class _World:
             raised = type(str(reply["error"]["type"]), (Exception,), {})
             raise raised(str(reply["error"]["message"]))
         value = decode(reply["reply"])
-        return _call(value) if method == "call" else value
+        return SimpleNamespace(**value) if method == "call" else value
 
     def state(self, table: str | None = None) -> Any:
         return self._ask("state") if table is None else self._ask("state", table)
 
     def query(self, sql: str, params: Any = ()) -> Any:
         return self._ask("query", sql, params)
+
+    def events(self, actor_id: str | None = None, outcome: str | None = None) -> Any:
+        return self._ask("events", actor_id, outcome)
 
     def put(self, collection: str, record: dict[str, Any], *, key: str = "") -> Any:
         return self._ask("put", collection, dict(record), key=key)
@@ -392,7 +352,7 @@ class _World:
     def drop(self, collection: str, key: str = "", *, by: str = "") -> Any:
         return self._ask("drop", collection, key, by=by)
 
-    def call(self, name: str, arguments: dict[str, Any] | None = None) -> _Call:
+    def call(self, name: str, arguments: dict[str, Any] | None = None) -> SimpleNamespace:
         return self._ask("call", name, dict(arguments or {}))
 
 
@@ -423,7 +383,7 @@ def main() -> None:
     while (request := _receive()) is not None:
         if "authored" in request:
             authored = request["authored"]
-            calls = [_call(decode(one)) for one in authored.get("calls") or []]
+            calls = [SimpleNamespace(**decode(one)) for one in authored.get("calls") or []]
             world = _World(authored)
             with (
                 open(os.devnull, "w", encoding="utf-8") as discarded,
@@ -466,4 +426,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # The namespace hides the checkout. The launcher supplies these trusted, stdlib-only modules.
+    from types import ModuleType
+
+    for module_name, source in zip(("world_door", "check_helpers"), sys.argv[1:], strict=True):
+        module = ModuleType(module_name)
+        sys.modules[module_name] = module
+        exec(compile(source, module_name + ".py", "exec"), module.__dict__)
+    from check_helpers import check_namespace
+
     main()

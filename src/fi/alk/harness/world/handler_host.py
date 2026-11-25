@@ -23,6 +23,7 @@ a fresh child, so its nested `world.call()` uses a separate handler process and 
 from __future__ import annotations
 
 import atexit
+from dataclasses import fields
 import json
 import os
 import selectors
@@ -40,7 +41,10 @@ MODES = ("namespace", "process")
 # nothing, so the builder's 0700 directories and 0600 files are closed to it.
 _MAPPED_ID = 100000
 _HIDDEN = ("/work", "/run", "/home", "/tmp")
-_CHILD = (Path(__file__).with_name("handler_child.py")).read_text(encoding="utf-8")
+_WORLD_DIR = Path(__file__).parent
+_CHILD = tuple(path.read_text(encoding="utf-8") for path in (
+    _WORLD_DIR / "handler_child.py", _WORLD_DIR.parent / "world_door.py", _WORLD_DIR / "check_helpers.py",
+))
 # A handler is a few queries; a proof calls hundreds. Long enough for neither to trip it.
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # What one message from the child may hold, so a handler cannot exhaust the caller's memory.
@@ -73,7 +77,7 @@ def isolation_mode() -> str | None:
 
 
 def _command(mode: str) -> list[str]:
-    python = [sys.executable, "-I", "-c", _CHILD]
+    python = [sys.executable, "-I", "-c", *_CHILD]
     if mode == "process":
         return python
     hide = "; ".join(
@@ -228,20 +232,19 @@ def _answer(db: Any, request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _call_record(value: Any) -> dict[str, Any]:
-    return {
-        "name": str(getattr(value, "name", "") or ""),
-        "arguments": dict(getattr(value, "arguments", {}) or {}),
-        "result": getattr(value, "result", None),
-        "ok": bool(getattr(value, "ok", True)),
-        "error": str(getattr(value, "error", "") or ""),
-        "refused": bool(getattr(value, "refused", False)),
-        "at": float(getattr(value, "at", 0.0) or 0.0),
-    }
+    from .runtime import Call
+
+    if isinstance(value, Call):
+        return {item.name: getattr(value, item.name) for item in fields(value)}
+    return {key: getattr(value, key, default) for key, default in (
+        ("name", ""), ("arguments", {}), ("result", None), ("ok", True),
+        ("error", ""), ("refused", False), ("at", 0.0),
+    )}
 
 
 def _answer_world(world: Any, request: dict[str, Any]) -> dict[str, Any]:
     method = request.get("method")
-    if method not in {"state", "query", "put", "change", "drop", "call"}:
+    if method not in {"state", "query", "put", "change", "drop", "call", "events"}:
         return {
             "error": {"type": "AttributeError", "message": f"world has no {method!r}"}
         }

@@ -205,7 +205,7 @@ def _compile_entry(
     right behavior for "no setup/ready code here" -- would silently turn "there is no check" into
     "the check passed": a vacuous deterministic pass, which is exactly what `hosted_scheduler.py`
     forbids one scenario level up ("scenario declared zero sub_goals"). Absence of the file
-    entirely is what means "judged" (see `_load_one`); an existing-but-empty file is malformed.
+    entirely is what means "judged" (see `load_one`); an existing-but-empty file is malformed.
     """
     if not source.strip():
         if allow_empty:
@@ -273,6 +273,12 @@ class _CompiledSubGoal:
     # The actor this sub-goal is about, if any.
     actor: str = ""
     compares: str = ""
+    # Whose result: the task, or `worker:<id>`, whose check is given only that worker's calls.
+    subject: str = "task"
+
+    @property
+    def worker(self) -> str:
+        return self.subject[len("worker:") :] if self.subject.startswith("worker:") else ""
 
 
 @dataclass(frozen=True)
@@ -314,7 +320,7 @@ def _read_text(path: Path, *, label: str) -> str:
     but unreadable (permission denied, a directory instead of a file) or present but not valid
     UTF-8 is a typed `ScenarioDocumentInvalid`, never a raw `OSError`/`UnicodeDecodeError` escaping
     this module (R1-1) -- both are equally "this scenario folder is malformed", the same
-    conclusion `_load_one`'s other reads already reach for a bad `scenario.json`.
+    conclusion `load_one`'s other reads already reach for a bad `scenario.json`.
     """
     if not path.exists():
         return ""
@@ -382,7 +388,7 @@ def _presented(
         return {}
 
 
-def _deterministic_names(bundle_dir: Path) -> set[str]:
+def deterministic_names(bundle_dir: Path) -> set[str]:
     """Sub-goals the catalogue settles in code, so a missing check file is a defect and not a judge.
 
     Absence of `checks/<name>.py` is what marks a sub-goal judged, which is right when the catalogue
@@ -404,7 +410,7 @@ def _deterministic_names(bundle_dir: Path) -> set[str]:
         return set()
 
 
-def _declared_tool_names(bundle_dir: Path) -> set[str]:
+def declared_tool_names(bundle_dir: Path) -> set[str]:
     """Return the target tools declared by the authored contract.
 
     The solution format intentionally permits semantic steps that are not executable tools.  The
@@ -479,6 +485,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
             "actor": goal.actor,
+            "subject": goal.subject,
             "overlay": goal.overlay,
             "conversation_only": "yes" if goal.conversation_only() else "",
         }
@@ -509,7 +516,7 @@ def _needs_a_tool_action(
     return not (claimed or wanted in goal.name.strip().lower())
 
 
-def _load_one(
+def load_one(
     folder: Path,
     *,
     settled_in_code: set[str] | None = None,
@@ -663,7 +670,7 @@ def _with_claims(
 ) -> _CompiledScenario:
     """Restore each sub-goal's real claim from the catalogue.
 
-    `_load_one` can only tell that a sub-goal is judged, never what it was meant to decide:
+    `load_one` can only tell that a sub-goal is judged, never what it was meant to decide:
     `folder.py` writes no file for one. Without this the platform judge gets a name and a
     placeholder, which is not something a verdict can be reached from.
 
@@ -690,6 +697,7 @@ def _with_claims(
             both=combined(goal),
             compares=claims[goal.name].get("contract", "") or goal.compares,
             actor=claims[goal.name].get("actor", "") or goal.actor,
+            subject=claims[goal.name].get("subject") or goal.subject,
         )
         if goal.name in claims
         else goal
@@ -719,8 +727,8 @@ def load_scenarios(
         raise ScenarioDocumentInvalid(
             f"{root}: cannot list scenario folders: {exc}"
         ) from exc
-    settled_in_code = _deterministic_names(bundle_dir)
-    declared_tools = _declared_tool_names(bundle_dir)
+    settled_in_code = deterministic_names(bundle_dir)
+    declared_tools = declared_tool_names(bundle_dir)
     claims = _load_catalogue_claims(bundle_dir)
     speaking = _speaking_actor_ids(bundle_dir)
     scenarios: list[_CompiledScenario] = []
@@ -729,7 +737,7 @@ def load_scenarios(
             continue
         scenarios.append(
             _with_claims(
-                _load_one(
+                load_one(
                     folder,
                     settled_in_code=settled_in_code,
                     declared_tools=declared_tools,

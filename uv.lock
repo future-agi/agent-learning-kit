@@ -195,7 +195,7 @@ requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.2.140,<0.3" },
     { name = "cryptography", specifier = ">=43" },
     { name = "fastapi", marker = "extra == 'harness-ui'", specifier = ">=0.115,<1" },
-    { name = "fi-instrumentation-otel", specifier = ">=0.1.16,<1.5.1" },
+    { name = "fi-instrumentation-otel", specifier = ">=0.1.16" },
     { name = "gepa", specifier = ">=0.0.17" },
     { name = "google-adk", specifier = ">=2.7.1,<2.8" },
     { name = "httpx", specifier = ">=0.24.0" },

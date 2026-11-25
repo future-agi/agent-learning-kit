@@ -38,6 +38,7 @@ from fi.alk.harness.contract import (
 )
 from fi.alk.harness.framework_detection import detect_framework
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
+from fi.alk.harness.agent_type_check import EXIT_REFUSED
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 from fi.alk.harness.reading_result import document
@@ -2159,3 +2160,112 @@ def test_a_readings_saves_hold_only_the_record_the_reading_put_in(tmp_path):
 
     write_contract(contract, reading)
     assert _made_from(json.loads(saved.read_bytes())) == record_for(job)
+
+
+# -- a seed whose agent needs a browser ----------------------------------------------------------
+
+
+_NEEDS_BROWSER = {**CONTRACT, "modality": "chat", "environment_needs": ["browser"]}
+
+
+def _build_job(tmp_path: Path, job: HarnessJob, *flags: str) -> int:
+    return authoring_entrypoint.main(
+        [
+            str(_job_file(tmp_path, job)),
+            "--source",
+            str(_source(tmp_path)),
+            "--output",
+            str(tmp_path / "authoring"),
+            *flags,
+        ]
+    )
+
+
+def _code(tmp_path: Path) -> str:
+    return json.loads((tmp_path / "authoring" / "failure.json").read_text(encoding="utf-8"))["code"]
+
+
+def test_a_seed_that_needs_a_browser_the_job_doesnt_give_is_refused_before_anything(
+    tmp_path, monkeypatch
+):
+    calls = _watch_authoring(monkeypatch)
+    job = _job()
+    _place(tmp_path, _seed_bytes(job, _NEEDS_BROWSER))
+
+    assert _build_job(tmp_path, job, *_seeded(tmp_path)) == EXIT_REFUSED
+
+    assert _code(tmp_path) == "browser_environment_required"
+    # Nothing was started, and the conversation's harness can't take the seed.
+    assert calls == []
+    assert not _marker(tmp_path).exists()
+
+
+def test_a_seed_that_needs_a_browser_the_job_gives_is_accepted(tmp_path, monkeypatch):
+    calls = _watch_authoring(monkeypatch)
+    job = _job(
+        metadata={
+            "available_evals": EVALS,
+            "generic_harness_v1": True,
+            "browser_allowed_sites": ["shop.example.com"],
+        }
+    )
+    _place(tmp_path, _seed_bytes(job, _NEEDS_BROWSER))
+
+    assert _build_job(tmp_path, job, *_seeded(tmp_path)) == 0
+
+    assert _marker(tmp_path).is_file()
+    assert not (tmp_path / "authoring" / "failure.json").exists()
+    assert calls == ["compose", "await"]
+
+
+def test_a_contract_an_earlier_build_left_is_checked_too(tmp_path, monkeypatch):
+    calls = _watch_authoring(monkeypatch)
+    output = tmp_path / "authoring"
+    output.mkdir()
+    (output / "contract.json").write_text(json.dumps(_NEEDS_BROWSER), encoding="utf-8")
+
+    assert _build_job(tmp_path, _job()) == EXIT_REFUSED
+
+    assert _code(tmp_path) == "browser_environment_required"
+    assert calls == []
+
+
+@pytest.mark.parametrize("sites", [[], ["https://shop.example.com"]])
+def test_a_broken_site_list_is_refused_at_intake(tmp_path, monkeypatch, sites):
+    calls = _watch_authoring(monkeypatch)
+    job = _job(metadata={"browser_allowed_sites": sites})
+    _place(tmp_path, _seed_bytes(job))
+
+    assert _build_job(tmp_path, job, *_seeded(tmp_path)) == EXIT_REFUSED
+
+    assert _code(tmp_path) == "browser_allowed_sites_invalid"
+    assert calls == []
+    assert not _marker(tmp_path).exists()
+
+
+def test_the_contract_on_disk_is_checked_over_a_seed(tmp_path, monkeypatch):
+    # The build keeps a contract already on disk over any seed, so that is the one checked.
+    calls = _watch_authoring(monkeypatch)
+    job = _job()
+    _place(tmp_path, _seed_bytes(job))
+    output = tmp_path / "authoring"
+    output.mkdir()
+    (output / "contract.json").write_text(json.dumps(_NEEDS_BROWSER), encoding="utf-8")
+
+    assert _build_job(tmp_path, job, *_seeded(tmp_path)) == EXIT_REFUSED
+
+    assert _code(tmp_path) == "browser_environment_required"
+    assert calls == []
+
+
+def test_a_seed_that_doesnt_match_the_job_is_left_to_be_read_again(tmp_path, monkeypatch):
+    # Its kind is not this build's: the agent is read again, and that reading checked once saved.
+    calls = _watch_authoring(monkeypatch)
+    job = _job()
+    older = _job(source={**GITHUB, "commit_sha": OTHER_COMMIT})
+    _place(tmp_path, _seed_bytes(older, _NEEDS_BROWSER))
+
+    assert _build_job(tmp_path, job, *_seeded(tmp_path)) == 0
+
+    assert not (tmp_path / "authoring" / "failure.json").exists()
+    assert calls == ["compose", "await"]

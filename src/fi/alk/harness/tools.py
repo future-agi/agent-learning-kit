@@ -24,6 +24,8 @@ from fi.simulate.agent.wrappers.http_events import (
 from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from .agent_type_check import (
+    BROWSER,
+    REFUSED_KINDS,
     SECOND_LOOK_READ,
     SecondLook,
     agent_type_failure,
@@ -32,6 +34,7 @@ from .agent_type_check import (
     failure_message,
     is_browser,
     modality_text,
+    reading_kind,
 )
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
@@ -45,6 +48,7 @@ from .contract import (
     RuntimeInterface,
     ToolEntry,
     RuntimeSecretFile,
+    RuntimeToolService,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
@@ -237,8 +241,9 @@ def _checked_contract(
         if progress is not None:
             progress("contract", list(schema_problems))
         return _problems(schema_problems, arrived)
-    # Only the save records lines it couldn't confirm.
+    # Only the save records lines it couldn't confirm, or that it copied the prompt whole.
     contract.unconfirmed_prompt_from = []
+    contract.system_prompt_copied = False
 
     problems = validate_contract(contract)
     for entry in contract.tool_entrypoints:
@@ -264,7 +269,8 @@ def _checked_contract(
             "Omitting data_store does not declare a stateless agent."
         )
     if require_setup_contract and contract.modality == "chat":
-        if problem := generated_chat_interface_problem(contract.runtime):
+        problem = generated_chat_interface_problem(contract.runtime)
+        if problem and not _build_writes_the_interface(contract.runtime, source_root, subfolder):
             problems.append(problem)
     if progress is not None:
         progress("contract", list(problems))
@@ -281,6 +287,30 @@ def _checked_contract(
             instrumentation=instrumentation,
             progress=progress,
         )
+
+
+def _build_writes_the_interface(
+    runtime: Runtime | None, source_root: Path | None, subfolder: str | None
+) -> bool:
+    """Whether the build writes the chat interface this runtime leaves out, so the reading is
+    not asked for one. Today that is `adk web` serving the one app its folder holds: the
+    source holds no interface to find for it. The build decides, so the two can't disagree."""
+    if source_root is None or runtime is None or not runtime.command:
+        return False
+    if runtime.interface is not None and runtime.interface.kind:
+        return False
+    from .framework_servers import _adk_web_interface, _is_adk_web_command
+
+    # Asked of the command alone first, so no other command costs a lookup on disk.
+    if not _is_adk_web_command(list(runtime.command)):
+        return False
+    try:
+        with path_lookup_budget():
+            bound = bind_runtime(runtime.model_dump(), source_root, subfolder)
+            return _adk_web_interface(Path(source_root), dict(bound or {})) is not None
+    except (OSError, RuntimeError, ValueError, SubfolderNotFound, PathLookupsSpent):
+        # A folder or workdir that can't be bound is refused on its own line further on.
+        return False
 
 
 def _contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -408,6 +438,7 @@ def _checked_against_source(
                             # confirmed.
                             contract.system_prompt_excerpt = quote
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are left out and "
                                 "the quote is kept, since they don't hold it"
@@ -417,6 +448,7 @@ def _checked_against_source(
                             # lines nobody confirmed would be shown as it.
                             contract.system_prompt_excerpt = ""
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are recorded as "
                                 "unconfirmed and no prompt is saved, since they don't hold the "
@@ -610,6 +642,27 @@ def _modules_as_the_process_imports_them(
 _ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
+def _provider_prompt_copied(
+    contract: AgentContract, profile: dict[str, Any] | None
+) -> AgentContract:
+    """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
+    profile is in force and code can take every text of it. Otherwise it is left as checked:
+    the reading's quote, nothing marked."""
+    from .provider_import import whole_prompt
+
+    whole = whole_prompt(profile) if profile is not None else None
+    if whole is None:
+        return contract
+    return contract.model_copy(
+        update={
+            "system_prompt_excerpt": whole,
+            "system_prompt_from": [],
+            "unconfirmed_prompt_from": [],
+            "system_prompt_copied": True,
+        }
+    )
+
+
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
     # write_contract writes beside the file and moves it into place: a write that fails partway
     # leaves the contract an earlier call was told was saved as it was.
@@ -716,6 +769,7 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
         parts.append(excerpt)
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
+        contract.system_prompt_copied = True
     return problems
 
 
@@ -804,6 +858,18 @@ def _tools_in_agent_folder(
         return [], frozenset()
 
 
+def _needs_a_browser(destination: Path) -> bool:
+    """Whether the contract this reading starts over is a browser agent's. One that can't be read
+    is for the steps that read it."""
+    from .understand import load
+
+    try:
+        contract = load(destination)
+    except (OSError, ValueError):
+        return False
+    return contract is not None and "browser" in contract.environment_needs
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
@@ -814,6 +880,7 @@ def contract_tools(
     subfolder: str | None = None,
     save_checks: Mode | None = None,
     save_stand_in: str | None = None,
+    provider_profile: dict[str, Any] | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -823,6 +890,10 @@ def contract_tools(
     ``save_checks`` picks where the checks that read the customer's files run (the default is the
     kit's); ``save_stand_in`` names a module whose stages replace the real ones in the child, for
     tests.
+
+    ``provider_profile`` is the provider definition the reading is shown, when there is one. It is
+    then the source of the agent's prompt: no repository lines are copied for it, and the save
+    copies its whole prompt where code can take every text of it.
     """
     # Here rather than at the top: the checker's child imports this module.
     from . import save_checker
@@ -869,7 +940,7 @@ def contract_tools(
     # What was quoted for the prompt when the lines named for it were refused.
     held: dict[str, str] = {}
     refused = False
-    second_look = SecondLook()
+    second_look = SecondLook(browser_stood=_needs_a_browser(destination))
     found: list[str] | None = None
     # Set with found, from the same scan: a later call skips the scan and must still see its cut.
     cut: frozenset[str] = frozenset()
@@ -922,11 +993,17 @@ def contract_tools(
                 },
                 "modality": {
                     "type": "string",
-                    "enum": list(known_modalities()),
+                    # The refused kinds are answers, never a contract's modality.
+                    "enum": [*known_modalities(), *REFUSED_KINDS],
                     "description": "How this agent is run, read from its runtime. A voice "
                     "session (LiveKit, telephony, TTS/STT) is voice; a text conversation is chat; "
-                    "an agent a person uses to carry out work on websites or a computer is "
-                    "browser. This decides how it is later run.",
+                    "an agent a person uses to carry out work by driving a web browser with a "
+                    "browser library is browser, and runs only in an environment that gives it a "
+                    "browser and a list of sites; it takes its task in words, so record how it is "
+                    "reached as for chat. One that acts through a screen (pixels, mouse "
+                    "and keyboard) is computer_use, and one that fetches pages by rule with no "
+                    "model choosing each step is crawler: both stop the build as not supported. "
+                    "This decides how it is later run.",
                 },
                 "call_direction": {
                     "type": "string",
@@ -996,6 +1073,18 @@ def contract_tools(
                     "description": "Rules it must obey, in the source's own words. The agent "
                     "under test is told these and graded against them.",
                 },
+                "rule_sources": {
+                    "type": "array",
+                    "description": "For each rule read from a file of the agent's material (a policy or knowledge "
+                    "document, a prompt file): the rule exactly as written in hard_constraints, the file relative "
+                    "to the source root, and the line it comes from quoted exactly. Leave a rule out when no one "
+                    "line states it.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"rule": {"type": "string"}, "file": {"type": "string"}, "quote": {"type": "string"}},
+                        "required": ["rule", "file", "quote"],
+                    },
+                },
                 "tools": {
                     "type": "array",
                     "description": "Every tool the agent really has. Everything downstream is "
@@ -1050,6 +1139,12 @@ def contract_tools(
                                 "description": "The world's tables the tool adds to, changes or deletes from, "
                                 "declared from its code.",
                             },
+                            "world_free": {
+                                "type": "boolean",
+                                "description": "True only when the tool's code touches no table of the world and "
+                                "no service: it keeps the agent's own session memory or computes from its "
+                                "arguments alone. False when unsure.",
+                            },
                             "description": {"type": "string"},
                             "requires": {
                                 "type": "array",
@@ -1069,6 +1164,29 @@ def contract_tools(
                                 "every refusal the code returns as an ordinary value rather than an "
                                 "error. Read from the tool, the helpers it calls and the service "
                                 "behind it.",
+                            },
+                            "refusals": {
+                                "type": "array",
+                                "description": "Each refusal in `refuses` that turns on a field of a record the "
+                                "call names, as structure, when the tool's code or the service behind it shows it: "
+                                "the HTTP `status` it answers, the `table` and the `column` the call's `argument` is "
+                                "matched on, the record's `field` and the `values` that refuse (at least one), and "
+                                "the `message` the code gives. A record carrying a fault in the agent's "
+                                "own data (a payment that times out) is one. The world scenarios are proved on "
+                                "answers each the same way.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {"type": "integer"},
+                                        "table": {"type": "string"},
+                                        "column": {"type": "string"},
+                                        "argument": {"type": "string"},
+                                        "field": {"type": "string"},
+                                        "values": {"type": "array"},
+                                        "message": {"type": "string"},
+                                    },
+                                    "required": ["status", "table", "column", "argument", "field", "values"],
+                                },
                             },
                             "effects": {
                                 "type": "string",
@@ -1097,12 +1215,19 @@ def contract_tools(
                             "id": {"type": "string"},
                             "name": {"type": "string"},
                             "tools": {"type": "array", "items": {"type": "string"}},
+                            "allowed_tools": {"type": "array", "items": {"type": "string"}},
+                            "binding": {"type": "string", "enum": ["separate", "shared"]},
+                            "address_env": {"type": "string"},
+                            "process": {"type": "string"},
                         },
                         "required": ["id"],
                     },
                     "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
-                    "gives the agent (its spans carry it), and the names of the tools above that it "
-                    "holds. Leave out for an agent that hands no work on.",
+                    "gives the agent (its spans carry it), the names of the tools above that it holds, "
+                    "separate when its tools run through code of their own, with address_env naming the "
+                    "environment variable that code reads for its tools' base address, allowed_tools when it "
+                    "may use fewer tools than its code holds, and process naming the environment process that runs "
+                    "it alone when the app serves it as its own service. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",
@@ -1499,6 +1624,10 @@ def contract_tools(
                             },
                             "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
                         },
+                        "tool_service": {
+                            **RuntimeToolService.model_json_schema(),
+                            "description": Runtime.model_fields["tool_service"].description,
+                        },
                         "required_environment": {
                             "type": "object",
                             "additionalProperties": {
@@ -1755,6 +1884,9 @@ def contract_tools(
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = dict(unwrapped(args))
+        if provider_profile is not None:
+            # The provider's definition is what runs, so repository lines can't be the prompt.
+            payload.pop("system_prompt_from", None)
         # The quote as the contract will read it: under any alias, a list joined.
         excerpt = prompt_quote(_without_nulls(payload))
         if not excerpt.strip():
@@ -1815,8 +1947,9 @@ def contract_tools(
         if claimed and not is_browser(claimed) and claimed not in known_modalities():
             return _problems(
                 [
-                    f"{claimed!r} is not a modality. Use voice or chat, or browser if its main "
-                    "job is work on websites or a computer."
+                    f"{claimed!r} is not a modality. Use voice or chat; browser if its main job "
+                    "is work done by driving a web browser; computer_use if it acts through a "
+                    "screen; crawler if it fetches pages by rule."
                 ]
             )
         verdict = second_look.verdict(
@@ -1830,10 +1963,18 @@ def contract_tools(
             try:
                 (destination / "contract.json").unlink(missing_ok=True)
             finally:
-                write_failure_file(agent_type_failure(found), destination)
+                write_failure_file(
+                    agent_type_failure(found, reading_kind(claimed)), destination
+                )
             return _ok(_stop_message(destination))
         if verdict == "second_look":
             return _problems([second_look.issue(claimed, found, _new_receipt(), cut=cut)])
+        # What the agent needs from its environment is set here, after the look, and nowhere
+        # else. A browser agent is reached as a chat agent is, so every chat check below runs.
+        payload.pop("environment_needs", None)
+        if reading_kind(claimed) == BROWSER:
+            payload["modality"] = "chat"
+            payload["environment_needs"] = [BROWSER]
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}
@@ -2012,7 +2153,9 @@ def contract_tools(
                 and not payload.get("hard_constraints")
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
-                and not payload.get("system_prompt_from"),
+                and not payload.get("system_prompt_from")
+                # With a provider's definition in force, its prompt is the one; lines aren't.
+                and provider_profile is None,
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
@@ -2061,6 +2204,8 @@ def contract_tools(
                 # since a prompt built at run time has no lines to name, and its quote is kept.
                 "prompt-lines",
                 source_root is not None
+                # With a provider's definition in force, repository lines are not its prompt.
+                and provider_profile is None
                 and bool(excerpt)
                 and not payload.get("system_prompt_from")
                 # Asked already, with the "prompt" nudge or a refusal of named lines: the lines
@@ -2110,7 +2255,9 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        result = _save_contract(checked.contract, destination)
+        result = _save_contract(
+            _provider_prompt_copied(checked.contract, provider_profile), destination
+        )
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result

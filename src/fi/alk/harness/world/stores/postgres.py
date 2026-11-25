@@ -30,6 +30,57 @@ from .container import ContainerStore, docker
 SCHEMA = "schema.sql"
 
 
+# The harness's own sessions: nothing a source or seed defines in `public` stands in for the system's code
+# (`world_door.PINNED_SEARCH_PATH`).
+PINNED_SEARCH_PATH = "-c search_path=pg_catalog,pg_temp"
+# A session that runs the world's own SQL (a handler's, a check's) where there is no world role: the system's own
+# functions are found first, and the statement still finds the world's tables.
+_SYSTEM_FIRST = "-c search_path=pg_catalog,public,pg_temp"
+
+
+# A world trigger that fires even with triggers suspended (replica mode): a reset as the harness would run it.
+_TRIGGERS_FIRING_ANYWAY = (
+    "SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgenabled IN ('A', 'R') "
+    "UNION ALL SELECT c.relname, r.rulename FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND r.ev_enabled IN ('A', 'R')"
+)
+# Each foreign key between two of the world's tables: (child, parent).
+_FOREIGN_KEYS = (
+    "SELECT c.relname, p.relname FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid "
+    "JOIN pg_class p ON p.oid = k.confrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE k.contype = 'f' AND n.nspname = 'public'"
+)
+
+
+def attached_world_store(endpoint: Any) -> AttachedPostgresStore:
+    """The store over a leased world's database. With world roles, every statement runs as the world's own role, its
+    reset included, so no SQL of the world's (a handler's, a check's, a customer trigger's) ever runs as the harness,
+    and a world without a role is refused. With one fixed user (no roles) it runs as the harness, with the system's
+    own functions first; a reset then suspends the world's triggers and refuses one set to fire anyway."""
+    from ...privilege import IsolationMode, isolation_mode
+
+    if isolation_mode() is IsolationMode.PER_USER:
+        if not all(getattr(endpoint, name, None) for name in ("tool_address", "store_address", "log_address")):
+            raise StoreError("no_world_role: a world's SQL runs only with its own roles, and none was given")
+        return AttachedPostgresStore(
+            endpoint.tool_address,
+            restore_as_role=True,
+            reader_dsn=endpoint.store_address,
+            log_dsn=endpoint.log_address,
+        )
+    return AttachedPostgresStore(system_first(endpoint.address), admin_dsn=endpoint.address)
+
+
+def system_first(address: str) -> str:
+    """``address`` with the system's own functions first on its search path, the world's tables still found."""
+    from urllib.parse import quote
+
+    joiner = "&" if "?" in address else "?"
+    return f"{address}{joiner}options={quote(_SYSTEM_FIRST)}"
+
+
 def _psycopg() -> Any:
     try:
         import psycopg
@@ -112,8 +163,36 @@ class PostgresStore(ContainerStore):
         ordinary ``LIKE '%turkey%'`` with nothing to bind then reads its own ``%t`` as an
         unmatched one and raises before the statement ever reaches Postgres.
         """
+        # A check's read names the world's tables as the world's own SQL does: system functions first, read-only.
+        return self._read(self._reader_address(), statement, params, _SYSTEM_FIRST)
+
+    def read_log(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+        """A read of the harness's own tables (every name qualified) as the world's log reader, on the system's own
+        path and read-only; the store's reader where there is none (one fixed user)."""
+        log = getattr(self, "_log_dsn", None)
+        if not log:
+            return self.query(statement, params)
+        return self._read(log, statement, params, PINNED_SEARCH_PATH)
+
+    def query_as_world(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+        """``query`` as the agent's tools' own role, under the world's row security: a handler's read."""
+        return self._read(self.dsn(), statement, params, "")
+
+    def _reader_address(self) -> str:
+        return getattr(self, "_reader_dsn", None) or self.dsn()
+
+    def _reader_connect(self, writable: bool = False) -> Any:
+        """The harness's own reads of the world: the store role where there is one, on the system's own search path
+        (every statement it sends names its tables) and read-only unless it resets; else the store's connection."""
+        reader = getattr(self, "_reader_dsn", None)
+        if not reader:
+            return self._connect()
+        options = PINNED_SEARCH_PATH if writable else f"{PINNED_SEARCH_PATH} -c default_transaction_read_only=on"
+        return _psycopg().connect(reader, autocommit=True, options=options)
+
+    def _read(self, address: str, statement: str, params: Sequence[Any], path: str) -> list[dict[str, Any]]:
         with _psycopg().connect(
-            self.dsn(), autocommit=True, options="-c default_transaction_read_only=on"
+            address, autocommit=True, options=f"{path} -c default_transaction_read_only=on".strip()
         ) as connection:
             cursor = connection.execute(statement, tuple(params) if params else None)
             columns = [description[0] for description in cursor.description or []]
@@ -131,7 +210,11 @@ class PostgresStore(ContainerStore):
         rows = connection.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
         ).fetchall()
-        return [_catalogue_text(row[0]) for row in rows]
+        names = [_catalogue_text(row[0]) for row in rows]
+        if getattr(self, "_restore_as_role", False):
+            # The world's own tables: the harness's (its log, its marker) are no world role's to read or reset.
+            names = [name for name in names if not name.startswith("_alk_") and name != "harness_seed_sentinel"]
+        return names
 
     def _primary_key(self, connection: Any, table: str) -> list[str]:
         """The primary key columns, used only to read rows back in a stable order.
@@ -185,7 +268,7 @@ class PostgresStore(ContainerStore):
         """
         sql = _psycopg().sql
         key = self._primary_key(connection, table)
-        statement = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))
+        statement = sql.SQL("SELECT * FROM {}").format(sql.Identifier("public", table))
         if key:
             statement += sql.SQL(" ORDER BY ") + sql.SQL(", ").join(
                 sql.Identifier(column) for column in key
@@ -204,13 +287,13 @@ class PostgresStore(ContainerStore):
         never pays to read and discard rows for the ones it does not. ``None`` reads every table
         in ``public``, exactly as before.
         """
-        with self._connect() as connection:
+        with self._reader_connect() as connection:
             tables = self._tables(connection) if only is None else list(only)
             return {table: self._select_ordered(connection, table) for table in tables}
 
     def columns(self, name: str) -> list[str]:
         """One table's columns, as the database's catalogue lists them."""
-        with self._connect() as connection:
+        with self._reader_connect() as connection:
             return list(self._column_types(connection, name))
 
     def table(self, name: str) -> list[dict[str, Any]]:
@@ -220,14 +303,22 @@ class PostgresStore(ContainerStore):
         one of them: still a single connection, so reading one table never costs a second round
         trip just to learn how to order it.
         """
-        with self._connect() as connection:
+        with self._reader_connect() as connection:
             return self._select_ordered(connection, name)
 
     # -- how to put it back ----------------------------------------------------------
 
+    def _admin_connect(self) -> Any:
+        """The harness's own connection for what only it may do (a snapshot, a restore), on the system's own search
+        path; the store's connection when it has no other."""
+        admin = getattr(self, "_admin_dsn", None)
+        if not admin:
+            return self._reader_connect()
+        return _psycopg().connect(admin, autocommit=True, options=PINNED_SEARCH_PATH)
+
     def freeze(self) -> Snapshot:
         """Rows and sequence counters, which together are the whole mutable state."""
-        with self._connect() as connection:
+        with self._admin_connect() as connection:
             counters = {
                 row[0]: row[1]
                 for row in connection.execute(
@@ -235,8 +326,10 @@ class PostgresStore(ContainerStore):
                     "WHERE schemaname = 'public'"
                 ).fetchall()
                 if row[1] is not None
+                and not (getattr(self, "_restore_as_role", False) and str(row[0]).startswith("_alk_"))
             }
-        return Snapshot(rows=self.state(), counters=counters)
+            rows = {table: self._select_ordered(connection, table) for table in self._tables(connection)}
+        return Snapshot(rows=rows, counters=counters)
 
     def restore(self, snapshot: Snapshot) -> None:
         """Put the data back exactly as the snapshot found it.
@@ -247,16 +340,26 @@ class PostgresStore(ContainerStore):
         have. Counters are set last, so the next scenario's first insert gets the id the first
         scenario's did.
         """
-        with self._connect() as connection:
+        if getattr(self, "_restore_as_role", False):
+            self._restore_as_role_itself(snapshot)
+            return
+        with self._admin_connect() as connection:
             tables = self._tables(connection)
             if not tables:
                 return
-            listed = ", ".join(f'"{table}"' for table in tables)
-            # One statement, so Postgres resolves the dependency order between them itself.
-            connection.execute(f"TRUNCATE TABLE {listed} RESTART IDENTITY CASCADE")
-
+            firing = connection.execute(_TRIGGERS_FIRING_ANYWAY).fetchall()
+            if firing:
+                raise StoreError(
+                    "a reset would run the world's own triggers as the harness: "
+                    + ", ".join(sorted(f"{table}.{trigger}" for table, trigger in firing))
+                    + " are set to fire in replica mode (ENABLE ALWAYS or ENABLE REPLICA)"
+                )
+            listed = ", ".join('public."' + table.replace('"', '""') + '"' for table in tables)
+            # Suspended before the truncate too, so neither it nor a row put back fires a trigger of the world's.
             connection.execute("SET session_replication_role = replica")
             try:
+                # One statement, so Postgres resolves the dependency order between them itself.
+                connection.execute(f"TRUNCATE TABLE {listed} RESTART IDENTITY CASCADE")
                 for table, rows in snapshot.rows.items():
                     if not rows or table not in tables:
                         continue
@@ -265,7 +368,7 @@ class PostgresStore(ContainerStore):
                     quoted = ", ".join(f'"{column}"' for column in columns)
                     placeholders = ", ".join(["%s"] * len(columns))
                     statement = (
-                        f'INSERT INTO "{table}" ({quoted}) VALUES ({placeholders})'
+                        f'INSERT INTO public."{table}" ({quoted}) VALUES ({placeholders})'
                     )
                     with connection.cursor() as cursor:
                         cursor.executemany(
@@ -283,8 +386,60 @@ class PostgresStore(ContainerStore):
 
             for sequence, value in snapshot.counters.items():
                 connection.execute(
-                    "SELECT setval(%s, %s, true)", (f'public."{sequence}"', value)
+                    "SELECT pg_catalog.setval(%s::regclass, %s, true)", (f'public."{sequence}"', value)
                 )
+
+    def _restore_as_role_itself(self, snapshot: Snapshot) -> None:
+        """A reset as the world's own role, which may neither truncate nor suspend triggers: every row deleted and put
+        back in foreign-key order inside one transaction, and each sequence set back. Whatever of the world's runs
+        (a trigger) runs with no more than that role's rights."""
+        with self._reader_connect(writable=True) as connection:
+            tables = self._tables(connection)
+            if not tables:
+                return
+            firing = connection.execute(_TRIGGERS_FIRING_ANYWAY).fetchall()
+            if firing:
+                raise StoreError(
+                    "a reset would run the world's own triggers: "
+                    + ", ".join(sorted(f"{table}.{trigger}" for table, trigger in firing))
+                    + " are set to fire in replica mode (ENABLE ALWAYS or ENABLE REPLICA)"
+                )
+            parents: dict[str, set[str]] = {table: set() for table in tables}
+            for child, parent in connection.execute(_FOREIGN_KEYS).fetchall():
+                if child in parents and parent in parents and child != parent:
+                    parents[child].add(parent)
+            order: list[str] = []
+            while len(order) < len(tables):
+                ready = [t for t in tables if t not in order and parents[t] <= set(order)]
+                order.extend(ready or [t for t in tables if t not in order])
+            with connection.transaction():
+                if getattr(self, "_reader_dsn", None):
+                    # The store role may suspend the world's triggers and foreign-key checks for its own reset.
+                    connection.execute("SET LOCAL session_replication_role = replica")
+                for table in reversed(order):
+                    connection.execute(f'DELETE FROM public."{table}"')  # noqa: S608 - a listed table
+                for table in order:
+                    rows = snapshot.rows.get(table) or []
+                    if not rows:
+                        continue
+                    columns = list(rows[0])
+                    types = self._column_types(connection, table)
+                    quoted = ", ".join(f'"{column}"' for column in columns)
+                    placeholders = ", ".join(["%s"] * len(columns))
+                    with connection.cursor() as cursor:
+                        cursor.executemany(
+                            f'INSERT INTO public."{table}" ({quoted}) VALUES ({placeholders})',  # noqa: S608
+                            [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
+                        )
+                for sequence, start in connection.execute(
+                    "SELECT sequencename, start_value FROM pg_sequences WHERE schemaname = 'public' "
+                    "AND sequencename NOT LIKE '\\_alk\\_%'"
+                ).fetchall():
+                    value = snapshot.counters.get(sequence)
+                    connection.execute(
+                        "SELECT pg_catalog.setval(%s::regclass, %s, %s)",
+                        (f'public."{sequence}"', value if value is not None else start, value is not None),
+                    )
 
     def save_to(self, path: str | Path) -> None:
         """Save both the records and the DDL a fresh Postgres store needs."""
@@ -425,8 +580,24 @@ class AttachedPostgresStore(PostgresStore):
     its process and lifecycle, so closing one scenario must never remove the shared container.
     """
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        admin_dsn: str | None = None,
+        restore_as_role: bool = False,
+        reader_dsn: str | None = None,
+        log_dsn: str | None = None,
+    ) -> None:
         self._external_dsn = dsn
+        # The world's store role (with world roles): the harness's reads, snapshot and reset of the world's rows,
+        # past their row security; ``dsn`` stays the agent's tools' own role, under it.
+        self._reader_dsn = reader_dsn
+        # The world's log reader: the harness's own log and marker, read by a role that runs no world SQL.
+        self._log_dsn = log_dsn
+        # The harness's own address for a snapshot and a restore (one fixed user), or a reset run as ``dsn`` itself,
+        # the world's role (`attached_world_store`).
+        self._admin_dsn = admin_dsn
+        self._restore_as_role = restore_as_role
         self.applied: list[str] = []
         self._started = True
 

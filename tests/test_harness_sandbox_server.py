@@ -5,6 +5,7 @@ import hmac
 from io import BytesIO
 import json
 import os
+from pathlib import Path
 import re
 import signal
 import subprocess
@@ -18,9 +19,10 @@ import httpx
 from pydantic import Field, ValidationError
 import pytest
 
-from fi.alk.harness import call_runner, config, local_certified_runtime, process_runtime, provision, sandbox_server
+from fi.alk.harness import call_runner, config, local_certified_runtime, process_runtime, provision, refusals, sandbox_server
 from fi.alk.harness.bundle_v2 import ProcessUser, SourceProcess
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.refusals import JobRefused
 from fi.alk.harness.sandbox_server import (
     LocalSandbox,
     LocalSandboxRequest,
@@ -1086,15 +1088,35 @@ def test_preflight_accepts_public_github_url_and_requires_app_for_private_repo(
     assert requirement["accepted_secret_types"] == ["github_app_installation"]
 
 
+class _AwaitingDedicatedIsolation(Exception):
+    """The route failed only on the runtime isolation hosted jobs still lack."""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=_AwaitingDedicatedIsolation,
+    reason="submit does not yet give hosted jobs the dedicated_vm runtime",
+)
 def test_public_github_branch_url_populates_job_ref(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
-    response = client.post(
-        "/v1/jobs",
-        json={
-            "github_repository": "https://github.com/acme/agent/tree/feat/harness",
-        },
-    )
+    try:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "github_repository": "https://github.com/acme/agent/tree/feat/harness",
+                "github_commit_sha": "a" * 40,
+            },
+        )
+    except ValidationError as exc:
+        if "hosted_isolation_must_be_dedicated_vm" in str(exc):
+            raise _AwaitingDedicatedIsolation from exc
+        raise
+    if (
+        response.status_code == 500
+        and "hosted_isolation_must_be_dedicated_vm" in response.text
+    ):
+        raise _AwaitingDedicatedIsolation
 
     assert response.status_code == 200
     source = response.json()["job"]["source"]
@@ -1102,23 +1124,547 @@ def test_public_github_branch_url_populates_job_ref(tmp_path):
     assert source["ref"] == "feat/harness"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=_AwaitingDedicatedIsolation,
+    reason="submit does not yet give hosted jobs the dedicated_vm runtime",
+)
 def test_private_github_submission_becomes_hosted_job(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
-    response = client.post(
-        "/v1/jobs",
-        json={
-            "github_repository": "customer/private-agent",
-            "github_visibility": "private",
-            "github_installation_id": "installation-42",
-        },
-    )
+    try:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "github_repository": "customer/private-agent",
+                "github_visibility": "private",
+                "github_installation_id": "installation-42",
+                "github_commit_sha": "a" * 40,
+            },
+        )
+    except ValidationError as exc:
+        if "hosted_isolation_must_be_dedicated_vm" in str(exc):
+            raise _AwaitingDedicatedIsolation from exc
+        raise
+    if (
+        response.status_code == 500
+        and "hosted_isolation_must_be_dedicated_vm" in response.text
+    ):
+        raise _AwaitingDedicatedIsolation
 
     assert response.status_code == 200
     job = response.json()["job"]
     assert job["execution"] == "hosted"
     assert job["source"]["installation_id"] == "installation-42"
     assert "token" not in json.dumps(job).lower()
+
+
+def test_a_github_submission_without_a_commit_sha_is_refused_with_its_code(tmp_path):
+    # A GitHub job runs hosted, and a hosted GitHub job needs the commit it checks out. Without
+    # one the route used to fail building the job (a 500 with no reason); it says why now.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"github_repository": "acme/agent"})
+
+    assert response.status_code == 422
+    assert "github_commit_sha_required" in response.text
+
+
+@pytest.mark.parametrize(
+    ("repository", "reason"),
+    [
+        ("https://gitlab.com/acme/agent", "github_repository_invalid"),
+        ("https://ghe.acme.test/acme/agent", "github_repository_invalid"),
+        (
+            "https://github.com/acme/agent/commit/" + "a" * 40,
+            "github_repository_url_must_point_to_repository_or_branch",
+        ),
+    ],
+)
+def test_a_location_that_is_not_a_github_repository_is_refused_for_that_without_a_sha(
+    tmp_path, repository, reason
+):
+    # The missing commit is not what is wrong with it: adding one would only uncover this.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"github_repository": repository})
+
+    assert response.status_code == 400
+    assert reason in response.text
+    assert "github_commit_sha_required" not in response.text
+
+
+@pytest.mark.parametrize(
+    "sha",
+    [
+        "main",
+        "   ",
+        "abc1234",
+        "z" * 40,
+        "g" * 40,
+        "a" * 39,
+        "a" * 41,
+        " " + "a" * 40,
+        "a" * 40 + "\n",
+    ],
+)
+def test_a_commit_sha_that_is_not_forty_hex_characters_is_refused_with_its_code(tmp_path, sha):
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs", json={"github_repository": "acme/agent", "github_commit_sha": sha}
+    )
+
+    assert response.status_code == 422
+    assert "github_commit_sha_invalid" in response.text
+
+
+def test_intake_and_the_job_share_one_commit_sha_rule():
+    from fi.alk.harness.job import (
+        RepositorySource,
+        SourceKind,
+        SourceVisibility,
+        is_commit_sha,
+    )
+
+    assert is_commit_sha("0123456789abcdef0123456789ABCDEF01234567")
+    assert not is_commit_sha("main")
+    assert not is_commit_sha("")
+    # The job model holds the same rule itself, not only the route in front of it.
+    with pytest.raises(ValidationError, match="github_commit_sha_invalid"):
+        RepositorySource(
+            kind=SourceKind.GITHUB,
+            repository="acme/agent",
+            visibility=SourceVisibility.PUBLIC,
+            commit_sha="main",
+        )
+
+
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        ({"environment_values": {"PATH": "x"}}, "environment_name_reserved"),
+        ({"connector_config": {"ALK_JOB_X": "x"}}, "connector_config_name_reserved"),
+    ],
+)
+def test_a_reserved_name_is_reported_before_the_missing_commit(tmp_path, extra, reason):
+    # Both are wrong; the reserved name is reported first, so adding a commit does not
+    # just uncover the next refusal.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"github_repository": "acme/agent", **extra})
+
+    assert response.status_code == 422
+    assert reason in response.text
+    assert "github_commit_sha_required" not in response.text
+
+
+def _job_model_codes():
+    """Every refusal code job.py raises, read from its source: a new one is covered too."""
+    import fi.alk.harness.job as job_module
+
+    text = Path(job_module.__file__).read_text()
+    heads = re.findall(r'raise ValueError\(\s*f?"([a-z0-9_]+)', text)
+    return sorted(set(heads))
+
+
+def _refusal(code):
+    """A real pydantic ValidationError carrying ``code``, as a job.py validator raises it."""
+    from pydantic import BaseModel as _Model
+    from pydantic import model_validator as _after
+
+    class _Refuses(_Model):
+        note: str = ""
+
+        @_after(mode="after")
+        def _refuse(self):
+            raise ValueError(code)
+
+    try:
+        _Refuses(note="submitted-secret-value")
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("the model did not refuse")
+
+
+def _local_source(tmp_path, monkeypatch):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    monkeypatch.setattr(LocalSandbox, "_execute", _idle_execute)
+    return source
+
+
+def test_every_job_model_code_is_classified_once():
+    # A new refusal in job.py can't ship without saying whose it is: the caller's to fix, or
+    # this sandbox's own configuration.
+    import fi.alk.harness.job as job_module
+
+    text = Path(job_module.__file__).read_text()
+    # Every refusal is a ValueError opening with its code, so the list above sees it.
+    assert len(re.findall(r"raise ValueError\(", text)) == len(
+        re.findall(r'raise ValueError\(\s*f?"[a-z0-9_]+', text)
+    )
+    assert not re.search(r"PydanticCustomError|raise (?!ValueError\()", text)
+    codes = set(_job_model_codes())
+    submission, configuration = set(refusals.SUBMISSION), set(refusals.CONFIGURATION)
+
+    assert not submission & configuration
+    assert codes == submission | configuration
+
+
+@pytest.mark.parametrize("code", sorted(refusals.SUBMISSION))
+def test_a_job_model_refusal_is_a_cleaned_422_naming_its_code(tmp_path, monkeypatch, code):
+    # Built inside the route, the job model's ValidationError used to be a bare 500, which
+    # the platform reads as "sandbox unavailable". It is the caller's refusal, with its reason.
+    source = _local_source(tmp_path, monkeypatch)
+
+    def refuse(*_args, **_kwargs):
+        raise _refusal(code)
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", refuse)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert [entry["msg"] for entry in detail] == [f"Value error, {code}"]
+    # The shape of FastAPI's own 422 here, minus anything that can carry a submitted value.
+    assert all(set(entry) == {"type", "loc", "msg"} for entry in detail)
+    assert detail[0]["loc"] == ["body"]
+    assert "submitted-secret-value" not in response.text
+    # Nothing of the refused job is left behind.
+    assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
+
+
+@pytest.mark.parametrize("code", sorted(refusals.CONFIGURATION))
+def test_a_refusal_of_this_sandboxs_own_configuration_is_a_500_naming_its_code(
+    tmp_path, monkeypatch, code
+):
+    # Nothing in the submission can fix it, so it is not a 422; but it is not "down" either:
+    # the code says what is misconfigured, so the platform can say something true.
+    source = _local_source(tmp_path, monkeypatch)
+
+    def refuse(*_args, **_kwargs):
+        raise _refusal(code)
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", refuse)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": [
+            {"type": "sandbox_configuration", "loc": ["sandbox"], "msg": f"Value error, {code}"}
+        ]
+    }
+    assert "submitted-secret-value" not in response.text
+    assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
+
+
+def test_a_submission_and_a_configuration_refusal_together_answer_the_callers_422(caplog):
+    # A 5xx is only for a request with no fault of its own: the caller hears about their
+    # part, and ours is logged as an error rather than lost behind it.
+    from pydantic import BaseModel as _Model
+    from pydantic import model_validator as _after
+
+    class _Theirs(_Model):
+        @_after(mode="after")
+        def _refuse(self):
+            raise ValueError("github_commit_sha_invalid")
+
+    class _Ours(_Model):
+        @_after(mode="after")
+        def _refuse(self):
+            raise ValueError("hosted_isolation_must_be_dedicated_vm")
+
+    class _Both(_Model):
+        source: _Theirs
+        runtime: _Ours
+
+    try:
+        _Both(source={}, runtime={})
+    except ValidationError as exc:
+        both = exc
+    assert len(both.errors()) == 2
+
+    with caplog.at_level("ERROR", logger=refusals.__name__):
+        refused = JobRefused([(both, None)], job_id="job-1")
+
+    assert refused.status_code == 422
+    assert [entry["msg"] for entry in refused.detail] == [
+        "Value error, github_commit_sha_invalid"
+    ]
+    assert all(entry["loc"] == ["body"] for entry in refused.detail)
+    logged = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any(
+        "hosted_isolation_must_be_dedicated_vm" in m and "job-1" in m for m in logged
+    )
+
+
+def test_a_real_configuration_refusal_reaches_the_caller_as_a_500_with_its_code(
+    tmp_path, caplog
+):
+    # A GitHub job runs hosted, and submit doesn't yet give it the isolation a hosted job
+    # needs: that is ours to fix, and the caller is told what, not that we are down.
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    with caplog.at_level("ERROR", logger=refusals.__name__):
+        response = client.post(
+            "/v1/jobs",
+            json={"github_repository": "acme/agent", "github_commit_sha": "a" * 40},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"][0]["type"] == "sandbox_configuration"
+    assert "hosted_isolation_must_be_dedicated_vm" in response.text
+    # Ours alone, so the platform is not the only one that knows: the sandbox logs it too,
+    # with the job it refused.
+    logged = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any(
+        "hosted_isolation_must_be_dedicated_vm" in m
+        and re.search(r"job_id=[0-9a-f-]{36}", m)
+        for m in logged
+    ), logged
+
+
+_BAD_TRIAL = {
+    "execution_key": "k",
+    "scenario_key": "s",
+    "scenario_id": "x",
+    "trial_index": "two",
+    "call_execution_id": "c",
+}
+
+
+def test_two_faults_in_one_submission_come_back_in_one_422(tmp_path, monkeypatch):
+    # The connector misses its assistant and the plan has a bad value: one request, both
+    # named, rather than one per round trip.
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "connector": "vapi",
+            "connector_mode": "provider_import",
+            "scenario_count": 1,
+            "metadata": {"execution_manifest": [_BAD_TRIAL]},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert {
+        "type": "value_error",
+        "loc": ["body"],
+        "msg": "Value error, provider_import_requires_assistant_id",
+    } in detail
+    assert [e for e in detail if e["type"] == "int_parsing"] == [
+        {
+            "type": "int_parsing",
+            "loc": ["body", "metadata", "execution_manifest", 0, "trial_index"],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+        }
+    ]
+    assert len(detail) == 2
+    assert not any((tmp_path / "state" / "jobs").glob("*/job.json"))
+
+
+_GOOD_ENTRY = {**_BAD_TRIAL, "trial_index": 1}
+
+
+def test_a_part_refused_and_a_plan_of_the_wrong_size_come_back_in_one_422(
+    tmp_path, monkeypatch
+):
+    # The count used to be checked only by the job, after every part had built: the caller
+    # fixed the connector and was then told the plan was the wrong size.
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "connector": "vapi",
+            "connector_mode": "provider_import",
+            "scenario_count": 2,
+            "metadata": {"execution_manifest": [_GOOD_ENTRY]},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert sorted(entry["msg"] for entry in response.json()["detail"]) == [
+        "Value error, execution_manifest_count_mismatch",
+        "Value error, provider_import_requires_assistant_id",
+    ]
+
+
+def test_a_bad_entry_and_a_repeated_key_in_the_plan_come_back_in_one_422(
+    tmp_path, monkeypatch
+):
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "scenario_count": 2,
+            "metadata": {"execution_manifest": [_BAD_TRIAL, _GOOD_ENTRY]},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == [
+        {
+            "type": "int_parsing",
+            "loc": ["body", "metadata", "execution_manifest", 0, "trial_index"],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+        },
+        {
+            "type": "value_error",
+            "loc": ["body"],
+            "msg": "Value error, execution_manifest_duplicate_key",
+        },
+    ]
+
+
+def test_an_error_without_a_code_names_the_field_it_is_about(tmp_path, monkeypatch):
+    source = _local_source(tmp_path, monkeypatch)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "source_path": str(source),
+            "scenario_count": 1,
+            "metadata": {"execution_manifest": [_BAD_TRIAL]},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {
+            "type": "int_parsing",
+            "loc": ["body", "metadata", "execution_manifest", 0, "trial_index"],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+        }
+    ]
+
+
+def test_an_error_without_a_code_in_a_value_submit_sets_itself_is_ours(
+    tmp_path, monkeypatch, caplog
+):
+    # Submit chooses the artifact policy, so a bad value there (a renamed level, say) is this
+    # sandbox's fault: a 500 naming it, not a 422 telling the caller to change what they sent.
+    source = _local_source(tmp_path, monkeypatch)
+    real = sandbox_server.HarnessArtifactPolicy
+    monkeypatch.setattr(
+        sandbox_server,
+        "HarnessArtifactPolicy",
+        lambda **kwargs: real(**{**kwargs, "level": "everything"}),
+    )
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    with caplog.at_level("ERROR", logger=refusals.__name__):
+        response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert [entry["type"] for entry in detail] == ["sandbox_configuration"]
+    assert detail[0]["loc"] == ["sandbox"]
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
+def test_a_malformed_commit_is_refused_before_any_upload_is_claimed(hosted_sandbox):
+    # The boundary refuses it: the uploaded credential never leaves pending/, so nothing has
+    # to be put back.
+    sandbox = hosted_sandbox
+
+    async def upload():
+        return await _upload_credential(sandbox, "GOOD")
+
+    key = asyncio.run(upload())
+    for sha, code in (
+        (None, "github_commit_sha_required"),
+        ("main", "github_commit_sha_invalid"),
+    ):
+        with pytest.raises(ValidationError, match=code):
+            LocalSandboxRequest(
+                github_repository="acme/agent",
+                github_commit_sha=sha,
+                secret_refs={"GOOD": _ref("mounted", key)},
+            )
+    assert len(list((sandbox.secret_files_root / "pending").iterdir())) == 1
+
+
+def test_a_refusal_whose_uploads_cannot_be_put_back_still_answers_and_cleans_up(
+    hosted_sandbox, monkeypatch, caplog
+):
+    # The credential is claimed, the job is refused, and putting the upload back fails: the
+    # caller still gets the 422, the claim is still deleted, and the loss is logged.
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+
+    def refuse(**_kwargs):
+        raise _refusal("execution_manifest_invalid")
+
+    claims_seen = []
+
+    def stuck(self, job_id, _references):
+        claims_seen.append(
+            (self.secret_files_root / "jobs" / job_id / "GOOD").is_file()
+        )
+        raise OSError("pending/ is read-only")
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", refuse)
+    monkeypatch.setattr(LocalSandbox, "_return_job_secret_files", stuck)
+
+    async def submit():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        with caplog.at_level("ERROR", logger=sandbox_server.__name__):
+            with pytest.raises(JobRefused) as refused:
+                sandbox.submit(
+                    LocalSandboxRequest(
+                        source_id=source_id,
+                        secret_refs={"GOOD": _ref("mounted", upload)},
+                    )
+                )
+        return refused.value
+
+    refused = asyncio.run(submit())
+
+    assert refused.status_code == 422
+    assert "execution_manifest_invalid" in str(refused)
+    # The upload was claimed before the refusal, so there was a claim to clean up.
+    assert claims_seen == [True]
+    _assert_nothing_left(sandbox)
+    assert not any((sandbox.secret_files_root / "pending").iterdir())
+    assert any(
+        r.levelname == "ERROR"
+        and r.getMessage().startswith("job_refused_uploads_not_returned")
+        for r in caplog.records
+    )
+
+
+def test_an_unexpected_failure_building_the_job_is_still_a_500(tmp_path, monkeypatch):
+    source = _local_source(tmp_path, monkeypatch)
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("not a refusal")
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", broken)
+    client = TestClient(create_app(tmp_path / "state"), raise_server_exceptions=False)
+
+    response = client.post("/v1/jobs", json={"source_path": str(source)})
+
+    assert response.status_code == 500
+    assert "not a refusal" not in response.text
 
 
 def test_job_submission_requires_exactly_one_source(tmp_path):
@@ -1784,10 +2330,6 @@ class _DedicatedVmJob(HarnessJob):
     )
 
 
-class _AwaitingDedicatedIsolation(Exception):
-    """The route failed only on the runtime isolation hosted jobs still lack."""
-
-
 async def _idle_execute(*_args):
     return None
 
@@ -2091,6 +2633,41 @@ def test_hosted_submit_names_its_own_values_platform_vault(hosted_sandbox, sourc
     assert claimed_path not in persisted
 
 
+def test_a_refused_job_leaves_its_uploaded_credential_for_the_corrected_resubmit(
+    hosted_sandbox, monkeypatch
+):
+    # The refusal is the caller's to fix; fixing it must not need the credential uploaded
+    # again, so the claim on it is undone rather than the file deleted.
+    sandbox = hosted_sandbox
+    sandbox._execute = _idle_execute
+    build = sandbox_server.HarnessJob
+    refusals_left = [_refusal("execution_manifest_invalid")]
+
+    class _RefusesOnce(build):
+        def __init__(self, **kwargs):
+            if refusals_left:
+                raise refusals_left.pop()
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", _RefusesOnce)
+
+    async def submit_twice():
+        source_id = await _upload_archive(sandbox)
+        upload = await _upload_credential(sandbox, "GOOD")
+        request = LocalSandboxRequest(
+            source_id=source_id, secret_refs={"GOOD": _ref("mounted", upload)}
+        )
+        with pytest.raises(JobRefused, match="execution_manifest_invalid"):
+            sandbox.submit(request)
+        return sandbox.submit(request)
+
+    submitted = asyncio.run(submit_twice())
+
+    claimed = sandbox.secret_files_root / "jobs" / submitted.job.job_id / "GOOD"
+    assert claimed.read_bytes() == b"credential-body"
+    assert not any((sandbox.secret_files_root / "pending").iterdir())
+
+
 def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):
     sandbox = hosted_sandbox
     sandbox._execute = _idle_execute
@@ -2099,7 +2676,7 @@ def test_hosted_submit_still_refuses_a_mounted_server_key(hosted_sandbox):
         source_id = await _upload_archive(sandbox)
         upload = await _upload_credential(sandbox, "GOOD")
         with pytest.raises(
-            ValidationError, match="hosted_secret_manager_unsupported: OTHER_VALUE"
+            JobRefused, match="hosted_secret_manager_unsupported: OTHER_VALUE"
         ):
             sandbox.submit(
                 LocalSandboxRequest(
@@ -2438,6 +3015,11 @@ def test_hosted_github_route_accepts_a_submitted_value(tmp_path, monkeypatch):
         if "hosted_isolation_must_be_dedicated_vm" in str(exc):
             raise _AwaitingDedicatedIsolation from exc
         raise
+    if (
+        response.status_code == 500
+        and "hosted_isolation_must_be_dedicated_vm" in response.text
+    ):
+        raise _AwaitingDedicatedIsolation
 
     assert response.status_code == 200
     job = response.json()["job"]

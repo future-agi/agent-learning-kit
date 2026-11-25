@@ -75,6 +75,20 @@ def test_isolated_checks_cannot_read_the_callers_environment(monkeypatch) -> Non
     assert world_check.held, world_check.said
 
 
+def test_isolated_checks_keep_shared_helpers_and_recorded_call_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("ALK_HANDLER_ISOLATION", "process")
+    world = _world()
+    world.events = lambda actor_id, outcome: [{"action": "refund", "ok": True}] if actor_id == "agent" else []
+    result = run_check(
+        "def check(world, calls):\n"
+        "    return (same_value('$5.00', '5 USD') and committed_writes(world)[0]['action'] == 'refund'\n"
+        "            and calls[0].worker_id == 'billing' and calls[0].ok is None)",
+        world,
+        [Call(name="return", arguments={}, worker_id="billing", ok=None)],
+    )
+    assert result.held, result.said
+
+
 @pytest.mark.skipif(
     os.environ.get("ALK_HANDLER_ISOLATION") != "namespace",
     reason="requires the hosted image's user, mount, and network namespaces",

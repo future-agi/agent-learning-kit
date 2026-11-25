@@ -77,6 +77,7 @@ PINNED_FREE_TEXT = (
     "AgentContract.notes",
     "AgentContract.open_questions",
     "AgentContract.amendments",
+    "AmendmentRecord.text",
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
@@ -227,6 +228,7 @@ def _full_contract() -> AgentContract:
         "runtime_dependencies": [{"name": URL}],
         "data_store": {"kind": "database", "host": URL, "configured_by": URL},
         "workers": [{"id": URL, "name": URL, "tools": ["post"]}],
+        "amendment_records": [{"kind": "rule", "key": URL, "action": "removed", "text": URL}],
     }
     for name in FREE_TEXT:
         model, field = name.split(".")
@@ -240,6 +242,7 @@ def _full_contract() -> AgentContract:
                     ("tool_entrypoints", "ToolEntry"),
                     ("dependencies", "Dependency"),
                     ("runtime_dependencies", "Dependency"),
+                    ("amendment_records", "AmendmentRecord"),
                 )
                 if kind == model
                 for item in body[key]
@@ -1409,10 +1412,29 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, _READS + " (rewrites stale pre-run sessions in scenario.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "validate_native"): (
         1, _READS + " (the native validation record)"),
-    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_bytes"): (
-        1, _READS + " (a validation record)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "keep_rejected_certification"): (
+        1, _READS + " (the rejected certification log)"),
+    # The job document and the secrets copy, written by `_prepare_runtime_work`, which a prove-only pass shares.
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "_prepare_runtime_work"): (
+        1, _READS + " (the runtime workspace's job and secrets copy)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "play_this_attempt"): (
+        1, _READS + " (the live proofs file)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_unplayed"): (
+        1, _READS + " (the unplayed cases file)"),
+    ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "_prepare_runtime_work"): (
+        1, _READS + " (the runtime workspace's job and secrets copy)"),
+    ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "prove_live"): (
+        1, _READS + " (the live proofs file)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "record_tool_routing"): (
+        1, _READS + " (the tool routing observations)"),
+    ("fi.alk.harness.authoring_runtime_validation", "validate_once", "request_uncovered_tools"): (
+        1, _READS + " (the tool requests ledger and the routing observations)"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "record"): (
+        2, _READS + " (the check's failure record, failure_record.record)"),
+    ("fi.alk.harness.hosted_agent_reading", "_read", "write_text"): (
+        1, _READS + " (the agent reading's document, agent.json)"),
     ("fi.alk.harness.authoring_runtime_validation", "validate_once", "write_text"): (
-        2, _READS + " (validation records)"),
+        1, _READS + " (validation records)"),
     ("fi.alk.harness.bundle_author_v2", "_reuse_certified_bundle", "Path.rename"): (
         3, _READS + " (its digest); moves bundle folders"),
     ("fi.alk.harness.bundle_author_v2", "_reuse_certified_bundle", "shutil.copy2"): (
@@ -1442,6 +1464,8 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.bundle", "export_session_bundle", "shutil.copy2"): (2, _COPIES),
     ("fi.alk.harness.bundle", "export_session_bundle", "write_environment_plan"): (1, _COPIES),
     ("fi.alk.harness.bundle", "export_session_bundle", "write_text"): (1, _COPIES),
+    ("fi.alk.harness.authoring_runtime_validation", "prove_on_sealed_runtime", "shutil.copytree"): (
+        1, _COPIES + ": the sealed bundle, into the live proof's own work folder"),
     ("fi.alk.harness.bundle_author_v2", "_carry_contract", "_compile_source_tool_handlers"): (
         1, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "_carry_contract", "shutil.copy2"): (1, _COPIES),
@@ -1462,13 +1486,14 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "_reuse_certified_bundle"): (
         1, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "compile_bundle"): (1, _COPIES),
-    # Eight: the three before dev's actors (2aed5a4d) and world door (06c8d288, 7588a371) merged, and
-    # five they added. None copies contract.json's content: the actors file, and the kit's own door
-    # modules (world_door.py twice, in_process_door.py, tool_trace_proxy.py) into the bundle's
-    # generated folders, so each is a copy of a file that is not the contract.
-    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "shutil.copy2"): (8, _COPIES),
+    # Six: the tool proxy's two copies moved into _seal_tool_proxy (listed below). None copies
+    # contract.json's content: the actors file, and the kit's own door modules (world_door.py,
+    # in_process_door.py, tool_trace_proxy.py) into the bundle's generated folders, so each is a copy
+    # of a file that is not the contract.
+    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "shutil.copy2"): (6, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "write_text"): (
-        5, _COPIES + " (:3752 writes the parsed authoring body back as written)"),
+        6, _COPIES + " (one writes the parsed authoring body back as written; door.json is the door's "
+        "sealed outcome, read from the plan and the tool modes)"),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "Path.rename"): (2, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "_carry_contract"): (1, _COPIES),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "_copy_scenarios"): (1, _COPIES),
@@ -1483,12 +1508,14 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.compose_integration", "compile_bundle", "_copy_scenarios"): (1, _COPIES),
     ("fi.alk.harness.compose_integration", "compile_bundle", "_copy_sub_goal_catalogue"): (
         1, _COPIES),
-    ("fi.alk.harness.compose_integration", "compile_bundle", "write_text"): (4, _COPIES),
+    ("fi.alk.harness.compose_integration", "compile_bundle", "write_text"): (
+        5, _COPIES + " (door.json is the door's sealed outcome)"),
     # Found by the widened scan (change review r1, A-M1): calls to a helper that writes to what
     # it is given, found to a fixed point. None of these helpers names contract.json (one that
     # did would be listed under its own name), so each reason says what the helper writes.
     ("fi.alk.harness.agent_reading", "_read", "_reading"): (1, "calls _reading, listed below"),
     ("fi.alk.harness.agent_reading", "_reading", "_timed_out"): (1, _FAILURE),
+    ("fi.alk.harness.agent_reading", "_reading", "call_limit"): (1, _FAILURE),
     ("fi.alk.harness.agent_reading", "_reading", "classify"): (
         1, _FAILURE + "; classify's document writes agent.json"),
     ("fi.alk.harness.agent_reading", "_reading", "model_error"): (1, _FAILURE),
@@ -1499,6 +1526,14 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "the runtime-plan repair, which saves through write_contract (B13); " + _TEMP_COMPOSE),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "repair"): (
         3, "calls its nested repair, scanned as validate_and_repair.repair"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "_rewrite_held_cases"): (
+        1, "hands held cases to its nested repair (scenarios), then puts back what other cases rely on"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "read_held"): (
+        1, "proves the suite into a temporary file to read which cases are held; writes no contract"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_yield"): (
+        2, "writes generic-harness/yield.json, the build's runnable and held counts; writes no contract"),
+    ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "mark_replay"): (
+        1, "writes generic-harness/live-replay.json, which cases the next live pass proves again; writes no contract"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "validate"): (
         2, "calls its nested validate, which runs validate_once (listed above)"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair", "write_scenarios"): (
@@ -1525,18 +1560,27 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
         1, "writes actor_rules.json into the bundle (actors.write_actor_rules), not the contract"),
     ("fi.alk.harness.bundle_author_v2", "reseal_scenarios", "_reseeded"): (
         1, "_carried_world writes the world seed (world.sqlite, world-ir.json)"),
-    ("fi.alk.harness.chat_call_runner", "HostedChatCallRunner.run", "_drive_conversation"): (
+    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "_seal_tool_proxy"): (
+        1, "copies the kit's tool proxy and door modules and writes the proxy's routes, not the contract"),
+    ("fi.alk.harness.bundle_author_v2", "author_bundle_v2", "write_worker_limits"): (
+        1, "writes each scenario's sealed worker limits (call_runner.write_worker_limits), not the contract"),
+    ("fi.alk.harness.compose_integration", "compile_bundle", "write_worker_limits"): (
+        1, "writes each scenario's sealed worker limits (call_runner.write_worker_limits), not the contract"),
+    ("fi.alk.harness.chat_call_runner", "HostedChatCallRunner._run", "_drive_conversation"): (
         1, _TRACE),
-    ("fi.alk.harness.chat_call_runner", "handler_child_for", "start_handler_child"): (
+    ("fi.alk.harness.chat_call_runner", "handler_child_at", "start_handler_child"): (
         1, "makes the handler child's own scratch folder and log, not the contract"),
+    ("fi.alk.harness.cli", "_auto", "refuse_saved_contract"): (
+        1, "writes the build's failure file when the agent needs an environment the job lacks"),
     ("fi.alk.harness.cli", "_auto", "save_session"): (
         1, "sessions.save writes the session's own record (META)"),
     ("fi.alk.harness.compose_integration", "compile_bundle", "select_runtime"): (
         1, _TEMP_COMPOSE),
+    ("fi.alk.harness.reading_result", "classify", "call_limit"): (1, _FAILURE),
     ("fi.alk.harness.reading_result", "classify", "model_error"): (2, _FAILURE),
     ("fi.alk.harness.reading_result", "classify", "write_reading_failure"): (1, _FAILURE),
     ("fi.alk.harness.reading_result", "document", "write_reading_failure"): (2, _FAILURE),
-    ("fi.alk.harness.retell_chat_call_runner", "RetellChatCallRunner.run",
+    ("fi.alk.harness.retell_chat_call_runner", "RetellChatCallRunner._run",
      "_drive_conversation"): (1, _TRACE),
     ("fi.alk.harness.sandbox_server", "LocalSandbox.rerun", "_claim_secret_files"): (
         1, "moves the job's pending secret files into the job's folder"),

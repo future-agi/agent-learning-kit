@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from itertools import combinations
 from math import ceil, log
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -76,6 +76,52 @@ class Step(BaseModel):
     environment_arguments: dict[str, Any] = Field(default_factory=dict)
     # Each argument the caller, their record or a rule fixes, and where it comes from; checks see only these.
     fixed: dict[str, str] | None = None
+
+
+_CONTROL_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+class NegativeControl(BaseModel):
+    """A wrong behaviour written for this task, played like a solution; the checks must fail it."""
+
+    name: str  # slug, unique within the scenario
+    why: str  # one sentence: the wrong behaviour, e.g. "does the action twice"
+    steps: list[Step] = Field(default_factory=list)  # the wrong trajectory
+    must_fail: list[str] = Field(default_factory=list)  # sub-goals that must fail; empty = any check
+    # What the wrong agent says, as [{role: "user" | "assistant", content}]: the judge reads it with
+    # the steps for a case only a judge can grade, and must fail it.
+    transcript: list[dict[str, str]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _shape(self) -> "NegativeControl":
+        if not _CONTROL_NAME.match(self.name or ""):
+            raise ValueError(f"negative control name {self.name!r} must be a lowercase slug")
+        if not self.steps and not self.transcript:
+            raise ValueError(f"negative control {self.name} has no steps and no transcript")
+        for turn in self.transcript:
+            if str(turn.get("role") or "") not in ("user", "assistant") or not str(turn.get("content") or "").strip():
+                raise ValueError(
+                    f"negative control {self.name}: each transcript turn needs a role (user or assistant) and content"
+                )
+        return self
+
+
+class ScenarioSource(BaseModel):
+    """Where one requirement of a case comes from, so it is shown on the case and checked."""
+
+    kind: Literal["rule", "file", "chat_message", "evidence_case", "requirement", "assumption"]
+    # rule:<index into contract.hard_constraints> | file:<path> | chat:<message id> |
+    # evidence:<EvidenceImportCase id> | "" for requirement and assumption. A file:<path> is an attached file, or a
+    # file of the agent's own source (where its tools live) relative to the source root, e.g. file:agent/app.py.
+    ref: str = ""
+    quote: str = Field(default="", max_length=500)  # the cited words; required for rule and file
+    supports: str = ""  # which part of the case it justifies, e.g. "<the limit the rule states>"
+
+    @model_validator(mode="after")
+    def _quoted(self) -> "ScenarioSource":
+        if self.kind in ("rule", "file") and not self.quote.strip():
+            raise ValueError(f"a {self.kind} source needs the exact quote it cites")
+        return self
 
 
 # The language every accent in the platform's accent vocabulary is a way of speaking.
@@ -201,7 +247,7 @@ class Persona(BaseModel):
         return "\n".join(parts)
 
 
-def _slug(name: str) -> str:
+def scenario_slug(name: str) -> str:
     """An ASCII key for ``name``, safe to send as a header value.
 
     Falls back to a digest rather than an empty string: an empty key would collapse every
@@ -219,6 +265,14 @@ def used_keys(destination: Any) -> set[str]:
     so a new scenario never takes one and inherits another's row and run history. One live set per
     environment: whatever adds to it is seen by every writer."""
     return _USED_KEYS.setdefault(str(Path(destination).resolve()), set())
+
+
+def seed_used_keys(destination: Any, metadata: Any) -> None:
+    """Add every key the environment has given a scenario (the job's `used_scenario_keys`, a dropped one's included)
+    to the keys `destination`'s writers treat as taken, so a new scenario never takes one and inherits another's row and
+    run history."""
+    keys = (metadata or {}).get("used_scenario_keys") if isinstance(metadata, dict) else None
+    used_keys(destination).update(str(key) for key in keys or () if key)
 
 
 def unused_key(key: str, taken: set[str]) -> str:
@@ -241,7 +295,7 @@ def with_unique_keys(
     out: list[Scenario] = []
     for one in scenarios:
         if not one.scenario_key or one.scenario_key in keys:
-            key = unused_key(one.scenario_key or _slug(one.name), held | keys)
+            key = unused_key(one.scenario_key or scenario_slug(one.name), held | keys)
             one = one.model_copy(update={"scenario_key": key})
             held.add(key)
         keys.add(one.scenario_key)
@@ -264,6 +318,13 @@ class Scenario(BaseModel):
     # on the pair, so a use case can carry many scenarios without any reading as a duplicate.
     branch: str = ""
     tests: str = ""
+    # A failure here blocks the release: the platform marks the case must-pass and names it on a run
+    # whose result it failed. Set by the person or the builder; versioned with the case.
+    must_pass: bool = False
+    # A case the suite had and lost, brought back as the same case: `{"key": its original scenario_key,
+    # "suite_version": the saved suite version it last existed in}` ("" when it was removed in this conversation).
+    # Only a case carrying it may take a key the environment gave before; the platform's save reads it as a restore.
+    restored_from: dict[str, str] | None = None
 
     # What this scenario changes about the world after it is reset, as code: a file defining
     # ``setup(world)``. Rows in a table were enough while every world was a database, and they
@@ -301,6 +362,11 @@ class Scenario(BaseModel):
     solution: list[Step] = Field(default_factory=list)
     # Other ways the agent's instructions allow to the same outcome; every check must pass on each.
     alternatives: list[list[Step]] = Field(default_factory=list)
+    # Wrong behaviours written for this task; each must fail the checks. Never shown to the agent.
+    negative_controls: list[NegativeControl] = Field(default_factory=list)
+    # Where each requirement comes from: a rule, a file, a chat message, an evidence case, the
+    # person's own words, or an assumption labelled as such.
+    sources: list[ScenarioSource] = Field(default_factory=list)
 
     # Level per plan axis, e.g. {"task": "book_ride", "overlay": "interruption"}. Optional.
     coverage: dict[str, str] = Field(default_factory=dict)
@@ -328,6 +394,19 @@ class Scenario(BaseModel):
     faults: list[Fault] = Field(default_factory=list)
 
     max_turns: int = 10
+    # Seconds from the trial's start after which a worker's world calls are refused and its own process, if it has one,
+    # is ended; one number for all workers or {worker id: seconds} for named ones. None: the run's own limit alone.
+    worker_budget_seconds: int | dict[str, int] | None = None
+
+    @field_validator("worker_budget_seconds", mode="after")
+    @classmethod
+    def _positive_budget(cls, value: int | dict[str, int] | None) -> int | dict[str, int] | None:
+        if value is None:
+            return value
+        budgets = value if isinstance(value, dict) else {"*": value}
+        if not budgets or any(not str(key).strip() or isinstance(one, bool) or one <= 0 for key, one in budgets.items()):
+            raise ValueError("a worker budget is a number of seconds above 0, for all workers or per named worker")
+        return value
 
     # Where this call is made from. A string names the place ("street", "vehicle", "retail"), and
     # True asks for noise while leaving the place to the fixture. Left unset it is decided from
@@ -367,9 +446,20 @@ class Scenario(BaseModel):
         return data
 
     @model_validator(mode="after")
+    def _controls_fit(self) -> "Scenario":
+        names = [one.name for one in self.negative_controls]
+        if len(names) != len(set(names)):
+            raise ValueError("negative control names must be unique within a scenario")
+        for one in self.negative_controls:
+            unknown = sorted(set(one.must_fail) - set(self.sub_goals))
+            if unknown:
+                raise ValueError(f"negative control {one.name} names sub-goals the scenario lacks: {', '.join(unknown)}")
+        return self
+
+    @model_validator(mode="after")
     def _identify(self) -> "Scenario":
         if not self.scenario_key:
-            self.scenario_key = _slug(self.name)
+            self.scenario_key = scenario_slug(self.name)
         if self.background_noise == "":
             level = str((self.coverage or {}).get("interface") or "").strip().lower()
             # A real caller is somewhere; only a quiet level is heard in the clear.
@@ -565,7 +655,7 @@ def validate_scenario(
             "no tests line: say in one line what this scenario is trying to find out, in words "
             "the report can carry"
         )
-    elif _slug(scenario.tests) == _slug(scenario.name):
+    elif scenario_slug(scenario.tests) == scenario_slug(scenario.name):
         problems.append(
             "tests just restates the name: say what this scenario is trying to find out instead"
         )
@@ -1281,11 +1371,18 @@ def vocabulary_from(design: dict | None) -> set[str] | None:
 
 
 def tidy_keywords(
-    scenarios: list[Scenario], vocabulary: set[str] | None = None
+    scenarios: list[Scenario],
+    vocabulary: set[str] | None = None,
+    *,
+    among: list[Scenario] | None = None,
 ) -> tuple[int, set[str]]:
-    """Settle one spelling per keyword and drop words the plan did not deal; returns (moved, dropped)."""
+    """Settle one spelling per keyword and drop words the plan did not deal; returns (moved, dropped).
+
+    Only ``scenarios`` are rewritten; spellings are settled across ``among`` (the whole suite) when
+    given, so a case written now takes the suite's spelling and a case not written now is untouched.
+    """
     spellings: dict[str, Counter[str]] = defaultdict(Counter)
-    for one in scenarios:
+    for one in among if among is not None else scenarios:
         for word in one.keywords or []:
             clean = word.strip()
             if clean:

@@ -80,7 +80,8 @@ def snapshot(dsn: str, *, max_rows: int = MAX_ROWS, timeout_ms: int = 10000) -> 
     the database cannot be read; the caller records that, never failing the trial."""
     import psycopg
 
-    options = f"-c default_transaction_read_only=on -c statement_timeout={timeout_ms}"
+    # The system's own search path (`world_door.PINNED_SEARCH_PATH`): every table read is named with its schema.
+    options = f"-c default_transaction_read_only=on -c statement_timeout={timeout_ms} -c search_path=pg_catalog,pg_temp"
     with psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=options) as connection:
         names = [
             str(row[0])
@@ -93,7 +94,7 @@ def snapshot(dsn: str, *, max_rows: int = MAX_ROWS, timeout_ms: int = 10000) -> 
         read: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}
         too_big: list[dict[str, str]] = []
         for table in names:
-            quoted = '"' + table.replace('"', '""') + '"'
+            quoted = '"public"."' + table.replace('"', '""') + '"'
             if not keys.get(table):
                 read[table] = ([], [])
                 continue

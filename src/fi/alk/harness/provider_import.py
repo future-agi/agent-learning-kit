@@ -112,13 +112,66 @@ def _safe_profile_value(value: Any, key: str = "") -> Any:
         }
     if isinstance(value, list):
         return [_safe_profile_value(item, key) for item in value]
-    if isinstance(value, str) and "://" in value:
+    if isinstance(value, str) and _rewritten_as_url(value):
         parsed = urlsplit(value)
-        if parsed.scheme and parsed.netloc:
-            hostname = parsed.hostname or ""
-            port = f":{parsed.port}" if parsed.port else ""
-            return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
+        hostname = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
     return value
+
+
+def _rewritten_as_url(value: str) -> bool:
+    """Whether the profile's sanitizer rewrites this text as an address: its query, fragment
+    and any newlines are dropped, so a prompt that begins with one comes back cut."""
+    if "://" not in value:
+        return False
+    parsed = urlsplit(value)
+    return bool(parsed.scheme and parsed.netloc)
+
+
+# The most a whole prompt is copied at: the same limit as a prompt copied from the source.
+_LARGEST_WHOLE_PROMPT = 1024 * 1024
+
+
+def whole_prompt(profile: Mapping[str, Any]) -> str | None:
+    """The agent's whole instructions from a provider profile, or None where code can't take
+    every text of them, or where taking them would cut them.
+
+    Phone and LiveKit carry the prompt the user gave. Retell's one general prompt is whole when
+    there are no states; with states or a conversation flow it is only a part. Vapi's are the
+    system messages of the assistant's model, in order.
+    """
+    provider = str(profile.get("provider") or "")
+    texts: list[Any]
+    if provider in {"phone", "livekit"}:
+        texts = [profile.get("system_prompt")]
+    elif provider == "retell":
+        if profile.get("response_engine_type") != "retell-llm" or profile.get("states"):
+            return None
+        texts = [profile.get("general_prompt")]
+    elif provider == "vapi":
+        model = profile.get("model")
+        messages = model.get("messages") if isinstance(model, Mapping) else None
+        if not isinstance(messages, list):
+            return None
+        texts = [
+            message.get("content")
+            for message in messages
+            if isinstance(message, Mapping) and message.get("role") == "system"
+        ]
+    else:
+        return None
+    if not texts or not all(isinstance(text, str) and text.strip() for text in texts):
+        return None
+    if provider in {"retell", "vapi"} and any(
+        _rewritten_as_url(text) for text in texts
+    ):
+        # Fetched profiles were sanitized, and one rewritten as an address may have been cut.
+        return None
+    whole = "\n\n".join(texts)
+    if len(whole.encode("utf-8")) > _LARGEST_WHOLE_PROMPT:
+        return None
+    return whole
 
 
 def inspect_provider_target(

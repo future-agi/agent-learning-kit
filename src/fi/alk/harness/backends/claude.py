@@ -29,6 +29,7 @@ from claude_agent_sdk import (
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     create_sdk_mcp_server,
 )
 
@@ -36,10 +37,12 @@ from fi import agentcc
 
 from .base import (
     ASK_TOOL,
+    CALL_BUDGET_SPENT,
     DELEGATE_TOOL,
     KNOWN_BUILTINS,
     MOST_WORKERS_AT_ONCE,
     Call,
+    CallBudgetSpent,
     ModelReply,
     Say,
     SessionOpened,
@@ -171,6 +174,123 @@ def _flattened(content: Any) -> str:
     return content if isinstance(content, str) else str(content)
 
 
+class _CallCount:
+    """Model calls a session has made, its sub-agents' included, held to its budget.
+
+    The CLI makes the calls itself and offers no hook before one, so a call is counted when its
+    reply reaches the stream: one per provider message id, since the CLI splits one reply into a
+    message per content block under the same id. A message without an id counts on its own,
+    which can only count more, never fewer. A sub-agent's closing reply may never reach the stream,
+    so its delegate tool's result counts one more call unless the stream shows there was none
+    (``_closing_reply``).
+
+    The call that reaches the budget is still inside it and finishes what it asked for, as on the
+    Gemini backend, where the budget-th call is made and only the one after it is refused. A call
+    past the budget ends the session: Gemini refuses it unsent; here it is seen, its tools are
+    refused, and the caller stops the session.
+    """
+
+    def __init__(self, budget: int) -> None:
+        self.budget = budget
+        self.total = 0
+        self._numbers: dict[str, int] = {}
+        self._tools_inside: set[str] = set()
+        # The number of the call the last message seen belongs to.
+        self.latest = 0
+
+    @property
+    def spent(self) -> bool:
+        """The budget is reached: any call not yet counted is past it."""
+        return self.budget > 0 and self.total >= self.budget
+
+    @property
+    def past(self) -> bool:
+        """A call past the budget has been counted."""
+        return self.budget > 0 and self.total > self.budget
+
+    def see(self, received: AssistantMessage) -> bool:
+        """Count ``received`` if it is a new call; True when it was one."""
+        message_id = getattr(received, "message_id", None)
+        new = not message_id or message_id not in self._numbers
+        if new:
+            self.total += 1
+            if message_id:
+                self._numbers[message_id] = self.total
+        number = self._numbers[message_id] if message_id else self.total
+        self.latest = number
+        if self.budget <= 0 or number <= self.budget:
+            self._tools_inside.update(
+                block.id for block in received.content if isinstance(block, ToolUseBlock)
+            )
+        return new
+
+    def add(self, calls: int) -> None:
+        """Count calls made whose replies never reach the stream."""
+        self.total += calls
+
+    def may_run(self, tool_use_id: str | None) -> bool:
+        """Whether a tool may run: always before the budget is reached, and after it only when
+        the call that asked for it was inside the budget. A tool whose call is not counted yet
+        belongs to a call past the budget, since every call up to it has been counted."""
+        return not self.spent or (tool_use_id is not None and tool_use_id in self._tools_inside)
+
+
+def _closing_reply(is_error: bool, calls: list[bool], limit: int | None) -> int:
+    """The model calls a sub-agent made for its closing reply that the stream did not show, 1 or 0.
+
+    ``calls`` says, for each of the sub-agent's calls seen in the stream in order, whether it asked
+    for a tool; ``limit`` is the turn limit the kit set for it, None when not known.
+
+    A sub-agent that ends by answering makes one last call for that answer, and the CLI may hand
+    the answer back only as the delegate tool's result, never in the stream. Only the stream is
+    evidence that no such call was missed, and the result's own text and status are not read:
+
+    - refused or failed: 0;
+    - its last call seen asked for no tool, so that call was its answer and is counted already: 0;
+    - its calls seen reached its turn limit, so it had no turn left to answer with: 0;
+    - anything else, an empty answer included: 1, and with a warning when the limit is not known.
+
+    So a change in the CLI can make the count high, never quietly low.
+    """
+    if is_error:
+        return 0
+    if calls and not calls[-1]:
+        return 0
+    if limit is None:
+        logger.warning(
+            "a sub-agent's turn limit is not known; its result is counted as one model call"
+        )
+        return 1
+    return 0 if len(calls) >= limit else 1
+
+
+def _refuse_after_budget(options: ClaudeAgentOptions, calls: _CallCount) -> None:
+    """Refuse every tool a call past the budget asks for: a guard against a late save, not the
+    stop. The call that reaches the budget keeps its tools, so a save made on it still counts.
+
+    A refused call is answered with another call, so the caller still has to stop the session.
+    """
+    from claude_agent_sdk.types import HookMatcher
+
+    async def refuse(payload: dict[str, Any], tool_use_id: Any, _context: Any) -> dict[str, Any]:
+        if calls.may_run(tool_use_id or payload.get("tool_use_id")):
+            return {}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"This session's budget of {calls.budget} model calls is spent, so no tool "
+                    "runs now."
+                ),
+            }
+        }
+
+    hooks = dict(options.hooks or {})
+    hooks["PreToolUse"] = [*hooks.get("PreToolUse", []), HookMatcher(hooks=[refuse])]
+    options.hooks = hooks
+
+
 class ClaudeSession:
     """One Claude Code session, translated to the neutral reply vocabulary."""
 
@@ -181,14 +301,20 @@ class ClaudeSession:
         reported_model: str | None = None,
         streaming: bool = False,
         interrupt_on_terminal_save: bool = True,
+        calls: _CallCount | None = None,
     ) -> None:
         self._options = options
+        self._calls = calls or _CallCount(0)
         self._reported_model = reported_model
         self._streaming = streaming
         self._interrupt_on_terminal_save = interrupt_on_terminal_save
         self._client: ClaudeSDKClient | None = None
         self._mirror_errors: list[str] = []
         self._tool_names: dict[str, str] = {}
+        # For each delegate tool call: the worker it sent out, and that worker's calls seen in the
+        # stream, by their number in the count, with whether each asked for a tool.
+        self._sent_to: dict[str, str] = {}
+        self._worker_calls: dict[str, dict[int, bool]] = {}
         self._terminal_save_succeeded = False
         # The CLI reports running totals within one connection, so a result's own counts are its
         # totals less the last ones seen. None until this connection's first report.
@@ -228,15 +354,86 @@ class ClaudeSession:
         if self._client is None:
             raise RuntimeError("session is not open")
         terminal = False
+        calls_before = self._calls.total
         async for received in self._client.receive_response():
             if terminal and not isinstance(received, ResultMessage):
                 continue
+            counted = isinstance(received, AssistantMessage) and self._calls.see(received)
+            if isinstance(received, AssistantMessage):
+                self._follow_workers(received)
+            closing = self._closing_replies(received)
+            if closing:
+                self._calls.add(closing)
+                counted = True
             for reply in self._translate(received):
+                if isinstance(reply, StageDone):
+                    reply = self._with_calls(reply, self._calls.total - calls_before)
                 yield reply
+            if counted and self._calls.past:
+                yield CallBudgetSpent(calls=self._calls.total)
             if self._terminal_save_succeeded:
                 self._terminal_save_succeeded = False
                 terminal = True
                 await self._client.interrupt()
+
+    def _follow_workers(self, received: AssistantMessage) -> None:
+        """Note the workers this message sends out, and, when a worker made it, whether its call
+        asked for a tool. A call is judged by all the messages under its id, since the CLI sends
+        one message for each block of a reply."""
+        for block in received.content:
+            if isinstance(block, ToolUseBlock) and block.name in DELEGATION_TOOLS:
+                arguments = block.input if isinstance(block.input, dict) else {}
+                self._sent_to[block.id] = str(arguments.get("subagent_type") or "")
+        delegate = getattr(received, "parent_tool_use_id", None)
+        if delegate:
+            calls = self._worker_calls.setdefault(delegate, {})
+            asked = any(isinstance(block, ToolUseBlock) for block in received.content)
+            calls[self._calls.latest] = calls.get(self._calls.latest, False) or asked
+
+    def _closing_replies(self, received: Any) -> int:
+        """Model calls made by sub-agents for closing replies the stream did not show, one
+        delegate tool's result at a time (see ``_closing_reply``)."""
+        if not isinstance(received, UserMessage) or not isinstance(received.content, list):
+            return 0
+        counted = 0
+        for block in received.content:
+            if not (
+                isinstance(block, ToolResultBlock)
+                and self._tool_names.get(block.tool_use_id) in DELEGATION_TOOLS
+            ):
+                continue
+            # Keyed on the delegate call, never the worker: several readers of one worker can run
+            # at once.
+            calls = self._worker_calls.pop(block.tool_use_id, {})
+            worker = self._sent_to.pop(block.tool_use_id, "")
+            counted += _closing_reply(
+                bool(getattr(block, "is_error", False)),
+                [calls[number] for number in sorted(calls)],
+                self._turn_limit(worker),
+            )
+        return counted
+
+    def _turn_limit(self, worker: str) -> int | None:
+        """The turn limit the kit set for ``worker``, None when it set none."""
+        agents = getattr(self._options, "agents", None)
+        definition = agents.get(worker) if isinstance(agents, dict) else None
+        limit = getattr(definition, "maxTurns", None)
+        return limit if isinstance(limit, int) and limit > 0 else None
+
+    def _with_calls(self, done: StageDone, calls: int) -> StageDone:
+        if not self._calls.past:
+            return dataclasses.replace(done, calls=calls)
+        # However the CLI ended the turn, it ended because a call went past the budget.
+        return dataclasses.replace(
+            done,
+            calls=calls,
+            outcome=CALL_BUDGET_SPENT,
+            is_error=True,
+            errors=[
+                *done.errors,
+                f"the session went past its budget of {self._calls.budget} model calls",
+            ],
+        )
 
     def _translate(self, received: Any) -> list[Any]:
         if isinstance(received, StreamEvent):
@@ -448,11 +645,16 @@ class ClaudeBackend:
         # An alias on the wire is not what was billed, so report the model the run chose.
         reported = spec.model if gateway_wire_model(spec.model) != spec.model else None
         context = spec.conversation
+        options = self._options(spec)
+        calls = _CallCount(spec.call_budget)
+        if spec.call_budget > 0:
+            _refuse_after_budget(options, calls)
         return ClaudeSession(
-            self._options(spec),
+            options,
             reported_model=reported,
             streaming=bool(context and context.streaming),
             interrupt_on_terminal_save=context is None,
+            calls=calls,
         )
 
     def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
@@ -510,7 +712,9 @@ class ClaudeBackend:
             if context.config_dir:
                 environment["CLAUDE_CONFIG_DIR"] = context.config_dir
         if spec.workers:
-            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
+            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(
+                spec.workers_at_once or MOST_WORKERS_AT_ONCE
+            )
             # A backgrounded worker lets the stage end before the worker reports.
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)

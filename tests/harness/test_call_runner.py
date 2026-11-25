@@ -11,12 +11,17 @@ touch a real `SimulationRunner`, `rtc.Room`, or `AgentSession`.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import io
 import json
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -42,7 +47,7 @@ from fi.alk.harness.process_runtime import (
     RuntimeState,
 )
 from fi.alk.harness.world.errors import WorldUnavailable
-from fi.alk.harness.world.runtime import Call
+from fi.alk.harness.world.runtime import Call, graded_calls
 from fi.simulate.artifacts import ArtifactManifest
 from fi.simulate.runtime.failures import FailureStage, SimulationFailure
 from fi.simulate.runtime.report import SimulationReport, SimulationTestCaseResult
@@ -164,7 +169,7 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
         + "\n",
         encoding="utf-8",
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert [call.name for call in calls] == ["process_request", "write_record"]
@@ -200,7 +205,7 @@ def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(
     )
     observed, plain = (
         trace_row(call)
-        for call in cr._collect_file_tool_calls(
+        for call in cr.collect_file_tool_calls(
             _runtime(metadata={"tool_trace_path": str(trace)})
         )
     )
@@ -217,6 +222,68 @@ def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(
         "task_label",
         "runtime_ids",
     } & set(plain)
+
+
+def _events(**fields) -> list[tuple]:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    row = trace_row(Call(name="ask", arguments={}, at=4.0, **fields))
+    return [
+        (one["type"], one["id"], one["worker_id"], one.get("by"), one["parent_id"], one["relationship"], one["at"])
+        for one in row["worker_events"]
+    ]
+
+
+def test_a_hand_off_whose_worker_returned_is_a_delegated_and_a_returned_worker_event() -> None:
+    placed = dict(runtime_ids={"event_id": "e2"}, parent_span_id="e1", relationship="observed")
+    assert _events(worker_id="lead", delegated_to="research", ended_at=6.5, **placed) == [
+        ("delegated", "e2", "research", "lead", "e1", "observed", 4.0),
+        ("returned", "e2", "research", "lead", "e1", "observed", 6.5),
+    ]
+
+
+def test_a_control_pass_and_a_hand_off_still_out_have_no_returned_worker_event() -> None:
+    ids = {"runtime_ids": {"event_id": "e2"}}
+    assert [one[0] for one in _events(worker_id="lead", delegated_to="billing", transferred=True, **ids)] == [
+        "transferred"
+    ]
+    assert [one[0] for one in _events(worker_id="lead", delegated_to="research", **ids)] == ["delegated"]
+
+
+def test_a_tool_call_worker_event_names_its_worker_place_end_and_outcome() -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    refused = trace_row(
+        Call(name="refund", arguments={}, ok=False, refused=True, at=4.0, ended_at=4.5, worker_id="billing",
+             runtime_ids={"event_id": "e3"}, parent_span_id="e2", relationship="observed")
+    )
+    (event,) = refused["worker_events"]
+    assert (event["type"], event["worker_id"], event["parent_id"], event["ended_at"], event["status"]) == (
+        "tool_call", "billing", "e2", 4.5, "refused",
+    )
+    # A call no runtime attributed still carries its event, so a reader can tell a new run from an old one.
+    (plain,) = trace_row(Call(name="lookup", arguments={}, at=1.0))["worker_events"]
+    assert (plain["worker_id"], plain["relationship"], plain["status"]) == (None, "unknown", "ok")
+
+
+def test_a_worker_event_names_a_declared_worker_by_its_contract_id_and_keeps_the_framework_s_name(tmp_path) -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"workers": [{"id": "refund", "name": "Refund Desk"}, {"id": "lookup", "name": ""}]})
+    )
+    workers = cr.declared_worker_ids(tmp_path)
+    assert workers == {"Refund Desk": "refund"}
+    handed = trace_row(Call(name="ask", arguments={}, worker_id="Lead", delegated_to="Refund Desk", ended_at=2.0,
+                            runtime_ids={"event_id": "e1"}), workers)
+    assert [(one["worker_id"], one["worker_name"], one["by"], one["by_name"]) for one in handed["worker_events"]] == [
+        ("refund", "Refund Desk", "Lead", "Lead"),
+    ] * 2
+    # A call on a worker's door channel already carries its id, and a name no worker declares stays as it was.
+    (by_channel,) = trace_row(Call(name="refund", arguments={}, worker_id="refund"), workers)["worker_events"]
+    (unknown,) = trace_row(Call(name="note", arguments={}, worker_id="Scribe"), workers)["worker_events"]
+    assert (by_channel["worker_id"], unknown["worker_id"], unknown["worker_name"]) == ("refund", "Scribe", "Scribe")
+    assert cr.declared_worker_ids(None) == {} and cr.declared_worker_ids(tmp_path / "missing") == {}
 
 
 # A worker's run, as a CrewAI agent records it: a hand-off, not a call checks grade.
@@ -318,7 +385,7 @@ def test_a_runtime_s_hand_off_keeps_when_the_worker_returned_and_is_never_graded
             "kind": "handoff",
         },
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     (row,) = (trace_row(call) for call in calls)
@@ -340,7 +407,7 @@ def test_a_span_that_recorded_no_arguments_reads_as_none_not_as_raw_text(
         {**_SPAN_LINES[1], "arguments": "", "output": ""},
         {"name": "note", "arguments": "not json", "output": "", "is_error": False},
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert [(c.name, c.arguments) for c in calls] == [
@@ -356,7 +423,7 @@ def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_fro
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: EvidenceSeam | None
 ) -> None:
     trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES)
-    for reader in ("_collect_tool_trace_calls", "_collect_http_tool_calls"):
+    for reader in ("collect_tool_trace_calls", "_collect_http_tool_calls"):
         monkeypatch.setattr(cr, reader, lambda runtime, **_: tuple(_observed()))
     _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
@@ -377,7 +444,7 @@ def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_pa
         ),
         encoding="utf-8",
     )
-    calls = cr._collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    calls = cr.collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
     assert [call.result for call in calls] == [{"verified": True}, {"verified": True}, "sent"]
 
 
@@ -410,7 +477,7 @@ def test_file_tool_trace_merges_agent_line_with_livekit_hook_time(
             "source": "livekit",
         },
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert [(call.arguments, call.result, call.at) for call in calls] == [
@@ -563,7 +630,7 @@ def test_file_tool_trace_keeps_a_rejected_call_apart_from_a_same_name_success(
             "source": "livekit",
         },
     )
-    calls = cr._collect_file_tool_calls(
+    calls = cr.collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
     assert sorted((call.at, call.ok, call.result) for call in calls) == [
@@ -1493,7 +1560,7 @@ def test_non_completed_tool_trace_call_preserves_evidence_and_uploads_trace(
         at="2026-01-01T00:00:01.000Z",
     )
     monkeypatch.setattr(
-        cr, "_collect_tool_trace_calls", lambda runtime, **_: (captured,)
+        cr, "collect_tool_trace_calls", lambda runtime, **_: (captured,)
     )
 
     async def place_call(spec):
@@ -1773,6 +1840,97 @@ def test_silence_after_caller_turn_is_attributed_to_target_agent(
     assert "Target agent produced no response" in str(exc)
 
 
+# The payment-timeout voice trials' last turns: the agent's markdown reply, and one cut off mid-sentence.
+_MARKDOWN_REPLY = (
+    "Here's what I found:\n\n- **Order 1045:** Head torch, $35.00, delivered 5 days ago.\n"
+    "- **Return window:** It's inside the 30-day window, with 25 days left.\n- **Refunds issued:** None"
+)
+_CUT_OFF_REPLY = (
+    "Please don't assume the refund has gone through. I can check the order again in a little while. "
+    "Would you like me to do that, or would you prefer to"
+)
+
+
+@pytest.mark.parametrize(
+    ("last", "code"),
+    [
+        ("Would you like me to go ahead?", "simulator_stalled"),
+        ("Refund R-1043 issued.", "simulator_stalled"),
+        (_MARKDOWN_REPLY, "target_agent_stalled"),
+        ("- Your refund of", "target_agent_stalled"),
+        (_CUT_OFF_REPLY, "target_agent_stalled"),
+    ],
+)
+def test_a_stall_is_attributed_from_the_last_turn(
+    tmp_path: Path, last: str, code: str
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="conversation_stalled",
+                message="Conversation produced no new speech for the stall deadline",
+                retryable=True,
+            ),
+            transcript="user: I'd like a refund for order 1045.\nassistant: " + last,
+            messages=[
+                {"role": "user", "content": "I'd like a refund for order 1045."},
+                {"role": "assistant", "content": last},
+            ],
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == code
+
+
+def test_a_stall_under_a_transcript_failure_and_a_failed_teardown_both_reach_the_receipt(tmp_path: Path) -> None:
+    """As the payment-timeout trial afba0ff3 ended: the caller asked for the refund, the agent went quiet while its
+    refund was held, the transcript could not be fully captured, and a teardown step failed."""
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.FINALIZING,
+                code="transcript_finalization_failed",
+                message="The final call transcript could not be completely captured",
+                retryable=True,
+            ),
+            transcript="assistant: Would you like me to go ahead?\nuser: Yes, go ahead and submit the refund.",
+            messages=[
+                {"role": "assistant", "content": "Would you like me to go ahead?"},
+                {"role": "user", "content": "Yes, go ahead and submit the refund."},
+            ],
+            result_metadata={
+                "stop_reason": "conversation_stalled",
+                "cleanup_status": "failed",
+                "cleanup_errors": ["delete_room:TimeoutError"],
+            },
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    # The transcript failure still decides the code; the stall and the teardown are said beside it.
+    assert exc.code != "target_agent_stalled"
+    message = str(exc)
+    assert "could not be completely captured" in message
+    assert "also stalled (target_agent_stalled: Target agent produced no response" in message
+    assert "call teardown failed at delete_room:TimeoutError" in message
+
+
 def test_provider_tool_failure_is_attributed_to_target_agent(tmp_path: Path) -> None:
     _job_obj, context = _context(tmp_path=tmp_path)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
@@ -1886,6 +2044,9 @@ class _FakeCursor:
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
 
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
 
 class _FakeConnection:
     def __init__(self, rows: list[tuple[Any, ...]], columns: list[str]) -> None:
@@ -1895,6 +2056,12 @@ class _FakeConnection:
 
     def execute(self, statement: str, params: Any = None) -> _FakeCursor:
         self.executed.append(statement)
+        if "to_regclass" in statement:
+            # A world without the trial tables yet: the catalog read finds none of their columns.
+            return _FakeCursor([], ["relname", "attname"])
+        if "_alk_worker_stops" in statement:
+            # No worker was stopped: the rows are the door's log, not stops.
+            return _FakeCursor([], self._columns)
         return _FakeCursor(self._rows, self._columns)
 
     def __enter__(self) -> "_FakeConnection":
@@ -1934,7 +2101,7 @@ def test_tool_trace_keeps_the_door_s_outcome_apart_from_a_failure(monkeypatch) -
         ("legacy", {}, None, False, "not found", 4.0, None, None),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    calls = cr.collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [(c.name, c.refused, c.refusal_code) for c in calls] == [
         ("cancel_order", True, "world_rule"),
         ("refund", True, "not_permitted"),
@@ -1955,7 +2122,7 @@ def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> 
     monkeypatch.setitem(sys.modules, "psycopg", fake)
 
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
 
     assert calls == (
         Call(
@@ -1979,6 +2146,15 @@ def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> 
     )
 
 
+def test_tool_trace_keeps_the_path_the_tool_proxy_logged(monkeypatch) -> None:
+    columns = ["id", "name", "endpoint", "arguments", "result", "ok", "error", "at"]
+    rows = [(1, "search", "/orders/search", {}, None, True, "", 1.0)]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    runtime = _runtime(endpoints={"database": _postgres_endpoint()})
+
+    assert cr.collect_tool_trace_calls(runtime)[0].endpoint == "/orders/search"
+
+
 def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
     monkeypatch,
 ) -> None:
@@ -1989,7 +2165,7 @@ def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
     ]
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(agent_rows, old))
-    before = cr._collect_tool_trace_calls(runtime)
+    before = cr.collect_tool_trace_calls(runtime)
 
     columns = [*old, "action_id", "actor_id", "worker_id", "outcome"]
     rows = [
@@ -2009,7 +2185,10 @@ def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
         (*agent_rows[1], "a3", "agent", None, "refused"),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
-    assert cr._collect_tool_trace_calls(runtime) == before
+    after = cr.collect_tool_trace_calls(runtime)
+    # The new rows also say which channel each call came in on (a null worker_id is the shared address).
+    assert [one.channel for one in after] == ["", ""]
+    assert [replace(one, channel=None) for one in after] == list(before)
     assert [one.name for one in before] == ["lookup_order", "cancel_order"]
 
 
@@ -2020,22 +2199,22 @@ def test_tool_trace_read_failure_degrades_to_no_calls_never_crashes(
     degrade to `()`, never raise past this function."""
     monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    assert cr._collect_tool_trace_calls(runtime) == ()
+    assert cr.collect_tool_trace_calls(runtime) == ()
 
 
 def test_tool_trace_missing_endpoint_degrades_to_no_calls() -> None:
     runtime = _runtime(endpoints={})
-    assert cr._collect_tool_trace_calls(runtime) == ()
+    assert cr.collect_tool_trace_calls(runtime) == ()
 
 
 def test_a_strict_tool_trace_read_says_the_capture_failed(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
     with pytest.raises(cr.ToolCaptureFailed, match="tool_trace read failed"):
-        cr._collect_tool_trace_calls(
+        cr.collect_tool_trace_calls(
             _runtime(endpoints={"database": _postgres_endpoint()}), strict=True
         )
     with pytest.raises(cr.ToolCaptureFailed, match="no world database"):
-        cr._collect_tool_trace_calls(_runtime(endpoints={}), strict=True)
+        cr.collect_tool_trace_calls(_runtime(endpoints={}), strict=True)
 
 
 def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
@@ -2044,16 +2223,16 @@ def test_a_strict_trace_file_read_fails_only_on_a_file_it_cannot_read(
     trace = tmp_path / "agent-tool-calls.jsonl"
     runtime = _runtime(metadata={"tool_trace_path": str(trace)})
     # No file: the agent called no tool, or nothing wrote one. Neither is a failed read.
-    assert cr._collect_file_tool_calls(runtime, strict=True) == ()
+    assert cr.collect_file_tool_calls(runtime, strict=True) == ()
     _trace_lines(trace, {"name": "lookup", "arguments": {}})
 
     def refuse(*_args: Any, **_kwargs: Any) -> str:
         raise PermissionError("denied")
 
     monkeypatch.setattr(type(trace), "read_text", refuse)
-    assert cr._collect_file_tool_calls(runtime) == ()
+    assert cr.collect_file_tool_calls(runtime) == ()
     with pytest.raises(cr.ToolCaptureFailed, match="tool_trace file unreadable"):
-        cr._collect_file_tool_calls(runtime, strict=True)
+        cr.collect_file_tool_calls(runtime, strict=True)
 
 
 @pytest.mark.parametrize(
@@ -2079,12 +2258,12 @@ def test_a_trace_file_with_no_readable_record_is_a_failed_capture(
     runtime = _runtime(metadata={"tool_trace_path": str(trace)})
 
     # Lenient reads drop what they cannot parse, as before.
-    assert [call.name for call in cr._collect_file_tool_calls(runtime)] == names
+    assert [call.name for call in cr.collect_file_tool_calls(runtime)] == names
     if failed:
         with pytest.raises(cr.ToolCaptureFailed, match="no readable record"):
-            cr._collect_file_tool_calls(runtime, strict=True)
+            cr.collect_file_tool_calls(runtime, strict=True)
     else:
-        calls = cr._collect_file_tool_calls(runtime, strict=True)
+        calls = cr.collect_file_tool_calls(runtime, strict=True)
         assert [call.name for call in calls] == names
 
 
@@ -2245,7 +2424,7 @@ def test_tool_trace_result_string_form_is_truncated_at_2000_chars(monkeypatch) -
     rows = [("t", {}, long_string, True, "", 1.0)]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
     assert len(calls) == 1
     assert len(calls[0].result) == 2000
 
@@ -2259,7 +2438,7 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
     rows = [("t", {}, big_list, True, "", 1.0)]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
     assert calls[0].result == big_list
 
 
@@ -2287,7 +2466,7 @@ def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    assert [one.name for one in cr._collect_tool_trace_calls(runtime)] == [
+    assert [one.name for one in cr.collect_tool_trace_calls(runtime)] == [
         "read_record",
         "update",
     ]
@@ -3064,7 +3243,7 @@ def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_
             "on_behalf_of": None,
         }
     ]
-    assert [call.name for call in cr._collect_tool_trace_calls(runtime)] == [
+    assert [call.name for call in cr.collect_tool_trace_calls(runtime)] == [
         "request_approval"
     ]
     assert cr._actor_rows(runtime, tmp_path / "no-actors") == []
@@ -3092,7 +3271,7 @@ def test_with_actors_the_agent_s_sealed_calls_carry_their_own_action_ids_to_link
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    calls = cr._collect_tool_trace_calls(runtime)
+    calls = cr.collect_tool_trace_calls(runtime)
     assert cr._agent_marks(runtime, bundle, calls) == [
         {"action_id": "a1", "outcome": "committed"},
         {"action_id": "a3", "outcome": "refused"},
@@ -3464,6 +3643,883 @@ def test_a_voice_call_with_no_words_still_seals_the_notice_for_a_fault_it_never_
     assert json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["notices"][0]["code"] in ("fault_not_applied", "fault_not_triggered")
 
 
+def test_a_voice_call_hands_the_scheduler_the_notice_that_worker_limits_were_not_held(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["worker_budget_seconds"] = 30
+    document.write_text(json.dumps(body))
+    monkeypatch.setattr(cr, "_write_trial_state", lambda *args, **kwargs: None)
+
+    placed = []
+
+    async def place_call(spec):
+        placed.append(spec)
+        return _report(transcript="hello", messages=[])
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    outcome = _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+    # The bundle was sealed without a door that holds worker limits: the scheduler must hear it to hold the grading,
+    # and no call is placed for a trial that is held whatever it does.
+    assert [one["code"] for one in outcome.notices] == ["worker_limits_not_enforced"]
+    assert placed == [] and outcome.calls == ()
+
+
+def test_a_voice_trial_says_its_span_source_was_on_but_never_that_it_was_silent(tmp_path, monkeypatch) -> None:
+    """Through the voice runner: the LiveKit worker wrote a tracer line for the tool it ran, and the hook noted the
+    framework's span source as on, with no tool span. A voice trial reads spans for hand-offs, so that is no sign of a
+    silent source."""
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    monkeypatch.setattr(cr, "_write_trial_state", lambda *args, **kwargs: None)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+
+    async def place_call(spec):
+        line = {"name": "lookup", "arguments": {}, "output": "ok", "is_error": False, "at": 1.0, "source": "livekit"}
+        trace.write_text(json.dumps(line) + "\n", encoding="utf-8")
+        (tmp_path / "agent-tool-calls.jsonl.observing").write_text(
+            json.dumps({"framework": "agents", "state": "on"}) + "\n", encoding="utf-8"
+        )
+        return _report(transcript="hello", messages=[])
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0", "tool_trace_path": str(trace)}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    codes = [one["code"] for one in json.loads(sealed[cr.ArtifactKind.TRANSCRIPT]).get("notices", [])]
+    assert [call.name for call in outcome.calls] == ["lookup"]
+    assert cr.TOOL_SPANS_ON in codes
+    assert cr.TOOL_SPANS_SILENT not in codes
+    # The same trace read as a chat trial would say it.
+    assert cr.TOOL_SPANS_SILENT in [one["code"] for one in cr.tool_span_notices(_runtime(metadata={"tool_trace_path": str(trace)}), outcome.calls)]
+
+
+def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code", "refusal"]
+    rows = [
+        ("update_status", {}, None, False, "", 1.0, "a1", "agent", "order_lookup", "refused", "not_permitted",
+         "orders.update_status is not permitted for order_lookup"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0"},
+        ),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    changes = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]["state_changes"]
+    # The agent keeps its own line ("no change"); the worker's refused attempt is its own entry.
+    assert [(one["who"], one["refused"], [r["code"] for r in one["refused_actions"]]) for one in changes] == [
+        ("agent", 0, []),
+        ("worker:order_lookup", 1, ["not_permitted"]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("budget", "expected"),
+    [(30, True), (0, False), (-5, False), (True, False), ("30", False), (None, False)],
+)
+def test_a_trial_s_worker_deadline_is_its_start_plus_the_scenario_s_worker_budget(budget, expected, monkeypatch):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    assert cr.worker_deadline({"worker_budget_seconds": budget}) == (1030.0 if expected else None)
+
+
+def test_a_budget_per_worker_gives_each_named_worker_its_own_deadline_and_no_deadline_for_all(monkeypatch):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    document = {"worker_budget_seconds": {"refund": 5, "lookup": 0, "": 3, "audit": True}}
+    assert cr.worker_deadlines(document) == {"refund": 1005.0}
+    assert cr.worker_deadline(document) is None
+    assert cr.worker_deadlines({"worker_budget_seconds": 30}) == {}
+
+
+def test_worker_budgets_on_a_door_sealed_before_worker_limits_are_said_not_enforced(monkeypatch, tmp_path):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    document = {"worker_budget_seconds": {"refund": 5, "lookup": 9}}
+    # Sealed by a door that holds worker limits: each worker its own deadline, nothing said.
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    assert cr.trial_worker_deadlines(document, tmp_path) == (None, {"refund": 1005.0, "lookup": 1009.0}, [])
+    # Sealed before: that proxy has no worker limits at all, for either budget shape, and the trial says so.
+    (door / "door.json").unlink()
+    (door / "proxy.py").write_text("")
+    for budget in ({"refund": 5}, 30):
+        *_, notices = cr.trial_worker_deadlines({"worker_budget_seconds": budget}, tmp_path)
+        [notice] = notices
+        assert notice["code"] == "worker_limits_not_enforced"
+    # No tool proxy and no door inside the agent: held too, for a cause a rebuild does not fix, so it is not told to
+    # rebuild.
+    (door / "proxy.py").unlink()
+    [unproxied] = cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path)[2]
+    assert unproxied["code"] == "worker_limits_not_enforced" and unproxied["message"] != notice["message"]
+    # No budget asked: nothing to say.
+    assert cr.trial_worker_deadlines({}, tmp_path) == (None, {}, [])
+    # No sealed bundle (the harness's own proxy): enforced, nothing said.
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, None) == (1030.0, {}, [])
+
+
+def test_limits_on_a_shared_worker_are_said_not_enforced_on_a_new_door(monkeypatch, tmp_path):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    contract = tmp_path / "contract.json"
+    separate = {"id": "lookup", "binding": "separate", "address_env": "LOOKUP_URL"}
+    shared = {"id": "refund", "binding": "shared", "tools": ["get_order"]}
+    contract.write_text(json.dumps({"workers": [separate, shared]}))
+    # A deadline naming a shared worker: the world cannot tell its calls apart, so it is held, not graded.
+    [notice] = cr.trial_worker_deadlines({"worker_budget_seconds": {"refund": 2}}, tmp_path)[2]
+    assert notice["code"] == "worker_limits_not_enforced"
+    # A deadline naming only the separate worker is held by the door: nothing said.
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": {"lookup": 2}}, tmp_path)[2] == []
+    # One deadline for all with no separate worker cannot be held either.
+    contract.write_text(json.dumps({"workers": [shared]}))
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": 30}, tmp_path)[2]
+    # Permitted tools on a shared worker cannot be held, for a scenario with a check about that worker.
+    contract.write_text(json.dumps({"workers": [{**shared, "allowed_tools": ["get_order"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refund_refused", "subject": "worker:refund"}]}))
+    assert cr.trial_worker_deadlines({"sub_goals": ["refund_refused"]}, tmp_path)[2]
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
+
+
+def test_permitted_tools_on_a_shared_worker_the_scenario_does_not_rely_on_do_not_hold_a_tool_proxy_trial(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"},
+        {"id": "reader", "binding": "shared", "tools": ["read"], "allowed_tools": ["read"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "writer_held", "subject": "worker:writer"}, {"name": "reader_refused", "subject": "worker:reader"}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    # Relies only on the separate writer, which the door holds: the shared reader's permitted tools do not hold it.
+    about_writer = {"worker_budget_seconds": {"writer": 5}, "sub_goals": ["writer_held"]}
+    assert cr._limits_not_held_cause(about_writer, tmp_path) == ("", "", [])
+    assert cr.limits_not_held(about_writer, tmp_path) == []
+    # Relying on the reader's permitted tools holds it, naming the reader alone.
+    about_reader = {"worker_budget_seconds": {"writer": 5}, "sub_goals": ["reader_refused"]}
+    assert cr._limits_not_held_cause(about_reader, tmp_path) == ("A participant's allowed tools", "shared_worker", ["reader"])
+
+
+def test_a_deadline_only_scenario_on_a_shared_worker_with_allowed_tools_is_not_held_for_permitted_tools(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"},
+        {"id": "reader", "binding": "shared", "tools": ["read"], "allowed_tools": ["read"]}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    # One deadline for all reaches the shared reader too, whose calls the world cannot tell apart: held for the
+    # deadline, never for its permitted tools, which no sub-goal judges.
+    assert cr._limits_not_held_cause({"worker_budget_seconds": 30}, tmp_path) == (
+        "A participant's time limit", "shared_worker", ["reader"])
+    # A deadline naming the shared reader is held for the deadline, not for its permitted tools.
+    assert cr._limits_not_held_cause({"worker_budget_seconds": {"reader": 5}}, tmp_path) == (
+        "A participant's time limit", "shared_worker", ["reader"])
+
+
+def test_one_deadline_for_all_holds_a_relied_on_shared_worker_even_beside_a_separate_one(tmp_path):
+    """A scalar budget, a separate writer and a shared reader the scenario judges: the reader's calls cannot be told
+    from the coordinator's, so the deadline cannot be held for it and the scenario is held, naming the reader."""
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"},
+        {"id": "reader", "binding": "shared", "tools": ["read"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "reader_answered", "subject": "worker:reader"}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    document = {"worker_budget_seconds": 30, "sub_goals": ["reader_answered"]}
+    assert cr._limits_not_held_cause(document, tmp_path) == ("A participant's time limit", "shared_worker", ["reader"])
+
+
+def test_the_bundle_seals_each_worker_s_limited_flag_and_what_each_scenario_relies_on(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"}, {"id": "reader", "tools": ["read"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "writer_held", "subject": "worker:writer"}, {"name": "reader_said", "subject": "worker:reader"},
+        {"name": "task_done", "subject": "task"}]}))
+    for key, document in {
+        "about_writer": {"sub_goals": ["writer_held", "task_done"]},
+        "about_reader": {"sub_goals": ["reader_said"]},
+        "budgeted": {"sub_goals": ["task_done"], "worker_budget_seconds": {"reader": 5}},
+    }.items():
+        (tmp_path / "scenarios" / key).mkdir(parents=True)
+        (tmp_path / "scenarios" / key / "scenario.json").write_text(json.dumps({**document, "scenario_key": key}))
+    cr.write_worker_limits(tmp_path)
+    sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())
+    assert sealed["workers"] == {"writer": {"limited": True}, "reader": {"limited": False}}
+    # No tool proxy fronts these tools, so every scenario relying on a worker limit is held.
+    no_proxy = {"held": True, "reason": cr.WORKER_LIMITS_NOT_ENFORCED, "cause": "no_tool_proxy", "limit": "all",
+                "deadline": None}
+    assert sealed["scenarios"] == {
+        "about_writer": {"workers": ["writer"], "relies_on_worker_limits": True, **no_proxy,
+                         "unheld_workers": ["writer"]},
+        # About a worker with no limits of its own: nothing the door must hold.
+        "about_reader": {"workers": ["reader"], "relies_on_worker_limits": False, "held": False, "reason": None,
+                         "cause": None, "limit": None, "deadline": None, "unheld_workers": []},
+        "budgeted": {"workers": ["reader"], "relies_on_worker_limits": True, **no_proxy, "unheld_workers": ["reader"]},
+    }
+    # A bundle whose agent declares no workers seals no file, as before.
+    (tmp_path / cr.WORKER_LIMITS_FILE).unlink()
+    (tmp_path / "contract.json").write_text(json.dumps({}))
+    cr.write_worker_limits(tmp_path)
+    assert not (tmp_path / cr.WORKER_LIMITS_FILE).exists()
+
+
+def test_each_scenario_s_sealed_hold_is_the_one_the_runner_decides_for_it(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"}, {"id": "reader", "tools": ["read"]}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    documents = {
+        # A deadline on a separate worker: the door holds it, so the trial runs and is graded.
+        "writer_budget": {"worker_budget_seconds": {"writer": 5}},
+        # A deadline on a shared worker: the door cannot tell its calls apart, so the trial is held.
+        "reader_budget": {"worker_budget_seconds": {"reader": 5}},
+    }
+    for key, document in documents.items():
+        (tmp_path / "scenarios" / key).mkdir(parents=True)
+        (tmp_path / "scenarios" / key / "scenario.json").write_text(json.dumps({**document, "scenario_key": key}))
+    cr.write_worker_limits(tmp_path)
+    sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())["scenarios"]
+    for key, document in documents.items():
+        held = cr.limits_not_held(document, tmp_path)
+        assert sealed[key]["held"] is bool(held)
+        assert sealed[key]["reason"] == (held[0]["code"] if held else None)
+    assert sealed["writer_budget"]["held"] is False and sealed["writer_budget"]["workers"] == ["writer"]
+    assert sealed["reader_budget"] == {
+        "workers": ["reader"], "relies_on_worker_limits": True, "held": True,
+        "reason": cr.WORKER_LIMITS_NOT_ENFORCED, "cause": "shared_worker", "limit": "deadline", "deadline": None,
+        "unheld_workers": ["reader"],
+    }
+
+
+def test_each_held_scenario_seals_the_workers_whose_limits_the_build_cannot_hold(tmp_path):
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "writer", "binding": "separate", "address_env": "WRITER_URL"},
+        {"id": "reader", "tools": ["read"], "allowed_tools": ["read"]},
+        {"id": "idle", "tools": ["read"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "reader_refused", "subject": "worker:reader"}, {"name": "idle_said", "subject": "worker:idle"},
+        {"name": "task_done", "subject": "task"}]}))
+    (tmp_path / "generated" / "tool-proxy").mkdir(parents=True)
+    (tmp_path / "generated" / "tool-proxy" / "door.json").write_text(json.dumps({"worker_deadlines": "per_worker"}))
+    documents = {
+        # The separate writer's deadline holds; the shared reader's deadline and permitted tools do not.
+        "both_budgets": {"worker_budget_seconds": {"writer": 5, "reader": 5}, "sub_goals": ["reader_refused"]},
+        # One deadline for all reaches every shared worker the scenario relies on, beside a separate one too.
+        "one_for_all": {"worker_budget_seconds": 30, "sub_goals": ["idle_said"]},
+        # About a worker with no limits, and the task: nothing relied on, nothing listed.
+        "no_limits": {"sub_goals": ["idle_said", "task_done"]},
+    }
+    for key, document in documents.items():
+        (tmp_path / "scenarios" / key).mkdir(parents=True)
+        (tmp_path / "scenarios" / key / "scenario.json").write_text(json.dumps({**document, "scenario_key": key}))
+    cr.write_worker_limits(tmp_path)
+    sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())["scenarios"]
+    assert {key: (one["held"], one["unheld_workers"]) for key, one in sealed.items()} == {
+        "both_budgets": (True, ["reader"]),
+        "one_for_all": (True, ["idle", "reader"]),
+        "no_limits": (False, []),
+    }
+    # The list is the runner's own rule, not a second one.
+    for key, document in documents.items():
+        assert sealed[key]["unheld_workers"] == cr._limits_not_held_cause(document, tmp_path)[2]
+    # With no door at all, every worker the scenario puts a limit on is listed; one with no limits never is.
+    (tmp_path / "generated" / "tool-proxy" / "door.json").unlink()
+    cr.write_worker_limits(tmp_path)
+    sealed = json.loads((tmp_path / cr.WORKER_LIMITS_FILE).read_text())["scenarios"]
+    assert sealed["both_budgets"]["unheld_workers"] == ["reader", "writer"]
+    assert sealed["one_for_all"]["unheld_workers"] == ["idle", "reader", "writer"]
+    assert sealed["no_limits"]["held"] is False and sealed["no_limits"]["unheld_workers"] == []
+
+
+def test_a_permission_only_scenario_on_a_door_sealed_before_worker_limits_is_said_not_enforced(tmp_path):
+    # No budget, but the scenario checks a worker the agent declares held to its own tools: an old door holds none.
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "refund_refused", "subject": "worker:refund"}, {"name": "task_done", "subject": "task"}]}))
+    about_refund = {"sub_goals": ["task_done", "refund_refused"]}
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"workers": [{"id": "refund", "binding": "separate", "address_env": "REFUND_URL"}]})
+    )
+    [notice] = cr.trial_worker_deadlines(about_refund, tmp_path)[2]
+    assert notice["code"] == "worker_limits_not_enforced"
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
+    assert cr.trial_worker_deadlines(about_refund, tmp_path)[2]
+    # A scenario about the task alone relies on no worker's limits: graded, nothing said.
+    assert cr.trial_worker_deadlines({"sub_goals": ["task_done"]}, tmp_path)[2] == []
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
+    # A worker with no limits of its own relies on nothing the door must hold.
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "tools": ["get"]}]}))
+    assert cr.trial_worker_deadlines(about_refund, tmp_path)[2] == []
+    # Sealed with worker limits: nothing to say.
+    door = tmp_path / "generated" / "tool-proxy"
+    door.mkdir(parents=True)
+    (door / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "binding": "separate"}]}))
+    assert cr.trial_worker_deadlines({}, tmp_path)[2] == []
+
+
+def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch):
+    written = []
+    monkeypatch.setattr(
+        cr,
+        "_write_trial_state",
+        lambda runtime, faults, deadline=None, deadlines=None: written.append((faults, deadline, deadlines)),
+    )
+    cr._set_trial_faults(None, [], 1030.0)
+    cr._set_trial_faults(None, [{"action": "approve"}])
+    cr._set_trial_faults(None, [], None, {"refund": 1030.0})
+    assert written == [([], 1030.0, None), ([{"action": "approve"}], None, None), ([], None, {"refund": 1030.0})]
+
+
+def test_a_worker_deadline_that_cannot_be_written_fails_the_trial_rather_than_run_without_one(monkeypatch):
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: None)
+    with pytest.raises(RuntimeError, match="deadline cannot be set"):
+        cr._write_trial_state(None, [], 1030.0)
+    # Faults alone on a world with no database keep the old behaviour: noted, the trial runs.
+    cr._write_trial_state(None, [{"action": "approve"}])
+
+
+def test_a_change_one_of_the_agent_s_workers_committed_is_not_no_change() -> None:
+    log = [
+        {"name": "issue_refund", "actor_id": "agent", "worker_id": "refund", "outcome": "committed", "ok": True},
+        {"name": "cancel_order", "actor_id": "agent", "worker_id": "lookup", "outcome": "refused",
+         "refusal_code": "not_permitted", "refusal": "orders.cancel is not permitted for lookup"},
+    ]
+    agent, *workers = cr.trial_state_changes(log, {})
+    assert (agent["who"], agent["no_change"]) == ("agent", False)
+    assert [(one["who"], one["committed_actions"], one["refused_actions"]) for one in workers] == [
+        ("worker:refund", ["issue_refund"], []),
+        ("worker:lookup", [], [{"action": "cancel_order", "code": "not_permitted",
+                                "reason": "orders.cancel is not permitted for lookup"}]),
+    ]
+    # Only refused attempts: nothing changed.
+    assert cr.trial_state_changes(log[1:], {})[0]["no_change"] is True
+
+
+def test_a_call_through_the_tool_proxy_is_shown_by_the_agent_s_tool_name_not_its_route() -> None:
+    log = [
+        {"name": "get", "agent_tool": "get_order", "actor_id": "agent", "worker_id": "lookup", "outcome": "committed"},
+        {"name": "update_status", "agent_tool": "update_order_status", "actor_id": "agent", "worker_id": "lookup",
+         "outcome": "refused", "refusal_code": "not_permitted", "refusal": "not permitted"},
+        {"name": "list", "agent_tool": "list_refunds", "actor_id": "agent", "outcome": "committed"},
+        {"name": "list", "actor_id": "agent", "outcome": "committed"},
+    ]
+    agent, worker = cr.trial_state_changes(log, {})
+    assert agent["committed_actions"] == ["list_refunds", "list"]
+    assert worker["committed_actions"] == ["get_order"]
+    assert [one["action"] for one in worker["refused_actions"]] == ["update_order_status"]
+
+
+def test_a_worker_s_call_carries_the_worker_and_why_the_world_refused_it(monkeypatch) -> None:
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code"]
+    rows = [
+        ("get_order", {"id": "1"}, {"status": "delivered"}, True, "", 100.5, "a1", "agent", "order_lookup", "committed", None),
+        ("issue_refund", {"id": "1"}, None, False, "late", 101.0, "a2", "agent", "refund", "refused", "deadline_passed"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    calls = cr.collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    assert [(one.worker_id, one.refusal_code) for one in calls] == [("order_lookup", ""), ("refund", "deadline_passed")]
+
+
+def test_the_sealed_trace_row_keeps_why_the_world_refused_a_call() -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    refused = Call(
+        name="get_order",
+        arguments={},
+        ok=False,
+        refused=True,
+        worker_id="order_lookup",
+        refusal_code="deadline_passed",
+    )
+    assert trace_row(refused)["refusal_code"] == "deadline_passed"
+    assert "refusal_code" not in trace_row(Call(name="get_order", arguments={}))
+
+
+def test_a_logged_call_is_graded_under_the_agent_s_own_tool_name_when_the_world_recorded_it(monkeypatch) -> None:
+    columns = ["name", "arguments", "result", "ok", "error", "at", "actor_id", "agent_tool"]
+    rows = [
+        ("list", {"order_id": "1042"}, {"refunds": []}, True, "", 1.0, "agent", "list_refunds"),
+        ("get_deal", {"id": 8}, {}, True, "", 2.0, "agent", None),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    calls = cr.collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    assert [one.name for one in calls] == ["list_refunds", "get_deal"]
+
+
+_RETURNS_WORKERS = [
+    {"id": "order_lookup", "name": "Order-lookup worker", "binding": "separate", "address_env": "ORDER_LOOKUP_API_URL"},
+    {"id": "refund", "name": "Refund worker", "binding": "separate", "address_env": "REFUND_API_URL"},
+]
+
+
+def _door_call(name: str, channel: str | None, at: float, **arguments: Any) -> Call:
+    return Call(
+        name=name, arguments=dict(arguments), at=at, worker_id=channel or "", channel=channel
+    )
+
+
+def _span_call(name: str, worker: str, at: float, **arguments: Any) -> Call:
+    return Call(name=name, arguments=dict(arguments), at=at, worker_id=worker, worker_label=worker)
+
+
+def test_a_separate_worker_call_on_the_shared_address_is_a_bypass() -> None:
+    door = [_door_call("issue_refund", "", 10.0, order_id="1043", amount=89.0)]
+    spans = [_span_call("issue_refund", "Refund worker", 10.0, order_id="1043", amount=89.0)]
+    merged = cr._merge_span_calls(door, spans)
+    # The span lends its worker to the door call, never its channel: the call still came in on the shared address.
+    assert [(one.worker_id, one.channel) for one in merged if one.name == "issue_refund"] == [("Refund worker", "")]
+    found = cr.channel_bypasses(merged, _RETURNS_WORKERS)
+    assert [(one["worker"], one["tool"]) for one in found] == [("refund", "issue_refund")]
+
+
+def test_a_worker_s_call_whose_answer_differs_from_the_door_s_row_is_still_a_bypass() -> None:
+    # A live trial (returns fixture, order 1048, `bypass_channel`): the Refund worker issued the refund on the shared
+    # address. Its span and its door row were not joined, as the world's answer carried a field the agent's did not,
+    # so the door's row named no worker; the worker's own span did.
+    span_list = Call(
+        name="list_refunds", arguments={"order_id": "1048"}, result={"refunds": [], "order_id": "1048"},
+        at=1794927457.830908, worker_id="Refund worker", worker_label="Refund worker",
+    )
+    own_channel = replace(
+        _door_call("list_refunds", "refund", 1794927457.8361108, order_id="1048"),
+        result={"fault": "bypass_channel", "refunds": [], "order_id": "1048"}, worker_label="Refund worker",
+    )
+    span_issue = Call(
+        name="issue_refund", arguments={"amount": 75.0, "order_id": "1048"},
+        result={"amount": 75.0, "status": "issued", "order_id": "1048", "refund_id": "RF-9"},
+        at=1794927459.819974, worker_id="Refund worker", worker_label="Refund worker",
+    )
+    shared_issue = replace(
+        _door_call("issue_refund", "", 1794927459.8243933, amount=75.0, order_id="1048"),
+        result={"fault": "bypass_channel", "amount": 75.0, "status": "issued", "order_id": "1048", "refund_id": "RF-9"},
+    )
+    import copy
+
+    def fresh(*calls):
+        # Merging lends a span's worker to the call it pairs with, so each case starts from the rows as read.
+        return [copy.deepcopy(one) for one in calls]
+
+    merged = cr._merge_span_calls(fresh(own_channel, shared_issue), fresh(span_list, span_issue))
+    found = cr.channel_bypasses(merged, _RETURNS_WORKERS)
+    # The call on its own channel is not one; the refund on the shared address is, and it is the Refund worker's.
+    assert [(one["worker"], one["tool"]) for one in found] == [("refund", "issue_refund")]
+    # The same door row with no worker's record beside it names no one.
+    alone = cr._merge_span_calls(fresh(own_channel, shared_issue), fresh(span_list))
+    assert cr.channel_bypasses(alone, _RETURNS_WORKERS) == []
+    # Nor does a record with no time, which nothing places beside the row.
+    untimed = replace(span_issue, at=0.0)
+    assert cr.channel_bypasses([replace(shared_issue, at=0.0), untimed], _RETURNS_WORKERS) == []
+    # Nor does a worker's record of another call.
+    other = replace(span_issue, arguments={"amount": 75.0, "order_id": "1049"})
+    assert cr.channel_bypasses(cr._merge_span_calls(fresh(shared_issue), fresh(other)), _RETURNS_WORKERS) == []
+
+
+@pytest.mark.parametrize(
+    "worker_record",
+    [
+        {"ok": False, "error": "403 Forbidden"},
+        # The app's tool wrapper turned the refusal into an answer: the two outcomes differ, the call is the same.
+        {"ok": True, "result": {"detail": "forbidden"}},
+    ],
+    ids=["record-says-refused", "record-says-answered"],
+)
+def test_a_call_the_door_refused_on_the_shared_address_is_the_worker_s_bypass(tmp_path, worker_record) -> None:
+    # The Refund worker called the world on the shared address and the door
+    # refused it there, so the door's row names no worker; the worker's own event names it.
+    refused = replace(
+        _door_call("issue_refund", "", 1794927459.8243933, amount=75.0, order_id="1048"),
+        ok=False, refused=True, error="the agent may not issue_refund", refusal_code="not_permitted", result=None,
+    )
+    event = Call(
+        name="issue_refund", arguments={"amount": 75.0, "order_id": "1048"}, at=1794927459.819974,
+        worker_id="Refund worker", worker_label="Refund worker", **worker_record,
+    )
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": _RETURNS_WORKERS}), encoding="utf-8")
+
+    alone = replace(refused)
+    merged = cr._merge_span_calls([refused], [event])
+    [notice] = cr.channel_bypass_notices(merged, tmp_path)
+
+    assert (notice["code"], notice["workers"]) == (cr.WORKER_CHANNEL_BYPASSED, ["refund"])
+    # With no record of the worker making it, the refused row is credited to no one: never guessed.
+    assert cr.channel_bypass_notices([alone], tmp_path) == []
+
+
+def test_a_shared_tool_call_on_the_shared_address_gives_no_false_bypass() -> None:
+    door = [
+        _door_call("list_refunds", "", 10.0, order_id="1042"),
+        _door_call("list_refunds", "order_lookup", 10.0, order_id="1042"),
+    ]
+    spans = [
+        _span_call("list_refunds", "Order-lookup worker", 10.0, order_id="1042"),
+        _span_call("list_refunds", "Refund worker", 10.0, order_id="1042"),
+    ]
+    merged = cr._merge_span_calls(door, spans)
+    found = cr.channel_bypasses(merged, _RETURNS_WORKERS)
+    # The worker that used its own channel is never reported; a competing group is never lent to one worker.
+    assert all(one["worker"] != "order_lookup" for one in found)
+
+
+def test_a_shared_worker_never_bypasses() -> None:
+    shared = [{**one, "binding": "shared"} for one in _RETURNS_WORKERS]
+    calls = [replace(_door_call("issue_refund", "", 10.0), worker_id="Refund worker")]
+    assert cr.channel_bypasses(calls, shared) == []
+
+
+def test_a_door_row_from_before_channels_is_not_a_bypass(monkeypatch) -> None:
+    rows = [{"name": "issue_refund", "arguments": {}, "ok": True, "at": 1.0}]
+    monkeypatch.setattr(cr, "read_tool_trace", lambda _address: rows)
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda _runtime: type("E", (), {"address": "x"})())
+    (call,) = cr.collect_tool_trace_calls(object())
+    assert call.channel is None
+    assert cr.channel_bypasses([replace(call, worker_id="refund")], _RETURNS_WORKERS) == []
+    # A row from a door that records channels: the shared address reads "".
+    monkeypatch.setattr(cr, "read_tool_trace", lambda _address: [{**rows[0], "worker_id": None}])
+    (shared,) = cr.collect_tool_trace_calls(object())
+    assert shared.channel == ""
+
+
+# The key column the world declares for orders (`record_key_columns`).
+_KEYS = frozenset({"order_id"})
+_RETURNS_TOOLS = {
+    "tools": [
+        {"name": "list_refunds", "effects": ""},
+        {"name": "issue_refund", "effects": "creates a refund"},
+    ]
+}
+
+
+def _row(tool: str, worker: str = "", outcome: str = "committed", **arguments: Any) -> dict[str, Any]:
+    # As the world door writes it: every agent-side row has actor_id "agent", a worker's row also its worker_id.
+    return {
+        "name": tool,
+        "agent_tool": tool,
+        "actor_id": "agent",
+        "worker_id": worker,
+        "arguments": arguments,
+        "outcome": outcome,
+    }
+
+
+def test_shared_records_list_two_participants_on_one_order() -> None:
+    log = [
+        _row("list_refunds", "order_lookup", order_id="1042"),
+        _row("list_refunds", "refund", order_id="1042"),
+        _row("issue_refund", "refund", order_id="1042", amount=120),
+    ]
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS, _KEYS)
+    assert record["key"] == "order_id=1042"
+    assert [(one["who"], one["tool"]) for one in record["actions"]] == [
+        ("worker:order_lookup", "list_refunds"),
+        ("worker:refund", "list_refunds"),
+        ("worker:refund", "issue_refund"),
+    ]
+    assert record["committed_writes"] == 1
+
+
+def test_an_argument_the_world_declares_no_key_for_names_no_shared_record_whatever_its_name() -> None:
+    log = [_row("list_refunds", "order_lookup", order_id="1042"), _row("list_refunds", "refund", order_id="1042")]
+    assert cr.trial_shared_records(log, _RETURNS_TOOLS) == []
+    # A declared key is read whatever it is called.
+    log = [_row("list_refunds", "order_lookup", ref="R-9"), _row("list_refunds", "refund", ref="R-9")]
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS, {"ref"})
+    assert record["key"] == "ref=R-9"
+
+
+def test_the_world_s_record_keys_are_its_declared_single_column_keys(tmp_path: Path) -> None:
+    import sqlite3
+
+    (tmp_path / "seed").mkdir()
+    connection = sqlite3.connect(tmp_path / "seed" / "world.sqlite")
+    connection.executescript(
+        "CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT, total REAL);"
+        "CREATE TABLE customers(id INTEGER PRIMARY KEY, email TEXT UNIQUE);"
+        "CREATE TABLE lines(order_id TEXT, line INTEGER, PRIMARY KEY (order_id, line));"
+        "CREATE INDEX by_customer ON orders(customer_id);"
+    )
+    connection.close()
+
+    # A composite key names no one record by one argument; a column merely named like an id is not a key.
+    assert cr.record_key_columns(tmp_path) == {"order_id", "id", "email"}
+    assert cr.record_key_columns(tmp_path / "missing") == frozenset()
+    assert cr.record_key_columns(None) == frozenset()
+
+
+def test_a_voice_trial_s_shared_records_read_the_world_s_declared_keys(tmp_path: Path, monkeypatch) -> None:
+    import sqlite3
+
+    (tmp_path / "seed").mkdir()
+    connection = sqlite3.connect(tmp_path / "seed" / "world.sqlite")
+    connection.executescript("CREATE TABLE orders(order_id TEXT PRIMARY KEY, total REAL);")
+    connection.close()
+    log = [_row("list_refunds", "order_lookup", order_id="1042"), _row("list_refunds", "refund", order_id="1042")]
+    monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda runtime: SimpleNamespace(address="db"))
+    monkeypatch.setattr(cr, "_read_action_log", lambda address: log)
+
+    (record,) = cr._shared_records(object(), tmp_path)["shared_records"]
+    assert record["key"] == "order_id=1042"
+
+
+def test_a_record_one_participant_touched_is_not_shared() -> None:
+    log = [_row("list_refunds", "refund", order_id="1043"), _row("issue_refund", "refund", order_id="1043")]
+    assert cr.trial_shared_records(log, _RETURNS_TOOLS, _KEYS) == []
+
+
+def test_write_comes_from_contract_effects_and_unknown_is_null() -> None:
+    log = [
+        {**_row("issue_refund", "order_lookup", order_id="1"), "idempotency_key": "seed:h0"},
+        _row("issue_refund", "order_lookup", order_id="1"),
+        _row("list_refunds", "refund", order_id="1"),
+        _row("unknown_tool", "refund", order_id="1"),
+    ]
+    (record,) = cr.trial_shared_records(log, _RETURNS_TOOLS, _KEYS)
+    assert [one["write"] for one in record["actions"]] == [True, None, None]
+
+
+def test_a_read_the_door_logged_is_never_a_committed_write_whatever_the_tool_describes() -> None:
+    # The lookup tool describes what it returns, which once read as "records effects" and counted as a write.
+    contract = {
+        "tools": [
+            {"name": "list_refunds", "effects": "returns the refunds already issued"},
+            {"name": "issue_refund", "effects": "creates a refund"},
+        ]
+    }
+    log = [
+        {**_row("list_refunds", "order_lookup", order_id="1042"), "effect": "read"},
+        {**_row("issue_refund", "refund", order_id="1042"), "effect": "write"},
+        {**_row("issue_refund", "refund", order_id="1042"), "effect": "write"},
+    ]
+    (record,) = cr.trial_shared_records(log, contract, _KEYS)
+    assert [one["write"] for one in record["actions"]] == [False, True, True]
+    assert record["committed_writes"] == 2
+
+
+def test_a_row_without_a_logged_effect_takes_the_contract_s_declared_effect() -> None:
+    contract = {
+        "tools": [{"name": "list_refunds", "effects": "returns refunds"}, {"name": "issue_refund"}],
+        "tool_entrypoints": [
+            {"tool": "list_refunds", "endpoint": "/refunds", "method": "POST", "effect": "read"},
+            {"tool": "issue_refund", "endpoint": "/refunds/issue", "method": "POST", "effect": "write"},
+        ],
+    }
+    log = [_row("list_refunds", "order_lookup", order_id="7"), _row("issue_refund", "refund", order_id="7")]
+    (record,) = cr.trial_shared_records(log, contract, _KEYS)
+    assert [one["write"] for one in record["actions"]] == [False, True]
+    assert record["committed_writes"] == 1
+
+
+def test_shared_records_say_which_cap_cut_them() -> None:
+    def fields(records: int, actions: int) -> dict[str, Any]:
+        log = [_row("list_refunds", "order_lookup", order_id=str(n)) for n in range(records)]
+        log += [_row("list_refunds", "refund", order_id=str(n)) for n in range(records)]
+        log += [_row("list_refunds", "refund", order_id="0") for _ in range(actions - 2)]
+        return cr.trial_shared_record_fields(log, _RETURNS_TOOLS, _KEYS)
+
+    below = fields(cr._SHARED_RECORD_KEYS, cr._SHARED_RECORD_ACTIONS)
+    assert below["shared_records_truncated"] is False
+    assert [one["actions_truncated"] for one in below["shared_records"]] == [False] * cr._SHARED_RECORD_KEYS
+    assert not any(one["truncated"] for one in below["shared_records"])
+
+    many_records = fields(cr._SHARED_RECORD_KEYS + 1, 2)
+    assert many_records["shared_records_truncated"] is True
+    assert len(many_records["shared_records"]) == cr._SHARED_RECORD_KEYS
+    assert not any(one["actions_truncated"] for one in many_records["shared_records"])
+
+    many_actions = fields(1, cr._SHARED_RECORD_ACTIONS + 1)
+    assert many_actions["shared_records_truncated"] is False
+    (record,) = many_actions["shared_records"]
+    assert record["actions_truncated"] is True and record["truncated"] is True
+    assert len(record["actions"]) == cr._SHARED_RECORD_ACTIONS
+
+
+def _cut_voice_call(runner: cr.CallRunnerImpl, entered: asyncio.Event) -> Any:
+    async def scenario():
+        task = asyncio.create_task(
+            runner.run(_FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+        )
+        await entered.wait()
+        task.cancel()
+        return await task
+
+    return scenario
+
+
+@pytest.mark.parametrize("stop", [True, False])
+def test_voice_cancel_with_stop_requested_raises_call_cancelled(tmp_path: Path, stop: bool) -> None:
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    holder: dict[str, asyncio.Event] = {}
+
+    async def place_call(spec):
+        holder["entered"].set()
+        await asyncio.sleep(30)
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), replace(context, stop_requested=lambda: stop), place_call=place_call)
+
+    async def scenario():
+        holder["entered"] = asyncio.Event()
+        return await _cut_voice_call(runner, holder["entered"])()
+
+    if stop:
+        with pytest.raises(CallCancelled) as caught:
+            asyncio.run(scenario())
+        partial = caught.value.partial
+        assert partial is not None and partial.started_at and partial.ended_at
+        assert partial.stop_reason == "user_canceled"
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(scenario())
+
+
+def test_voice_stop_when_ends_at_the_next_turn(tmp_path: Path) -> None:
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    stopped = {"value": False}
+    turns: list[int] = []
+
+    async def place_call(spec, stop_when=None):
+        # A stand-in engine that checks `stop_when` after each turn and hangs up with its own report.
+        for turn in range(5):
+            turns.append(turn)
+            if turn == 1:
+                stopped["value"] = True
+            if stop_when is not None and stop_when([], None):
+                break
+        return _report(messages=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
+
+    runner = cr.CallRunnerImpl(
+        FakeAdapter(), replace(context, stop_requested=lambda: stopped["value"]), place_call=place_call
+    )
+    assert runner.stops_at_turn_boundary is True
+    with pytest.raises(CallCancelled) as caught:
+        asyncio.run(runner.run(_FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"})))
+    assert turns == [0, 1]
+    assert caught.value.partial is not None
+    assert caught.value.partial.stop_reason == "user_canceled"
+
+
+def test_the_voice_call_worker_gets_the_stop_and_hangs_up_at_the_next_turn(tmp_path: Path, monkeypatch) -> None:
+    """The hosted voice call runs in a worker process: the stop reaches it, and the engine there gets `stop_when`."""
+    from fi.alk.harness import call_worker, isolated_process
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    stop = lambda: True  # noqa: E731
+    runner = cr.CallRunnerImpl(FakeAdapter(), replace(context, stop_requested=stop))
+    # The scheduler gives the worker path the seal bound, as it does an engine that takes `stop_when`.
+    assert runner.stops_at_turn_boundary is True
+
+    seen: dict = {}
+
+    async def place_call(spec, stop_when=None):
+        seen["stop_when"] = stop_when
+        return "report"
+
+    monkeypatch.setattr(cr, "_default_place_call", place_call)
+    monkeypatch.setattr(isolated_process, "_stop_requested", False)
+
+    class _Spec:
+        @staticmethod
+        def model_validate_json(_raw):
+            return SimpleNamespace(run_id="r1")
+
+    import fi.simulate.runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "SimulationSpec", _Spec)
+    output = tmp_path / "report.json"
+    monkeypatch.setattr(call_worker.sys, "argv", ["call_worker", str(output)])
+    monkeypatch.setattr(call_worker.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"{}")))
+    # The worker reconfigures the root logger for its own process; keep that out of later tests.
+    monkeypatch.setattr(call_worker.logging, "basicConfig", lambda **_kwargs: None)
+    with pytest.raises(AttributeError):
+        # The stand-in report is no model; only the hand-off of `stop_when` matters here.
+        asyncio.run(call_worker.main())
+    assert seen["stop_when"]([], None) is False
+    isolated_process._stop_requested = True
+    assert seen["stop_when"]([], None) is True
+
+
+def test_a_worker_s_door_row_and_its_span_are_one_call(monkeypatch) -> None:
+    """The door names the worker by its contract id, the framework's span by its name: one call, never two."""
+    from fi.alk.harness.world.runtime import Call as WorldCall
+
+    door = [
+        WorldCall(name="list_refunds", arguments={"order_id": "1043"}, result={"refunds": []}, ok=True, at=10.0,
+                  worker_id="refund", channel="refund"),
+        WorldCall(name="issue_refund", arguments={"order_id": "1043", "amount": 100.0}, ok=False, refused=True,
+                  error="the deadline for refund has passed", at=11.0, worker_id="refund",
+                  refusal_code="deadline_passed", channel="refund"),
+    ]
+    spans = [
+        WorldCall(name="list_refunds", arguments={"order_id": "1043"}, result={"refunds": []}, ok=True, at=9.9,
+                  ended_at=10.1, worker_id="Refund worker", worker_label="Refund worker",
+                  runtime_ids={"event_id": "s1"}),
+        WorldCall(name="issue_refund", arguments={"order_id": "1043", "amount": 100}, ok=True, at=10.9, ended_at=11.1,
+                  result={"detail": "the deadline for refund has passed"}, worker_id="Refund worker",
+                  worker_label="Refund worker", runtime_ids={"event_id": "s2"}),
+    ]
+    monkeypatch.setattr(cr, "_read_file_tool_calls", lambda _runtime, **_: ([], spans))
+    monkeypatch.setattr(cr, "collect_tool_trace_calls", lambda _runtime, **_: tuple(door))
+    calls = cr.collect_seam_calls(
+        _runtime(), cr.EvidenceSeam.TOOL_TRACE, worker_names={"refund": "Refund worker", "order_lookup": "Lookup"}
+    )
+    assert [(one.name, one.worker_id, one.refusal_code) for one in calls] == [
+        ("list_refunds", "refund", ""),
+        ("issue_refund", "refund", "deadline_passed"),
+    ]
+
+
+def test_a_stopped_voice_call_is_marked_sealed_before_it_delivers_what_it_kept(tmp_path: Path) -> None:
+    """The engine hung up on the stop with its report: the scheduler is told the call is sealed before the uploads, so
+    a platform slower than the seal bound never loses it."""
+    from fi.alk.harness import hosted_scheduler as hs
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    sealed = asyncio.Event()
+    seen: list[bool] = []
+
+    class _Platform(FakeAdapter):
+        async def upload_artifact(self, data: bytes, **kwargs):
+            seen.append(sealed.is_set())
+            return await super().upload_artifact(data, **kwargs)
+
+    async def place_call(spec, stop_when=None):
+        return _report(messages=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
+
+    runner = cr.CallRunnerImpl(_Platform(), replace(context, stop_requested=lambda: True), place_call=place_call)
+    runtime = _runtime(metadata={"livekit_agent_name": "agent-w0"})
+    with pytest.raises(hs.CallCancelled):
+        asyncio.run(hs._run_call(runner, _FakeScenario("k1"), runtime, None, sealed))
+    assert seen and all(seen)
+
+
 def _logged(name, arguments, *, error="", outcome="committed", effect="write", actor="agent", action_id=""):
     return {
         "name": name, "action": f"orders.{name}", "arguments": arguments, "outcome": outcome, "error": error,
@@ -3532,14 +4588,16 @@ def test_a_retry_that_rewords_free_text_but_writes_the_same_record_is_a_duplicat
         _logged("issue_refund", {"order": 7, "amount": 500, "note": "retrying after the timeout"}),
     ]
     # The reference fixes the record and the value; the note is the agent's own words.
-    solution = [{"tool": "issue_refund", "arguments": {"order": 7, "amount": 500}, "fixed": {"order": "the person", "amount": "the person"}}]
+    solution = [{"tool": "issue_refund", "arguments": {"order": 7, "amount": 500, "note": "any"}, "fixed": {"order": "the person", "amount": "the person"}}]
     [found] = duplicate_commits(log, solution)
     assert found["action"] == "orders.issue_refund"
     # Another record is another write, whatever the free text says.
     other = [log[0], _logged("issue_refund", {"order": 8, "amount": 500, "note": "first try"})]
     assert duplicate_commits(other, solution) == []
-    # With nothing fixed for the action, every argument still has to match.
+    # With nothing fixed for the action, every argument still has to match; and a note the reference never lists is
+    # compared too, whatever its name.
     assert duplicate_commits(log) == []
+    assert duplicate_commits(log, [{**solution[0], "arguments": {"order": 7, "amount": 500}}]) == []
 
 
 def test_an_identical_retry_is_a_duplicate_even_when_the_solution_fixes_a_field_the_call_does_not_carry():
@@ -3580,7 +4638,8 @@ def test_writes_to_two_records_named_by_text_ids_are_not_a_duplicate():
     ]
 
     assert duplicate_commits(two_records, solution) == []
-    assert len(duplicate_commits(reworded, solution)) == 1
+    chosen = [{**solution[0], "arguments": {"amount": 500, "note": "any"}}]
+    assert len(duplicate_commits(reworded, chosen)) == 1
 
 
 def test_an_unreadable_action_log_leaves_duplicates_unknown_never_cleared(monkeypatch):
@@ -3648,6 +4707,35 @@ def test_voice_trial_without_actors_seals_world_changes(tmp_path, monkeypatch) -
     assert "records" in world and "start" in world
     # Counts a door stood for say so, so a reader never takes a record from before the door for one.
     assert world["door"] is True
+    # No tool proxy holds a channel per worker here, so the trial claims none.
+    assert "worker_channels" not in world
+
+
+def test_a_trial_behind_a_sealed_tool_proxy_says_its_workers_were_held_on_their_channels(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
+    from fi.alk.harness.world_door import DOOR_FILE
+
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    (context.bundle_dir / DOOR_FILE).write_text(json.dumps({"present": True, "surface": "tool_proxy"}))
+    _seal_tool_proxy(context.bundle_dir / "generated" / "tool-proxy", {"tools": [{"name": "issue_refund"}]})
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [("issue_refund", {"order": 7}, None, True, "", 2.0, "a1", "agent", "committed")]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report()
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    world = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]
+    assert world["door"] is True and world["worker_channels"] is True
 
 
 def test_a_voice_trial_whose_tools_the_door_cannot_see_says_world_changes_were_not_recorded(tmp_path) -> None:
@@ -3708,6 +4796,53 @@ def test_a_voice_trial_reads_its_start_before_its_pre_run_sessions_write(tmp_pat
     assert order == ["start", "replay", "rebase", "call"]
 
 
+def test_a_build_whose_tool_service_is_not_behind_the_door_holds_a_trial_relying_on_worker_limits(tmp_path):
+    (tmp_path / "door.json").write_text(json.dumps({"present": False, "reason": "tool_service_not_fronted"}))
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "binding": "separate"}]}))
+    held = cr.limits_not_held({"worker_budget_seconds": {"refund": 5}}, tmp_path)
+    assert [one["code"] for one in held] == [cr.WORKER_LIMITS_NOT_ENFORCED]
+    # A trial relying on no worker limit runs on the same build as before.
+    assert cr.limits_not_held({}, tmp_path) == []
+
+
+def test_a_build_whose_door_runs_inside_the_agent_holds_a_deadline_only_for_the_workers_it_stops(tmp_path):
+    (tmp_path / "door.json").write_text(json.dumps({"present": True, "surface": "in_process", "workers": ["writer"]}))
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "writer"}, {"id": "reviewer"}]}))
+    # A deadline on a worker the door stops: the trial runs, and the deadline is written for the door to read.
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path) == []
+    assert cr.trial_worker_deadlines({"worker_budget_seconds": {"writer": 5}}, tmp_path)[1].keys() == {"writer"}
+    # A worker the door does not stop, or one deadline for all while one of them is such a worker: held.
+    for budget in ({"reviewer": 5}, 30):
+        [held] = cr.limits_not_held({"worker_budget_seconds": budget}, tmp_path)
+        assert held["code"] == cr.WORKER_LIMITS_NOT_ENFORCED and "Rebuild" not in held["message"]
+    # Nothing there tells the workers' calls apart, so a scenario relying on a worker's permitted tools is held.
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "writer", "allowed_tools": ["a"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "w", "subject": "worker:writer"}]}))
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}, "sub_goals": ["w"]}, tmp_path)
+    # A bundle sealed before the root record has no door that holds limits, as before.
+    (tmp_path / "door.json").unlink()
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path)
+
+
+def test_a_deadline_only_trial_on_an_in_process_build_with_a_separate_worker_is_not_held(tmp_path):
+    (tmp_path / "door.json").write_text(json.dumps({"present": True, "surface": "in_process", "workers": ["writer"]}))
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "writer", "binding": "separate"}]}))
+    assert cr.limits_not_held({"worker_budget_seconds": {"writer": 5}}, tmp_path) == []
+    assert cr.limits_not_held({"worker_budget_seconds": 30}, tmp_path) == []
+
+
+def test_a_build_whose_tool_service_is_not_behind_the_door_leaves_a_trial_with_faults_unmeasured(tmp_path):
+    faults = [{"action": "issue_refund", "mode": "unavailable", "on_call": 1}]
+    (tmp_path / "door.json").write_text(json.dumps({"present": False, "reason": "tool_service_not_fronted"}))
+    notices = cr.faults_not_held(faults, [], tmp_path)
+    assert [one["code"] for one in notices] == ["fault_not_applied"]
+    assert cr.unmeasured_reasons(notices)
+    # A build with a door applies its faults there, and a trial with none has nothing to say.
+    (tmp_path / "door.json").write_text(json.dumps({"present": True, "surface": "in_process", "workers": []}))
+    assert cr.faults_not_held(faults, [], tmp_path) == []
+    assert cr.faults_not_held([], [], None) == []
+
+
 def test_a_voice_trial_on_a_seal_without_a_world_door_says_its_world_actions_were_not_seen() -> None:
     """The voice runner reads the same rule as chat: no door and no proxy in the seal, the agent's 8 calls in its own
     trace and none of them in the action log. Unknown, never "0 attempted"."""
@@ -3741,7 +4876,8 @@ def test_writes_to_two_records_are_not_a_duplicate_whatever_the_field_naming_the
     ]
 
     assert duplicate_commits(two_records, solution) == []
-    assert len(duplicate_commits(reworded, solution)) == 1
+    chosen = [{**solution[0], "arguments": {"amount": 500, "customerNote": "any"}}]
+    assert len(duplicate_commits(reworded, chosen)) == 1
 
 
 def test_a_voice_trial_whose_in_process_tool_ran_past_a_door_that_went_down_misses_its_call_evidence(tmp_path, monkeypatch) -> None:
@@ -4057,3 +5193,520 @@ def test_were_the_in_process_door_beside_the_proxy_it_would_decide_and_hold_ever
     both = cr.in_process_tools(_order_routes("get_order", "confirm_order"), {"tool_proxy": object(), "world_door": object()})
 
     assert both["confirm_order"] == {"action": "confirm_order"} and both["get_order"] == {"action": "get_order"}
+
+
+def test_a_worker_s_call_and_the_door_s_row_of_it_are_one_call_though_the_tool_reshaped_the_answer() -> None:
+    # A live trial (returns fixture, order 1047): the Refund worker's span kept its tool's output, the door's row on
+    # the worker's own channel kept the world's answer; the two answers differ, and they are one call.
+    span = Call(
+        name="issue_refund", arguments={"amount": 41.0, "order_id": "1047"}, ok=True,
+        result={"amount": 41.0, "status": "issued", "order_id": "1047", "refund_id": "RF-8"},
+        at=1794929929.828, worker_id="Refund worker", worker_label="Refund worker",
+    )
+    door = replace(
+        _door_call("issue_refund", "refund", 1794929929.834, amount=41.0, order_id="1047"),
+        ok=True, worker_label="Refund worker",
+        result={"fault": "skip_refund_check", "amount": 41.0, "status": "issued", "order_id": "1047", "refund_id": "RF-8"},
+    )
+    merged = cr._merge_span_calls([door], [span])
+    assert [(one.name, one.channel) for one in merged] == [("issue_refund", "refund")]
+    # A tracer that is not the door, answering differently, is still another call.
+    assert len(cr._merge_span_calls([replace(door, channel=None)], [span])) == 2
+
+
+def test_the_hold_on_a_timed_out_tool_call_is_read_from_the_door_s_own_rows() -> None:
+    # As the door logs the payment-timeout trials' refund calls: before it holds each one, with the scenario's fault.
+    rows = [
+        {"name": "lookup_order", "at": 100.0, "outcome": "committed", "fault": None},
+        {"name": "issue_refund", "at": 110.0, "outcome": "faulted",
+         "fault": {"mode": "timeout_before_commit", "action": "issue_refund"}},
+        {"name": "issue_refund", "at": 141.0, "outcome": "faulted",
+         "fault": '{"mode": "timeout_after_commit", "action": "issue_refund", "delay_seconds": 12}'},
+        {"name": "issue_refund", "at": 150.0, "outcome": "faulted", "fault": {"mode": "unavailable"}},
+    ]
+    # Held for the fault's delay, or the door's 30 s when it names none; an unavailable answer is not held.
+    assert cr.held_until(rows[:2]) == 140.0
+    assert cr.held_until(rows) == 153.0
+    assert cr.held_until([rows[0], rows[3]]) is None
+    assert cr.held_until([{"at": 1.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 600}}]) == 31.0
+
+
+@pytest.mark.parametrize(
+    ("faults", "held"),
+    [
+        ([{"action": "issue_refund", "mode": "timeout_before_commit"}], True),
+        ([{"action": "issue_refund", "mode": "unavailable"}], False),
+        ([], False),
+    ],
+)
+def test_only_a_scenario_that_holds_a_tool_call_gives_the_call_the_hold_to_wait_through(
+    tmp_path: Path, monkeypatch, faults, held
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    doc = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    doc.write_text(json.dumps({**json.loads(doc.read_text()), "faults": faults}))
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name"]))
+    seen: list[dict[str, str]] = []
+
+    async def worker(module, payload, *, environ, **_kwargs):
+        seen.append(dict(environ))
+        return _report().model_dump(mode="json")
+
+    monkeypatch.setattr(cr, "run_json_worker", worker)
+    _run(
+        cr.CallRunnerImpl(FakeAdapter(), context),
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert (seen[0].get(cr.TOOL_HOLD_DSN) == _postgres_endpoint().address) is held
+    assert (cr.TOOL_HOLD_DSN in seen[0]) is held
+
+
+def test_the_call_process_waits_through_the_hold_it_is_given(monkeypatch) -> None:
+    pytest.importorskip("livekit")  # the call runs in LiveKit mode
+    from fi.simulate.simulation.engines import livekit
+
+    seen: list[object] = []
+
+    async def run(self, spec, **_kwargs):
+        seen.append(livekit.TARGET_BUSY_UNTIL.get())
+        return "report"
+
+    monkeypatch.setattr(cr.SimulationRunner, "run", run)
+    reads: list[float] = []
+    release = threading.Event()
+
+    def held_rows(dsn):
+        # A slow database: the engine's check must not wait on it.
+        reads.append(time.monotonic())
+        release.wait(5)
+        return [{"at": 10.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 5}}]
+
+    monkeypatch.setattr(cr, "_held_rows", held_rows)
+    monkeypatch.setenv(cr.TOOL_HOLD_DSN, "postgresql://world")
+    assert asyncio.run(cr._default_place_call(object())) == "report"
+    check = seen[0]
+    started = time.monotonic()
+    assert check() is None and check() is None
+    # Answered at once, with one read under way rather than one per check.
+    assert time.monotonic() - started < 0.5 and len(reads) == 1
+    release.set()
+    deadline = time.monotonic() + 5
+    while check() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert check() == 15.0
+    # Set for that call only.
+    assert livekit.TARGET_BUSY_UNTIL.get() is None
+    monkeypatch.delenv(cr.TOOL_HOLD_DSN)
+    asyncio.run(cr._default_place_call(object()))
+    assert seen[1] is None
+
+
+def test_the_hold_is_read_from_only_the_door_s_latest_faulted_rows(monkeypatch) -> None:
+    queries: list[str] = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql):
+            queries.append(sql)
+            return SimpleNamespace(fetchall=lambda: [(10.0, {"mode": "timeout_before_commit", "delay_seconds": 5})])
+
+    monkeypatch.setattr(cr, "_read_only", lambda dsn, timeout_ms=None: Connection())
+    assert cr._held_rows("postgresql://world") == [
+        {"at": 10.0, "fault": {"mode": "timeout_before_commit", "delay_seconds": 5}}
+    ]
+    assert "WHERE fault IS NOT NULL" in queries[0] and "LIMIT" in queries[0]
+
+
+def test_a_hold_read_whose_thread_cannot_start_is_tried_again(monkeypatch) -> None:
+    starts: list[int] = []
+
+    class Unstartable:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            starts.append(1)
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(cr.threading, "Thread", Unstartable)
+    monkeypatch.setattr(cr, "_HOLD_READ_SECONDS", 0.0)
+    check = cr._hold_reader("postgresql://world")
+    assert check() is None and check() is None
+    # Each check tries again: a failed start never leaves the read marked as under way.
+    assert len(starts) == 2
+
+
+def test_two_workers_sharing_a_display_name_are_never_told_apart_by_it(tmp_path):
+    """Two workers both named "Assistant": a call under that name belongs to neither by name, so the trace leaves it
+    undeclared and neither worker's checks read it; their contract ids still match."""
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [
+        {"id": "billing", "name": "Assistant"}, {"id": "shipping", "name": "Assistant"}, {"id": "refund", "name": "Refunds"}]}))
+    assert cr.declared_worker_ids(tmp_path) == {"Refunds": "refund"}
+    names = cr.contract_worker_names(tmp_path)
+    assert names == {"refund": "Refunds"}
+    by_name = Call(name="lookup", arguments={}, worker_id="Assistant")
+    assert not cr.is_worker_call(by_name, "billing", names.get("billing", ""))
+    assert not cr.is_worker_call(by_name, "shipping", names.get("shipping", ""))
+    by_id = Call(name="lookup", arguments={}, worker_id="shipping")
+    assert cr.is_worker_call(by_id, "shipping", names.get("shipping", ""))
+
+
+def test_a_shared_address_call_under_a_name_two_workers_share_is_lent_to_neither() -> None:
+    workers = [
+        {"id": "sales", "name": "Assistant", "binding": "separate"},
+        {"id": "support", "name": "Assistant", "binding": "separate"},
+    ]
+    call = replace(_door_call("issue_refund", "", 10.0), worker_id="Assistant")
+    assert cr.channel_bypasses([call], workers) == []
+
+
+def test_a_shared_address_call_is_its_worker_s_by_exact_id_before_another_worker_s_name() -> None:
+    workers = [
+        {"id": "ops", "name": "billing", "binding": "separate"},
+        {"id": "billing", "name": "Billing desk", "binding": "separate"},
+    ]
+    by_id = replace(_door_call("issue_refund", "", 10.0), worker_id="billing")
+    by_name = replace(_door_call("issue_refund", "", 11.0), worker_id="Billing desk")
+    assert [one["worker"] for one in cr.channel_bypasses([by_id, by_name], workers)] == ["billing", "billing"]
+
+
+def test_a_worker_s_name_that_is_another_worker_s_id_never_rewrites_that_id(tmp_path) -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "workers": [
+                    {"id": "ops", "name": "billing"},
+                    {"id": "billing", "name": "Billing desk"},
+                    {"id": "refund", "name": "refund"},
+                ]
+            }
+        )
+    )
+    workers = cr.declared_worker_ids(tmp_path)
+    assert workers == {"Billing desk": "billing", "refund": "refund"}
+    assert cr.contract_worker_names(tmp_path) == {"billing": "Billing desk", "refund": "refund"}
+    (event,) = trace_row(Call(name="refund", arguments={}, worker_id="billing"), workers)["worker_events"]
+    assert event["worker_id"] == "billing"
+    assert not cr.is_worker_call(Call(name="refund", arguments={}, worker_id="billing"), "ops", "")
+
+
+# -- a voice trial reads its calls as before sources were named -----------------------------------
+#
+# The voice runner keeps its precedence: the trace file's records whenever the file holds a graded call, the
+# world's table only when it holds none, spans joined as before. Naming each record's source must change nothing
+# else: the same calls, in the same order, with the same fields and the same grading. Each case is read twice, with
+# the span pairing as it was and as it is now, and compared field for field.
+
+
+def _lend_span_as_it_was(span: Call, other: Call) -> None:
+    if not (other.worker_id or other.worker_label):
+        other.worker_id, other.worker_label = span.worker_id, span.worker_label
+    other.delegated_to = other.delegated_to or span.delegated_to
+    other.transferred = other.transferred or span.transferred
+    other.ended_at = other.ended_at or span.ended_at
+    if not other.runtime_ids:
+        other.runtime_ids = span.runtime_ids
+        other.parent_span_id, other.relationship = (
+            span.parent_span_id,
+            span.relationship,
+        )
+    other.at = span.at or other.at
+
+
+_NAMED = {"source", "seen_by", "trace_mark"}
+
+
+def _digest_as_it_was(call: Call) -> str:
+    # The pairing's digest before a call named its sources: everything but its times.
+    fields = {key: value for key, value in vars(call).items() if key not in ("at", "ended_at", *_NAMED)}
+    return json.dumps(fields, sort_keys=True, default=repr)
+
+
+_SPOKEN_LINES = (
+    {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped", "at": 1.0},
+    {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "started", "at": 2.0},
+)
+_AGREEING_SPANS = (
+    {"name": "look_up_order", "arguments": "{\"order_id\": \"A1001\"}", "output": "shipped", "source": "otel",
+     "agent_key": "Support", "event_id": "e1", "at": 0.9, "ended_at": 1.1},
+    {"name": "start_return", "arguments": "{\"order_id\": \"A1001\"}", "output": "started", "source": "otel",
+     "agent_key": "Support", "event_id": "e2", "at": 1.9, "ended_at": 2.1},
+)
+_HANDOFF_ONLY = (
+    {"name": "Returns desk", "arguments": {}, "output": "done", "source": "otel", "kind": "handoff",
+     "delegated_to": "Returns desk", "at": 1.0},
+)
+
+
+def _table_rows() -> list[Call]:
+    return [
+        Call(name="look_up_order", arguments={"order_id": "A1001"}, result="shipped", at=5.0),
+        Call(name="look_up_order", arguments={"order_id": "A1001"}, result="shipped", at=6.0),
+    ]
+
+
+def _voice_reading(tmp_path, monkeypatch, *, lines, seam, table=None, table_fails=False, log=None, lend):
+    folder = tmp_path / lend.__name__
+    folder.mkdir()
+    trace = folder / "agent-tool-calls.jsonl"
+    if lines is not None:
+        trace.write_text("".join((json.dumps(line) if isinstance(line, dict) else line) + "\n" for line in lines))
+
+    def read_table(runtime, **_):
+        if table_fails:
+            raise cr.ToolCaptureFailed("tool_trace table unreadable")
+        return tuple(dataclasses.replace(call) for call in (table or []))
+
+    monkeypatch.setattr(cr, "collect_tool_trace_calls", read_table)
+    monkeypatch.setattr(cr, "_collect_http_tool_calls", lambda runtime, **_: tuple(read_table(runtime)))
+    monkeypatch.setattr(cr, "_lend_span", lend)
+    monkeypatch.setattr(cr, "_digest", _digest_as_it_was if lend is _lend_span_as_it_was else _digest_now)
+    _job_obj, context = _context(tmp_path=folder, evidence_seam=seam)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+    try:
+        calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    except cr.ToolCaptureFailed as failed:
+        return ("failed", str(failed), [_unnamed(call) for call in failed.calls])
+    if log is not None:
+        # The door's log, as the runner folds a lost answer after reading the calls.
+        calls = cr.one_call_per_lost_answer(calls, log)
+    return (
+        [_unnamed(call) for call in calls],
+        [call.name for call in graded_calls(calls)],
+    )
+
+
+def _unnamed(call: Call) -> dict:
+    return {key: value for key, value in dataclasses.asdict(call).items() if key not in _NAMED}
+
+
+_LOST_ANSWER_LOG = (
+    {"name": "start_return", "arguments": {"order_id": "A1001"}, "actor_id": "agent", "error": "response_lost",
+     "outcome": "committed"},
+)
+_RAN = {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "started", "at": 2.0}
+_HEARD_FAILED = {"name": "start_return", "arguments": {"order_id": "A1001"}, "output": "timed out", "is_error": True,
+                 "at": 2.5}
+
+
+def _marked_lines(mark: str) -> tuple[dict, ...]:
+    # One tool called twice with the same arguments and result, one of its two lines carrying a writer's mark, then a
+    # second tool; the agent's spans timed all three earlier than the lines and fit either line of the first tool.
+    def line(name, at, marked=False):
+        return {"name": name, "arguments": {"date": "fri"}, "output": "ok", "at": at, "ended_at": at + 0.5,
+                **({"source": mark} if marked and mark else {})}
+
+    def span(name, at, event_id, agent):
+        return {"name": name, "arguments": {"date": "fri"}, "output": "ok", "at": at, "ended_at": at + 3,
+                "source": "otel", "event_id": event_id, "agent_key": agent}
+
+    return (
+        line("book", 10.0, marked=True), line("book", 11.0), line("pay", 12.0),
+        span("book", 9.0, "e1", "booker"), span("book", 9.5, "e2", "booker"), span("pay", 9.7, "e3", "cashier"),
+    )
+
+
+_VOICE_CASES = {
+    "file with graded calls": dict(lines=_SPOKEN_LINES, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "file with graded calls and agreeing spans": dict(
+        lines=(*_SPOKEN_LINES, *_AGREEING_SPANS), seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()
+    ),
+    "file with graded calls and spans that recorded nothing": dict(
+        lines=(*_SPOKEN_LINES, *(
+            {**span, "arguments": "", "output": ""} for span in _AGREEING_SPANS
+        )), seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "the same tool twice with the same arguments": dict(
+        lines=(_SPOKEN_LINES[0], {**_SPOKEN_LINES[0], "at": 3.0}), seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "no file, the table's rows": dict(lines=None, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "no file, the table's rows and spans": dict(
+        lines=_AGREEING_SPANS, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()
+    ),
+    "neither": dict(lines=None, seam=EvidenceSeam.TOOL_TRACE),
+    "an unreadable file": dict(lines=("{cut", "[]"), seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "an unreadable table": dict(lines=None, seam=EvidenceSeam.TOOL_TRACE, table_fails=True),
+    "an unreadable table under a file with graded calls": dict(
+        lines=_SPOKEN_LINES, seam=EvidenceSeam.TOOL_TRACE, table_fails=True
+    ),
+    "hand-offs alone": dict(lines=_HANDOFF_ONLY, seam=EvidenceSeam.TOOL_TRACE, table=_table_rows()),
+    "a lost answer, run by the tool's tracer and failed by the framework's hook": dict(
+        lines=(_RAN, {**_HEARD_FAILED, "source": "livekit"}), seam=EvidenceSeam.TOOL_TRACE, log=_LOST_ANSWER_LOG,
+    ),
+    "a lost answer, run by the tool's tracer and failed by the agent's span": dict(
+        lines=(_RAN, {**_HEARD_FAILED, "arguments": "{\"order_id\": \"A1001\"}", "source": "otel", "event_id": "e9",
+                      "ended_at": 2.6}),
+        seam=EvidenceSeam.TOOL_TRACE, log=_LOST_ANSWER_LOG,
+    ),
+    # A span that recorded less than the line it pairs with: it never takes the line's arguments or result.
+    "a span that kept fewer arguments": dict(
+        lines=(
+            {"name": "book", "arguments": {"date": "fri", "party": 2}, "output": "ok", "at": 10.0},
+            {"name": "book", "arguments": "{\"date\": \"fri\"}", "output": "ok", "source": "otel", "event_id": "b1",
+             "at": 9.5, "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "a span that kept no result": dict(
+        lines=(
+            {"name": "book", "arguments": {"date": "fri"}, "output": "booked #7", "at": 10.0},
+            {"name": "book", "arguments": "{\"date\": \"fri\"}", "source": "otel", "event_id": "b1", "at": 9.5,
+             "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "a span that typed an argument differently": dict(
+        lines=(
+            {"name": "book", "arguments": {"party": "2"}, "output": "ok", "at": 10.0},
+            {"name": "book", "arguments": "{\"party\": 2}", "output": "ok", "source": "otel", "event_id": "b1",
+             "at": 9.5, "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "a span that kept only the framework's wrapper": dict(
+        lines=(
+            {"name": "book", "arguments": {"date": "fri"}, "output": {"table": 7}, "at": 10.0},
+            {"name": "book", "arguments": "{\"date\": \"fri\"}",
+             "output": {"output": "content='Booked table 7' name='book' tool_call_id='call_1'"}, "source": "otel",
+             "event_id": "b1", "at": 9.5, "ended_at": 10.5},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "the http_tool seam": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL, table=_table_rows()),
+    "the http_tool seam with nothing": dict(lines=None, seam=EvidenceSeam.HTTP_TOOL),
+    "two lines of one call, one marked by the CrewAI observer": dict(
+        lines=_marked_lines("crewai"), seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "two lines of one call, one written by the LiveKit hook": dict(
+        lines=_marked_lines("livekit"), seam=EvidenceSeam.TOOL_TRACE,
+    ),
+    "the hook's line timing the agent's own line": dict(
+        lines=(
+            {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped"},
+            {"name": "look_up_order", "arguments": {"order_id": "A1001"}, "output": "shipped",
+             "source": "livekit", "at": 4.0},
+        ),
+        seam=EvidenceSeam.TOOL_TRACE,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_VOICE_CASES), ids=lambda case: case.replace(" ", "-"))
+def test_a_voice_trial_reads_its_calls_as_before_sources_were_named(tmp_path, monkeypatch, case) -> None:
+    before = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_as_it_was, **_VOICE_CASES[case])
+    now = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_now, **_VOICE_CASES[case])
+
+    assert now == before
+
+
+@pytest.mark.parametrize("case", [case for case in _VOICE_CASES if case.startswith("a span that")])
+def test_a_voice_span_that_recorded_less_never_takes_the_lines_record(tmp_path, monkeypatch, case) -> None:
+    calls, _graded = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_now, **_VOICE_CASES[case])
+
+    line = _VOICE_CASES[case]["lines"][0]
+    (call,) = calls
+    assert (call["arguments"], call["result"], call["output_omitted"]) == (line["arguments"], line["output"], False)
+    assert (call["at"], call["ended_at"]) == (9.5, 10.5)
+
+
+def test_every_voice_record_names_its_source(tmp_path, monkeypatch) -> None:
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPOKEN_LINES)
+    monkeypatch.setattr(cr, "collect_tool_trace_calls", lambda runtime, **_: tuple(_table_rows()))
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+
+    from_file = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    trace.unlink()
+    from_table = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert {call.source for call in from_file} == {"tracer"}
+    assert {call.source for call in from_table} == {"world"}
+
+
+_lend_span_now = cr._lend_span
+_digest_now = cr._digest
+
+
+@pytest.mark.parametrize("mark", ["", "crewai", "livekit"])
+def test_a_lines_mark_never_changes_how_spans_pair(tmp_path, monkeypatch, mark) -> None:
+    calls, graded = _voice_reading(
+        tmp_path, monkeypatch, lines=_marked_lines(mark), seam=EvidenceSeam.TOOL_TRACE, lend=_lend_span_now
+    )
+
+    assert graded == ["book", "book", "pay"]
+    assert [(call["at"], call["runtime_ids"].get("event_id"), call["worker_id"]) for call in calls] == [
+        (9.0, "e1", "booker"), (9.5, "e2", "booker"), (9.7, "e3", "cashier")
+    ]
+
+
+@pytest.mark.parametrize(
+    "heard",
+    ["framework's hook", "agent's span"],
+)
+def test_a_voice_lost_answer_is_one_done_call_with_the_tools_own_result(tmp_path, monkeypatch, heard) -> None:
+    case = _VOICE_CASES[f"a lost answer, run by the tool's tracer and failed by the {heard}"]
+
+    calls, graded = _voice_reading(tmp_path, monkeypatch, lend=_lend_span_now, **case)
+
+    assert graded == ["start_return"]
+    (call,) = calls
+    assert (call["ok"], call["error"], call["answer_lost"], call["result"]) == (True, "", True, "started")
+
+
+def test_a_tool_that_hands_back_the_proxy_s_failure_answer_made_a_failed_call_not_a_successful_one(
+    tmp_path: Path,
+) -> None:
+    # The door held the call (a test condition, or the world did not answer); the agent's tool returned the proxy's
+    # answer as its value instead of failing. A check must never read it as a call that went through.
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {"name": "file_request", "arguments": {"id": 7}, "output": {"detail": "tool_upstream_unavailable", "status": 502},
+         "is_error": False},
+        {"name": "file_request", "arguments": {"id": 7}, "output": '{"detail": "tool_upstream_timeout"}',
+         "is_error": False},
+        {"name": "file_request", "arguments": {"id": 7}, "is_error": False,
+         "output": {"detail": "tool_key_outcome_unknown", "reason": "first try unknown"}},
+        {"name": "file_request", "arguments": {"id": 7}, "output": {"detail": "pending"}, "is_error": False},
+    )
+
+    written, _ = cr._read_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+
+    assert [(call.ok, call.result) for call in written] == [
+        (False, None),
+        (False, None),
+        (False, None),
+        (True, {"detail": "pending"}),
+    ]
+
+
+def test_a_call_the_world_failed_on_with_no_test_condition_makes_the_trial_ours_not_the_agent_s() -> None:
+    from fi.alk.harness.world_door import DOOR_FAILED, KEY_UNKNOWN, LOG_UNKNOWN, WORLD_UNREACHABLE
+
+    def row(**fields):
+        return {"name": "file_request", "actor_id": "agent", "outcome": "faulted", "refusal_code": None, **fields}
+
+    log = [
+        row(refusal_code=DOOR_FAILED),  # the door itself failed: ours
+        row(refusal_code=WORLD_UNREACHABLE),  # the world it calls could not be reached: ours
+        row(refusal_code=LOG_UNKNOWN),  # a key the action log could not check: ours
+        row(),  # the agent's tools server answered 5xx: the agent's world, graded
+        row(fault={"mode": "unavailable"}),  # the scenario's test condition
+        row(fault=None),  # the same on a log with no `fault` column: still never ours
+        row(refusal_code=KEY_UNKNOWN),  # a keyed retry after a test condition lost the answer
+        row(actor_id="approver", refusal_code=DOOR_FAILED),  # an actor's own call
+        row(outcome="committed"),
+    ]
+
+    reasons = cr.world_failure_reasons(cr.world_failure_notices(log))
+
+    assert reasons == ("The world failed on the agent's file_request call, so this trial cannot be graded.",) * 3
+    assert cr.world_failure_notices(None) == []
