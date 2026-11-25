@@ -88,11 +88,14 @@ def _identifier_pattern(identifier: str) -> str:
 
 def _policy_assertion_matches(test_text: str, case: Mapping[str, Any]) -> bool:
     named_codes = re.findall(
-        r"\bcode\s+(?:is\s+)?([A-Z]{2,}-[0-9]+)\b",
+        r"\b(?:code|label)\s+(?:is\s+)?([A-Z]{2,}-[0-9]+)\b",
         str(case.get("policy_reference") or ""),
         flags=re.IGNORECASE,
     )
     if any(not re.search(_identifier_pattern(code), test_text) for code in named_codes):
+        return False
+    score = re.search(r"\brelevance score of (\d+)\b", str(case.get("policy_reference") or ""), re.I)
+    if score and not re.search(r"\b" + re.escape(score[1]) + r"\b", test_text):
         return False
     # An ordinary success inside the window also passes when a forbidden
     # extension is granted. The assertion must distinguish those behaviors.
@@ -279,13 +282,74 @@ def expected_source_semantics(case: Mapping[str, Any]) -> str:
 def bind_source_case(
     args: Mapping[str, Any], case: Mapping[str, Any], *, require_relevance: bool = True
 ) -> dict[str, Any]:
+    if require_relevance:
+        fields = _record_fields(case)
+        codes = set(_action_codes(fields))
+        for field in ("code", "service_code", "escalation_code", "qualification_label"):
+            codes.update(
+                re.findall(
+                    r"\b[A-Z][A-Z0-9]+-\d+\b", str(fields.get(field) or ""), re.I
+                )
+            )
+        codes.update(
+            re.findall(
+                r"\b(?:code|label)\s+(?:is\s+)?([A-Z][A-Z0-9]+-\d+)\b",
+                str(case.get("policy_reference") or ""),
+                re.I,
+            )
+        )
+        visible = " ".join(
+            str(args.get(k) or "") for k in ("name", "instruction", "use_case")
+        )
+        if fields.get("condition") and fields.get("queue"):
+            queue = r"[ _-]+".join(
+                re.escape(word) for word in re.split(r"[-_ ]+", str(fields["queue"]))
+            )
+            if re.search(r"(?<![a-z0-9])" + queue + r"(?![a-z0-9])", visible, re.I):
+                raise ValueError("source_case_answer_in_situation")
+            priority = re.escape(str(fields.get("priority") or ""))
+            if priority and re.search(
+                r"\b(?:"
+                + priority
+                + r"[ -]+priority|priority\s*[:=]?\s*"
+                + priority
+                + r")\b",
+                visible,
+                re.I,
+            ):
+                raise ValueError("source_case_answer_in_situation")
+        score = re.search(
+            r"\brelevance score of (\d+)\b",
+            str(case.get("policy_reference") or ""),
+            re.I,
+        )
+        if score and re.search(
+            r"\bscore\s*(?:of|is|=|:)?\s*" + score[1] + r"\b", visible, re.I
+        ):
+            raise ValueError("source_case_answer_in_situation")
+        for code in codes:
+            letters, digits = code.rsplit("-", 1)
+            if re.search(
+                r"(?<![A-Za-z0-9])"
+                + re.escape(letters)
+                + r"[-_ ]?"
+                + re.escape(digits)
+                + r"(?![A-Za-z0-9])",
+                visible,
+                re.I,
+            ):
+                raise ValueError("source_case_answer_in_situation")
     if require_relevance and not scenario_relates_to_case(args, case):
         raise ValueError("source_case_unrelated")
     bound = dict(args)
     if bound.get("solution"):
         steps = []
         for step in bound["solution"]:
-            marked = reviewed_action_arguments(case, step.get("arguments") or {}) if isinstance(step, Mapping) else set()
+            marked = (
+                reviewed_action_arguments(case, step.get("arguments") or {})
+                if isinstance(step, Mapping)
+                else set()
+            )
             if marked:
                 fixed = dict(step.get("fixed") or {})
                 for key in marked:
@@ -294,10 +358,6 @@ def bind_source_case(
             steps.append(step)
         bound["solution"] = steps
     context = safe_source_context(case)
-    instruction = str(bound.get("instruction") or "").strip()
-    marker = f"Reviewed context: {context}."
-    if marker not in instruction:
-        bound["instruction"] = (instruction + "\n\n" + marker).strip()
     variables = dict(bound.get("variables") or {})
     variables["reviewed_source_context"] = context
     bound["variables"] = variables

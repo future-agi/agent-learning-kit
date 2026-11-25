@@ -426,7 +426,7 @@ def test_public_cases_match_connected_authoring_on_genuine_order_agent(tmp_path)
             {
                 **native,
                 "instruction": "Book a flight to Paris.\n\n"
-                + native["instruction"].split("\n\n", 1)[-1],
+                + "Reviewed context: approved source public-policy.",
             }
         )
         assert not validate_bound_scenario(unrelated, case)

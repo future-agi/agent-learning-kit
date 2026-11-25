@@ -145,6 +145,8 @@ class ResealScenariosRequest(_ImmutableValue):
     mode: Literal["reviewed_build", "existing_environment"]
     generated_scenario_keys: Annotated[tuple[str, ...], Field(min_length=1)]
     schema_digest: str | None = None
+    source_task: str | None = None
+    writer_proved: bool = False
     distinct_case_budget: Annotated[int, Field(strict=True, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)] | None = None
 
 
@@ -465,6 +467,12 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
                 for scenario in generated_scenarios
                 if scenario.use_case.strip()
             }
+            if request.writer_proved:
+                if request.mode != "existing_environment" or not request.source_task:
+                    raise EnvironmentInputError(
+                        "source_suite_invalid", "Invalid writer proof request"
+                    )
+                tasks = {request.source_task}
             if len(tasks) != 1:
                 raise EnvironmentInputError(
                     "source_suite_invalid",
@@ -474,9 +482,14 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
             generated = _reviewable_scenarios(
                 reviewed,
                 environment_requirements=requirements,
-                requested_count=request.distinct_case_budget or len(generated_scenarios),
+                requested_count=request.distinct_case_budget
+                or len(generated_scenarios),
             )
-            drafts = _distinct_source_drafts(generated) if request.distinct_case_budget else generated.drafts
+            drafts = (
+                _distinct_source_drafts(generated)
+                if request.distinct_case_budget
+                else generated.drafts
+            )
             expected = {
                 native.scenario_key: (native, document, case)
                 for draft in drafts
@@ -484,51 +497,98 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
                     _native_source_scenario(draft, requirements)
                 ]
             }
-            if generated_keys != expected.keys():
-                raise EnvironmentInputError(
-                    "source_suite_invalid",
-                    "The archive scenario set does not match the approved cases",
-                )
-            for scenario in generated_scenarios:
-                native, document, case = expected[scenario.scenario_key]
-                folder = authoring / "scenarios" / scenario.name
-                files = {
-                    path.relative_to(folder).as_posix()
-                    for path in folder.rglob("*")
-                    if path.is_file()
-                }
-                complete_files = {"scenario.json", "setup.py", "ready.py"}
-                if request.mode == "reviewed_build":
-                    valid_files = files == complete_files
-                else:
-                    valid_files = files in ({"scenario.json"}, complete_files)
-                if not valid_files:
+            if request.writer_proved:
+                from fi.alk.harness.catalogue import load_catalogue
+                from fi.alk.harness.folder import write_folder
+                from fi.alk.harness.proofs import load_proofs
+                from fi.alk.harness.source_grounding import validate_bound_scenario
+
+                proofs = load_proofs(authoring)
+                cases = {case["id"]: case for _, _, case in expected.values()}
+                catalogue = load_catalogue(authoring)
+                for scenario in generated_scenarios:
+                    attached = scenario.fixture.get("reviewed_source") or {}
+                    case = cases.pop(attached.get("id"), None)
+                    proof = proofs.get(scenario.scenario_key, {})
+                    with tempfile.TemporaryDirectory(
+                        prefix="alk-writer-files-"
+                    ) as temp:
+                        canonical = Path(temp)
+                        write_folder(scenario, catalogue, canonical)
+                        if not _same_inherited_scenario(
+                            _scenario_files(authoring, scenario.name),
+                            _scenario_files(canonical, scenario.name),
+                        ):
+                            raise EnvironmentInputError(
+                                "source_suite_invalid",
+                                "Scenario files do not match the proved scenario",
+                            )
+                    if (
+                        case is None
+                        or case != attached
+                        or not validate_bound_scenario(scenario, case)
+                        or not all(
+                            proof.get(k) is True
+                            for k in ("holds", "ready", "solvable", "not_vacuous")
+                        )
+                        or proof.get("reviewed_source_digest")
+                        != semantic_source_digest(case, scenario)
+                    ):
+                        raise EnvironmentInputError(
+                            "source_suite_invalid",
+                            "Missing or invalid reviewed writer proof",
+                        )
+                if cases:
                     raise EnvironmentInputError(
                         "source_suite_invalid",
-                        "Generated source scenarios contain unexpected files",
+                        "Writer did not cover every approved case",
                     )
-                expected_scripts = {
-                    "setup.py": setup_document(native).encode(),
-                    "ready.py": ready_document(native).encode(),
-                }
-                if files == complete_files and any(
-                    (folder / name).read_bytes() != body
-                    for name, body in expected_scripts.items()
-                ):
+            else:
+                if generated_keys != expected.keys():
                     raise EnvironmentInputError(
                         "source_suite_invalid",
-                        "A generated source scenario script was changed",
+                        "The archive scenario set does not match the approved cases",
                     )
-                if document_for(scenario) != document or semantic_source_digest(
-                    case, scenario
-                ) != semantic_source_digest(case, native):
-                    raise EnvironmentInputError(
-                        "source_suite_invalid",
-                        "A generated source scenario was changed",
-                    )
-                if files == {"scenario.json"}:
-                    for name, body in expected_scripts.items():
-                        (folder / name).write_bytes(body)
+                for scenario in generated_scenarios:
+                    native, document, case = expected[scenario.scenario_key]
+                    folder = authoring / "scenarios" / scenario.name
+                    files = {
+                        path.relative_to(folder).as_posix()
+                        for path in folder.rglob("*")
+                        if path.is_file()
+                    }
+                    complete_files = {"scenario.json", "setup.py", "ready.py"}
+                    if request.mode == "reviewed_build":
+                        valid_files = files == complete_files
+                    else:
+                        valid_files = files in ({"scenario.json"}, complete_files)
+                    if not valid_files:
+                        raise EnvironmentInputError(
+                            "source_suite_invalid",
+                            "Generated source scenarios contain unexpected files",
+                        )
+                    expected_scripts = {
+                        "setup.py": setup_document(native).encode(),
+                        "ready.py": ready_document(native).encode(),
+                    }
+                    if files == complete_files and any(
+                        (folder / name).read_bytes() != body
+                        for name, body in expected_scripts.items()
+                    ):
+                        raise EnvironmentInputError(
+                            "source_suite_invalid",
+                            "A generated source scenario script was changed",
+                        )
+                    if document_for(scenario) != document or semantic_source_digest(
+                        case, scenario
+                    ) != semantic_source_digest(case, native):
+                        raise EnvironmentInputError(
+                            "source_suite_invalid",
+                            "A generated source scenario was changed",
+                        )
+                    if files == {"scenario.json"}:
+                        for name, body in expected_scripts.items():
+                            (folder / name).write_bytes(body)
             held = _bundle_files(bundle)
             inherited_files = (
                 {
@@ -558,6 +618,33 @@ def _reseal_scenarios(request: ResealScenariosRequest) -> dict[str, Any]:
                 raise EnvironmentInputError(
                     "source_bundle_invalid", "The resealed bundle is invalid"
                 )
+            if request.writer_proved and (authoring / "sub_goals.json").is_file():
+                candidate = json.loads((authoring / "sub_goals.json").read_bytes())
+                prior = (
+                    json.loads(held["sub_goals.json"])
+                    if "sub_goals.json" in held
+                    else {}
+                )
+                before = {g["name"]: g for g in prior.get("sub_goals", [])}
+                after = {g["name"]: g for g in candidate.get("sub_goals", [])}
+                used = {
+                    g for scenario in generated_scenarios for g in scenario.sub_goals
+                }
+                if (
+                    any(after.get(name) != goal for name, goal in before.items())
+                    or not (after.keys() - before.keys()) <= used
+                    or len(after) != len(candidate.get("sub_goals", []))
+                    or (
+                        prior
+                        and {k: v for k, v in prior.items() if k != "sub_goals"}
+                        != {k: v for k, v in candidate.items() if k != "sub_goals"}
+                    )
+                ):
+                    raise EnvironmentInputError(
+                        "source_suite_invalid",
+                        "Existing sub-goals or suite evaluations changed",
+                    )
+                held["sub_goals.json"] = (authoring / "sub_goals.json").read_bytes()
             if _bundle_files(bundle) != held:
                 raise EnvironmentInputError(
                     "source_bundle_invalid",

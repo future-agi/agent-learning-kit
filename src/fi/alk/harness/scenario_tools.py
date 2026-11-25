@@ -2069,6 +2069,7 @@ def scenario_tools(
     can_save: bool = True,
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
+    protect_catalogue: bool = False,
     can_grow: bool = False,
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     catalogue: Catalogue | None = None,
@@ -2103,6 +2104,7 @@ def scenario_tools(
         list(start_from) if start_from is not None else load_scenarios(destination)
     )
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
+    protected_goals = catalogue.names() if protect_catalogue else set()
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     # The job's actors switch: off, no scenario takes actors, a pre-run, a first speaker or faults.
@@ -2377,6 +2379,8 @@ def scenario_tools(
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
+        if args.get("name") in protected_goals:
+            return _err("The existing suite uses this sub-goal. Reuse it or define a distinct new sub-goal.")
         sub_goal = SubGoal(
             name=str(args.get("name") or ""),
             what=str(args.get("what") or ""),

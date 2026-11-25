@@ -498,3 +498,32 @@ def test_source_action_code_is_fixed_for_the_wrong_value_proof():
     bound = bind_source_case({"solution": [step]}, case, require_relevance=False)
     assert bound["solution"][0]["fixed"] == {"escalation_code": "record: approved expected_action"}
     assert "fixed" not in step
+
+
+@pytest.mark.parametrize("field,value", [
+    ("name", "escalate_high_value_refund_orchid72"),
+    ("instruction", "Request a refund using ORCHID-72."),
+    ("use_case", "Apply orchid_72."),
+])
+def test_grading_codes_stay_out_of_source_scenario_presentation(field, value):
+    from fi.alk.harness.source_grounding import bind_source_case
+    case = {"policy_reference":"Refunds above $425 require escalation. The escalation code is ORCHID-72.", "citations":[{"source_id":"src_9","page":1}], "starting_facts":[]}
+    args = {"name":"request_high_value_refund", "instruction":"You want a $500 refund for a damaged monitor.", "tests":"Escalates the refund using code ORCHID-72."}
+    with pytest.raises(ValueError, match="source_case_answer_in_situation"):
+        bind_source_case({**args, field:value}, case)
+    saved = bind_source_case(args, case)
+    assert saved["instruction"] == args["instruction"]
+    assert saved["fixture"]["reviewed_source"]["citations"] == case["citations"]
+
+
+def test_qualification_requires_specific_score_and_label_in_authored_assertion():
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+    case = {
+        "policy_reference": "A prospect who needs Python tracing receives a relevance score of 5 and the qualification label TRACE-51."
+    }
+    args = {"instruction": "You run an agent platform and need Python tracing."}
+    for incomplete in ("Qualifies the Python tracing lead as a good fit.",
+                       "Assigns relevance score 5 to the Python tracing prospect.",
+                       "Qualifies the Python tracing lead as TRACE-51 with score 1."):
+        assert not scenario_relates_to_case({**args, "tests": incomplete}, case)
+    assert scenario_relates_to_case({**args, "tests": "Assigns the Python tracing lead score 5 and label TRACE-51."}, case)

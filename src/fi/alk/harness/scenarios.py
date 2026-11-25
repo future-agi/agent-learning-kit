@@ -579,6 +579,7 @@ class Slice:
     angle: str = ""
     count: int = 1
     why: str = ""
+    choose_heading: bool = False
 
     def named(self) -> str:
         return f"{self.use_case}: {self.angle}" if self.angle else self.use_case
@@ -779,8 +780,12 @@ def brief_for(
             if others
             else ""
         )
-        + "Every scenario carries this use case verbatim in `use_case`, and its own one-line "
-        "`branch` saying what makes it different from the others you write here. Branches are "
+        + (
+            "Choose the matching existing use case, or a specific new heading if none covers the activity. Include a one-line "
+            if mine.choose_heading
+            else "Every scenario carries this use case verbatim in `use_case`, and its own one-line "
+        )
+        + "`branch` saying what makes it different from the others you write here. Branches are "
         "where the variety lives: the branch that cannot be completed, the rule under pressure, "
         "state that has to carry across turns, the same request against a differently seeded "
         "world.\n\n"
@@ -841,6 +846,7 @@ async def _write_slice(
         destination,
         destination,
         wanted=mine.count,
+        protect_catalogue=mine.choose_heading,
         can_save=False,
         start_from=[],
         reviewed=reviewed,

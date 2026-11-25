@@ -317,7 +317,9 @@ def bind_scenario(evidence: dict[str, Any], args: dict[str, Any]) -> str:
         return "Select a reviewed case ID from the cases section of read_source."
     try:
         args.update(bind_source_case(args, case))
-    except ValueError:
+    except ValueError as exc:
+        if str(exc) == "source_case_answer_in_situation":
+            return "Keep the expected code in the test and solution. Remove it from the name, heading and caller situation."
         hint = action_code_guidance([case])
         return "The scenario is unrelated to its approved source case. Choose an input that triggers the cited rule and assert the required outcome. Keep record codes in their supplied roles. Only name queues, priorities and deadlines supported by the evidence." + (" " + hint if hint else "")
     return ""

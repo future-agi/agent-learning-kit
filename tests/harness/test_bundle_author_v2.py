@@ -5104,8 +5104,9 @@ def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
 
 
+@pytest.mark.parametrize("authored", [False, True])
 def test_source_transport_reseals_generated_scenarios_in_current_archive(
-    tmp_path: Path,
+    tmp_path: Path, authored: bool,
 ) -> None:
     from test_genuine_agent_source_scenarios import _reviewed_order_knowledge
 
@@ -5158,10 +5159,17 @@ def test_source_transport_reseals_generated_scenarios_in_current_archive(
     natives = [
         Scenario.model_validate(item["native"]) for item in generated["scenarios"]
     ]
+    wording_args = {}
+    if authored:
+        from fi.alk.harness.source_grounding import semantic_source_digest
+        natives = [item.model_copy(update={"name": f"track_order_status_{index}", "instruction":"Ask about delivery of order 4821.", "use_case":"Track a delivery."}) for index,item in enumerate(natives)]
+        wording_args = {"source_task":"Track an order", "writer_proved":True}
+        (authoring/"proofs.json").write_text(json.dumps({item.scenario_key:{"holds":True,"ready":True,"solvable":True,"not_vacuous":True,"reviewed_source_digest":semantic_source_digest(item.fixture["reviewed_source"], item)} for item in natives}))
     for native in natives:
         write_folder(native, Catalogue(), authoring)
-        (authoring / "scenarios" / native.name / "setup.py").unlink()
-        (authoring / "scenarios" / native.name / "ready.py").unlink()
+        if not authored:
+            (authoring / "scenarios" / native.name / "setup.py").unlink()
+            (authoring / "scenarios" / native.name / "ready.py").unlink()
     pin_body = json.dumps(pin, sort_keys=True, separators=(",", ":"))
     (authoring / "reviewed-source.json").write_text(pin_body, encoding="utf-8")
     native = natives[0]
@@ -5175,6 +5183,7 @@ def test_source_transport_reseals_generated_scenarios_in_current_archive(
                 "snapshot": snapshot,
                 "authoring_archive_base64": base64.b64encode(archive).decode(),
                 "mode": "existing_environment",
+                **wording_args,
                 "generated_scenario_keys": [item.scenario_key for item in natives],
             }
         ).encode()
@@ -5242,6 +5251,7 @@ def test_source_transport_reseals_generated_scenarios_in_current_archive(
                         candidate_archive
                     ).decode(),
                     "mode": "existing_environment",
+                    **wording_args,
                     "generated_scenario_keys": keys
                     or [item.scenario_key for item in natives],
                 }

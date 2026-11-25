@@ -75,7 +75,7 @@ class ReviewedBuild:
             f"for exactly {len(self.cases)} assigned cases in its cases section. "
             "Explicitly test each assigned case's expected behavior using its cited passage or row. "
             "For routing rows, the test must check the named queue, priority, and escalation code. "
-            "Use each value in its stated role. Make the triggering condition true and assert its consequence. "
+            "For qualification cases explicitly assert the exact numeric score and qualification label in the test. Keep expected codes and grading answers out of the scenario name, section and caller situation. Use each value in its stated role. Make the triggering condition true and assert its consequence. "
             "For an exception or restriction, the test should fail if the agent ignores it. "
             "Fill remaining slots with ordinary agent scenarios without a reviewed_source fixture. "
             "Send its ID in fixture.reviewed_source when submitting; each case is used once. "
@@ -130,7 +130,9 @@ class ReviewedBuild:
         approved = _sealed_source_case(case)
         try:
             return bind_source_case(args, approved)
-        except ValueError:
+        except ValueError as exc:
+            if str(exc) == "source_case_answer_in_situation":
+                raise ReleaseError(str(exc), "Keep the expected code in the test and solution. Remove it from the name, heading and caller situation.") from None
             raise ReleaseError(
                 "source_case_unrelated",
                 "The scenario is unrelated to its approved source case. Choose an input that triggers the cited rule and assert the required outcome. Keep record codes in their supplied roles. Only name queues, priorities and deadlines supported by the evidence. " + action_code_guidance([approved]),
