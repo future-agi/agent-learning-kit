@@ -128,18 +128,43 @@ class AuthoredOutcome:
 
 
 _ID_NOISE = re.compile(r"[\s\-_.:/#]")
+_GROUPED_NUMBER = re.compile(r"\d(?:[\s-]*\d){9,}")
 
 
 def same_id(first: Any, second: Any) -> bool:
     """Whether two identifiers name the same record however they were typed or spoken.
 
-    Only separators and case are ignored, so a different number is still different. Defined here,
-    beside the code that runs checks, so the isolated child has it without importing the harness."""
+    Only separators and case are ignored, so a different number is still different: `A-1-23` is not
+    `A-12-3`, whose digits are the same but whose numbers are not. Defined here, beside the code that
+    runs checks, so the isolated child has it without importing the harness."""
     if first is None or second is None:
         return False
     mine, theirs = _ID_NOISE.sub("", str(first)).casefold(), _ID_NOISE.sub("", str(second)).casefold()
     # An empty id names no record, so it never matches, not even another empty one.
-    return bool(mine) and mine == theirs
+    return bool(mine) and mine == theirs and _same_numbers(str(first), str(second))
+
+
+def _same_numbers(first: str, second: str) -> bool:
+    """Whether one id's numbers are the other's with no more than some separators left out. A long
+    number in groups (a phone, a card) is said in any grouping, so its grouping says nothing."""
+    if all(_GROUPED_NUMBER.fullmatch(one.strip()) for one in (first, second)):
+        return True
+    mine, theirs = _digit_splits(first), _digit_splits(second)
+    return mine <= theirs or theirs <= mine
+
+
+def _digit_splits(value: str) -> set[int]:
+    """Where separators split two digits, counted in what is left once separators are dropped."""
+    splits, position, split = set(), 0, False
+    previous = ""
+    for character in value:
+        if _ID_NOISE.fullmatch(character):
+            split = True
+            continue
+        if split and previous.isdigit() and character.isdigit():
+            splits.add(position)
+        position, previous, split = position + 1, character, False
+    return splits
 
 
 # A number as text: an optional sign, a currency (a symbol, a code or a word, before or after), thousands commas, a
@@ -150,6 +175,15 @@ _NUMBER_TEXT = re.compile(
 )
 # A currency symbol and the ISO 4217 code it stands for; any other currency is written as its code.
 _CURRENCIES = {"$": "USD", "us$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}
+# The active ISO 4217 codes: three letters that are not one (`INV123`) are an id's, not an amount's.
+_CURRENCY_CODES = frozenset(
+    "AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF CHF "
+    "CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG "
+    "HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA "
+    "MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD "
+    "RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX "
+    "USD UYU UZS VES VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG".split()
+)
 
 
 def _number(value: Any) -> tuple[str, decimal.Decimal] | None:
@@ -163,8 +197,8 @@ def _number(value: Any) -> tuple[str, decimal.Decimal] | None:
     if not found or (found["before"] and found["after"]):
         return None
     marker = found["before"] or found["after"] or ""
-    currency = _CURRENCIES.get(marker.casefold(), marker.upper() if len(marker) in (0, 3) else None)
-    if currency is None:
+    currency = _CURRENCIES.get(marker.casefold(), marker.upper())
+    if currency and currency not in _CURRENCY_CODES:
         return None
     return currency, decimal.Decimal(found["sign"] + found["digits"].replace(",", ""))
 
@@ -467,7 +501,7 @@ class _Call:
     name: str
     arguments: dict[str, Any]
     result: Any = None
-    ok: bool = True
+    ok: bool | None = True
     error: str = ""
     refused: bool = False
     at: float = 0.0
@@ -479,7 +513,7 @@ def _call(value: dict[str, Any]) -> _Call:
         name=str(value.get("name") or ""),
         arguments=dict(value.get("arguments") or {}),
         result=value.get("result"),
-        ok=bool(value.get("ok", True)),
+        ok=None if (ok := value.get("ok", True)) is None else bool(ok),
         error=str(value.get("error") or ""),
         refused=bool(value.get("refused", False)),
         at=float(value.get("at") or 0.0),
@@ -594,13 +628,17 @@ def main() -> None:
         call = request["call"]
         namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
         try:
-            code = compile(call["source"], f"<handler:{call['name']}>", "exec")
-            exec(code, namespace)  # noqa: S102 - the isolated child exists to run it
-            handle = namespace.get("handle")
-            if not callable(handle):
-                # The same error the world raises in process, so the outcome reads the same.
-                raise RuntimeError("handler defines no handle(args, db)")  # noqa: TRY004
-            value = handle(decode(call["args"]), _Db())
+            with (
+                open(os.devnull, "w", encoding="utf-8") as discarded,
+                contextlib.redirect_stdout(discarded),
+            ):
+                code = compile(call["source"], f"<handler:{call['name']}>", "exec")
+                exec(code, namespace)  # noqa: S102 - the isolated child exists to run it
+                handle = namespace.get("handle")
+                if not callable(handle):
+                    # The same error the world raises in process, so the outcome reads the same.
+                    raise RuntimeError("handler defines no handle(args, db)")  # noqa: TRY004
+                value = handle(decode(call["args"]), _Db())
         except Exception as exc:  # noqa: BLE001 - every failure is reported to the parent
             _send({"raised": _raised(exc)})
             continue
