@@ -6,6 +6,13 @@ def _kept(error):
     return error
 
 
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, session or passcode
+    the desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
 def handle(args, db):
     customer_id = args.get("customer_id")
     session_id = args.get("session_id")
@@ -24,6 +31,8 @@ def handle(args, db):
     now_row = db.one("SELECT now FROM clock")
     now_str = now_row["now"] if now_row else "2026-10-26T12:00:00Z"
     
+    if customer_id != _caller(db):
+        raise ToolError("Only the customer signed in to this conversation is served; this is not them.", category="permission_denied")
     sess = db.one("SELECT * FROM sessions WHERE session_id = ?", [session_id])
     if not sess:
         raise ToolError(f"Session {session_id} not found.")
@@ -38,7 +47,17 @@ def handle(args, db):
     max_attempts = int(json.loads(max_row["value"])) if max_row else 3
     if sess["failed_attempts"] >= max_attempts:
         raise ToolError("Verification locked: the maximum number of failed attempts for this session has been reached. Hand the customer to a specialist.")
-        
+
+    # A one-time passcode is the step-up a contact-details change needs (Customer Contact Details
+    # Change Policy): passcode or KBA first, then the OTP, which is spent once it is accepted.
+    step_up = challenge_type == "otp"
+    if step_up and not sess["is_verified"]:
+        raise ToolError("Verify the customer by passcode or KBA first; a one-time passcode is the step-up on a verified session.")
+    if step_up and not cust["otp_code"]:
+        raise ToolError("The one-time passcode has already been used.")
+
+    log_count = len(db.query("SELECT log_id FROM action_log"))
+    log_id = f"LOG-{1001 + log_count}"
     if challenge_type == "passcode":
         expected = cust["passcode"]
     elif challenge_type == "kba":
@@ -51,7 +70,6 @@ def handle(args, db):
     if str(challenge_response).strip().lower() != str(expected).strip().lower():
         new_attempts = sess["failed_attempts"] + 1
         db.execute("UPDATE sessions SET failed_attempts = ? WHERE session_id = ?", [new_attempts, session_id])
-        log_id = f"LOG-{session_id}-{new_attempts}"
         db.execute(
             "INSERT INTO action_log (log_id, session_id, customer_id, action_type, target_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [log_id, session_id, customer_id, "verify_identity_failed", challenge_type, json.dumps({"challenge_type": challenge_type, "status": "failed"}), now_str]
@@ -59,14 +77,15 @@ def handle(args, db):
         # The failed attempt is counted although the call refuses: enough of them lock the session.
         raise _kept(ToolError("Verification failed: challenge response does not match records."))
         
-    # A one-time passcode on an already verified session is the step-up a contact-details change
-    # needs (Customer Contact Details Change Policy): passcode or KBA first, then the OTP.
-    step_up = challenge_type == "otp" and bool(sess["is_verified"])
+    # Only the first verification clears the failed attempts: on a verified session, a passcode that
+    # cleared them would allow any number of guesses at the one-time passcode.
     if step_up:
-        db.execute("UPDATE sessions SET step_up_at = ?, failed_attempts = 0 WHERE session_id = ?", [now_str, session_id])
+        db.execute("UPDATE sessions SET step_up_at = ? WHERE session_id = ?", [now_str, session_id])
+        db.execute("UPDATE customers SET otp_code = '' WHERE customer_id = ?", [customer_id])
+    elif sess["is_verified"]:
+        db.execute("UPDATE sessions SET verified_at = ? WHERE session_id = ?", [now_str, session_id])
     else:
         db.execute("UPDATE sessions SET is_verified = ?, verified_at = ?, failed_attempts = 0 WHERE session_id = ?", [True, now_str, session_id])
-    log_id = f"LOG-{session_id}-V" if not step_up else f"LOG-{session_id}-S"
     db.execute(
         "INSERT INTO action_log (log_id, session_id, customer_id, action_type, target_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [log_id, session_id, customer_id, "step_up_success" if step_up else "verify_identity_success", challenge_type, json.dumps({"challenge_type": challenge_type, "status": "step_up" if step_up else "verified"}), now_str]

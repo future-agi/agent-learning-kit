@@ -1,5 +1,13 @@
 import json
 
+
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, session or passcode
+    the desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
 def handle(args, db):
     customer_id = args.get("customer_id")
     session_id = args.get("session_id")
@@ -22,6 +30,8 @@ def handle(args, db):
         raise ToolError(f"Unknown replacement reason {reason!r}; use lost, stolen, damaged, expired or not_received.")
     if delivery_speed not in ("standard", "expedited"):
         raise ToolError(f"Unknown delivery_speed {delivery_speed!r}; use standard or expedited.")
+    if customer_id != _caller(db):
+        raise ToolError("Only the customer signed in to this conversation is served; this is not them.", category="permission_denied")
     sess = db.one("SELECT * FROM sessions WHERE session_id = ?", [session_id])
     if not sess:
         raise ToolError(f"Session {session_id} not found.")
@@ -64,6 +74,8 @@ def handle(args, db):
     if request_key:
         existing = db.one("SELECT * FROM replacement_requests WHERE request_key = ?", [request_key])
         if existing:
+            if (existing["customer_id"], existing["card_id"], existing["reason"], existing["delivery_speed"]) != (customer_id, card_id, reason, delivery_speed):
+                raise ToolError(f"request_key {request_key!r} was already used for a different request; use a new key for this one.", category="conflict")
             return present(existing, True)
     existing = db.one("SELECT * FROM replacement_requests WHERE card_id = ? AND status = 'requested'", [card_id])
     if existing:

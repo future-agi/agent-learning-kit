@@ -88,6 +88,9 @@ def test_calendar_replacing_a_non_last_attendee(tmp_path: Path) -> None:
 @pytest.mark.parametrize("package", ["gmail_inbox_triage", "banking"])
 def test_drafts_search_applies_its_operators(package: str, tmp_path: Path) -> None:
     world = _world(package, tmp_path)
+    if package == "banking":
+        # In banking a support colleague drafts to anyone, a customer only to themselves.
+        world.change("session_caller", "default", {"staff_id": "ST01"}, by="id")
     _ok(world, "create_draft", to=["alice@example.com"], subject="Alice", body="hi")
     _ok(world, "create_draft", to=["bob@example.com"], subject="Bob", body="hi")
     found = _ok(world, "list_drafts", query="to:alice@example.com")["drafts"]

@@ -1,7 +1,7 @@
 [
   {
     "name": "verify_identity",
-    "description": "Verify customer identity against an active session challenge (passcode, KBA, or OTP). An OTP on an already verified session is the step-up that contact-detail changes require.",
+    "description": "Verify the customer signed in to this conversation in their session by passcode or KBA. An OTP, on a session already verified that way, is the step-up that contact-detail changes require; each OTP works once.",
     "parameters": {
       "type": "object",
       "required": [

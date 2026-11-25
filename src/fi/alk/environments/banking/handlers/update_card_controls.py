@@ -1,5 +1,13 @@
 import json
 
+
+def _caller(db):
+    """The customer signed in to this conversation. The session sets it; an ID, session or passcode
+    the desk is told never changes who it is talking to."""
+    row = db.one("SELECT customer_id FROM session_caller WHERE id = 'default'")
+    return row["customer_id"] if row else None
+
+
 def handle(args, db):
     customer_id = args.get("customer_id")
     session_id = args.get("session_id")
@@ -30,6 +38,8 @@ def handle(args, db):
         changes["daily_limit"] = limit
     if not changes:
         raise ToolError("No control to change: give at least one of international_enabled, online_enabled, contactless_enabled or daily_limit.")
+    if customer_id != _caller(db):
+        raise ToolError("Only the customer signed in to this conversation is served; this is not them.", category="permission_denied")
     sess = db.one("SELECT * FROM sessions WHERE session_id = ?", [session_id])
     if not sess:
         raise ToolError(f"Session {session_id} not found.")
