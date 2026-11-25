@@ -364,6 +364,21 @@ def exactly_once(calls: Sequence[Any], name: str, **arguments: Any) -> bool:
     return len(succeeded(calls, name, **arguments)) + len(lost) == 1
 
 
+# Whether each helper reads what a call came to (went through, answered, committed, timed out): a check that uses one
+# is never proof of a step that did not run, as a call recorded but not run came to nothing.
+for _helper, _reads in (
+    (answered, True),
+    (succeeded, True),
+    (came_before, True),
+    (exactly_once, True),
+    (retried_timeouts, True),
+    (repeated_commits, True),
+    (committed_writes, True),
+    (same_id, False),
+    (same_value, False),
+):
+    _helper.reads_outcomes = _reads  # type: ignore[attr-defined]
+
 # Read-only helpers every check is given beside `world` and `calls`.
 CHECK_HELPERS = {
     "answered": answered,
