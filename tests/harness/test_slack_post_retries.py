@@ -63,6 +63,11 @@ def test_an_identical_retry_returns_the_original_post(vertical: str, tmp_path: P
         reused = play_reference_step(world, second)
         assert not reused.ok and "already used" in reused.error
         assert len(world.state()["slack_messages"]) == posted
+
+        broadcast = copy.deepcopy(second)
+        broadcast.arguments["message"] += " <!channel>"
+        refused = play_reference_step(world, broadcast)
+        assert not refused.ok and "Broadcast mentions" in refused.error
     finally:
         world.close()
 

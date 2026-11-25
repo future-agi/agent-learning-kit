@@ -29,7 +29,7 @@ def handle(args, db):
     if thread_ts and db.one("SELECT 1 FROM slack_messages WHERE channel_id = ? AND ts = ?", [channel_id, thread_ts]) is None:
         raise ToolError(f"thread_not_found: no message {thread_ts!r} in channel {channel_id!r}.", category="not_found")
 
-    if "@channel" in text or "@here" in text or "@everyone" in text:
+    if any(mention in text for name in ("channel", "here", "everyone") for mention in (f"@{name}", f"<!{name}")):
         raise ToolError("Broadcast mentions (@channel, @here, @everyone) are forbidden.", category="policy_blocked")
 
     dest_pol = db.one("SELECT value FROM environment_policy WHERE name = 'allowed_destinations'", [])
