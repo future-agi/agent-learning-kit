@@ -4129,8 +4129,8 @@ def scenario_tools(
         if args.get("actor_share") is not None and target.get("actor_share") and not args.get("change_actor_share"):
             kept_share = target["actor_share"]
             said += (
-                f". The environment's actor share stays {kept_share['min']:g}-{kept_share['max']:g}: "
-                "change_actor_share was not set"
+                f". The environment's actor share stays {kept_share['min']:g}-{kept_share['max']:g}: it changes only "
+                "when the person asks to change how many scenarios include an actor"
             )
         elif args.get("actor_share") is not None:
             given = args["actor_share"]
