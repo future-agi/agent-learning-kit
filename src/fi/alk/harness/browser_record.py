@@ -174,7 +174,7 @@ class BrowserRecord:
     def keep_shot(self, when: str, size: int, *, shots: int, shot_bytes: int) -> tuple[bool, list[str]]:
         """Whether a screenshot of ``size`` bytes is kept, and the files of earlier ones it displaces. A page's is
         kept while one place stays free for the end's. The end's is kept, displacing the latest pages' to stay within
-        the bytes, unless it is larger than all of them together may be or the record is already sealed."""
+        the count and the bytes, unless it is larger than all of them together may be or the record is already sealed."""
         with self._lock:
             if self._shots_sealed:
                 # The sealed record names its screenshots: none of them may go, and none is added after.
@@ -228,9 +228,11 @@ class BrowserRecord:
         return any(entry_admits(site, host) for site in self.sites)
 
     def opened(self, url: str) -> bool:
-        """Whether ``url`` is a page the agent opened. What the browser shows at a refused address (the proxy's
-        refusal over http, the browser's own error page over https) is not: the refusal is already kept."""
-        if url in ("", "about:blank") or url.startswith("chrome-error:"):
+        """Whether ``url`` is a page the agent opened, by its address: not a blank page, not the browser's own error
+        page (shown for any page it could not load, a refused one over https among them), and not an address off
+        the sites, where over http the proxy's refusal is shown. A refusal is kept in its own list."""
+        lowered = url.lower()
+        if not url or lowered.startswith(("about:blank", "chrome-error:")):
             return False
         return not _web(url) or self.allowed(url)
 
@@ -491,7 +493,6 @@ class BrowserRecorder:
         # place until it is answered, could not be asked for, or its tab closes.
         self._shots_pending: dict[object, str] = {}
         self._urls: dict[str, str] = {}  # session -> its tab's page now
-        self._last_session: str | None = None
         self._connect = connect
         self._clock = clock
         self.record = BrowserRecord(self.sites, clock=clock)
@@ -514,7 +515,6 @@ class BrowserRecorder:
         self.record = BrowserRecord(self.sites, clock=self._clock)
         self._tabs = {}
         self._urls = {}
-        self._last_session = None
         self._leaving = False
         self._shots_pending = {}
         try:
@@ -571,21 +571,43 @@ class BrowserRecorder:
                 self.record.seal_shots()
                 self.write(sealed=nonce)
 
-        session = self._last_session
-        if session is None or not self.record.opened(self._urls.get(session, "")):
-            # No tab open, or its page is what the browser shows at a refused address: no end screenshot.
-            then_seal()
-            return
+        def photograph_end(_answer: dict[str, Any]) -> None:
+            # On the reader's thread, once every event the browser sent before the ask is handled: the tab is the one
+            # whose page was opened last, among tabs still open showing a page the agent opened.
+            session = self._end_session()
+            if session is None:
+                then_seal()
+                return
+            url = self._urls[session]
+
+            def answered(answer: dict[str, Any]) -> None:
+                # A tab that moved on while it was photographed may show either page: not kept.
+                if self._urls.get(session) == url:
+                    self._photographed(answer, "end", session, url)
+                then_seal()
+
+            try:
+                self._command("Page.captureScreenshot", dict(_SHOT), session, then=answered)
+            except Exception:  # noqa: BLE001 - no end screenshot; the seal still answers
+                then_seal()
+
         timer = threading.Timer(self._shot_seconds, then_seal)
         timer.daemon = True
         timer.start()
         try:
-            self._command(
-                "Page.captureScreenshot", dict(_SHOT), session,
-                then=lambda answer: (self._photographed(answer, "end", session, self._urls.get(session, "")), then_seal()),
-            )
-        except Exception:  # noqa: BLE001 - no end screenshot; the seal still answers
+            self._command("Browser.getVersion", then=photograph_end)
+        except Exception:  # noqa: BLE001 - no connection: no end screenshot; the seal still answers
             then_seal()
+
+    def _end_session(self) -> str | None:
+        return next(
+            (
+                session
+                for session in reversed(list(self._urls))
+                if self._tabs.get(session, ("", ""))[1] and self.record.opened(self._urls[session])
+            ),
+            None,
+        )
 
     def _watch_seals(self) -> None:
         asked = seal_request_path(self.record_path)
@@ -678,16 +700,12 @@ class BrowserRecorder:
         if method == "Target.attachedToTarget":
             self._attached(params, session)
         elif method == "Target.detachedFromTarget":
-            # A closed tab is forgotten; the end's screenshot is of the last page still open, if any is.
+            # A closed tab is forgotten; the end's screenshot is of a tab still open.
             gone = str(params.get("sessionId") or "")
             self._tabs.pop(gone, None)
             self._urls.pop(gone, None)
             for token in [token for token, one in self._shots_pending.items() if one == gone]:
                 del self._shots_pending[token]
-            if self._last_session == gone:
-                self._last_session = next(
-                    (one for one in reversed(list(self._urls)) if self._tabs.get(one, ("", ""))[1]), None
-                )
         elif method == "Page.frameNavigated":
             frame = params.get("frame") or {}
             tab = self._tabs.get(session or "")
@@ -696,7 +714,6 @@ class BrowserRecorder:
                 # Last in the order: the end screenshot falls back to the page opened last.
                 self._urls.pop(session or "", None)
                 self._urls[session or ""] = url
-                self._last_session = session
                 self.record.navigated(tab[0], url)
         elif method == "Page.loadEventFired":
             tab = self._tabs.get(session or "")
@@ -948,7 +965,8 @@ async def upload_screenshots(
         notices.append(
             {
                 "code": SCREENSHOTS_CAPPED,
-                "message": "The browser's screenshots reached their limit for one trial, so some were not kept.",
+                "message": "The browser's screenshots reached their limit for one trial: some pages were not photographed, "
+                "or their screenshots not kept.",
             }
         )
     ids: list[str] = []

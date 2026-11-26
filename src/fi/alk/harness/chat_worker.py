@@ -309,13 +309,18 @@ class _ArtifactCollector:
         return identifier
 
 
+def _collector_for(payload: dict[str, Any]) -> _ArtifactCollector:
+    """The worker's collector, keeping screenshots unless the parent said the run's level keeps none."""
+    return _ArtifactCollector(screenshots_kept=payload.get("screenshots_kept") is not False)
+
+
 async def main() -> None:
     from .chat_call_runner import HostedChatCallRunner
     from .job import HarnessJob
     from .retell_chat_call_runner import RetellChatCallRunner
 
     payload = json.load(sys.stdin)
-    collector = _ArtifactCollector(screenshots_kept=payload.get("screenshots_kept") is not False)
+    collector = _collector_for(payload)
     usage = _UsageCollector()
     try:
         isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value

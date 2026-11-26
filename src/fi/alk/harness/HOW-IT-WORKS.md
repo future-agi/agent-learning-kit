@@ -158,9 +158,13 @@ kept, only that typing happened, including a field whose kind is changed after t
 Every text passes the kit's cleaner. Rows are capped (the record then says `truncated`), and a
 screenshot is taken at each page load and at the trial's end, capped in count and bytes with one
 place kept free for the end's, each named by the id it is stored under. The end's is not kept when it
-is larger than all of them together may be, or is answered after the record is sealed. What the
-browser shows at a refused address (the proxy's refusal, or its own error page) is neither a row nor
-a screenshot, and is not the end's. The record holds against the page,
+is larger than all of them together may be, or is answered after the record is sealed. A page is
+judged by its address: a blank page, the browser's own error page (shown for any page it could not
+load, a refused one over https among them) and an address off the sites (where over http the
+proxy's refusal is shown) are neither rows nor screenshots, and never the end's. So an allowed https
+page that fails to load leaves no row, and an allowed name the proxy refuses by its address (one
+that resolves to loopback) shows the proxy's refusal at the allowed address, kept as a page; the
+refusal itself is in the blocked list. The record holds against the page,
 not against a client holding the DevTools address: such a client can do whatever DevTools can,
 so the record says what the browser did, never that nothing else touched it.
 
@@ -181,8 +185,9 @@ takes them in the world, none is sent, and the trial says the level is why. One 
 whole, one the platform does not keep, or one past what an isolated worker's result can carry never
 fails the trial: the trial says so. Once the pages' screenshots are full (one place stays for the
 end's), no page is photographed; a page screenshot not kept, or one whose tab closed before it was
-taken, leaves its place free. A closed tab is never the end's: the end's is of the page opened last
-on a tab still open.
+taken, leaves its place free. The end's tab is chosen once every event the browser sent before the
+seal is handled: of the tabs still open showing a page the agent opened, the one that opened its
+page last. A tab that moves on while it is photographed gives no end screenshot.
 
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the
