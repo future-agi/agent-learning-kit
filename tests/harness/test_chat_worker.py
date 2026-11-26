@@ -833,6 +833,46 @@ def test_a_screenshot_the_platform_did_not_keep_is_said_and_never_named(tmp_path
     assert [one["code"] for one in outcome.notices] == ["screenshots_not_kept"]
 
 
+def test_a_screenshot_the_run_s_level_keeps_none_of_is_not_sent_and_says_the_level(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+
+    class NoShots:
+        def __init__(self) -> None:
+            self.kinds: list[str] = []
+
+        def keeps_artifact(self, kind) -> bool:
+            return kind.value != "screenshot"
+
+        async def upload_artifact(self, data, *, kind, **_kwargs):
+            self.kinds.append(kind.value)
+            return f"stored-{len(self.kinds)}"
+
+    async def worker(module, payload, **_kwargs):
+        return {
+            "outcome": {
+                "calls": [], "turns": 1, "started_at": None, "ended_at": None, "duration_ms": 1,
+                "transcript_artifact": "0", "recording_artifacts": [],
+            },
+            "artifacts": [
+                {"id": "0", "kind": "transcript", "data": base64.b64encode(b"t").decode()},
+                {"id": "1", "kind": "screenshot", "data": base64.b64encode(b"jpeg").decode()},
+            ],
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    adapter = NoShots()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-0", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY
+    )
+    outcome = asyncio.run(
+        chat_worker.IsolatedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", source_scenario_key="one", scenario_id="id"), runtime
+        )
+    )
+    assert adapter.kinds == ["transcript"]
+    assert [one["code"] for one in outcome.notices] == ["screenshots_not_sent_at_level"]
+
+
 def test_the_worker_keeps_screenshots_within_what_its_result_can_carry(monkeypatch):
     # The worker's result is one file with a size limit: a screenshot that would push it over is not kept, and the
     # trial goes on.

@@ -5992,6 +5992,21 @@ def test_a_browser_screenshot_is_kept_where_a_recording_is(level, kept) -> None:
     assert ob.priority_class(ob.ArtifactKind.SCREENSHOT) == 2
 
 
+@pytest.mark.parametrize(
+    ("level", "kept"),
+    [
+        (ArtifactLevel.METADATA_ONLY, False),
+        (ArtifactLevel.TRACES, False),
+        (ArtifactLevel.TRACES_AND_RECORDINGS, True),
+        (ArtifactLevel.FULL, True),
+    ],
+)
+def test_the_adapter_says_whether_its_level_keeps_a_screenshot(level, kept) -> None:
+    adapter = _build_adapter(FakeTransport())
+    adapter.configure_artifacts(HarnessArtifactPolicy(level=level))
+    assert adapter.keeps_artifact(ob.ArtifactKind.SCREENSHOT) is kept
+
+
 def test_a_transcript_upload_the_platform_did_not_take_is_tried_again_before_the_receipt_drops_it() -> None:
     # A backend restarted mid-run refused a transcript upload; the receipt used to drop the transcript at once.
     from types import SimpleNamespace

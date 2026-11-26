@@ -809,6 +809,29 @@ def test_screenshots_the_platform_did_not_keep_are_said_and_never_fail_the_trial
     assert [one["code"] for one in notices] == ["screenshots_capped", "screenshots_not_kept"]
 
 
+def test_screenshots_the_run_s_level_keeps_none_of_are_not_sent_and_say_the_level(tmp_path) -> None:
+    import asyncio
+
+    class NoShots(_Uploads):
+        def keeps_artifact(self, kind) -> bool:
+            return False
+
+    shots = tmp_path / "w0-shots"
+    shots.mkdir()
+    (shots / "shot-001-load.jpg").write_bytes(b"\xff\xd8one")
+    (shots / "shot-002-end.jpg").write_bytes(b"\xff\xd8two")
+    evidence = {
+        "state": "used",
+        "screenshots": [{"file": "shot-001-load.jpg"}, {"file": "shot-002-end.jpg"}],
+        "screenshots_capped": True,
+    }
+    adapter = NoShots()
+    ids, notices = asyncio.run(browser_record.upload_screenshots(adapter, "one", evidence, shots))
+    assert ids == () and adapter.kinds == []
+    assert notices == [browser_record.level_keeps_no_screenshots_notice(2)]
+    assert "level" in notices[0]["message"] and "platform did not keep" not in notices[0]["message"]
+
+
 def test_a_new_trial_s_record_never_shows_the_last_trial_s_rows(tmp_path, devtools_port) -> None:
     fake, recorder = _recording(tmp_path, devtools_port)
     try:
