@@ -388,9 +388,10 @@ def mask_source_secrets(text: str, masks: Iterable[str]) -> str:
     return text
 
 
-# Only parts that are clearly volatile are ignored when comparing two records: times and durations, memory
-# addresses, uuids and hex ids, long letter-and-digit ids and long numbers. Short numbers (404, 500, a line number) and names (gpt-4) are
-# compared as written, so two different errors never count as copies.
+# Only parts that are clearly volatile are ignored when comparing two records: times and durations,
+# memory addresses, uuids and hex ids, long letter-and-digit ids and long numbers. Short numbers
+# (404, 500, a line number) and names (gpt-4) are compared as written, so two different errors
+# never count as copies.
 _VOLATILE = re.compile(
     r"\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"
     r"|\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b"
