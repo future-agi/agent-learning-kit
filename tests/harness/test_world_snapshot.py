@@ -371,7 +371,12 @@ def test_a_browser_world_s_end_state_holds_its_record_and_its_refusals_split_nev
         "blocked_navigations": [{"url": "http://www.example.com/deals", "at": 1.0}],
         "blocked_page_requests": [],
     }
-    asyncio.run(upload_end_state(_Adapter(), "k1", sealed, log, browser=browser_file_body(browser, trial_blocked(log))))
+    adapter = _Adapter()
+    asyncio.run(
+        upload_end_state(
+            adapter, "k1", sealed, log, browser=browser_file_body(browser, trial_blocked(log), adapter=adapter)
+        )
+    )
     [body] = uploads
     # The browser's clicks and typing are the world's record, never the agent's calls or world actions.
     [agent] = trial_state_changes(body["action_log"], {})
