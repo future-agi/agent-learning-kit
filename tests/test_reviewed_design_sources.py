@@ -793,6 +793,23 @@ def test_proposal_only_attributes_a_matching_public_clause_to_its_page():
     assert proposal_rule_sources(rules, evidence) == [{"rule_index":0, "source_id":"policy", "page":2}]
 
 
+def test_proposal_matches_complete_numbered_items_on_a_single_approved_page():
+    from fi.alk.harness.design.reviewed_sources import proposal_rule_sources
+
+    evidence = {"documents": [
+        {"source": "policy", "metadata": {"page": 1},
+         "content": "Returns policy\n\n1. Accept through day 37. Day\n 38 is late.\n2. Escalate above $425. Use ORCHID-72\n."},
+        {"source": "policy", "metadata": {"page": 2}, "content": "3. Exceptions need review."},
+    ]}
+    rules = ["1. Accept through day 37. Day 38 is late.", "Escalate above $425. Use ORCHID-72.",
+             "Accept through day 37. Exceptions need review.", "Day 38 is late. Accept through day 37.",
+             "Escalate above $425. Use ORCHID-73.", "Day 38 is late."]
+    assert proposal_rule_sources(rules, evidence) == [
+        {"rule_index": 0, "source_id": "policy", "page": 1},
+        {"rule_index": 1, "source_id": "policy", "page": 1},
+    ]
+
+
 def test_build_approval_requires_resolving_every_dependency(tmp_path):
     from fi.alk.harness.design.tools import settle_proposal
 

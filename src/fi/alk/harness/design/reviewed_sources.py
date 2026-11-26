@@ -297,18 +297,28 @@ def proposal_rule_sources(rules: list[str], evidence: dict[str, Any]) -> list[di
     # Only an actual line break in the approved source may disappear in a proposed rule.
     normalized_rules = [" ".join(wording(rule).split()) for rule in rules]
     links = set()
-    for case in evidence.get("cases", []):
-        clause = wording(case.get("policy_reference") or "")
-        if not clause:
-            continue
+    def link_passage(text: str, source: str | None, page: int | None) -> None:
+        clause = wording(text)
+        if not clause or not source or type(page) is not int or page < 1:
+            return
         pattern = r" ?".join(
             re.escape(" ".join(line.split())) for line in clause.splitlines() if line.strip()
         )
         for index, rule in enumerate(normalized_rules):
             if re.fullmatch(pattern, rule):
-                for cite in case.get("citations", []):
-                    if cite.get("source_id") and type(cite.get("page")) is int and cite["page"] > 0:
-                        links.add((index, cite["source_id"], cite["page"]))
+                links.add((index, source, page))
+
+    for case in evidence.get("cases", []):
+        for cite in case.get("citations", []):
+            link_passage(case.get("policy_reference") or "", cite.get("source_id"), cite.get("page"))
+
+    # A numbered policy item can yield multiple source cases. Match the whole
+    # original item, preserving sentence order and the page boundary.
+    for document in evidence.get("documents", []):
+        page = document.get("metadata", {}).get("page")
+        for item in re.split(r"\n[ \t]*\n|\n(?=[ \t]*\d+[.)][ \t]+)", document.get("content", "")):
+            if re.match(r"^\s*\d+[.)]\s+", item):
+                link_passage(item, document.get("source"), page)
     return [
         {"rule_index": index, "source_id": source, "page": page}
         for index, source, page in sorted(links)
