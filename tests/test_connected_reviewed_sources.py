@@ -587,7 +587,8 @@ def test_reference_selection_excludes_disclaimer_only_pages_with_or_without_numb
     heading = PolicyStatement("heading", "NORTHSTAR RETURNS POLICY\nPolicy version: 2026-11-23", span)
     assert not _reference_passages((heading, note))
     rubric_title = PolicyStatement("title", "Slack community prospect qualification rubric", span)
-    assert not _reference_passages((rubric_title,))
+    overview = PolicyStatement("overview", "## Overview", span)
+    assert not _reference_passages((rubric_title, overview))
     for text in ["1. Customers receive a free replacement.", "Customers receive a free replacement."]:
         rule = PolicyStatement("rule", text, span)
         assert _reference_passages((heading, rule, note)) == (rule,)
@@ -611,6 +612,7 @@ def test_compound_policy_and_record_outcomes_cannot_omit_or_reverse_a_benefit():
 
 @pytest.mark.parametrize("rule, item", [
     ("Escalate claims above $500:", "1. Notify a human."),
+    ("Escalate per policy:", "1. Notify a human."),
     ("# Collect these photos:", "1. Damaged packaging."),
     ("Solicite estas fotos:", "1. El embalaje dañado."),
     ("次の写真を提出してください：", "1. 外箱"),

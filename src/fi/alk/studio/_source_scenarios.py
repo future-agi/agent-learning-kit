@@ -195,10 +195,12 @@ def _document_label(line: str) -> bool:
     # A short noun-phrase title is a label even outside a Markdown heading.
     # Preserve factual sentences and instructions that happen to reference a policy.
     title = line.lstrip("# ").rstrip(":").strip()
+    if title.casefold() in {"overview", "contents", "introduction", "disclaimer", "policy", "guidelines"}:
+        return True
     return bool(
         re.fullmatch(r"[\w '&/–-]+ (?:policy|rubric|manual|guidelines)", title, re.I)
         and len(title.split()) <= 12
-        and not re.search(r"\b(?:is|are|must|may|shall|should|use|follow|apply|read|refer|see)\b", title, re.I)
+        and not re.search(r"\b(?:is|are|must|may|shall|should|use|follow|apply|read|refer|see|per|according|under|if|when|escalate|verify|collect|process|reject|approve|deny|request|check|consult|enforce|respect)\b", title, re.I)
     )
 
 
