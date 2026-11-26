@@ -5542,6 +5542,12 @@ def test_a_model_setting_with_a_credential_word_inside_another_word_is_kept(root
         "LLM_APIKEY",
         "MODEL_API_KEY",
         "DB_PASSWORD",
+        "MODEL_CLIENTSECRET",
+        "LLM_APITOKEN",
+        "LLM_AUTHORIZATION",
+        "MODEL_PASSCODE",
+        "LLM_BASEURL",
+        "OPENAI_KEY2_MODEL",
     ],
 )
 def test_a_credentials_setting_is_still_refused(root, setting):
@@ -5598,3 +5604,57 @@ def test_a_setting_shaped_like_a_key_is_refused_without_being_repeated(root):
 
     assert problems
     assert all(shaped not in problem for problem in problems)
+
+
+# Other models written in the statement don't make the model's own setting a neighbour
+
+VOICE = (
+    "session = AgentSession(\n"
+    '    stt=STT(model="nova-3"),\n'
+    '    llm=LLM(model=os.getenv("LLM_MODEL", "gpt-4o")),\n'
+    '    tts=TTS(model="sonic-2"),\n'
+    ")\n"
+)
+
+
+@pytest.mark.parametrize(
+    "written, model",
+    [
+        pytest.param(
+            'agent = Agent(model=os.getenv("AGENT_MODEL", "gpt-4o"), '
+            'embedder=Embedder(model="text-embedding-3-small"))\n',
+            {"setting": "AGENT_MODEL", "name": "gpt-4o"},
+            id="beside-an-embedder",
+        ),
+        pytest.param(VOICE, {"setting": "LLM_MODEL", "name": "gpt-4o"}, id="voice-wrapped"),
+        pytest.param(
+            VOICE.replace('os.getenv("LLM_MODEL", "gpt-4o")', 'os.environ["LLM_MODEL"]'),
+            {"setting": "LLM_MODEL"},
+            id="voice-wrapped-no-default",
+        ),
+    ],
+)
+def test_a_setting_that_is_the_models_value_is_kept_beside_other_models(root, written, model):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(root, {**model, "path": "agent.py", "line": 1})
+
+    assert problems == []
+    assert contract.model.setting == model["setting"]
+
+
+def test_a_wrong_name_given_with_the_models_own_setting_keeps_the_setting(tmp_path, root):
+    (root / "agent.py").write_text(VOICE, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "LLM_MODEL", "name": "nova-3", "path": "agent.py", "line": 1},
+    )
+
+    assert submit(wrong).get("is_error")
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["model"]["setting"] == "LLM_MODEL"
+    assert saved(destination)["model"]["name"] == ""

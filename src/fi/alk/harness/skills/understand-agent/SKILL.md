@@ -393,9 +393,9 @@ Find, in roughly this order:
     variable's name exactly as the code writes it, in capitals, digits and _, and it names a model
     (MODEL, DEPLOYMENT or LLM in it); a setting read beside the model, such as a region or a
     temperature, is not where the model comes from. Never give a credential's variable (a name
-    with the word KEY, TOKEN, SECRET, PASSWORD, PASS, PWD, AUTH, CREDENTIAL, URL, URI or DSN in
-    it, or a joined form such as APIKEY) as the setting, nor its default as the name. Leave `model` out when the name is fetched from elsewhere at run
-    time.
+    with a word ending in KEY, TOKEN, SECRET, PASSWORD, PASS, PWD, AUTH, CREDENTIAL, URL, URI or
+    DSN, such as API_KEY or APITOKEN) as the setting, nor its default as the name. Leave `model`
+    out when the name is fetched from elsewhere at run time.
 
 ## A repository may not hold one agent
 

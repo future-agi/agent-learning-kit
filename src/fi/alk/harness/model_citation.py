@@ -588,22 +588,19 @@ _ENV_SETTING = re.compile(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]")
 _MODEL_WORDS = frozenset({"MODEL", "DEPLOYMENT", "LLM"})
 _ENGINE_PROVIDERS = frozenset({"OPENAI", "AZURE"})
 # What marks a setting that holds a secret: one of its words (split at _ . - and between a
-# lowercase letter and a capital), never letters inside another word (AUTHOR_MODEL, CURIE_MODEL,
-# TOKENIZER_MODEL are model settings). A URL can carry a password, and a model's name is never
-# one. These words mark a secret wherever they are in the name (MAX_TOKEN_MODEL,
-# CHAT_MODEL_KEY), and so does a word ending in one of the joined forms (LLM_APIKEY,
-# OPENAI_SECRETKEY).
-_SECRET_WORDS = frozenset(
-    {"KEY", "KEYS", "TOKEN", "TOKENS", "SECRET", "SECRETS", "PASSWORD", "PASSWORDS", "PASSWD",
-     "PASSPHRASE", "PWD", "CREDENTIAL", "CREDENTIALS", "CREDS"}
+# lowercase letter and a capital, trailing digits aside) ending in one of these, never letters
+# inside a word (AUTHOR_MODEL, CURIE_MODEL, TOKENIZER_MODEL are model settings). These mark a
+# secret wherever they are in the name (MAX_TOKEN_MODEL, CHAT_MODEL_KEY, LLM_APITOKEN,
+# MODEL_CLIENTSECRET, OPENAI_KEY2_MODEL). A word that only ends like one (WHISKEY) counts too:
+# refusing a model's label costs less than showing a credential's default.
+_SECRET_ENDINGS = (
+    "KEY", "KEYS", "TOKEN", "TOKENS", "SECRET", "SECRETS", "PASSWORD", "PASSWORDS", "PASSWD",
+    "PASSPHRASE", "PASSCODE", "PWD", "CREDENTIAL", "CREDENTIALS", "CREDS", "AUTHORIZATION",
 )
-_JOINED_SECRETS = (
-    "APIKEY", "ACCESSKEY", "SECRETKEY", "PRIVATEKEY", "AUTHTOKEN", "ACCESSTOKEN", "PASSWORD",
-    "PASSWD", "PASSPHRASE",
-)
-# These mark a secret too, except in a name whose last word names a model: FIRST_PASS_MODEL and
-# AUTH_LLM are model settings, DB_PASS and SENTRY_DSN are not.
-_WEAK_SECRET_WORDS = frozenset({"PASS", "AUTH", "URL", "URI", "DSN"})
+# These mark a secret too (a URL can carry a password), except in a name whose last word names a
+# model: FIRST_PASS_MODEL and AUTH_LLM are model settings, DB_PASS, SENTRY_DSN and LLM_BASEURL
+# are not.
+_WEAK_SECRET_ENDINGS = ("PASS", "AUTH", "URL", "URI", "DSN")
 
 
 def _words(setting: str) -> list[str]:
@@ -615,13 +612,14 @@ def _words(setting: str) -> list[str]:
 
 
 def _has_secret_words(setting: str) -> bool:
-    """Whether ``setting``'s words mark a secret, as _SECRET_WORDS and _WEAK_SECRET_WORDS say."""
-    words = _words(setting)
-    if any(word in _SECRET_WORDS or word.endswith(_JOINED_SECRETS) for word in words):
+    """Whether ``setting``'s words mark a secret, as _SECRET_ENDINGS and _WEAK_SECRET_ENDINGS
+    say."""
+    words = [word.rstrip(string.digits) for word in _words(setting)]
+    if any(word.endswith(_SECRET_ENDINGS) for word in words):
         return True
     if words and words[-1] in _MODEL_WORDS:
         return False
-    return any(word in _WEAK_SECRET_WORDS for word in words)
+    return any(word.endswith(_WEAK_SECRET_ENDINGS) for word in words)
 
 
 def _names_a_model(line: str) -> bool:
@@ -724,7 +722,7 @@ _DEFAULT_BEFORE = re.compile(
 
 def names_a_credential(setting: str) -> bool:
     """Whether an environment variable's name is shaped like a credential's: a word in it that
-    marks a secret (DB_PASS, LLM_PASSPHRASE, OPENAI_API_KEY; see _SECRET_WORDS), or a name the
+    marks a secret (DB_PASS, LLM_PASSPHRASE, OPENAI_API_KEY; see _SECRET_ENDINGS), or a name the
     credential scan asks for as a secret."""
     return _has_secret_words(setting) or secret_name(setting.upper())
 
@@ -959,8 +957,41 @@ def _whose_default(line: str, comment: int, inside: list[tuple[int, int]], name:
 
 
 # A model written as a value in a statement: model="gpt-4o", "model": "gpt-4o", model: gpt-4o
-# in quotes. The quoted value is group 2.
+# in quotes. The quoted value is group 3.
 _MODEL_VALUE = re.compile(r"""(?<!\w)(["']?)model\1\s*(?::|=(?!=))\s*(["'`])([^"'`\n]*)\2""")
+# A model key, up to where its value starts: model=, "model":.
+_MODEL_KEY = re.compile(r"""(?<!\w)(["']?)model\1\s*(?::|=(?!=))\s*""")
+
+
+def _model_values(text: str) -> Iterator[tuple[int, int]]:
+    """Where each value given to a model key in ``text`` starts and ends: up to the comma, the
+    closing bracket or the line break that ends it outside brackets and quotes
+    (llm=LLM(model=os.getenv("LLM_MODEL", "gpt-4o")) gives the whole os.getenv call)."""
+    for key in _MODEL_KEY.finditer(text):
+        at, depth, quote = key.end(), 0, ""
+        while at < len(text):
+            char = text[at]
+            if quote:
+                quote = "" if char == quote else quote
+            elif char in _QUOTES:
+                quote = char
+            elif char in "([{":
+                depth += 1
+            elif char in ")]}":
+                if not depth:
+                    break
+                depth -= 1
+            elif not depth and char in ",;\n":
+                break
+            at += 1
+        yield key.end(), at
+
+
+def _is_the_models_value(text: str, reads: list[tuple[int, int, bool]]) -> bool:
+    """Whether the setting read at ``reads`` is itself what a model key in the statement is
+    given, so other models written beside it (stt=STT(model="nova-3")) are not the agent's."""
+    values = list(_model_values(text))
+    return any(start <= read < end for read, _, _ in reads for start, end in values)
 
 
 def _span_line(text: str, offset: int) -> str:
@@ -1209,19 +1240,22 @@ def model_problems(
                 f"of {shown_path}; give as name the default the line gives {shown_setting}, or "
                 "leave name out if it gives none"
             ]
-        if _writes_a_model(text, spans, setting) or (
-            beside
-            and any(
-                named_on(
-                    _span_line(text, offset),
-                    beside,
-                    config=config,
-                    yaml=suffix in _YAML_SUFFIXES,
-                    block=block if offset == 0 else None,
-                    scanned=(span_comment, span_inside),
-                    **scan,
+        if not _is_the_models_value(text, reads) and (
+            _writes_a_model(text, spans, setting)
+            or (
+                bool(beside)
+                and any(
+                    named_on(
+                        _span_line(text, offset),
+                        beside,
+                        config=config,
+                        yaml=suffix in _YAML_SUFFIXES,
+                        block=block if offset == 0 else None,
+                        scanned=(span_comment, span_inside),
+                        **scan,
+                    )
+                    for offset, span_comment, span_inside, _ in spans
                 )
-                for offset, span_comment, span_inside, _ in spans
             )
         ):
             return [
