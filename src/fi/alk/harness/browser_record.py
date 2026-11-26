@@ -55,6 +55,8 @@ SHOT_BYTES = 8 * 1024 * 1024
 _SHOT = {"format": "jpeg", "quality": 60}
 _TEXT = 200
 _SAME_ATTEMPT_SECONDS = 2.0
+# The most of a kit-written file the platform's side reads: more than a capped record can be, so more is not one.
+KIT_FILE_BYTES = 64 * 1024 * 1024
 _ACTIONS = frozenset({"click", "typing"})
 _TARGET_FIELDS = ("tag", "role", "label", "text")
 
@@ -162,7 +164,7 @@ class BrowserRecord:
         self._navigations: list[dict[str, Any]] = []
         self._page_requests: dict[str, int] = {}
         self._tabs: dict[str, int] = {}
-        self._last_refused: dict[tuple[str, str], float] = {}
+        self._last_refused: dict[tuple[str, str, str], float] = {}
         self._truncated = False
         self._why_incomplete: str | None = None
         self._shots: list[dict[str, Any]] = []
@@ -230,19 +232,23 @@ class BrowserRecord:
         host = _host(url)
         with self._lock:
             if not (document and main_frame):
-                self._page_requests[host] = self._page_requests.get(host, 0) + 1
+                if host in self._page_requests or len(self._page_requests) < self.cap:
+                    self._page_requests[host] = self._page_requests.get(host, 0) + 1
+                else:
+                    self._truncated = True
                 return
-            # Chromium tries a plain address over https first and back again: one attempt, not three.
+            # Chromium tries a plain address over https first and back again within a moment: one attempt, not
+            # three. The moment runs from the attempt kept, so a page retried for longer is kept once each moment.
             parts = urlsplit(url)
-            place = (host, parts.path + ("?" + parts.query if parts.query else ""))
+            place = (tab, host, parts.path + ("?" + parts.query if parts.query else ""))
             now = self.clock()
             last = self._last_refused.get(place)
-            self._last_refused[place] = now
             if last is not None and now - last < _SAME_ATTEMPT_SECONDS:
                 return
             if len(self._navigations) >= self.cap:
                 self._truncated = True
                 return
+            self._last_refused[place] = now
             self._navigations.append({"url": _clean(url, 2048), "at": now, "tab": self._tab(tab)})
 
     def acted(self, tab: str, payload: str) -> None:
@@ -749,7 +755,7 @@ def sealed_record(record_path: Path, *, timeout: float = 5.0) -> dict[str, Any] 
     body: Any = None
     while True:
         try:
-            body = json.loads(record_path.read_text(encoding="utf-8")[: 64 * 1024 * 1024])
+            body = json.loads(_read_kit_file(record_path))
         except (OSError, ValueError):
             body = None
         if isinstance(body, dict) and body.get("sealed") == nonce:
@@ -764,6 +770,15 @@ def sealed_record(record_path: Path, *, timeout: float = 5.0) -> dict[str, Any] 
     body["complete"] = False
     body.setdefault("why_incomplete", "the record was not sealed in time")
     return body
+
+
+def _read_kit_file(path: Path) -> str:
+    """A kit-written file's text; ValueError when it is larger than any the kit writes."""
+    with path.open("rb") as handle:
+        data = handle.read(KIT_FILE_BYTES + 1)
+    if len(data) > KIT_FILE_BYTES:
+        raise ValueError(f"{path.name} is larger than {KIT_FILE_BYTES} bytes")
+    return data.decode("utf-8")
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -966,12 +981,16 @@ class BlockedFileLog(MemoryLog):
             try:
                 _write_text(self.path, "")
             except OSError:
+                # Last start's rows must never be read as this one's: with no file the trial reads them unreadable.
                 logger.warning("browser record: the blocked log %s could not be cut", self.path)
+                try:
+                    self.path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("browser record: the blocked log %s could not be removed either", self.path)
         with self._lock:
             self._rows.clear()
 
     def write(self, row: dict[str, Any]) -> None:
-        super().write(row)
         arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
         kept = {
             **{key: row[key] for key in ("actor_id", "outcome", "refusal_code", "method") if key in row},
@@ -981,6 +1000,8 @@ class BlockedFileLog(MemoryLog):
         with self._file_lock:
             if self._written > self.cap:
                 return
+            if self._written < self.cap:
+                super().write(row)
             self._written += 1
             line = {"truncated": True} if self._written > self.cap else kept
             try:
@@ -996,7 +1017,7 @@ def blocked_from_file(path: Path) -> list[dict[str, Any]] | None:
     from .call_runner import trial_state_changes
 
     try:
-        lines = path.read_text(encoding="utf-8")[: 16 * 1024 * 1024].splitlines()
+        lines = _read_kit_file(path).splitlines()
         rows = [json.loads(line) for line in lines if line.strip()]
     except (OSError, ValueError):
         return None
