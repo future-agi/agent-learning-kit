@@ -178,7 +178,7 @@ def _sealed_source_case(case: dict[str, Any]) -> dict[str, Any]:
 
 _LIST_ITEM = re.compile(r"^\d+[.)]\s+")
 _DOCUMENT_LABEL = re.compile(
-    r"(?:(?:policy|document)\s+)?(?:version|edition|revision)\b.*"
+    r"(?:(?:policy|document)\s+)?(?:version|edition|revision)\s*:?\s*[vV]?[0-9][0-9A-Za-z./_-]*"
     r"|(?:training|draft|reference|sample) copy[.]?"
     r"|(?:these (?:rules|policies|examples)|this (?:document|policy|data)) "
     r"(?:are|is) (?:fictional|synthetic)(?: and (?:exist[s]?|(?:are|is) intended) "
@@ -190,28 +190,41 @@ _DOCUMENT_LABEL = re.compile(
 
 def _document_label(line: str) -> bool:
     line = _LIST_ITEM.sub("", line.strip()).strip()
-    if line.endswith(":") or _DOCUMENT_LABEL.fullmatch(line):
+    if _DOCUMENT_LABEL.fullmatch(line):
         return True
     # A short noun-phrase title is a label even outside a Markdown heading.
     # Preserve factual sentences and instructions that happen to reference a policy.
-    title = line.lstrip("# ").strip()
+    title = line.lstrip("# ").rstrip(":").strip()
     return bool(
         re.fullmatch(r"[\w '&/–-]+ (?:policy|rubric|manual|guidelines)", title, re.I)
         and len(title.split()) <= 12
         and not re.search(r"\b(?:is|are|must|may|shall|should|use|follow|apply|read|refer|see)\b", title, re.I)
-    ) or (line.startswith("#") and not re.search(r"[.!?]$", title))
+    )
 
 
 def _reference_passages(statements: tuple[PolicyStatement, ...]) -> tuple[PolicyStatement, ...]:
     """Keep rule and narrative passages with the locations of their original statements."""
     passages = []
+    introduction = None
     for statement in statements:
         for part in re.split(r"(?m)^\s*(?=\d+[.)]\s+)", statement.text):
-            # Keep original paragraph wrapping, including multiple lines in a PDF clause.
             lines = [line for line in part.splitlines() if not _document_label(line)]
             text = "\n".join(lines).strip()
-            if text:
-                passages.append(replace(statement, text=text))
+            if not text:
+                continue
+            is_list_item = re.match(r"^(?:\d+[.)]|[-*•])\s+", text)
+            if introduction and (
+                introduction.span != statement.span or not is_list_item
+            ):
+                introduction = None
+            item = replace(statement, text=text)
+            if text.endswith((":", "：")):
+                introduction = item
+            elif introduction and is_list_item:
+                if passages and passages[-1] is introduction:
+                    passages.pop()
+                item = replace(statement, text=introduction.text + "\n" + text)
+            passages.append(item)
     return tuple(passages)
 
 

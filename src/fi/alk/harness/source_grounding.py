@@ -108,8 +108,8 @@ def _affirmed(text: str, expression: str) -> bool:
     for match in re.finditer(expression, text):
         before = text[:match.start()]
         if not re.search(
-            r"\b(?:no|not|never|without|deny|denies|refuses?|rejects?) "
-            r"(?:(?:give|offer|issue|provide|apply|charge|a|an|the|any) )*$", before,
+            r"(?:\b(?:no|not|never|without|cannot|deny|denies|refuses?|rejects?)|n['’]t) "
+            r"(?:(?:give|offer|issue|provide|grant|approve|allow|process|authorize|apply|charge|to|a|an|the|any) )*$", before,
         ):
             return True
     return False

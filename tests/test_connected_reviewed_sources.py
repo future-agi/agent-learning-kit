@@ -602,6 +602,27 @@ def test_compound_policy_and_record_outcomes_cannot_omit_or_reverse_a_benefit():
     record = {"starting_facts": [{"field":"expected_action", "value":"approve_full_refund_and_prepaid_shipping",
                                  "record_id":"RET-005"}]}
     for case in (rule, record):
-        for tests in ["Approves the full refund.", "Approves the full refund without prepaid shipping."]:
+        for tests in ["Approves the full refund.", "Approves the full refund without prepaid shipping.",
+                      "Does not grant a full refund and does not grant prepaid return shipping.",
+                      "Won't authorize the full refund or provide prepaid shipping."]:
             assert not scenario_relates_to_case({**args, "tests": tests}, case)
         assert scenario_relates_to_case({**args, "tests":"Approves a full refund with prepaid shipping."}, case)
+
+
+@pytest.mark.parametrize("rule, item", [
+    ("Escalate claims above $500:", "1. Notify a human."),
+    ("# Collect these photos:", "1. Damaged packaging."),
+    ("Solicite estas fotos:", "1. El embalaje dañado."),
+    ("次の写真を提出してください：", "1. 外箱"),
+])
+def test_actionable_headings_qualify_their_list_items(rule, item):
+    from fi.alk.studio._environment_input_types import PolicyStatement, SourceSpan
+    from fi.alk.studio._source_scenarios import _reference_passages
+
+    span = SourceSpan("src_a", page=2)
+    statement = PolicyStatement("rule", rule + "\n" + item + "\n2. Another item.", span)
+    assert [p.text for p in _reference_passages((statement,))] == [
+        rule + "\n" + item, rule + "\n2. Another item."
+    ]
+    standalone = PolicyStatement("rule", rule, span)
+    assert _reference_passages((standalone,)) == (standalone,)
