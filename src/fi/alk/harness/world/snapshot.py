@@ -139,6 +139,7 @@ def save(
     notes: str = "",
     sequences: list[dict[str, Any]] | None = None,
     world_checks: Mapping[str, str] | None = None,
+    implementation: str | None = None,
 ) -> Path:
     """Write the world out: the snapshot, the handlers, the module, and a manifest."""
     root = Path(path)
@@ -218,8 +219,10 @@ def save(
                 "source_provenance": source_provenance(world.source_root),
                 # A run refuses legacy/demo worlds whose handlers were authored by the harness.
                 # New worlds can only acquire handlers through adopt_tool, and a source root is
-                # required for that import to work.
-                "tool_implementation": "source" if world.source_root else "synthetic",
+                # required for that import to work. A released prebuilt environment says
+                # "environment" instead: its handlers are the environment by design.
+                "tool_implementation": implementation
+                or ("source" if world.source_root else "synthetic"),
                 "runtime_tools": sorted(getattr(world, "runtime_tools", set())),
                 "external_runtime": bool(getattr(world, "external_runtime", False)),
                 "native_runtime": bool(getattr(world, "native_runtime", False)),
@@ -317,6 +320,8 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     world.native_runtime = bool(manifest.get("native_runtime", False))
     world.tools = manifest.get("tool_specs", [])
     world.refusal_signature = str(manifest.get("refusal_signature") or "")
+    # The environment's own handlers (a design or a release), not bindings to an agent's code.
+    world.isolated = manifest.get("tool_implementation") == "environment"
     world.refusals = record_refusals(root)
     # A world whose handlers bind to the agent's own code cannot run them unless that code
     # is importable again, and the frozen state is what those tools act on.
@@ -350,9 +355,13 @@ def read_manifest(path: str | Path) -> dict[str, Any]:
 
 
 def require_source_implementation(path: str | Path) -> None:
-    """Refuse worlds that do not prove their tools came from the submitted source."""
+    """Refuse worlds that do not prove where their tools came from.
+
+    `source`: bound to the submitted agent's code. `environment`: a sealed environment release,
+    whose handlers are the environment by design and were proved when it was sealed.
+    """
     manifest = read_manifest(path)
-    if manifest.get("tool_implementation") != "source":
+    if manifest.get("tool_implementation") not in {"source", "environment"}:
         raise RuntimeError(
             "This environment has no source-implementation provenance. It was created by an "
             "older/synthetic harness path and may contain reimplemented handlers. Rebuild it "

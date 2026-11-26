@@ -1,0 +1,94 @@
+{
+  "name": "email_contact_change_updated",
+  "scenario_key": "email-contact-change-updated",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "David's email asks for invoices to go to ap@dataflow.com and then corrects it to accounts@dataflow.com (attention Priya Raman); the agent reads the thread, reads the corrected contact back and updates it after confirmation",
+  "tests": "Updates the billing contact to the corrected address from the email history (accounts@dataflow.com, not the retired ap@dataflow.com) after verification and explicit confirmation",
+  "instruction": "You are David Data, billing administrator for DataFlow (T04). In email thread th_b09_contact_change you asked for DataFlow's invoices to go to Priya Raman at ap@dataflow.com, then corrected the address to accounts@dataflow.com because ap@ is being retired.\n\nIn this chat, ask the billing desk to process the change in the thread; do not state the address yourself up front. When the agent reads back Priya Raman and accounts@dataflow.com and asks for confirmation, confirm. If it reads back ap@dataflow.com, tell it to check your latest email.\n\nYour details:\n- Name: David Data\n- Tenant ID: T04 (DataFlow)\n- User / Actor ID: U04_ADMIN\n- Email: david@dataflow.com\n- Thread ID: th_b09_contact_change",
+  "keywords": [
+    "billing_contact"
+  ],
+  "persona": {
+    "name": "David Data",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent email thread th_b09_contact_change about where DataFlow's invoices should go. Can you process it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "actor_id": "U04_ADMIN",
+    "thread_id": "th_b09_contact_change",
+    "origin": "seed",
+    "tenant_id": "T04",
+    "new_contact_name": "Priya Raman",
+    "new_contact_email": "accounts@dataflow.com"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b09_contact_change"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: th_b09_contact_change"
+      }
+    },
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T04",
+        "actor_id": "U04_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "update_billing_contact",
+      "arguments": {
+        "email": "accounts@dataflow.com",
+        "tenant_id": "T04",
+        "confirmation_code": "confirmed",
+        "actor_id": "U04_ADMIN",
+        "name": "Priya Raman"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: accounts@dataflow.com",
+        "tenant_id": "caller: T04"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "task": "verify_authorization",
+    "counterparty": "billing_admin",
+    "interface": "clean_chat",
+    "disposition": "contact_change",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "billing_contact_updated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

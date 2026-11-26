@@ -1,0 +1,88 @@
+{
+  "name": "cancel_order_idempotent_duplicate_request",
+  "scenario_key": "cancel-order-idempotent-duplicate-request",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "Customer asks to cancel processing order and repeats request after initial confirmation",
+  "tests": "the agent idempotently processes order cancellation using consistent request_key without duplicate failure",
+  "instruction": "You want to cancel order O433 which is still processing. After confirming the cancellation, you ask the agent again just to be completely certain that the order is cancelled and that you won't be charged twice.\n\nYour details:\nName: Hannah Scott\nEmail: hannah.scott@example.com\nPostal code: 02116\nOrder ID: O433",
+  "keywords": [
+    "cancel_order"
+  ],
+  "persona": {
+    "name": "Hannah Scott",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Nurse",
+    "location": "Canada",
+    "personality": "Anxious",
+    "communication_style": "Questioning",
+    "initial_message": "Hi, I need to cancel order O433 which is still processing. Can you cancel it and verify it won't be charged?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O433",
+    "origin": "generated",
+    "customer_id": "C433"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "02116",
+        "order_id": "O433"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O433"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_order",
+      "arguments": {
+        "confirmed": true,
+        "reason": "customer_request",
+        "order_id": "O433",
+        "request_key": "REQ-C433-O433-CAN",
+        "customer_id": "C433"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O433"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "repeat_inquiry",
+    "interface": "clean_prose",
+    "task": "change_or_cancel_order",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "order_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

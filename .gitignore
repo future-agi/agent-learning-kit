@@ -21,3 +21,6 @@ examples/artifacts/
 
 # Daytona snapshot SDK venv (scripts/daytona-snapshot.sh)
 .venv-daytona/
+
+# Written by the simulate tests
+/recordings/

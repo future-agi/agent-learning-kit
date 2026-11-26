@@ -1,0 +1,109 @@
+{
+  "name": "immediate_downgrade_requested_scheduled_at_period_end",
+  "scenario_key": "immediate-downgrade-requested-scheduled-at-period-end",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "billing admin asks for immediate downgrade; informed that downgrades take effect at period end, agrees and schedules at end_of_period",
+  "tests": "the agent explains downgrade timing policy and schedules the downgrade to Starter at end of period after user agrees",
+  "instruction": "You are Charlotte Jenkins, billing admin for CloudScale Branch (tenant ID T403, actor ID U403_ADMIN). You are on Basic with 4 active seats. You want to downgrade to Starter with 4 seats immediately. When informed that plan downgrades take effect at the end of the billing period, you agree and confirm scheduling for end of period (2026-11-01).\n\nYour details:\n- Tenant ID: T403\n- Actor ID: U403_ADMIN\n- Current Plan: Basic\n- Target Plan: Starter\n- Target Seats: 4\n- Effective Timing: End of period (end_of_period)",
+  "keywords": [
+    "plan_downgrade"
+  ],
+  "persona": {
+    "name": "Charlotte Jenkins",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Business Owner",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I am Charlotte Jenkins from CloudScale Branch (tenant T403). We want to downgrade from Basic to Starter with 4 seats immediately.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T403",
+    "active_seats": 4,
+    "target_plan": "starter",
+    "origin": "generated",
+    "actor_id": "U403_ADMIN",
+    "current_plan": "basic"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U403_ADMIN",
+        "tenant_id": "T403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_subscription",
+      "arguments": {
+        "tenant_id": "T403",
+        "actor_id": "U403_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "preview_plan_change",
+      "arguments": {
+        "tenant_id": "T403",
+        "target_seats": 4,
+        "effective_timing": "end_of_period",
+        "actor_id": "U403_ADMIN",
+        "target_plan_id": "starter"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "request_key": "req_down_403",
+        "target_seats": 4,
+        "confirmation_code": "confirmed",
+        "target_plan_id": "starter",
+        "actor_id": "U403_ADMIN",
+        "effective_timing": "end_of_period",
+        "tenant_id": "T403"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "what the admin confirmed",
+        "target_plan_id": "what the admin confirmed",
+        "target_seats": "what the admin confirmed",
+        "effective_timing": "what the admin confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "unconfirmed",
+    "task": "schedule_plan_change",
+    "overlay": "none",
+    "interaction": "burst",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "counterparty": "member",
+    "interface": "typo_heavy"
+  },
+  "sub_goals": [
+    "plan_change_scheduled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

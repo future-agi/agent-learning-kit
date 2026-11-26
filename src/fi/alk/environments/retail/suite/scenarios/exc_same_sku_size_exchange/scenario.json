@@ -1,0 +1,110 @@
+{
+  "name": "exc_same_sku_size_exchange",
+  "scenario_key": "exc-same-sku-size-exchange",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer C408 exchanges Road Running Shoes (SH01) bought in size 9 on order O408 for the same shoes in size 10",
+  "tests": "the agent reads the size bought on order O408 (9) and the sizes SH01 comes in, and creates an exchange of SH01 size 9 for SH01 size 10 upon confirmation; a different size or no size is a different item",
+  "instruction": "You purchased Road Running Shoes (SKU SH01) in size 9 in order O408. They are too small, so you want to exchange them for the same Road Running Shoes in size 10. You confirm the exchange once the agent reads back SH01 in size 10. If the agent offers any other size, correct them: you want size 10.\n\nYour details:\n- Name: Owen Lars\n- Email: owen.lars@example.com\n- Postal Code: 85001\n- Order ID: O408\n- Original: SKU SH01, size 9 (Quantity 1)\n- Replacement: SKU SH01, size 10 (Quantity 1)",
+  "keywords": [
+    "exchange_item",
+    "size_exchange"
+  ],
+  "persona": {
+    "name": "Owen Lars",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, I received my running shoes (SH01) on order O408 but the size 9 is too small. Please swap them for the same shoes in a size 10.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "replacement_sku": "SH01",
+    "origin": "generated",
+    "customer_id": "C408",
+    "order_id": "O408",
+    "original_sku": "SH01",
+    "replacement_size": "10",
+    "original_size": "9"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "85001",
+        "order_id": "O408"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O408"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "SH01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_exchange",
+      "arguments": {
+        "order_id": "O408",
+        "confirmed": true,
+        "quantity": 1,
+        "customer_id": "C408",
+        "request_key": "REQ-EXC-O408-SH01",
+        "replacement_sku": "SH01",
+        "original_sku": "SH01",
+        "replacement_size": "10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "quantity": "caller: quantity 1",
+        "replacement_sku": "caller: replacement SH01",
+        "confirmed": "caller: customer confirmation",
+        "customer_id": "record: customer C408",
+        "original_sku": "record: item SH01",
+        "order_id": "caller: order O408",
+        "replacement_size": "caller: size 10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "exchange_item",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "counterparty": "verified_owner",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "size_exchange",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "exchange_created_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

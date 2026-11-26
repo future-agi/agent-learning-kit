@@ -34,6 +34,7 @@ from .catalogue import Catalogue, SubGoal
 from .json_file import write_json_atomic
 from .python_source import KIT_PYTHON
 from .scenario import Scenario
+from .world.handler_child import evaluate_authored
 from .world.runtime import GeneratedWorld
 
 SCENARIOS = "scenarios"
@@ -61,7 +62,8 @@ if __name__ == "__main__":
         _calls = [_Call(**_one) for _one in _json.loads(_Path(_sys.argv[2]).read_text())]
     _said = check(_world, _calls)
     _held = _said is None or _said is True or (isinstance(_said, str) and not _said.strip())
-    print("held" if _held else f"FAILED: {_said}")
+    # Only the verdict: a failure names the records it read, so it is not written to the console.
+    print("held" if _held else "FAILED")
     raise SystemExit(0 if _held else 1)
 """
 
@@ -82,49 +84,16 @@ def _run(source: str, name: str, entry: str, *args: Any) -> Outcome:
     mistake, and scoring it as though the world were wrong would send somebody looking in the
     wrong place.
     """
-    if not source.strip():
-        return Outcome(True)
-    namespace: dict[str, Any] = {}
-    try:
-        exec(compile(source, f"<{name}>", "exec"), namespace)
-    except Exception as failed:
-        return Outcome(False, f"{name} would not compile: {failed}", broken=True)
+    world = args[0] if args else None
+    result = None
+    if getattr(world, "isolated", False):
+        from .world.handler_host import isolation_mode, run_authored
 
-    function = namespace.get(entry)
-    if not callable(function):
-        return Outcome(False, f"{name} defines no {entry}()", broken=True)
-    try:
-        said = function(*args)
-    except Exception as failed:
-        return Outcome(
-            False, f"{name} raised {type(failed).__name__}: {failed}", broken=True
-        )
-    # The convention is that a complaint is a sentence, and anything else means it held. An empty
-    # string is the case worth naming: it reads as "no complaint" to whoever wrote it, and taking
-    # it as a failure produces a rejection with no reason attached, which cannot be acted on and
-    # sends the author hunting for a problem that is not there.
-    if said is None or said is True or (isinstance(said, str) and not said.strip()):
-        return Outcome(True)
-    if said is False:
-        # Bare False from ready() names no precondition, so a scenario that hits it cannot be
-        # told apart from one whose ready.py is simply wrong — that is our mistake, not a
-        # generation-time precondition failure, so ready() alone reports it broken.
-        return Outcome(
-            False,
-            f"{name} returned False without saying what is wrong. Return the sentence instead, "
-            "or None if it holds.",
-            broken=(entry == "ready"),
-        )
-    if entry == "ready" and not isinstance(said, str):
-        # Same reasoning as bare False, widened: ready() has no way to turn a non-string value
-        # into a precondition sentence, so any of them is our mistake rather than the world's.
-        return Outcome(
-            False,
-            f"{name} returned {type(said).__name__} {repr(said)[:200]}. Return the sentence "
-            "naming what is missing, or None if it holds.",
-            broken=True,
-        )
-    return Outcome(False, str(said))
+        if mode := isolation_mode():
+            result = run_authored(source, world, kind=entry, name=name, mode=mode)
+    if result is None:
+        result = evaluate_authored(source, world, kind=entry, name=name)
+    return Outcome(result.ok, result.said, result.broken)
 
 
 def apply_setup(scenario: Scenario, world: GeneratedWorld) -> Outcome:
@@ -135,6 +104,12 @@ def apply_setup(scenario: Scenario, world: GeneratedWorld) -> Outcome:
 def check_ready(scenario: Scenario, world: GeneratedWorld) -> Outcome:
     """Whether the world now holds what this scenario presumes."""
     return _run(scenario.ready_code, f"{scenario.name}/ready.py", "ready", world)
+
+
+def plain_name(name: str) -> bool:
+    """Whether a name is one path part. Scenario and sub-goal names become file names, and a name
+    such as `../composition-change/x` would write outside the suite."""
+    return name not in ("", ".", "..") and not set(name) & set("/\\\0")
 
 
 def folder_for(destination: Path, name: str) -> Path:
@@ -161,8 +136,17 @@ def document_for(scenario: Scenario) -> dict:
     return body
 
 
+def check_file(sub_goal: SubGoal) -> str:
+    """What `checks/<name>.py` holds for a deterministic sub-goal."""
+    return sub_goal.check.rstrip() + "\n" + _RUNNABLE
+
+
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
+    if unplain := [
+        one for one in (scenario.name, *scenario.sub_goals) if not plain_name(one)
+    ]:
+        raise ValueError(f"not a plain file name: {', '.join(map(repr, unplain))}")
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 
@@ -186,9 +170,7 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
         sub_goal = catalogue.named(name)
         if sub_goal is None or not sub_goal.deterministic():
             continue
-        (root / "checks" / f"{name}.py").write_text(
-            sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
-        )
+        (root / "checks" / f"{name}.py").write_text(check_file(sub_goal), encoding="utf-8")
 
     # Drop checks for sub-goals a rewrite removed.
     wanted = {f"{name}.py" for name in scenario.sub_goals}
@@ -217,9 +199,7 @@ def refresh_check(destination: Path, sub_goal: SubGoal) -> list[str]:
         path = folder / "checks" / f"{sub_goal.name}.py"
         if sub_goal.deterministic():
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
-            )
+            path.write_text(check_file(sub_goal), encoding="utf-8")
         elif path.is_file():
             path.unlink()
         else:
@@ -337,6 +317,42 @@ def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
                 "catalogue but no check file was written, so nothing would measure it. Define "
                 "it again with add_sub_goal and save"
             )
+    return problems
+
+
+def check_file_drift(folder: Path, catalogue: Catalogue) -> list[str]:
+    """Check files that are not exactly what the catalogue would write.
+
+    Runs execute `checks/*.py`, but sealing proves the catalogue, so a file edited, added or left
+    behind would grade something nothing proved."""
+    problems: list[str] = []
+    for scenario_dir in sorted(
+        one for one in (Path(folder) / SCENARIOS).glob("*") if one.is_dir()
+    ):
+        scenario = read_folder(Path(folder), scenario_dir.name)
+        if scenario is None:
+            continue
+        wanted = {
+            f"{name}.py": check_file(sub_goal)
+            for name in scenario.sub_goals
+            if (sub_goal := catalogue.named(name)) is not None and sub_goal.deterministic()
+        }
+        checks = scenario_dir / "checks"
+        present = {
+            path.relative_to(checks).as_posix(): path
+            for path in sorted(checks.rglob("*"))
+            if path.is_file()
+        }
+        missing = sorted(set(wanted) - set(present))
+        stray = sorted(set(present) - set(wanted))
+        drifted = sorted(
+            name
+            for name in set(wanted) & set(present)
+            if present[name].read_bytes() != wanted[name].encode("utf-8")
+        )
+        for label, names in (("missing", missing), ("stray", stray), ("changed", drifted)):
+            if names:
+                problems.append(f"{scenario_dir.name}: {label} check files {', '.join(names)}")
     return problems
 
 

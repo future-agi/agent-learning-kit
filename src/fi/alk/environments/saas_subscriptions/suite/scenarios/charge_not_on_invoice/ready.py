@@ -1,0 +1,5 @@
+def ready(world):
+    invs = {i["invoice_id"] for i in world.state().get("invoices", [])}
+    if "inv_401_curr" not in invs:
+        return "missing inv_401_curr"
+    return None

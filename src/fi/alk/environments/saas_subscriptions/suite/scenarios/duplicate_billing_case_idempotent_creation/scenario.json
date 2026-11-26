@@ -1,0 +1,86 @@
+{
+  "name": "duplicate_billing_case_idempotent_creation",
+  "scenario_key": "duplicate-billing-case-idempotent-creation",
+  "scenario_id": "",
+  "use_case": "Preview and schedule a plan or seat change",
+  "branch": "billing admin submits refund case request twice with the same request key; second call returns existing case",
+  "tests": "the agent creates a refund billing case and handles duplicate submission idempotently",
+  "instruction": "You are Grace Growth, billing admin for GrowthLabs (tenant ID T07, actor ID U07_ADMIN). You want to open a refund billing case for invoice inv_07_curr regarding unused seats using request key req_bc_grace. You submit the request and confirm it is recorded.\n\nYour details:\n- Tenant ID: T07\n- Actor ID: U07_ADMIN\n- Invoice ID: inv_07_curr\n- Category: refund\n- Request Key: req_bc_grace",
+  "keywords": [
+    "billing_case"
+  ],
+  "persona": {
+    "name": "Grace Growth",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "Canada",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I am Grace Growth from GrowthLabs (T07). I would like to open a refund billing case for invoice inv_07_curr regarding our unused seats.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "invoice_id": "inv_07_curr",
+    "actor_id": "U07_ADMIN",
+    "origin": "seed",
+    "category": "refund",
+    "request_key": "req_bc_grace",
+    "tenant_id": "T07"
+  },
+  "solution": [
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "tenant_id": "T07",
+        "invoice_id": "inv_07_curr",
+        "request_key": "req_bc_grace",
+        "summary": "Refund request for unused seats on inv_07_curr",
+        "category": "refund",
+        "actor_id": "U07_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "summary": "Refund request for unused seats on inv_07_curr",
+        "request_key": "req_bc_grace",
+        "invoice_id": "inv_07_curr",
+        "category": "refund",
+        "tenant_id": "T07",
+        "actor_id": "U07_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "task": "billing_case",
+    "interface": "split_message",
+    "interaction": "burst",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "member",
+    "disposition": "duplicate_request"
+  },
+  "sub_goals": [
+    "billing_case_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,79 @@
+{
+  "name": "charge_not_on_invoice",
+  "scenario_key": "charge-not-on-invoice",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "The admin claims a $99 support fee was charged, but invoice lines show only standard base subscription",
+  "tests": "checks invoice lines and clarifies that no unlisted $99 support fee exists",
+  "instruction": "You are Sam Taylor, billing admin for NovaTech. You believe NovaTech was charged an unlisted $99 support fee on October invoice inv_401_curr. Ask why this $99 support fee was charged.\n\nYour details:\n- Tenant ID: T401\n- Tenant Name: NovaTech\n- Your Name: Sam Taylor\n- Your User ID: U401_ADMIN\n- Your Role: billing_admin\n- Invoice ID: inv_401_curr",
+  "keywords": [
+    "invoice_explanation"
+  ],
+  "persona": {
+    "name": "Sam Taylor",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "Why did we get charged a $99 support fee on inv_401_curr?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "user_id": "U401_ADMIN",
+    "invoice_id": "inv_401_curr",
+    "tenant_id": "T401"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U401_ADMIN",
+        "tenant_id": "T401"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "invoice_id": "inv_401_curr",
+        "tenant_id": "T401",
+        "actor_id": "U401_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "invoice_id": "caller: inv_401_curr"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "explain_invoice",
+    "overlay_intensity": "absent",
+    "disposition": "missing_charge",
+    "counterparty": "member",
+    "overlay": "none",
+    "interface": "clean_chat",
+    "overlay_vector": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "invoice_breakdown_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

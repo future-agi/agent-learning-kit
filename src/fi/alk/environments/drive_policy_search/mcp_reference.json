@@ -1,0 +1,63 @@
+{
+  "server": "Google Drive MCP server (Developer Preview)",
+  "endpoint": "https://drivemcp.googleapis.com/mcp/v1",
+  "transport": "streamable_http",
+  "recorded": "2026-11-04",
+  "sources": [
+    "https://developers.google.com/workspace/drive/api/reference/mcp",
+    "https://developers.google.com/workspace/drive/api/reference/mcp/tools_list/search_files",
+    "https://developers.google.com/workspace/drive/api/reference/mcp/tools_list/list_recent_files",
+    "https://developers.google.com/workspace/drive/api/reference/mcp/tools_list/get_file_metadata",
+    "https://developers.google.com/workspace/drive/api/reference/mcp/tools_list/get_file_permissions",
+    "https://developers.google.com/workspace/drive/api/reference/mcp/tools_list/read_file_content"
+  ],
+  "notes": [
+    "The server publishes no MCP protocol version; the tool pages carry a Developer Preview warning and the tool set may change.",
+    "File.description carries the policy metadata the M04 cases need (family, status, version, effective date); the official File has no typed fields for them.",
+    "read_file_content answers an unsupported format with textFormattingNotSupported=true and empty fileContent, not an error (official behaviour)."
+  ],
+  "objects": {
+    "File": ["id", "title", "parentId", "mimeType", "fileSize", "description", "fileExtension", "contentSnippet", "viewUrl", "sharedWithMeTime", "createdTime", "modifiedTime", "viewedByMeTime", "owner", "canAddChildren"],
+    "Permission": ["role", "displayName", "type", "emailAddress", "view"]
+  },
+  "tools": {
+    "search_files": {
+      "input": {"properties": {"query": {"type": "string"}, "pageToken": {"type": "string"}, "pageSize": {"type": "integer"}, "excludeContentSnippets": {"type": "boolean"}}, "required": ["query"]},
+      "output": {"properties": {"files": "File[]", "nextPageToken": "string"}, "required": ["files"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "list_recent_files": {
+      "input": {"properties": {"orderBy": {"type": "string", "enum": ["recency", "lastModified", "lastModifiedByMe"]}, "pageToken": {"type": "string"}, "pageSize": {"type": "integer"}, "excludeContentSnippets": {"type": "boolean"}}, "required": []},
+      "output": {"properties": {"files": "File[]", "nextPageToken": "string"}, "required": ["files"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "get_file_metadata": {
+      "input": {"properties": {"fileId": {"type": "string"}, "excludeContentSnippets": {"type": "boolean"}}, "required": ["fileId"]},
+      "output": {"properties": {"id": "string", "title": "string", "parentId": "string", "mimeType": "string", "fileSize": "string", "description": "string", "fileExtension": "string", "contentSnippet": "string", "viewUrl": "string", "createdTime": "string", "modifiedTime": "string", "owner": "string", "canAddChildren": "boolean"}, "required": ["id", "title", "mimeType"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "get_file_permissions": {
+      "input": {"properties": {"fileId": {"type": "string"}}, "required": ["fileId"]},
+      "output": {"properties": {"permissions": "Permission[]"}, "required": ["permissions"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    },
+    "read_file_content": {
+      "input": {"properties": {"fileId": {"type": "string"}, "includeComments": {"type": "boolean"}}, "required": ["fileId"]},
+      "output": {"properties": {"fileContent": "string", "textFormattingNotSupported": "boolean", "contentAnchoredComments": "CommentThread[]", "unanchoredComments": "CommentThread[]", "commentsNotSupported": "boolean"}, "required": ["fileContent"]},
+      "annotations": {"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false}
+    }
+  },
+  "not_attached": {
+    "copy_file": "writes; M04 is read-only",
+    "create_file": "writes; M04 is read-only",
+    "download_file_content": "base64 download; the M04 cases read text through read_file_content"
+  },
+  "local": {
+    "parameters": {
+      "read_file_content": {"revisionId": "M04 reads a specific earlier revision (workbook step 3: later revisions); the official server has no revision argument"}
+    },
+    "result_fields": {
+      "read_file_content": {"revisionId": "echoes the revision that was read"}
+    }
+  }
+}

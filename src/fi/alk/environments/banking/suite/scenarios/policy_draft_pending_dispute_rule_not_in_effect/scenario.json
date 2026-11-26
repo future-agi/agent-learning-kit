@@ -1,0 +1,86 @@
+{
+  "name": "policy_draft_pending_dispute_rule_not_in_effect",
+  "scenario_key": "policy-draft-pending-dispute-rule-not-in-effect",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer read that pending charges can now be disputed after two days (the 2027 draft). The draft is not in effect; the policy in effect says pending charges cannot be disputed until they post.",
+  "tests": "passes when the agent reads the policy in effect (pol_dispute_v2) and answers that pending charges cannot be disputed, treating the draft as not effective.",
+  "instruction": "You read somewhere that under new rules a pending charge can be disputed after two days. Ask the assistant whether you can dispute a pending charge now. If it says the new rule is only a draft, ask what applies today and accept the answer.\n\nYour details:\n- Question: Can I dispute a pending charge after two days under the new rules?",
+  "keywords": [
+    "policy",
+    "draft"
+  ],
+  "persona": {
+    "name": "Priya Natarajan",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "I read that pending charges can now be disputed after two days. Is that right?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "pol_dispute_v2",
+    "draft_file": "pol_dispute_v3_draft"
+  },
+  "solution": [
+    {
+      "tool": "list_recent_files",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_file_metadata",
+      "arguments": {
+        "fileId": "pol_dispute_v3_draft"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_dispute_v2"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_dispute_v2, the policy in effect; the 2027 draft is not"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "draft_not_effective",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

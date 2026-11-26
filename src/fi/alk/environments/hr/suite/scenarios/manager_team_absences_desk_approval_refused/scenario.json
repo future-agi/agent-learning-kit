@@ -1,0 +1,80 @@
+{
+  "name": "manager_team_absences_desk_approval_refused",
+  "scenario_key": "manager-team-absences-desk-approval-refused",
+  "scenario_id": "",
+  "use_case": "Show a manager their team's absences",
+  "branch": "A manager asks the HR leave desk to approve a pending request on his behalf, which the desk refuses while reporting status.",
+  "tests": "Verifies that the HR desk refuses to approve leave requests on behalf of managers while reporting status.",
+  "instruction": "You are Michael Scott (manager ID M01), engineering manager. One of your team members, Bob Smith, submitted leave request REQ-1101. You want the HR leave desk to approve REQ-1101 right now through chat on your behalf. Ask the HR leave desk to approve REQ-1101 for Bob and confirm its status.\n\nYour details:\n- Manager ID: M01\n- Name: Michael Scott\n- Target Request ID: REQ-1101",
+  "keywords": [
+    "request_status",
+    "manager_view",
+    "approval_workflow"
+  ],
+  "persona": {
+    "name": "Michael Scott",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "Manager",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am manager M01. Can you approve leave request REQ-1101 for Bob Smith on my behalf right now?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "employee_id": "M01",
+    "request_id": "REQ-1101"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "actor_id": "M01",
+        "employee_id": "M01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_request_status",
+      "arguments": {
+        "actor_id": "M01",
+        "request_id": "REQ-1101"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: REQ-1101"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "manager_us",
+    "overlay": "none",
+    "task": "show_team_absences",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "disposition": "unsupported_desk_approval",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "status_reported_from_hr_system",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

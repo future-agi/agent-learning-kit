@@ -10,14 +10,56 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from . import Records, Snapshot, StoreError
 
 # What SQLite hands out that is not itself a record. Only present once a table is declared
 # AUTOINCREMENT, which is why its absence is normal rather than a gap.
 COUNTERS = "sqlite_sequence"
+
+_ALLOWED_PRAGMAS = frozenset(
+    {
+        "foreign_key_list",
+        "foreign_keys",
+        "index_info",
+        "index_list",
+        "query_only",
+        "table_info",
+        "table_xinfo",
+    }
+)
+
+
+def _authorize_world_sql(
+    action: int,
+    first: str | None,
+    second: str | None,
+    _database: str | None,
+    _trigger: str | None,
+) -> int:
+    if action in {sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH}:
+        return sqlite3.SQLITE_DENY
+    if (
+        action == sqlite3.SQLITE_FUNCTION
+        and (second or "").casefold() == "load_extension"
+    ):
+        return sqlite3.SQLITE_DENY
+    if (
+        action == sqlite3.SQLITE_PRAGMA
+        and (first or "").casefold() not in _ALLOWED_PRAGMAS
+    ):
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _connection(database: str) -> sqlite3.Connection:
+    connection = sqlite3.connect(database, check_same_thread=False)
+    connection.set_authorizer(_authorize_world_sql)
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
 
 
 def _sqlite_value(value: Any) -> Any:
@@ -34,8 +76,7 @@ class SqliteStore(Records):
 
     def __init__(self, database: str | Path = ":memory:", **_ignored: Any) -> None:
         self.database = str(database)
-        self.connection = sqlite3.connect(self.database, check_same_thread=False)
-        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection = _connection(self.database)
 
     # -- lifecycle -------------------------------------------------------------------
 
@@ -54,8 +95,28 @@ class SqliteStore(Records):
         cursor = self.connection.execute(
             statement, tuple(_sqlite_value(value) for value in params)
         )
-        self.connection.commit()
+        if not getattr(self, "_held", False):
+            self.connection.commit()
         return cursor.rowcount
+
+    def hold(self) -> None:
+        """Keep every write from here on in one transaction, until ``release``: one tool call's
+        writes land together or not at all, and undoing them needs no writes of its own."""
+        self.connection.commit()
+        self._held = True
+
+    def release(self, keep: bool) -> None:
+        """Commit or roll back the held call. A commit that fails is rolled back before the error
+        goes up, so nothing it wrote stays pending for the next call to commit."""
+        self._held = False
+        if not keep:
+            self.connection.rollback()
+            return
+        try:
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def apply(self, script: str) -> None:
         """Several statements at once, which is how a schema or a seed arrives."""
@@ -238,8 +299,7 @@ class SqliteStore(Records):
             return
         self.connection.close()
         shutil.copyfile(held, self.database)
-        self.connection = sqlite3.connect(self.database, check_same_thread=False)
-        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection = _connection(self.database)
 
     def close(self) -> None:
         self.connection.close()

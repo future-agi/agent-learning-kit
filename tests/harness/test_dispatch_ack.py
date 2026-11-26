@@ -126,7 +126,7 @@ def test_known_domains_are_unchanged_by_the_fallback() -> None:
 def _runner() -> cr.CallRunnerImpl:
     runner = cr.CallRunnerImpl.__new__(cr.CallRunnerImpl)
     runner._adapter = None  # never touched: no calls, no result
-    runner._collect_calls = lambda runtime: ()  # instance override
+    runner._collect_calls = lambda runtime, **_: ()  # instance override
     # A bundle with no tool-trace seam and no actors: the trial never reads the world's door.
     runner._context = SimpleNamespace(
         evidence_seam=None, bundle_dir=Path(tempfile.mkdtemp()), usage_reporter=None
