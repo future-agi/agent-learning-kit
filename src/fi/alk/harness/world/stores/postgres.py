@@ -121,6 +121,9 @@ class PostgresStore(ContainerStore):
     engine = "postgres"
     image = "postgres:16"
     container_port = 5432
+    # With world roles only (`AttachedPostgresStore`): the harness's address for the world's roles, and theirs.
+    _roles_admin_dsn: str | None = None
+    _role_dsns: tuple[str, ...] = ()
     boot_env = {
         "POSTGRES_USER": "{user}",
         "POSTGRES_PASSWORD": "{password}",
