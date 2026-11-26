@@ -223,9 +223,16 @@ class BrowserRecord:
         host = _host(url)
         return any(entry_admits(site, host) for site in self.sites)
 
+    def opened(self, url: str) -> bool:
+        """Whether ``url`` is a page the agent opened. What the browser shows at a refused address (the proxy's
+        refusal over http, the browser's own error page over https) is not: the refusal is already kept."""
+        if url in ("", "about:blank") or url.startswith("chrome-error:"):
+            return False
+        return not _web(url) or self.allowed(url)
+
     def navigated(self, tab: str, url: str) -> None:
-        """A page the browser opened. Its error page at a refused address is the refusal, already kept."""
-        if url in ("", "about:blank") or (_web(url) and not self.allowed(url)):
+        """A page the browser opened; see ``opened``."""
+        if not self.opened(url):
             return
         with self._lock:
             self._add({"kind": "navigation", "url": _clean(url, 2048)}, tab)
@@ -557,7 +564,8 @@ class BrowserRecorder:
                 self.write(sealed=nonce)
 
         session = self._last_session
-        if session is None:
+        if session is None or not self.record.opened(self._urls.get(session, "")):
+            # No tab open, or its page is what the browser shows at a refused address: no end screenshot.
             then_seal()
             return
         timer = threading.Timer(self._shot_seconds, then_seal)
@@ -671,7 +679,7 @@ class BrowserRecorder:
                 self.record.navigated(tab[0], url)
         elif method == "Page.loadEventFired":
             tab = self._tabs.get(session or "")
-            if tab is not None and tab[1] and self._urls.get(session or "", "") not in ("", "about:blank"):
+            if tab is not None and tab[1] and self.record.opened(self._urls.get(session or "", "")):
                 url = self._urls[session or ""]
                 # One place stays free for the end's: a page past the others' places is not photographed at all.
                 if self._page_shots_asked + 1 >= self._shot_limits["shots"]:
