@@ -3280,6 +3280,13 @@ def resolve_environment_plan(
             if service_node and service_name == control_name and contract_interface_kind != "http":
                 # As in the native lane: only an HTTP route reaches a Node control service.
                 raise BundleAuthorError("runtime_node_http_interface_required")
+            # A Node control service, declared or inferred, starts in runtime.workdir when that folder
+            # is inside its build context; else in the context, as every Compose service does on dev.
+            start = (
+                _runtime_component(root, runtime_workdir, python_project=False)
+                if service_node and service_name == control_name and runtime_workdir.strip()
+                else service_root
+            )
             process = _plan_source_process(
                 root,
                 language=service_language,
@@ -3289,12 +3296,7 @@ def resolve_environment_plan(
                     else ""
                 ),
                 name=service_name,
-                # A declared Node service starts in its runtime.workdir, not the build context.
-                root=(
-                    _runtime_component(root, runtime_workdir, python_project=False)
-                    if service_node and declared_runtime and runtime_workdir.strip()
-                    else service_root
-                ),
+                root=start if start.is_relative_to(service_root) else service_root,
                 entry=entry,
                 control=service_name == control_name,
                 needs_secrets=needs_target_secrets and service_name == control_name,
