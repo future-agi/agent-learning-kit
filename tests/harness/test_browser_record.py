@@ -712,6 +712,50 @@ def test_an_end_screenshot_answered_after_the_seal_leaves_the_sealed_files_in_pl
     assert named and all((tmp_path / "w0-shots" / name).is_file() for name in named)
 
 
+def test_an_end_screenshot_of_a_tab_that_moved_on_while_it_was_taken_is_not_kept(tmp_path, devtools_port) -> None:
+    # The end screenshot may show either page once its tab navigates between the ask and the answer: none is kept.
+    class _HeldEnd(_FakeCdp):
+        held: list = []
+        sent_loads = 0
+
+        def send(self, message: dict) -> None:
+            if message["method"] == "Page.captureScreenshot" and self.sent_loads >= 1:
+                with self.ready:
+                    self.sent.append(message)
+                    self.held.append(message)
+                return
+            if message["method"] == "Page.captureScreenshot":
+                self.sent_loads += 1
+            super().send(message)
+
+    fake = _HeldEnd()
+    recorder = browser_record.BrowserRecorder(
+        ["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake, shot_seconds=5
+    )
+    recorder.attach(devtools_port)
+    sealed: dict = {}
+    try:
+        fake.queue(_attached())
+        for message in _loaded("http://shop.test/"):
+            fake.queue(message)
+        _until(lambda: (tmp_path / "w0-shots").exists() and any((tmp_path / "w0-shots").iterdir()))
+        sealing = threading.Thread(
+            target=lambda: sealed.update(browser_record.sealed_record(tmp_path / "w0-record.json", timeout=8))
+        )
+        sealing.start()
+        _until(lambda: bool(fake.held))
+        [end] = fake.held
+        fake.queue(
+            {"method": "Page.frameNavigated", "sessionId": "S1", "params": {"frame": {"id": "T1", "url": "http://shop.test/next"}}}
+        )
+        fake.queue({"id": end["id"], "result": {"data": base64.b64encode(fake.shot).decode()}})
+        sealing.join(10)
+    finally:
+        recorder.close()
+    assert sealed, "the record was never sealed"
+    assert [one["when"] for one in sealed["screenshots"]] == ["load"]
+
+
 def test_a_screenshot_the_browser_could_not_take_is_skipped_and_the_seal_still_answers(
     tmp_path, devtools_port
 ) -> None:
@@ -1225,6 +1269,15 @@ def test_a_blocked_file_is_capped_and_says_so(tmp_path) -> None:
     found = browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl")
     assert [one["host"] for one in found if "host" in one] == ["a.example.com", "b.example.com"]
     assert {"truncated": True} in found
+
+
+def test_refusals_past_the_cap_add_no_more_lines_to_the_blocked_file(tmp_path) -> None:
+    path = tmp_path / "w0-blocked.jsonl"
+    log = browser_record.BlockedFileLog(path, cap=2)
+    for index in range(6):
+        _refused(log, f"h{index}.example.com")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3 and json.loads(lines[-1]) == {"truncated": True}
 
 
 def test_a_blocked_log_holds_no_more_in_memory_than_in_its_file(tmp_path) -> None:

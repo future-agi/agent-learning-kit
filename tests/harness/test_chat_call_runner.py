@@ -2869,3 +2869,126 @@ def test_a_browser_trial_with_no_door_keeps_a_world_state_file_saying_the_world_
     assert world["browser"] == {"state": "not_used"}
     if not include_tools:
         assert world["recorded"] is False
+
+
+def _browser_trial(
+    tmp_path: Path, monkeypatch: Any, adapter: Any, *, kit_file: bool, end_readable: bool, include_tools: bool = True
+) -> None:
+    """A chat trial of a world whose browser the agent never attached to, with one page it was refused. With
+    ``kit_file`` the refusal is in the kit-owned file, as a world with the kit's in-process door writes it; without,
+    the world's door keeps it. With ``end_readable`` the world's end snapshot reads back."""
+    from fi.alk.harness.browser_record import BlockedFileLog
+    from fi.alk.harness.call_runner import END_STATE_KEY, TrialRecords
+    from fi.alk.harness.egress_proxy import EgressProxy
+
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Nothing to buy.")
+
+    class _Proxy(EgressProxy):
+        via = "browser"
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    state = tmp_path / "w0.json"
+    state.write_text(json.dumps({"attached": 0}), encoding="utf-8")
+    browser: dict[str, Any] = {
+        "state": "started", "state_path": str(state), "record_path": str(tmp_path / "w0-record.json")
+    }
+    if kit_file:
+        blocked_log = BlockedFileLog(tmp_path / "w0-blocked.jsonl")
+        proxy = _Proxy([], blocked_log)
+        proxy.refuse("www.example.com", "GET")
+        proxy.close()
+        browser["blocked_log_path"] = str(blocked_log.path)
+    if end_readable:
+        monkeypatch.setattr(
+            TrialRecords, "end",
+            lambda self, *_args, **_kwargs: {
+                "records": {"changes": [], "skipped": [], "truncated": 0}, "start": None,
+                END_STATE_KEY: SimpleNamespace(tables={}, skipped=[]),
+            },
+        )
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http", protocol="http", address="http://localhost:18080"
+            )
+        },
+        metadata={"browser": browser},
+    )
+    context = _context(tmp_path)
+    if not include_tools:
+        contract = json.loads((context.bundle_dir / "contract.json").read_text())
+        contract["runtime"]["interface"]["include_tools"] = False
+        (context.bundle_dir / "contract.json").write_text(json.dumps(contract))
+    asyncio.run(
+        chat.HostedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+
+
+class _Stored(_Adapter):
+    def __init__(self, *, refuse_first_world_state: bool = False) -> None:
+        super().__init__()
+        self.stored: list[tuple[str, bytes]] = []
+        self.refuse_first_world_state = refuse_first_world_state
+
+    async def upload_artifact(self, data: bytes, **kwargs: Any) -> str:
+        kind = kwargs["kind"].value
+        if kind == "world_state" and self.refuse_first_world_state:
+            self.refuse_first_world_state = False
+            raise RuntimeError("the platform refused the upload")
+        self.stored.append((kind, data))
+        return f"artifact-{len(self.stored)}"
+
+    def world(self) -> dict[str, Any]:
+        [(_, transcript)] = [one for one in self.stored if one[0] == "transcript"]
+        return json.loads(transcript)["world_actors"]
+
+
+def test_the_in_process_door_s_sealed_record_holds_the_browser_s_refusals(tmp_path: Path, monkeypatch: Any) -> None:
+    # The kit's in-process door sends the browser's refusals to the kit-owned file, never its own log: the sealed
+    # record's agent list is built from the same source as the file, so the run page shows them.
+    adapter = _Stored()
+    _browser_trial(tmp_path, monkeypatch, adapter, kit_file=True, end_readable=False)
+    world = adapter.world()
+    assert world["door"] is True
+    [agent] = [one for one in world["state_changes"] if one.get("who") == "agent"]
+    assert agent["blocked"] == [{"host": "www.example.com", "method": "GET", "via": "browser", "count": 1}]
+
+
+def test_a_door_log_that_cannot_be_read_leaves_the_browser_s_refusals_unreadable_never_empty(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # The world's table alone holds the browser proxy's refusals: when it cannot be read, the list says so.
+    monkeypatch.setattr(
+        chat, "_readable_trial_log", lambda _door, _since=0.0, *, proxied=False: None if proxied else []
+    )
+    adapter = _Stored()
+    _browser_trial(tmp_path, monkeypatch, adapter, kit_file=False, end_readable=True)
+    [(_, end)] = [one for one in adapter.stored if one[0] == "world_state"]
+    body = json.loads(end)
+    assert body.get("blocked_unreadable") is True and "blocked" not in body
+
+
+def test_an_end_state_upload_the_platform_refused_is_never_stored_as_a_world_that_failed(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # The world's end was read; only its upload failed. Nothing says the world failed, and no second upload follows
+    # the platform's refusal.
+    adapter = _Stored(refuse_first_world_state=True)
+    _browser_trial(tmp_path, monkeypatch, adapter, kit_file=True, end_readable=True)
+    assert [one for one in adapter.stored if one[0] == "world_state"] == []
+    assert "end_state_artifact" not in adapter.world()
