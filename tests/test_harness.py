@@ -11808,10 +11808,69 @@ def test_every_actor_gets_a_role_and_one_part_is_written_the_same_way(tmp_path):
     not_text = asyncio.run(add({"id": "tom", "name": "Tom Reed", "role": 7}))
 
     assert "needs a role" in str(missing)
-    assert "Not added" in str(not_text) and "tom" not in {
+    assert "`role` is text" in str(not_text) and "tom" not in {
         one.id for one in load_actors(tmp_path).actors
     }
     assert roles == {
         "priya": ("Priya Sharma", "Sales manager"),
         "omar": ("Omar Haddad", "Sales manager"),
     }
+
+
+def test_a_role_matches_another_actor_s_whatever_its_spacing_and_never_the_actor_s_own_name(
+    tmp_path,
+):
+    """A stored role with odd spacing still matches a new one; an actor can fix its own casing; a role that is the
+    actor's own name is refused; the reply says when a role was written the way the others in its part have it."""
+    import asyncio
+
+    from fi.alk.harness.actors import Actor, ActorList, load_actors, save_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="david", name="David Chen", role="Family  member")]),
+    )
+    tools = world_tools(AgentContract(agent="a"), tmp_path)[0].tools
+    add = next(one.handler for one in tools if one.name == "add_actor")
+
+    # Alone in its part, an actor can correct its own role; then a new one in that part takes the corrected text.
+    own_case = asyncio.run(add({"id": "david", "role": "Family member"}))
+    joined = asyncio.run(
+        add({"id": "sarah", "name": "Sarah Ortiz", "role": "family   MEMBER"})
+    )
+    named = asyncio.run(
+        add({"id": "omar", "name": "Omar Haddad", "role": "omar  haddad"})
+    )
+    spaced = asyncio.run(
+        add({"id": "lena", "name": "Lena Park", "role": "family member "})
+    )
+
+    roles = {one.id: one.role for one in load_actors(tmp_path).actors}
+    assert roles["david"] == "Family member" and "Not added" not in str(own_case)
+    assert roles["sarah"] == "Family member"
+    assert "Role written as 'Family member'" in str(joined)
+    assert roles["lena"] == "Family member" and "Not added" not in str(spaced)
+    assert "is their name" in str(named) and "omar" not in roles
+
+
+def test_a_stored_role_with_odd_spacing_still_matches_a_new_one(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.actors import Actor, ActorList, load_actors, save_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[Actor(id="marcus", name="Marcus Vance", role="Store  manager")]
+        ),
+    )
+    tools = world_tools(AgentContract(agent="a"), tmp_path)[0].tools
+    add = next(one.handler for one in tools if one.name == "add_actor")
+
+    asyncio.run(add({"id": "ana", "name": "Ana Silva", "role": "store manager"}))
+
+    assert {one.id: one.role for one in load_actors(tmp_path).actors}[
+        "ana"
+    ] == "Store  manager"

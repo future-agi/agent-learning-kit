@@ -719,24 +719,40 @@ def world_actor_tools(
                 f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
                 "`surface` is where it acts in the world."
             )
-        # A role that is not text is left for the record's own check to refuse.
-        if ("role" in given or current is None) and isinstance(
-            given.get("role", ""), str
-        ):
+        unified = ""
+        if "role" in given or current is None:
+            if not isinstance(given.get("role", ""), str):
+                return _err(
+                    'Not added: `role` is text, their part as a short singular title such as "Teammate".'
+                )
             role = " ".join(str(given.get("role") or "").split())
             if not role:
                 return _err(
                     'Not added: an actor needs a role, their part as a short singular title such as "Teammate".'
                 )
-            # The same part is written the same way for everyone in it, so the cast reads by role.
-            given["role"] = next(
+            name = " ".join(
+                str(
+                    given.get("name") or (current.name if current is not None else "")
+                ).split()
+            )
+            if name and role.casefold() == name.casefold():
+                return _err(
+                    f'Not added: {role!r} is their name; `role` is their part, such as "Teammate".'
+                )
+            # The same part is written the same way for everyone in it, so the cast reads by role. Only other
+            # actors count, so an actor can correct its own role's casing.
+            same = next(
                 (
                     one.role
                     for one in listing.actors
-                    if one.role.casefold() == role.casefold()
+                    if one.id != str(given.get("id") or "")
+                    and " ".join(one.role.split()).casefold() == role.casefold()
                 ),
-                role,
+                None,
             )
+            if same is not None and same != role:
+                unified = f" Role written as {same!r}, as for the others in that part."
+            given["role"] = same if same is not None else role
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
             # A nested field merges the keys sent into what it has, as the top level does.
@@ -839,7 +855,7 @@ def world_actor_tools(
                 f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
                 "refuses it; send `permitted_actions` again with actions from that list."
             )
-        return _ok(reply)
+        return _ok(reply + unified)
 
     @tool(
         "drop_actor",
