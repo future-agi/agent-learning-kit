@@ -170,6 +170,7 @@ def preflight_bundle(
     parallelism: int,
     secret_refs: dict[str, str],
     allow_compose: bool = False,
+    for_authoring: bool = False,
 ) -> None:
     """Run the complete §2e checklist against a sealed v2 bundle directory, in the contract's own
     numbered order. Raises ``PreflightError`` on the first violation; returns ``None`` when clean.
@@ -200,6 +201,10 @@ def preflight_bundle(
             raise ValueError(
                 f"secret_refs[{alias!r}] = {purpose!r} is not a SecretPurpose value"
             )
+
+    if manifest.runtime.kind is RuntimeKindV2.SCENARIOS_ONLY and not for_authoring:
+        reason = manifest.metadata.get("target_runtime_unavailable") or "This bundle contains scenarios only."
+        raise PreflightError("engine_unsupported", str(reason))
 
     if manifest.runtime.kind is RuntimeKindV2.COMPOSE and not allow_compose:
         # §2a: "a hosted job with kind: compose fails preflight" — not one of §2e's seven numbered
@@ -241,7 +246,7 @@ def preflight_bundle(
                     "HTTP setup secrets require declared target-provider aliases",
                 )
 
-    if manifest.runtime.kind is RuntimeKindV2.PROCESS:
+    if manifest.runtime.kind in {RuntimeKindV2.PROCESS, RuntimeKindV2.SCENARIOS_ONLY}:
         _verify_placeholder_vocabulary(manifest)  # 5
         _verify_no_root_build_commands(manifest)  # 5 (§2a)
         _verify_secret_purposes(manifest, secret_refs)  # 5

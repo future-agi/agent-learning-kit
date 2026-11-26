@@ -62,6 +62,7 @@ from .bundle_v2 import (
     ManagedProcess,
     ProcessUser,
     ReadinessProbeV2,
+    RuntimeKindV2,
     SecretPurpose,
     SourceProcess,
     StoreEntry,
@@ -8162,6 +8163,10 @@ class ProcessRuntimeProvider:
         instances: int,
         require_declared_user: bool,
     ) -> list[EnvironmentRuntime]:
+        if bundle.runtime.kind is RuntimeKindV2.SCENARIOS_ONLY:
+            raise ProcessRuntimeError(
+                "build", "runtime_unsupported", "This scenario bundle has no executable agent."
+            )
         bundle_digest = bundle.digest
         requested = instances
         if isolation_mode() is IsolationMode.PER_USER:

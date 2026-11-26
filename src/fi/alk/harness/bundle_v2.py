@@ -58,6 +58,7 @@ class BundleV2Error(RuntimeError):
 
 class RuntimeKindV2(str, Enum):
     PROCESS = "process"
+    SCENARIOS_ONLY = "scenarios_only"
     EXTERNAL = "external"
     COMPOSE = "compose"
 
@@ -514,6 +515,17 @@ class EnvironmentBundleV2(BaseModel):
         ):
             raise ValueError("processes_and_seed_forbidden: kind=external")
 
+        if self.runtime.kind is RuntimeKindV2.SCENARIOS_ONLY and (
+            self.runtime.control_service is not None
+            or self.runtime.evidence_seam is not None
+            or len(self.processes) != 1
+            or not isinstance(self.processes[0], ManagedProcess)
+            or self.processes[0].name != "world-db"
+            or self.processes[0].engine is not ManagedEngine.POSTGRES
+            or not self.metadata.get("reviewed_source")
+        ):
+            raise ValueError("bundle_manifest_invalid: scenarios_only requires a reviewed world store")
+
         for process in self.processes:
             if isinstance(process, SourceProcess) and process.local_auth:
                 target = self.capabilities.get("target_http")
@@ -549,7 +561,7 @@ class EnvironmentBundleV2(BaseModel):
         # `external` omits `processes` entirely (§2a) and `compose` addresses services through its
         # own `document`, not this array. Gating here, rather than by emptying `known_names`,
         # keeps the duplicate-name check above meaningful for every runtime kind.
-        if self.runtime.kind is RuntimeKindV2.PROCESS:
+        if self.runtime.kind in {RuntimeKindV2.PROCESS, RuntimeKindV2.SCENARIOS_ONLY}:
             service_unresolved = {
                 slug: capability.service
                 for slug, capability in self.capabilities.items()

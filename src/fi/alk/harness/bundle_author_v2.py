@@ -144,6 +144,7 @@ class EnvironmentPlanV2:
     capabilities: dict[str, CapabilityV2]
     readiness: tuple[ReadinessProbeV2, ...]
     deferred_agent_settings: tuple[str, ...] = ()
+    target_runtime_unavailable: str = ""
 
     def __post_init__(self) -> None:
         names = [process.name for process in self.processes]
@@ -3133,9 +3134,20 @@ def resolve_environment_plan(
                 readiness.append(ReadinessProbeV2(capability=f"{service_name}_redis"))
                 continue
             if image and not service.get("build"):
-                raise BundleAuthorError(
-                    f"engine_unsupported: image-only service {service_name!r} ({image!r}) is not in the snapshot catalog"
+                message = (
+                    f"engine_unsupported: image-only service {service_name!r} "
+                    f"({image!r}) is not in the snapshot catalog"
                 )
+                if scenario_build:
+                    return EnvironmentPlanV2(
+                        packaging="scenarios_only",
+                        control_service=None,
+                        processes=(_managed_world_db(),),
+                        capabilities={"world_db": capabilities["world_db"]},
+                        readiness=(ReadinessProbeV2(capability="world_db", timeout_seconds=180),),
+                        target_runtime_unavailable=message,
+                    )
+                raise BundleAuthorError(message)
 
         source_services = [name for name in services if name not in managed_names]
         control_name = declared_control or (
@@ -4752,9 +4764,9 @@ def author_bundle_v2(
             digest="sha256:" + "0" * 64,
             name=str(job.metadata.get("name") or source_root.name),
             runtime=BundleRuntimeV2(
-                kind=RuntimeKindV2.PROCESS,
+                kind=RuntimeKindV2.SCENARIOS_ONLY if plan.target_runtime_unavailable else RuntimeKindV2.PROCESS,
                 control_service=plan.control_service,
-                evidence_seam=EvidenceSeam.TOOL_TRACE,
+                evidence_seam=None if plan.target_runtime_unavailable else EvidenceSeam.TOOL_TRACE,
             ),
             processes=list(plan.processes),
             seed=Seed(stores=[store]),
@@ -4785,6 +4797,7 @@ def author_bundle_v2(
             ),
             metadata={
                 "packaging": plan.packaging,
+                **({"target_runtime_unavailable": plan.target_runtime_unavailable} if plan.target_runtime_unavailable else {}),
                 "environment_plan_version": "2",
                 # A build's seal, told apart from a chat's reseal, which stamps the tree it sealed from instead.
                 "sealed_from": BUILD_SEAL,
@@ -4852,6 +4865,7 @@ def author_bundle_v2(
         preflight_bundle(
             temporary,
             loaded,
+            for_authoring=reviewed_scenarios_only,
             parallelism=job.runtime.parallelism,
             secret_refs={
                 alias: reference.purpose

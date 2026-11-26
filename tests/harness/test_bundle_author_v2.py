@@ -1262,6 +1262,44 @@ def test_reviewed_scenario_bundle_defers_target_configuration_until_run(tmp_path
     require_deferred_agent_settings(bundle, {name: "test-value" for name in names})
 
 
+def test_reviewed_scenarios_keep_unsupported_target_out_of_executable_bundle(tmp_path: Path) -> None:
+    import asyncio
+
+    from fi.alk.harness.bundle_v2 import RuntimeKindV2
+    from fi.alk.harness.process_preflight import PreflightError, preflight_bundle
+    from fi.alk.harness.process_runtime import ProcessRuntimeError, ProcessRuntimeProvider
+    from fi.alk.harness.reviewed_build import PIN_FILE
+
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        "services:\n  ollama:\n    image: ollama/ollama\n"
+        "  agent:\n    build: .\n    depends_on: [ollama]\n"
+    )
+    (source / "agent.py").write_text("raise AssertionError('target must not execute')\n")
+    authoring = _authoring(tmp_path)
+    _write_callable_contract(authoring)
+    digest = "sha256:" + "4" * 64
+    (authoring / PIN_FILE).write_text(json.dumps({
+        "id": "source_snapshot_" + "4" * 16, "digest": digest, "schema_digest": digest
+    }))
+    output = tmp_path / "bundle"
+    kwargs = dict(source=source, job=_job(connector="auto"), authoring=authoring, output=output)
+    with pytest.raises(BundleAuthorError, match="engine_unsupported"):
+        author_bundle_v2(**kwargs)
+    manifest = author_bundle_v2(**kwargs, reviewed_scenarios_only=True)
+    assert manifest.runtime.kind is RuntimeKindV2.SCENARIOS_ONLY
+    assert [process.name for process in manifest.processes] == ["world-db"]
+    assert (output / "scenarios/one/scenario.json").is_file()
+    with pytest.raises(PreflightError, match="ollama"):
+        preflight_bundle(output, manifest, parallelism=1, secret_refs={})
+    with pytest.raises(ProcessRuntimeError, match="runtime_unsupported"):
+        asyncio.run(ProcessRuntimeProvider().provision(
+            manifest, source=source, bundle_dir=output, work_directory=tmp_path / "run",
+        ))
+    assert not (tmp_path / "run").exists()
+
+
 def test_bundle_accepts_post_checkout_runtime_configuration_names(
     tmp_path: Path,
 ) -> None:
