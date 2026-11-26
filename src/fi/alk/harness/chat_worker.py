@@ -147,7 +147,7 @@ class IsolatedChatCallRunner:
                     ),
                     "scenario_id": scenario.scenario_id,
                     "start": self._records.start_of(id(runtime)),
-                    # So the worker takes no screenshot the run's level keeps none of, and says the level itself.
+                    # So the worker sends no screenshot the run's level keeps none of, and says the level is why.
                     "screenshots_kept": screenshots_kept(self._adapter),
                 },
                 environ=environ,
@@ -199,7 +199,7 @@ class IsolatedChatCallRunner:
         outcome = None
         if raw_outcome is not None:
             raw_outcome["calls"] = tuple(Call(**call) for call in raw_outcome["calls"])
-            # A recording the platform did not keep has no id: never named in the outcome, and a screenshot's is said.
+            # A recording not kept has no id: never named in the outcome, and a lost screenshot is said.
             lost = sum(
                 1 for one in artifacts if one["kind"] == ArtifactKind.SCREENSHOT.value and not artifact_ids.get(one["id"])
             )

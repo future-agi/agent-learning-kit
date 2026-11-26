@@ -49,7 +49,7 @@ from .world_door import MemoryLog
 logger = logging.getLogger(__name__)
 
 RECORD_ROWS = 500
-# Screenshots for one trial, in number and in bytes; the end's is always kept.
+# Screenshots for one trial, in number and in bytes; one place is kept free for the end's.
 SHOTS = 20
 SHOT_BYTES = 8 * 1024 * 1024
 _SHOT = {"format": "jpeg", "quality": 60}
@@ -173,8 +173,8 @@ class BrowserRecord:
 
     def keep_shot(self, when: str, size: int, *, shots: int, shot_bytes: int) -> tuple[bool, list[str]]:
         """Whether a screenshot of ``size`` bytes is kept, and the files of earlier ones it displaces. A page's is
-        kept while one place stays free for the end's; the end's is always kept, displacing the latest pages' to
-        stay within the bytes."""
+        kept while one place stays free for the end's. The end's is kept, displacing the latest pages' to stay within
+        the bytes, unless it is larger than all of them together may be or the record is already sealed."""
         with self._lock:
             if self._shots_sealed:
                 # The sealed record names its screenshots: none of them may go, and none is added after.
@@ -934,7 +934,8 @@ async def upload_screenshots(
     adapter: Any, scenario_key: str, evidence: dict[str, Any] | None, shots_dir: Path
 ) -> tuple[tuple[str, ...], list[dict[str, str]]]:
     """Upload the trial's screenshots, after its transcript and end state so they never crowd those out. A
-    screenshot the platform did not keep never fails the trial: it is said."""
+    screenshot not kept, whether the kit could not send it whole or the platform did not store it, never fails the
+    trial: it is said."""
     from .outbound import ArtifactKind
 
     notices: list[dict[str, str]] = []
@@ -947,7 +948,7 @@ async def upload_screenshots(
         notices.append(
             {
                 "code": SCREENSHOTS_CAPPED,
-                "message": "The browser's screenshots reached their limit for one trial; the last one is kept.",
+                "message": "The browser's screenshots reached their limit for one trial, so some were not kept.",
             }
         )
     ids: list[str] = []
@@ -1021,7 +1022,8 @@ def level_keeps_no_screenshots_notice(count: int) -> dict[str, str]:
 def not_kept_notice(lost: int) -> dict[str, str]:
     return {
         "code": SCREENSHOTS_NOT_KEPT,
-        "message": f"The platform did not keep {lost} of the browser's screenshots; the trial is graded without them.",
+        "message": f"{lost} of the browser's screenshots were not kept, either not sent whole or not stored by the "
+        "platform; the trial is graded without them.",
     }
 
 

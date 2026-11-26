@@ -1078,7 +1078,7 @@ def test_screenshots_the_run_s_level_keeps_none_of_are_not_sent_and_say_the_leve
     ids, notices = asyncio.run(browser_record.upload_screenshots(adapter, "one", evidence, shots))
     assert ids == () and adapter.kinds == []
     assert notices == [browser_record.level_keeps_no_screenshots_notice(2)]
-    assert "level" in notices[0]["message"] and "platform did not keep" not in notices[0]["message"]
+    assert "level" in notices[0]["message"] and "not stored" not in notices[0]["message"]
 
 
 def test_a_new_trial_s_record_never_shows_the_last_trial_s_rows(tmp_path, devtools_port) -> None:
