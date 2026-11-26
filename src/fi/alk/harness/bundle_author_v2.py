@@ -1848,8 +1848,8 @@ def _dockerfile_run(root: Path, project: Path | None = None) -> list[str] | None
 def _undeclared_node_dockerfile_run(root: Path, workdir: str) -> list[str] | None:
     """The ``node`` CMD of the Dockerfile in runtime.workdir, for a process that declares no language.
 
-    That CMD can be the only sign of a Node agent. Any other CMD, or one that does not parse, is not
-    read: the root Dockerfile then decides, as it does for Python and Bun.
+    That CMD can be the only sign of a Node agent. It is read only when the root Dockerfile has no
+    CMD; any other CMD, or one that does not parse, is not read.
     """
     folder = (root / workdir.strip()).resolve()
     if folder == root or not folder.is_relative_to(root) or not folder.is_dir():
@@ -1857,7 +1857,7 @@ def _undeclared_node_dockerfile_run(root: Path, workdir: str) -> list[str] | Non
     try:
         command = _dockerfile_run(folder)
     except BundleAuthorError:
-        # Not proven Node, so the root Dockerfile is read next, exactly as before the Node lane.
+        # Not proven Node: the plan goes on with no command, as before the Node lane.
         return None
     return command if command and _is_node("", command) else None
 
@@ -3104,9 +3104,10 @@ def resolve_environment_plan(
                 or []
             )
         else:
+            # The root Dockerfile first, as before the Node lane; a workdir `node` CMD only fills its gap.
             runtime_command = (
-                (not language and _undeclared_node_dockerfile_run(root, runtime_workdir))
-                or _dockerfile_run(run_folder)
+                _dockerfile_run(run_folder)
+                or (not language and _undeclared_node_dockerfile_run(root, runtime_workdir))
                 or []
             )
     # Node is read after the Dockerfile CMD fill: that CMD can be the only sign of a Node agent.

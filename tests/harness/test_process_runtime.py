@@ -1216,6 +1216,37 @@ def test_an_agent_build_step_that_prints_the_probe_marker_is_still_build_failed(
     assert excinfo.value.code == "build_failed"
 
 
+@pytest.mark.parametrize(
+    "program",
+    [
+        "import sys; sys.exit('runtime_unsupported: not my fault')",
+        "import shutil,subprocess,sys; sys.exit('runtime_unsupported: runtime_node_toolchain_missing')",
+    ],
+)
+def test_only_the_harness_probe_itself_can_report_runtime_unsupported(
+    tmp_path: Path, program: str
+) -> None:
+    """An agent step shaped like the probe (``python3 -I -c`` and the marker) is still the agent's build failure."""
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+    marker = program.split("'")[1]
+
+    def fake_run(step, *, cwd, env, **kwargs):
+        return subprocess.CompletedProcess(step, 1, stdout="", stderr=marker + "\n")
+
+    process = _source_process(
+        working_directory="svc", build_commands=[["python3", "-I", "-c", program]]
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.build_process_tree(
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
+            sleep=lambda _: None,
+        )
+    assert excinfo.value.code == "build_failed"
+
+
 def test_a_build_step_that_times_out_is_build_failed(tmp_path: Path) -> None:
     """F15, p5-round1-review: an install step wedged on a private registry with no DNS answer
     used to block the provisioner forever."""

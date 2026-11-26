@@ -9617,3 +9617,194 @@ def test_an_unused_javascript_lockfile_can_still_be_excluded(tmp_path, lane):
     )
     agent = next(p for p in manifest.processes if p.name == manifest.runtime.control_service)
     assert not (output / agent.working_directory / "package-lock.json").exists()
+
+
+def test_a_root_bun_cmd_still_wins_over_a_workdir_node_cmd(tmp_path):
+    """With no language, the root Dockerfile is read first, as on dev; a workdir ``node`` CMD only fills a gap."""
+    server = "Bun.serve({fetch: () => new Response('ok')})"
+    source = _repo(
+        tmp_path,
+        {
+            "Dockerfile": 'FROM oven/bun:1\nCMD ["bun", "run", "server.ts"]\n',
+            "chat/package.json": json.dumps({"name": "chat", "packageManager": "bun@1.3.14"}),
+            "chat/bun.lock": '{"lockfileVersion": 1}',
+            "chat/server.ts": server,
+            "chat/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+        },
+    )
+
+    plan = _plan_with_workdir(
+        source, {"workdir": "chat", "interface": {"kind": "http", "port": 8001}}
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "chat"
+    assert agent.run_command == ["bun", "run", "server.ts"]
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+
+
+def test_a_node_bundle_refuses_to_exclude_its_dockerfile_entry_script(tmp_path):
+    """A start script read from the Dockerfile CMD is as required in the sealed context as a declared one."""
+    source = _repo(
+        tmp_path,
+        {
+            "dist/server.js": _NODE_CHAT_SERVER,
+            "Dockerfile": 'FROM node:22\nCMD ["node", "dist/server.js"]\n',
+        },
+    )
+    _node_package(source)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "interface": _NODE_JSON_INTERFACE,
+                    "context_excludes": ["dist"],
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+
+    with pytest.raises(Exception, match="generated_runtime_context_exclude_required"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=tmp_path / "bundle",
+        )
+
+
+def _compose_node_plan(source: Path, runtime: dict, subfolder: str | None = None):
+    return resolve_environment_plan(
+        source,
+        _github_job(subfolder) if subfolder else _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={"execution": "compose", "interface": _NODE_JSON_INTERFACE, **runtime},
+    )
+
+
+def test_a_compose_node_control_keeps_its_build_context_under_the_default_workdir(tmp_path):
+    """With a source subfolder, runtime.workdir defaults to that folder; the Compose build context still wins."""
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/server/server.js": _NODE_CHAT_SERVER,
+            "agents/a/compose.yml": (
+                "services:\n  agent:\n    build: ./server\n    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source / "agents/a/server")
+
+    plan = _compose_node_plan(
+        source,
+        {"language": "node", "compose_file": "agents/a/compose.yml", "service": "agent"},
+        subfolder="agents/a",
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "agents/a/server"
+    assert agent.run_command == ["node", "server.js"]
+
+
+def test_a_compose_node_control_never_starts_outside_its_build_context(tmp_path):
+    """A runtime.workdir outside the service's build context is not where it starts; the context is, as on dev."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "other/server.js": "throw new Error('outside the build context');\n",
+            "compose.yml": "services:\n  agent:\n    build: ./agent\n    command: [node, server.js]\n",
+        },
+    )
+    _node_package(source / "agent")
+    _node_package(source / "other")
+
+    plan = _compose_node_plan(
+        source,
+        {"language": "node", "compose_file": "compose.yml", "service": "agent", "workdir": "other"},
+    )
+
+    assert _agent_of(plan).working_directory == "agent"
+
+
+def test_an_inferred_compose_node_control_starts_in_runtime_workdir(tmp_path):
+    """No control service is declared, so the command alone makes it Node; runtime.workdir still applies."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": "services:\n  agent:\n    build: .\n    command: [node, server.js]\n",
+        },
+    )
+    _node_package(source / "agent")
+
+    # Auto selection finds the Compose file and names no control service.
+    plan = _plan_with_workdir(source, {"workdir": "agent", "interface": _NODE_JSON_INTERFACE})
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "agent"
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+
+
+def _node_tool_wiring(process, plan_processes) -> dict[str, object]:
+    return {
+        "trace": sorted(
+            key for key in process.environment if key in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
+        ),
+        "door": "ALK_WORLD_DOOR_URL" in process.environment
+        or any(p.name == "world-door" for p in plan_processes),
+    }
+
+
+@pytest.mark.parametrize("language", ["", "node"])
+def test_a_node_control_gets_no_python_tool_wiring_at_seal_or_reseal(tmp_path, language):
+    """Python import bindings (the tool tracer, the in-process door) never reach a Node process."""
+    source = tmp_path / "source"
+    source.mkdir()
+    _node_package(source)
+    (source / "server.js").write_text(_NODE_CHAT_SERVER)
+    authoring = _authoring(tmp_path)
+    runtime = {
+        "execution": "native",
+        "command": ["node", "server.js"],
+        "interface": _NODE_JSON_INTERFACE,
+    }
+    if language:
+        runtime["language"] = language
+    contract = {
+        "modality": "chat",
+        "runtime": runtime,
+        "data_store": {"kind": "none"},
+        "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+        "tool_entrypoints": [
+            {"tool": "lookup_order", "mode": "import", "module": "tools", "callable": "lookup_order"}
+        ],
+    }
+    contract_path = authoring / "contract.json"
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+
+    sealed = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=bundle
+    )
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert _node_tool_wiring(control, sealed.processes) == {"trace": [], "door": False}
+
+    contract["tools"].append({"name": "cancel_order", "args": ["order_id"]})
+    contract["tool_entrypoints"].append(
+        {"tool": "cancel_order", "mode": "import", "module": "tools", "callable": "cancel_order"}
+    )
+    contract_path.write_text(json.dumps(contract))
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    control = next(
+        p for p in resealed.processes if p.name == resealed.runtime.control_service
+    )
+    assert _node_tool_wiring(control, resealed.processes) == {"trace": [], "door": False}
