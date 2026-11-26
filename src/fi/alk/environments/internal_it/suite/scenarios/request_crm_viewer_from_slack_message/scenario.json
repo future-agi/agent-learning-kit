@@ -1,0 +1,126 @@
+{
+  "name": "request_crm_viewer_from_slack_message",
+  "scenario_key": "request-crm-viewer-from-slack-message",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Employee posted in #it-access requesting CRM viewer; agent reads thread IM405, verifies employee E405, and creates pending access request.",
+  "tests": "Does the agent read the Slack thread and create a pending request for E405 on APP-CRM viewer?",
+  "instruction": "You are Nathan Drake (employee ID E405). You posted message IM405 in #it-access (timestamp 1792700000.000405) requesting viewer access on CRM System (APP-CRM). In chat, ask the IT desk to read your message thread and submit the access request for you. Justification: 'Customer lead lookup in CRM'.",
+  "keywords": [
+    "access_request"
+  ],
+  "persona": {
+    "name": "Nathan Drake",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi IT desk, I posted a request in #it-access at ts 1792700000.000405 asking for CRM viewer access. Can you process it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "slack_message_id": "IM405",
+    "target_app": "APP-CRM",
+    "employee_id": "E405",
+    "target_role": "viewer",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "cursor": "",
+        "latest": "",
+        "message_ts": "1792700000.000405",
+        "oldest": "",
+        "response_format": "text",
+        "channel_id": "CH_ITACCESS",
+        "limit": 10
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "channel_id": "record: slack_channels.channel_id where name='it-access'",
+        "message_ts": "caller: ts 1792700000.000405"
+      }
+    },
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E405"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Nathan Drake (E405)"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E405",
+        "app_id": "APP-CRM"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Nathan Drake (E405)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "role_name": "viewer",
+        "app_id": "APP-CRM",
+        "employee_id": "E405"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: CRM System (APP-CRM)",
+        "role_name": "caller: viewer role",
+        "employee_id": "caller: Nathan Drake (E405)"
+      }
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "employee_id": "E405",
+        "app_id": "APP-CRM",
+        "role_name": "viewer",
+        "justification": "Customer lead lookup in CRM"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Nathan Drake (E405)",
+        "role_name": "caller: viewer role",
+        "app_id": "caller: CRM System (APP-CRM)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "slack_channel_source",
+    "counterparty": "standard_employee",
+    "task": "submit_access_request",
+    "interface": "chat",
+    "interaction": "collaborative",
+    "overlay": "none",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "pending_request_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

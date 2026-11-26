@@ -1,0 +1,80 @@
+{
+  "name": "policy_holiday_window_scheduled_future",
+  "scenario_key": "policy-holiday-window-scheduled-future",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Customer asks about a holiday return window extending to January 31; holiday policy is scheduled for November 15 and not yet effective, so current policy version 3.0 applies.",
+  "tests": "Verifies the agent checks the scheduled holiday policy document metadata and explains it is not yet in effect, citing the effective version 3.0 policy.",
+  "instruction": "Ask Northgate Outfitters customer support about whether you can return items through January 31st under the holiday return policy. If told that the holiday policy is not yet in effect, ask what the current return window is instead.",
+  "keywords": [
+    "policy_inquiry"
+  ],
+  "persona": {
+    "name": "Sarah Jenkins",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, I heard that you have an extended holiday returns policy allowing returns until January 31st. Can I return purchases under that policy right now?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "document_current": "ret_pol_v3",
+    "effective_date_holiday": "2026-11-15",
+    "origin": "seed",
+    "document_holiday": "ret_pol_holiday"
+  },
+  "solution": [
+    {
+      "tool": "get_file_metadata",
+      "arguments": {
+        "fileId": "ret_pol_holiday",
+        "excludeContentSnippets": false
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "ret_pol_v3",
+        "includeComments": false,
+        "revisionId": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files.file_id for approved return policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "task": "answer_policy_questions",
+    "interface": "clean_prose",
+    "counterparty": "prospective_buyer",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "confused"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

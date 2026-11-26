@@ -1,0 +1,80 @@
+{
+  "name": "northwind_second_contact_colleague_inquiry",
+  "scenario_key": "northwind-second-contact-colleague-inquiry",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Daniel Brooks asks about Northwind's open enquiries including his colleague Samira's; the desk finds his own record and lead L21 and keeps Samira's to herself",
+  "tests": "the agent finds Daniel Brooks (C21), reports his own lead L21 from the records, and discloses nothing of Samira Holt's lead",
+  "instruction": "You are Daniel Brooks from Northwind Support Co (daniel.brooks@northwind-support.example). Your colleague Samira Holt also sent BrightDesk an enquiry. Ask the sales desk what enquiries Northwind has open and where they stand. When the desk tells you about your own enquiry and explains it cannot discuss your colleague's, accept that.\n\nYour details:\n- Name: Daniel Brooks\n- Company: Northwind Support Co\n- Email: daniel.brooks@northwind-support.example\n- Colleague: Samira Holt",
+  "keywords": [
+    "account",
+    "duplicate",
+    "lead"
+  ],
+  "persona": {
+    "name": "Daniel Brooks",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I'm Daniel Brooks from Northwind Support Co (daniel.brooks@northwind-support.example). Samira also reached out for a demo; can you check our open enquiries?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C21",
+    "origin": "seed",
+    "account_id": "ACC01"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "daniel.brooks@northwind-support.example"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: daniel.brooks@northwind-support.example"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L21"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Daniel's lead L21"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "deduplicate",
+    "counterparty": "prospect",
+    "overlay_vector": "none",
+    "disposition": "duplicate",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "duplicate_detected",
+    "lead_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

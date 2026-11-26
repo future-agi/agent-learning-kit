@@ -1390,6 +1390,37 @@ ALLOWED: dict[tuple[str, str, str], tuple[int, str]] = {
     ("fi.alk.harness.seed_contract", "use_seed", "_write_whole"): (
         2, "installs the platform's seed, a reading's saved contract, as written; a reading from "
         "before the cleaner stays as written (a named limit), and every send cleans again"),
+    # A composition's chat workspace is laid out from sealed release archives: the files are
+    # copied as the releases hold them (contract.json among them), never written anew.
+    ("fi.alk.harness.composition_edit", "_lay_out", "shutil.copytree"): (
+        2, "copies the suite's scenarios and the release's handlers from the archives"),
+    ("fi.alk.harness.composition_edit", "_lay_out", "shutil.copyfile"): (
+        2, "copies the suite's sub_goals.json and simulator prompt from the archive"),
+    ("fi.alk.harness.composition_edit", "_lay_out", "_write_json"): (
+        1, "writes the generated contract for the agent's view of the release's tools"),
+    ("fi.alk.harness.composition_edit", "_lay_out", "write_index"): (
+        1, "writes the scenario index the builder reads"),
+    ("fi.alk.harness.composition_edit", "open_composition", "_lay_out"): (
+        1, "opens the workspace: the layout above"),
+    ("fi.alk.harness.composition_edit", "_lay_out", "_lay_out_servers"): (
+        1, "copies the release's servers.json and attached files from the archive"),
+    ("fi.alk.harness.composition_edit", "open_composition", "_lay_out_servers"): (
+        1, "the same copy, for a workspace already laid out without them"),
+    # A design seals its own contract through its own writer (`design.contract`), the design's
+    # contract.json; the builder's `contract.write_contract` is for an agent that was read.
+    ("fi.alk.harness.design.contract", "write_contract", "write_text"): (
+        1, "the design mode's own contract writer"),
+    ("fi.alk.harness.hosted_agent", "HostedAgentCallRunner._run", "converse"): (1, _TRACE),
+    # A run bundle composed from sealed releases: the files are copied as the releases hold them,
+    # and the generated contract.json is the agent's view of the release's tools.
+    ("fi.alk.harness.releases", "compose_bundle", "shutil.copytree"): (
+        4, "copies the suite's scenarios and the release's handlers and attached files"),
+    ("fi.alk.harness.releases", "compose_bundle", "shutil.copyfile"): (
+        5, "copies sub_goals.json, the simulator prompt, tools.json, servers.json and the binding"),
+    ("fi.alk.harness.releases", "compose_bundle", "write_text"): (
+        3, "writes the generated contract.json, the seed SQL and the bundle manifest"),
+    ("fi.alk.harness.releases", "compose_bundle", "Path.rename"): (
+        1, "moves the finished staging directory into place"),
     ("fi.alk.harness.authoring_entrypoint", "_prepare_source_data_invariants",
      "prune_invariant_scopes"): (1, _READS + " (the invariants file)"),
     ("fi.alk.harness.authoring_runtime_validation", "_validate_and_repair",

@@ -1,0 +1,93 @@
+{
+  "name": "v20_s09_revoke_existing_entitlement",
+  "scenario_key": "v20-s09-revoke-existing-entitlement",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Transferred employee requests revocation of legacy sales CRM access; agent inspects active entitlements and revokes synthetic entitlement.",
+  "tests": "Does the agent inspect current entitlements and successfully revoke the specified active entitlement?",
+  "instruction": "You are Ian Malcolm (employee ID E09), an analytics consultant who transferred from sales support. You still have active sales_rep access on CRM System (APP-CRM) under entitlement ENT-CRM-09. Ask the IT service desk to look up your active access on APP-CRM and revoke entitlement ENT-CRM-09. If asked for a reason, provide: 'Transferred from sales support project'.",
+  "keywords": [
+    "revocation",
+    "idempotency",
+    "synthetic_grant"
+  ],
+  "persona": {
+    "name": "Ian Malcolm",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Technical",
+    "initial_message": "Hello, I am Ian Malcolm (E09). I recently moved off the sales project and need my legacy sales_rep access on CRM System (APP-CRM) revoked. Could you look up my active access and remove entitlement ENT-CRM-09?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "target_app": "APP-CRM",
+    "target_role": "sales_rep",
+    "employee_id": "E09",
+    "entitlement_id": "ENT-CRM-09"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Ian Malcolm (E09)"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "app_id": "APP-CRM",
+        "employee_id": "E09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "revoke_synthetic_access",
+      "arguments": {
+        "reason": "Transferred from sales support project",
+        "entitlement_id": "ENT-CRM-09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "entitlement_id": "caller: entitlement ENT-CRM-09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "inquisitive",
+    "counterparty": "transferred_employee",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "task": "manage_existing_access_and_idempotency",
+    "disposition": "revocation_needed"
+  },
+  "sub_goals": [
+    "employee_verified_before_action",
+    "entitlement_revoked",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

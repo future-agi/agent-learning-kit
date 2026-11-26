@@ -208,6 +208,12 @@ def test_a_value_is_the_same_however_it_was_written() -> None:
         ("#1043", "1043"),
         ({"order": "O-1", "items": [1, "2"]}, {"order": "o1", "items": ["1", 2.0]}),
         (None, None),
+        # The same number with some or all of its separators left out, and a long number said in other groups.
+        ("555-123-4567", "5551234567"),
+        ("ORD-2026-0113", "ord 20 26 01 13"),
+        ("020 7946 0958", "0207 946 0958"),
+        ("INV123", "inv-123"),
+        ("AED 40", 40),
     ]:
         assert same_value(one, two), (one, two)
         assert same_value(two, one), (two, one)
@@ -249,6 +255,12 @@ def test_a_different_value_is_never_the_same() -> None:
         ("Callum", "Calum"),
         ({"a": 1}, {"a": 1, "b": 2}),
         ([1, 2], [1]),
+        # The same digits, separated into other numbers.
+        ("2026-1-11", "2026-11-1"),
+        ("A-1-23", "A-12-3"),
+        # Letters that are no currency are an id's.
+        ("INV123", 123),
+        ("ORD 89", "89"),
     ]:
         assert not same_value(one, two), (one, two)
         assert not same_value(two, one), (two, one)

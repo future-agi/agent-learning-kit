@@ -285,7 +285,7 @@ scenarios/<name>/
 written as rows. The check files genuinely run on their own:
 
 ```bash
-python scenarios/<name>/checks/<goal>.py path/to/world.sqlite     # prints held, or FAILED: ...
+python scenarios/<name>/checks/<goal>.py path/to/world.sqlite     # prints held, or FAILED and exits 1; import check() to read why
 ```
 
 Before a scenario is kept it is **proved** by three gates, all pure code, no model involved:

@@ -25,6 +25,21 @@ from typing import Any, Collection, Mapping, Sequence
 
 from ..environment import EnvironmentAdapter, EnvironmentSnapshot, ToolExecutionResult
 
+# The stable refusal categories an agent can act on: a blocked policy is not an outage, and a
+# timeout with an unknown outcome is not a failure to retry blindly.
+ERROR_CATEGORIES = frozenset(
+    {
+        "invalid_input",
+        "not_found",
+        "permission_denied",
+        "conflict",
+        "policy_blocked",
+        "rate_limited",
+        "unavailable",
+        "timeout_unknown_outcome",
+    }
+)
+
 
 class ToolError(Exception):
     """A tool refusing for a real reason the agent should see and recover from.
@@ -32,7 +47,18 @@ class ToolError(Exception):
     Distinct from a crash. A refusal is the world working: the id does not exist, the item is
     unavailable, the argument is outside what the tool accepts. A crash is our bug, and the two
     must never look the same to a caller deciding whether the agent behaved correctly.
+
+    `category`, one of `ERROR_CATEGORIES`, leads the message the agent reads
+    (``permission_denied: ...``), so an agent and a check can tell the kinds of refusal apart.
     """
+
+    def __init__(self, message: str, category: str | None = None) -> None:
+        if category is not None and category not in ERROR_CATEGORIES:
+            raise ValueError(
+                f"unknown error category {category!r}; use one of {sorted(ERROR_CATEGORIES)}"
+            )
+        self.category = category
+        super().__init__(f"{category}: {message}" if category else message)
 
 
 @dataclass
@@ -521,6 +547,10 @@ class GeneratedWorld(EnvironmentAdapter):
         # writes the frozen rows into the newly-created store.
         self.store.start()
         self.calls: list[Call] = []
+        # Whether the handlers are the environment's own (a designed or released world) rather
+        # than bound to an agent's code: those run in the isolated child when
+        # ALK_HANDLER_ISOLATION is set (see `handler_host`).
+        self.isolated = False
 
     @property
     def connection(self) -> Any:
@@ -626,6 +656,62 @@ class GeneratedWorld(EnvironmentAdapter):
     # -- execution -------------------------------------------------------------------
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+        """Execute one call and record it (`_call`). An environment's own world (``isolated``) runs
+        it as one transaction; a world bound to an agent's code runs it as that code does, where a
+        refused call may well keep what it wrote (a lockout counter, an audit row).
+        """
+        return self._transaction(name, arguments) if self.isolated else self._call(name, arguments)
+
+    def _transaction(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+        """Execute one call as one transaction, one call at a time.
+
+        A call that fails changes nothing: its writes are rolled back by the store, which needs
+        no writes of its own to do it, so it holds even while the store refuses writes. Only a
+        refusal the world simulates on purpose (``keep_writes``: a rival booking, a commit whose
+        reply was lost) keeps what it wrote. Calls take turns, so rolling one back can never
+        undo another call's success.
+        """
+        import threading
+
+        with self.__dict__.setdefault("_turns", threading.RLock()):
+            held = self.state_object is None and callable(getattr(self.store, "hold", None))
+            mark = None
+            if held:
+                self.store.hold()
+            elif callable(getattr(self.store, "freeze", None)):
+                mark = self.checkpoint()
+            # A store that can neither hold a transaction nor freeze (a bare stand-in) runs the
+            # call as it always did: there is nothing to roll back to.
+            self._kept = False
+            try:
+                call = self._call(name, arguments)
+            except BaseException:
+                if held:
+                    self.store.release(keep=False)
+                raise
+            keep = call.ok or self._kept
+            if held:
+                try:
+                    self.store.release(keep=keep)
+                except Exception as failed:
+                    # The commit itself failed (a constraint checked at commit, a lost store):
+                    # nothing the call wrote stands, so it is recorded as failed, not as the
+                    # success the handler returned.
+                    if self.calls and self.calls[-1] is call:
+                        self.calls.pop()
+                    call = self._record(
+                        Call(
+                            name=call.name,
+                            arguments=call.arguments,
+                            ok=False,
+                            error=f"{type(failed).__name__}: {failed}",
+                        )
+                    )
+            elif not keep and mark is not None:
+                self.revert(mark)
+            return call
+
+    def _call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         """Execute one call and record it. Never raises: a failure is an outcome, not an event.
 
         An unknown tool is a refusal rather than a silent success. An agent reaching for a tool
@@ -651,14 +737,29 @@ class GeneratedWorld(EnvironmentAdapter):
         refused = record_refusal(self, name, args)
         if refused is not None:
             return self._record(refused)
-        namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
+        from .handler_host import isolation_mode, run_handler
+
         try:
-            exec(compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace)
-            handle = namespace.get("handle")
-            if not callable(handle):
-                raise RuntimeError("handler defines no handle(args, db)")
-            value = handle(args, Db(self.store, self.state_object))
+            mode = isolation_mode() if self.isolated else None
+            if mode is not None:
+                value = run_handler(
+                    self.handlers[name],
+                    name,
+                    args,
+                    Db(self.store, self.state_object),
+                    mode=mode,
+                )
+            else:
+                namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
+                exec(
+                    compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace
+                )
+                handle = namespace.get("handle")
+                if not callable(handle):
+                    raise RuntimeError("handler defines no handle(args, db)")
+                value = handle(args, Db(self.store, self.state_object))
         except Exception as raised:
+            self._kept = bool(getattr(raised, "keep_writes", False))
             if _is_refusal(raised, self.refusal_signature):
                 return self._record(
                     Call(

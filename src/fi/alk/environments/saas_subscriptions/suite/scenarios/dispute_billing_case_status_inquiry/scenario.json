@@ -1,0 +1,80 @@
+{
+  "name": "dispute_billing_case_status_inquiry",
+  "scenario_key": "dispute-billing-case-status-inquiry",
+  "scenario_id": "",
+  "use_case": "Open a billing case or report a payment",
+  "branch": "Member Fiona Analyst asks about current status and resolution of billing case BC-301",
+  "tests": "checks billing case BC-301 status and reports status=in_review",
+  "instruction": "You are Fiona Analyst, member at FinTrack. You want to check the status and details of billing dispute case BC-301.\n\nYour details:\n- Name: Fiona Analyst\n- Company: FinTrack\n- Tenant ID: T06\n- User ID: U06_MEMBER\n- Case ID: BC-301",
+  "keywords": [
+    "billing_case"
+  ],
+  "persona": {
+    "name": "Fiona Analyst",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you tell me the current status of billing dispute case BC-301?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "tenant_id": "T06",
+    "case_id": "BC-301",
+    "actor_id": "U06_MEMBER",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_user_role",
+      "arguments": {
+        "user_id": "U06_MEMBER",
+        "actor_id": "U06_MEMBER",
+        "tenant_id": "T06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_billing_case_status",
+      "arguments": {
+        "case_id": "BC-301",
+        "tenant_id": "T06",
+        "actor_id": "U06_MEMBER"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "case_id": "record: BC-301"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "member",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_chat",
+    "task": "get_case_status",
+    "interaction": "multi_turn",
+    "disposition": "case_in_review",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "case_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

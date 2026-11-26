@@ -1,0 +1,81 @@
+{
+  "name": "cancel_subscription_already_scheduled_reported",
+  "scenario_key": "cancel-subscription-already-scheduled-reported",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "T401 already has scheduled cancellation; Arthur Pendelton U401_ADMIN asks to cancel again and assistant reports existing cancellation",
+  "tests": "Reports existing scheduled cancellation when tenant requests cancellation on already pending cancel subscription",
+  "instruction": "You are Arthur Pendelton, Billing Admin for Apex Innovations (Tenant ID: T401, Actor ID: U401_ADMIN). You want to check your cancellation status or cancel your subscription. Ask the assistant to check your renewal terms.\n\nYour details:\n- Tenant ID: T401 (Apex Innovations)\n- Admin Actor ID: U401_ADMIN",
+  "keywords": [
+    "cancellation_at_term_end"
+  ],
+  "persona": {
+    "name": "Arthur Pendelton",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I am Arthur Pendelton for Apex Innovations (T401, U401_ADMIN). We requested cancellation earlier; could you confirm our renewal terms and cancellation status?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "records": {
+      "admin_id": "U401_ADMIN",
+      "tenant_id": "T401",
+      "cancellation_id": "CAN-401",
+      "subscription_id": "sub_401"
+    },
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T401",
+        "actor_id": "U401_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "actor_id": "U401_ADMIN",
+        "tenant_id": "T401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T401"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "explain_renewal",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "clean_chat",
+    "overlay_intensity": "absent",
+    "interaction": "resumed",
+    "counterparty": "member",
+    "disposition": "already_scheduled"
+  },
+  "sub_goals": [
+    "renewal_terms_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,96 @@
+{
+  "name": "calendar_brooks_monday_meeting_check",
+  "scenario_key": "calendar-brooks-monday-meeting-check",
+  "scenario_id": "",
+  "use_case": "Provider availability questions from Calendar",
+  "branch": "Patient asks about Dr. Ethan Brooks's availability on Monday 26 October in the afternoon; the desk checks CAL-D04 and reports a departmental meeting until 15:00",
+  "tests": "the agent checks events on CAL-D04 for 26 October afternoon and reports Dr. Brooks has a meeting until 15:00",
+  "instruction": "You are inquiring on behalf of your brother about cardiology availability. Ask if Dr. Ethan Brooks is free this afternoon, Monday 26 October. When the assistant informs you that Dr. Brooks is occupied with a departmental meeting until 15:00 and has clinic sessions afterwards, acknowledge the information and let the assistant know you will check with your brother regarding afternoon times.\n\nYour details:\n- Caller: Gordon Stewart (brother)\n- Provider: Dr. Ethan Brooks (Cardiology)\n- Date and time: Monday 26 October 2026 afternoon",
+  "keywords": [
+    "availability"
+  ],
+  "persona": {
+    "name": "Gordon Stewart",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United Kingdom",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, is Dr. Ethan Brooks free this afternoon, Monday 26 October?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "cardiology"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "endTime": "2026-10-26T18:00:00Z",
+        "startTime": "2026-10-26T12:00:00Z",
+        "calendarId": "CAL-D04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "calendarId": "record: providers.calendar_id for Dr. Ethan Brooks (D04)"
+      }
+    }
+  ],
+  "alternatives": [
+    [
+      {
+        "tool": "list_calendars",
+        "arguments": {},
+        "environment_arguments": {},
+        "fixed": {}
+      },
+      {
+        "tool": "list_events",
+        "arguments": {
+          "endTime": "2026-10-26T18:00:00Z",
+          "startTime": "2026-10-26T12:00:00Z",
+          "calendarId": "CAL-D04"
+        },
+        "environment_arguments": {},
+        "fixed": {
+          "calendarId": "record: providers.calendar_id for Dr. Ethan Brooks (D04)"
+        }
+      }
+    ]
+  ],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "no_availability",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "counterparty": "third_party",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "task": "availability"
+  },
+  "sub_goals": [
+    "availability_reported_from_calendar"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
