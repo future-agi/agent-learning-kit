@@ -1770,7 +1770,7 @@ def _reviewed_order_item_problems(scenario: Scenario, state: dict, contract) -> 
         return []
     records = state.get("orders")
     base_orders = (contract.base_environment or {}).get("orders") if contract else None
-    if not records or (contract and contract.data_store and contract.data_store.kind == "in_process"):
+    if records is None or (contract and contract.data_store and contract.data_store.kind == "in_process"):
         records = base_orders if base_orders is not None else records
     if isinstance(records, list):
         records = {
@@ -1785,11 +1785,17 @@ def _reviewed_order_item_problems(scenario: Scenario, state: dict, contract) -> 
     ids = {str(fixture[key]) for key in id_fields if fixture.get(key) is not None}
     ids.update(str(step.arguments[key]) for step in scenario.solution for key in id_fields if step.arguments.get(key) is not None)
     for match in re.finditer(
-        r"\border(?:[ _-]?(?:id|no\.?|number|ref(?:erence)?))?\s*(?:is\s+)?[:=#]?\s*#?"
-        r"([A-Za-z0-9][A-Za-z0-9_-]{1,63})\b", scenario.instruction, re.I,
+        r"\border(?:[ _-]?(?:id|no\.?|number|ref(?:erence)?))?\s*(?:is\s+)?"
+        r"(?P<marker>[:=#]?)\s*#?[\x22\x27`]?(?P<ref>[a-z0-9][a-z0-9_-]{0,63})\b",
+        scenario.instruction, re.I,
     ):
-        if any(ch.isdigit() for ch in match[1]):
-            ids.add(match[1])
+        reference = match["ref"]
+        if reference.isdecimal() and not match["marker"] and re.match(
+            r"\s+(?:hours?|days?|weeks?|months?|years?)\b", scenario.instruction[match.end():], re.I
+        ):
+            continue
+        if match["marker"] or reference.isupper() or any(ch.isdigit() for ch in reference):
+            ids.add(reference)
     by_id = {str(key).casefold(): value for key, value in records.items()}
     missing = sorted(key for key in ids if key.casefold() not in by_id)
     if missing and not re.search(

@@ -762,6 +762,7 @@ def test_ordinary_cases_must_not_grade_uncited_source_facts():
     "My order number is printed below. Order #ORD-X009.",
     "Check order_reference=RE-9900.",
     "The order number is VP-809.",
+    "Your details:\n- Order ID: 'AZURE'",
 ])
 def test_claimed_customer_order_must_exist_even_if_only_a_policy_tool_is_called(caller):
     from types import SimpleNamespace
@@ -776,6 +777,9 @@ def test_claimed_customer_order_must_exist_even_if_only_a_policy_tool_is_called(
     world = {"orders":[{"order_id":"A1003","item":"water bottle"}]}
     problems = _reviewed_order_item_problems(scenario, world, None)
     assert problems and "A1003" in problems[0]
+    scenario.instruction = "I placed an order 30 days ago and have a policy question."
+    assert not _reviewed_order_item_problems(scenario, world, None)
+    scenario.instruction = caller
     scenario.tests = "Tell the caller that the policy was not found."
     assert _reviewed_order_item_problems(scenario, world, None)
     scenario.tests = "Tell the caller the order was not found."
