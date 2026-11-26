@@ -2920,6 +2920,11 @@ _RECORDING_ARTIFACT_KINDS = frozenset(
 )
 
 
+# The most of a job's upload budget the browser's screenshots may take together: they share the last tier with
+# traces, and many browser trials would otherwise leave no room for a trace uploaded after them.
+SCREENSHOT_SHARE = 0.5
+
+
 def priority_class(kind: ArtifactKind) -> int:
     """N16: the contract's three-tier budget partition as a total order, lower = admitted first --
     `0` reserved (`is_reserved_artifact_kind`, always admitted), `1` recordings, `2` optional
@@ -2953,6 +2958,7 @@ class ArtifactBudgetTracker:
     ) -> None:
         self._max_bytes = max_artifact_bytes
         self._admitted_bytes = 0
+        self._screenshot_bytes = 0
         self._seen_digests: set[str] = set()
         self._recording_headroom_bytes = recording_headroom_bytes
 
@@ -2965,14 +2971,17 @@ class ArtifactBudgetTracker:
         remaining = self._max_bytes - self._admitted_bytes
         if tier == 2:
             remaining -= self._recording_headroom_bytes
+        if kind is ArtifactKind.SCREENSHOT:
+            remaining = min(remaining, int(self._max_bytes * SCREENSHOT_SHARE) - self._screenshot_bytes)
         return size <= remaining
 
     def record(self, kind: ArtifactKind, size: int, *, digest: str) -> None:
-        del kind  # reservation already resolved by would_admit; recorded uniformly here
         if digest in self._seen_digests:
             return
         self._seen_digests.add(digest)
         self._admitted_bytes += size
+        if kind is ArtifactKind.SCREENSHOT:
+            self._screenshot_bytes += size
 
     @property
     def admitted_bytes(self) -> int:
