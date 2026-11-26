@@ -3543,3 +3543,66 @@ def test_a_repair_that_points_langgraph_dev_at_a_file_other_than_its_config_is_r
             validate()
     else:
         assert validate().runtime.command[-1] == "langgraph.json"
+
+
+def _bun_patch(contract: AgentContract, workdir: str) -> RuntimePlanPatch:
+    return RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(
+            language="bun",
+            workdir=workdir,
+            command=["bun", "run", "server.ts"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+        evidence_paths=(f"{workdir}/package.json",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the chat package.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [("traced", "plain", "none"), ("plain", "traced", "traceai")],
+)
+def test_a_repair_that_moves_a_node_agent_recomputes_its_instrumentation(
+    tmp_path, before, after, expected
+):
+    """The saved label follows the runtime the repair selects, not the one it replaced."""
+    for name, dependencies in (("traced", {"@traceai/fi-core": "^1.4.1"}), ("plain", {})):
+        package = tmp_path / "packages" / name
+        package.mkdir(parents=True)
+        (package / "package.json").write_text(json.dumps({"name": name, "dependencies": dependencies}))
+        (package / "server.ts").write_text("export const ready = true\n")
+    contract = AgentContract(
+        agent="chat",
+        runtime=Runtime(language="bun", workdir=f"packages/{before}"),
+        instrumentation="traceai" if expected == "none" else "none",
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path,
+        contract,
+        _bun_patch(contract, f"packages/{after}"),
+        allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+    )
+
+    assert repaired.instrumentation == expected
+
+
+def test_a_repair_that_keeps_the_runtimes_reader_keeps_the_saved_instrumentation(tmp_path):
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("print('agent')\n")
+    contract = AgentContract(
+        agent="agent",
+        modality="chat",
+        runtime=Runtime(language="python", workdir="service", command=["python", "app.py"]),
+        instrumentation="traceai",
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, _patch(contract), allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+    assert repaired.instrumentation == "traceai"
