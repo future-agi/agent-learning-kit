@@ -170,13 +170,19 @@ def _names_member(workspace: dict[str, Any], member: str) -> bool:
     if not isinstance(patterns, list):
         return False
     parts = tuple(member.split("/"))
+    named = False
     for pattern in patterns[:_WORKSPACE_PATTERNS]:
         if not isinstance(pattern, str) or len(pattern) > _WORKSPACE_PATTERN_LENGTH:
             continue
-        spelled = pattern.strip().removeprefix("./").strip("/")
-        if spelled and not spelled.startswith("!") and _matches(tuple(spelled.split("/")), parts):
-            return True
-    return False
+        spelled = pattern.strip()
+        excluded = spelled.startswith("!")
+        spelled = spelled.removeprefix("!").strip().removeprefix("./").strip("/")
+        if spelled and _matches(tuple(spelled.split("/")), parts):
+            # A `!` pattern takes the folder out of the workspace, wherever it is listed.
+            if excluded:
+                return False
+            named = True
+    return named
 
 
 def _matches(pattern: tuple[str, ...], parts: tuple[str, ...]) -> bool:

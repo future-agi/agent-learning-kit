@@ -835,6 +835,28 @@ def test_a_workspace_root_counts_only_for_a_member_it_declares(
     )
 
 
+@pytest.mark.parametrize(
+    "workspaces",
+    [["packages/*", "!packages/agent"], {"packages": ["packages/**", "!./packages/agent/"]}],
+    ids=["list", "yarn_object"],
+)
+def test_a_member_the_workspace_excludes_is_read_alone(tmp_path: Path, workspaces: object) -> None:
+    """A `!` pattern takes the folder out of the workspace, so the root's packages are not its own."""
+    files = {
+        "package.json": json.dumps(
+            {"name": "repo", "workspaces": workspaces, "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        "packages/agent/package.json": _package({}),
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(
+            _repository(tmp_path, files), "packages/agent"
+        )
+        == "none"
+    )
+
+
 def test_an_unread_manifest_ends_the_walk(tmp_path: Path) -> None:
     """A package.json past the size limit is still the agent's package: the walk stops there."""
     padding = " " * instrumentation_evidence._LARGEST_PACKAGE_JSON
