@@ -97,6 +97,7 @@ def prepare_environment_inputs(
     destination_schema: DestinationSchema | None = None,
     schema_repairs: tuple[SimulationSchemaRepair, ...] = (),
     redact_text_sources: tuple[str, ...] = (),
+    synthetic_text_sources: tuple[str, ...] = (),
 ) -> EnvironmentInputDraft:
     if destination_schema is not None and (
         not isinstance(destination_schema, DestinationSchema)
@@ -119,7 +120,9 @@ def prepare_environment_inputs(
         for source in source_items
         if source.role in {"policy", "reference"}
     }
-    if set(redact_text_sources) - text_sources:
+    if set(redact_text_sources) & set(synthetic_text_sources):
+        raise EnvironmentInputError("source_request_invalid", "Choose one privacy treatment per source")
+    if (set(redact_text_sources) | set(synthetic_text_sources)) - text_sources:
         raise EnvironmentInputError(
             "source_request_invalid",
             "Select a policy or reference source for text redaction",
@@ -171,7 +174,8 @@ def prepare_environment_inputs(
             continue
         if isinstance(parsed, RawPolicyDocument):
             policy_source, policy_diagnostics = _prepare_policy_source(
-                source, pin, parsed, redact=source.source_id in redact_text_sources
+                source, pin, parsed, redact=source.source_id in redact_text_sources,
+                synthetic=source.source_id in synthetic_text_sources
             )
             parsed_sources.append(policy_source)
             diagnostics.extend(policy_diagnostics)
@@ -579,20 +583,52 @@ def _compile_projection(
     return tuple(environments)
 
 
+def _synthetic_contact_replacements(parsed: RawPolicyDocument, pattern, *, email: bool):
+    """Keep repeated contacts consistent across pages without retaining an original value."""
+    def identity(value):
+        return value.casefold() if email else re.sub(r"\D", "", value)
+
+    originals = dict.fromkeys(
+        identity(match.group()) for page in parsed.pages for match in pattern.finditer(page.text)
+    )
+    replacements = {}
+    index = 0
+    for original in originals:
+        while True:
+            index += 1
+            # The 555-0100 through 555-0199 block is reserved for fictional use.
+            group, suffix = divmod(index - 1, 100)
+            candidate = (
+                f"person{index:04d}@example.invalid" if email
+                else f"+1-202-555-{100 + suffix:04d}" + (f" ext {group}" if group else "")
+            )
+            if identity(candidate) not in originals:
+                break
+        replacements[original] = candidate
+    return lambda match: replacements[identity(match.group())]
+
+
 def _prepare_policy_source(
     source: EnvironmentSource,
     pin: SourcePin,
     parsed: RawPolicyDocument,
     *,
     redact: bool = False,
+    synthetic: bool = False,
 ) -> tuple[ParsedPolicySource, tuple[SourceDiagnostic, ...]]:
+    email_replacement = _synthetic_contact_replacements(parsed, _EMAIL_RE, email=True) if synthetic else "[email removed]"
+    phone_replacement = _synthetic_contact_replacements(parsed, _PHONE_RE, email=False) if synthetic else "[phone removed]"
+    contact_pattern = re.compile(f"(?P<email>{_EMAIL_RE.pattern})|{_PHONE_RE.pattern}", re.IGNORECASE)
+
+    def replace_contact(match):
+        replacement = email_replacement if match.lastgroup == "email" else phone_replacement
+        return replacement(match) if synthetic else replacement
+
     pages = tuple(
         ParsedPolicyPage(
             page=item.page,
-            text=_PHONE_RE.sub(
-                "[phone removed]", _EMAIL_RE.sub("[email removed]", item.text)
-            )
-            if redact
+            text=contact_pattern.sub(replace_contact, item.text)
+            if redact or synthetic
             else item.text,
         )
         for item in parsed.pages
@@ -625,7 +661,7 @@ def _prepare_policy_source(
                     span=SourceSpan(source_id=source.source_id, page=page.page),
                 )
             )
-        if _EMAIL_RE.search(page.text) or _PHONE_RE.search(page.text):
+        if not (redact or synthetic) and (_EMAIL_RE.search(page.text) or _PHONE_RE.search(page.text)):
             diagnostics.append(
                 SourceDiagnostic(
                     code="source_privacy_unresolved",

@@ -473,6 +473,20 @@ def test_redaction_keeps_common_phone_formats_private(number) -> None:
     assert after.sources[0].pages[0].text == "Call [phone removed]."
 
 
+def test_text_synthetic_replacement_is_consistent_and_avoids_originals() -> None:
+    source = EnvironmentSource(
+        "p", "contacts.txt", "text/plain",
+        b"Contact Alice@example.com or +1-202-555-0100. Again: alice@example.com. Do not use person0001@example.invalid.",
+        "reference",
+    )
+    draft = prepare_environment_inputs((source,), synthetic_text_sources=("p",))
+    assert not draft.diagnostics
+    text = draft.sources[0].pages[0].text
+    assert text.count("person0002@example.invalid") == 2
+    assert "+1-202-555-0101" in text
+    assert "alice@" not in text.lower() and "+1-202-555-0100" not in text
+
+
 def test_text_redaction_keeps_content_scan_blockers_and_rejects_foreign_ids() -> None:
     source = EnvironmentSource(
         "p",
