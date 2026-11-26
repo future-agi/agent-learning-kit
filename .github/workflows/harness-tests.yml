@@ -8,10 +8,10 @@ on:
     branches: [dev, main]
   pull_request:
 
-# A newer push to the same branch makes the running suite moot.
+# A newer push to the same pull request makes the running suite moot; runs on dev and main always finish.
 concurrency:
   group: harness-tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   harness:
