@@ -884,6 +884,9 @@ def test_the_worker_keeps_no_screenshot_where_the_run_s_level_keeps_none():
     assert chat_worker._ArtifactCollector(screenshots_kept=False).keeps_artifact(ArtifactKind.SCREENSHOT) is False
     assert chat_worker._ArtifactCollector(screenshots_kept=False).keeps_artifact(ArtifactKind.TRANSCRIPT) is True
     assert chat_worker._ArtifactCollector().keeps_artifact(ArtifactKind.SCREENSHOT) is True
+    # The worker builds its collector from what the parent sent: no word keeps them, only False keeps none.
+    assert chat_worker._collector_for({"screenshots_kept": False}).keeps_artifact(ArtifactKind.SCREENSHOT) is False
+    assert chat_worker._collector_for({}).keeps_artifact(ArtifactKind.SCREENSHOT) is True
 
 
 def test_the_worker_keeps_screenshots_within_what_its_result_can_carry(monkeypatch):

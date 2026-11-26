@@ -793,7 +793,11 @@ def _places_come_back(tmp_path, devtools_port, fake, first: list[dict], **kwargs
             fake.queue(message)
         # The first page's screenshot is asked for, then its answer (or its tab's close) is handled before the next
         # pages load: a screenshot still being taken holds its place.
-        _until(lambda: getattr(fake, "failed", False) or any(m["method"] == "Page.captureScreenshot" for m in fake.sent))
+        def asked() -> bool:
+            return getattr(fake, "failed", False) or any(m["method"] == "Page.captureScreenshot" for m in fake.sent)
+
+        _until(asked)
+        assert asked()
         handled = threading.Event()
         recorder._command("Browser.getVersion", then=lambda _answer: handled.set())
         assert handled.wait(5)
@@ -832,14 +836,14 @@ def test_a_screenshot_that_could_not_be_written_leaves_its_place_free(tmp_path, 
     failed: list[str] = []
 
     def fails_once(path, data):
-        if not failed:
+        if not failed and path.name.endswith("-load.jpg"):
             failed.append(path.name)
             raise OSError("disk full")
         return write_bytes(path, data)
 
     monkeypatch.setattr(browser_record.Path, "write_bytes", fails_once)
     body, _ = _places_come_back(tmp_path, devtools_port, _FakeCdp(), _loaded("http://shop.test/0"))
-    assert failed and _page_shots(body) == ["http://shop.test/1", "http://shop.test/2"]
+    assert failed == ["shot-001-load.jpg"] and _page_shots(body) == ["http://shop.test/1", "http://shop.test/2"]
 
 
 def test_a_screenshot_the_browser_refused_to_take_leaves_its_place_free(tmp_path, devtools_port) -> None:
@@ -875,6 +879,74 @@ def test_with_the_last_tab_closed_the_end_is_of_the_page_opened_last_on_a_tab_st
     finally:
         recorder.close()
     assert [(one["when"], one["url"]) for one in body["screenshots"]] == [("end", "http://shop.test/c")]
+
+
+def test_the_end_is_of_a_tab_showing_a_page_opened_never_a_blank_or_refused_one(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    try:
+        for message in (
+            *_loaded("http://shop.test/cart"),
+            _tab("S2", "T2"),
+            {"method": "Page.frameNavigated", "sessionId": "S2", "params": {"frame": {"id": "T2", "url": "about:blank"}}},
+            _tab("S3", "T3"),
+            {"method": "Page.frameNavigated", "sessionId": "S3",
+             "params": {"frame": {"id": "T3", "url": "http://www.example.com/deals"}}},
+        ):
+            fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [(one["when"], one["url"]) for one in body["screenshots"]] == [
+        ("load", "http://shop.test/cart"),
+        ("end", "http://shop.test/cart"),
+    ]
+
+
+def test_the_end_is_chosen_after_every_event_the_browser_sent_before_the_seal(tmp_path, devtools_port) -> None:
+    # The tab's last page is refused, and the seal is asked before that navigation is handled: the end screenshot
+    # is never of the refused page, whatever thread asks for the seal.
+    class _Held(_FakeCdp):
+        gate = threading.Event()
+
+        def receive(self) -> dict:
+            with self.ready:
+                while not self.inbox:
+                    if self.closed:
+                        raise ConnectionError("closed")
+                    self.ready.wait(0.05)
+                held = isinstance(self.inbox[0], dict) and self.inbox[0].get("held")
+            if held:
+                self.gate.wait(5)
+            return super().receive()
+
+    fake = _Held()
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake)
+    recorder.attach(devtools_port)
+    try:
+        fake.queue(_attached())
+        for message in _loaded("http://shop.test/cart"):
+            fake.queue(message)
+        _until(lambda: any(m["method"] == "Page.captureScreenshot" for m in fake.sent))
+        handled = threading.Event()
+        recorder._command("Browser.getVersion", then=lambda _answer: handled.set())
+        assert handled.wait(5)
+        before = len(fake.sent)
+        fake.queue({"held": True, "method": "Page.frameNavigated", "sessionId": "S1",
+                    "params": {"frame": {"id": "T1", "url": "http://www.example.com/deals"}}})
+        sealed: list = []
+        sealing = threading.Thread(
+            target=lambda: sealed.append(browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5))
+        )
+        sealing.start()
+        # The seal is asked for, and the recorder sends its first command for it, while the navigation is held.
+        _until(lambda: len(fake.sent) > before)
+        assert len(fake.sent) > before
+        fake.gate.set()
+        sealing.join(10)
+    finally:
+        recorder.close()
+    [body] = sealed
+    assert [(one["when"], one["url"]) for one in body["screenshots"]] == [("load", "http://shop.test/cart")]
 
 
 def test_a_new_record_starts_with_no_screenshots_of_the_last_trial(tmp_path, devtools_port) -> None:
