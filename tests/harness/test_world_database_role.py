@@ -2170,6 +2170,18 @@ def test_a_bundle_made_with_the_older_outcome_default_builds_and_loses_it():
         _dropped(superuser, baseline, run)
 
 
+@real_postgres
+def test_a_door_bundle_whose_world_has_no_action_log_yet_takes_its_grants():
+    """A door bundle seeded without the log (its seed makes only the world): the door's grants skip the log's sequence
+    rather than fail the build on a table that is not there."""
+    superuser, _migrator, baseline, checked, before, run = _migrated("CREATE TABLE public.items (id int)", "")
+    try:
+        assert run(superuser, baseline, "SELECT to_regclass('public._alk_tool_trace')") == [(None,)]
+        pr._grant_world_role_group(**checked, door=True)
+    finally:
+        _dropped(superuser, baseline, run)
+
+
 _SHOUTING = (
     "CREATE TABLE public.parent (id serial PRIMARY KEY, name text);\n"
     "CREATE TABLE public.child (id serial PRIMARY KEY, parent_id int REFERENCES public.parent (id));\n"

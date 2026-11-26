@@ -7022,8 +7022,10 @@ def _grant_world_role_group(
         )
     run(
         baseline_db,
-        "DO $$ DECLARE q text := pg_get_serial_sequence('public._alk_tool_trace', 'id'); BEGIN "
-        f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); "
+        # A world seeded without the log has no sequence to grant (the name of a missing table is an error).
+        "DO $$ DECLARE q text; BEGIN IF to_regclass('public._alk_tool_trace') IS NOT NULL THEN "
+        "q := pg_get_serial_sequence('public._alk_tool_trace', 'id'); "
+        f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); END IF; "
         "END IF; END $$",
     )
     _grant_log_role_group(run, baseline_db)
