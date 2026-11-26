@@ -119,6 +119,9 @@ SOURCE_OUTCOME_GUIDANCE = (
     "Write the specific decision and every promised outcome in the test itself. "
     "Include the applicable fee, service, turnaround, escalation code and shipping terms when supplied. "
     "Looking up a record, starting a workflow or reciting a policy alone does not test its outcome. "
+    "Keep every caller request and grading criterion focused on the assigned decision. "
+    "When the answer can be judged from the conversation, use a transcript-judged subgoal "
+    "with a failing control and an empty solution. Put unrelated tool coverage in separate ordinary scenarios. "
 )
 
 
@@ -173,6 +176,18 @@ def _policy_assertion_matches(test_text: str, situation: str, case: Mapping[str,
         test_text,
     ):
         return False
+    if score and named_codes:
+        # A second independent request needs its own scenario unless the rubric supports it.
+        topics = _tokens(case["policy_reference"]) - {"the", "and", "for", "agent", "prospect", "receive"}
+        for text in (situation, test_text):
+            requests = re.split(
+                r"\b(?:(?:(?:also|then) )?ask (?:the (?:assistant|agent) )?to (?:look up|calculate|compute)"
+                r"|(?:also|then) (?:ask|request)|look up|calculate|compute)\b", text
+            )[1:]
+            for request in requests:
+                subject = re.split(r"[.,;?!]|\band (?:ask|assign|report|give)\b", request, maxsplit=1)[0]
+                if not (_tokens(subject) & topics):
+                    return False
     # An ordinary success inside the window also passes when a forbidden
     # extension is granted. The assertion must distinguish those behaviors.
     policy = str(case.get("policy_reference") or "").casefold()

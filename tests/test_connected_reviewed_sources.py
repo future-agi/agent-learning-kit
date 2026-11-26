@@ -541,6 +541,26 @@ def test_qualification_requires_specific_score_and_label_in_authored_assertion()
     )
 
 
+@pytest.mark.parametrize(("context", "score", "label", "extra", "mixed_test"), [
+    ("a production platform needing Python tracing", 5, "TRACE-51",
+     "Also ask for the company onboarding duration and ask the assistant to calculate total engineers across 3 teams.",
+     "look up onboarding duration, calculate team size, and assign"),
+    ("a print-only studio with no software workload", 1, "PRINT-14",
+     "Then ask for the company expense report deadline and ask the assistant to calculate total days across 3 reporting cycles.",
+     "look up expense report deadline, calculate total days, and assign"),
+])
+def test_qualification_is_graded_independently_of_unrelated_tool_requests(context, score, label, extra, mixed_test):
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    outcome = f"a relevance score of {score} and qualification label {label}"
+    case = {"policy_reference": f"A prospect with {context} receives {outcome}."}
+    caller = f"You operate {context}. Ask for your relevance score. Also ask for your qualification label."
+    grading = f"Does the agent assign {outcome}?"
+    assert scenario_relates_to_case({"instruction": caller, "tests": grading}, case)
+    assert not scenario_relates_to_case({"instruction": caller + " " + extra, "tests": grading}, case)
+    assert not scenario_relates_to_case({"instruction": caller, "tests": f"Does the agent {mixed_test} {outcome}?"}, case)
+
+
 @pytest.mark.parametrize(("policy", "situation", "weak", "grounded"), [
     ("Returns are accepted through day 27 after delivery. A request on day 28 is late.",
      "My parcel arrived 28 days ago.", "States the store return policy.",

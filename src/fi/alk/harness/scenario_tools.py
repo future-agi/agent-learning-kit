@@ -112,6 +112,7 @@ from .actors import (
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
+    SOURCE_FIXTURE,
     VOICEMAIL_STYLES,
     Scenario,
     ScenarioSource,
@@ -3885,7 +3886,15 @@ def scenario_tools(
             kept=kept,
             simulator_prompt=simulator_prompt,
             hard_constraints=contract.hard_constraints,
-            allow_empty_solution=tool_free_target,
+            allow_empty_solution=tool_free_target or (
+                reviewed is not None
+                and SOURCE_FIXTURE in (args.get("fixture") or {})
+                and bool(args.get("sub_goals"))
+                and all(
+                    (goal := catalogue.named(name)) and goal.conversation_only()
+                    for name in args["sub_goals"]
+                )
+            ),
             persist=can_save,
             rename_on_collision=rename_on_collision,
             vocabulary=target.get("keywords"),
