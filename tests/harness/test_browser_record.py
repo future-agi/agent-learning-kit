@@ -6,14 +6,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import socket
-import struct
 import threading
 
 import pytest
 
 from fi.alk.harness import browser_record
-from fi.alk.harness.browser_record import BrowserRecord, CdpSocket, FrameTooLarge
+from fi.alk.harness.browser_record import BrowserRecord
+from fi.alk.harness.devtools_socket import FrameTooLarge
 
 
 class _Clock:
@@ -273,120 +272,7 @@ def test_tabs_are_numbered_in_the_order_they_were_first_seen() -> None:
     assert [row["tab"] for row in record.body()["rows"]] == [1, 2, 1]
 
 
-# The DevTools connection: a WebSocket on the standard library
-
-
-class _Server:
-    """A WebSocket server for one connection: completes the handshake, then runs `script` on the socket."""
-
-    def __init__(self, script) -> None:
-        self.listener = socket.create_server(("127.0.0.1", 0))
-        self.port = self.listener.getsockname()[1]
-        self.received: list[bytes] = []
-        self.script = script
-        threading.Thread(target=self._serve, daemon=True).start()
-
-    def _serve(self) -> None:
-        connection, _ = self.listener.accept()
-        with connection:
-            request = b""
-            while b"\r\n\r\n" not in request:
-                request += connection.recv(4096)
-            key = next(
-                line.split(b":", 1)[1].strip()
-                for line in request.split(b"\r\n")
-                if line.lower().startswith(b"sec-websocket-key")
-            )
-            connection.sendall(
-                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                b"Sec-WebSocket-Accept: " + browser_record.accept_key(key.decode()).encode() + b"\r\n\r\n"
-            )
-            self.script(connection, self)
-
-
-def _frame(payload: bytes, *, opcode: int = 1, fin: bool = True) -> bytes:
-    head = bytes([(0x80 if fin else 0) | opcode])
-    if len(payload) < 126:
-        return head + bytes([len(payload)]) + payload
-    if len(payload) < 65536:
-        return head + bytes([126]) + struct.pack("!H", len(payload)) + payload
-    return head + bytes([127]) + struct.pack("!Q", len(payload)) + payload
-
-
-def _read_client_frame(connection: socket.socket) -> tuple[int, bool, bytes]:
-    first, second = connection.recv(2, socket.MSG_WAITALL)
-    length = second & 0x7F
-    if length == 126:
-        length = struct.unpack("!H", connection.recv(2, socket.MSG_WAITALL))[0]
-    elif length == 127:
-        length = struct.unpack("!Q", connection.recv(8, socket.MSG_WAITALL))[0]
-    mask = connection.recv(4, socket.MSG_WAITALL) if second & 0x80 else b""
-    data = connection.recv(length, socket.MSG_WAITALL) if length else b""
-    if mask:
-        data = bytes(byte ^ mask[index % 4] for index, byte in enumerate(data))
-    return first & 0x0F, bool(second & 0x80), data
-
-
-def test_the_client_masks_what_it_sends_and_reads_a_message_sent_in_pieces() -> None:
-    seen: list = []
-
-    def script(connection, _server):
-        seen.append(_read_client_frame(connection))
-        message = json.dumps({"id": 1, "result": {"big": "x" * 70000}}).encode()
-        connection.sendall(_frame(message[:10], fin=False) + _frame(b"", opcode=9) + _frame(message[10:], opcode=0))
-
-    server = _Server(script)
-    client = CdpSocket.connect(f"ws://127.0.0.1:{server.port}/devtools/browser/x", timeout=5)
-    try:
-        client.send({"id": 1, "method": "Browser.getVersion"})
-        answer = client.receive()
-    finally:
-        client.close()
-    opcode, masked, data = seen[0]
-    assert (opcode, masked) == (1, True)
-    assert json.loads(data) == {"id": 1, "method": "Browser.getVersion"}
-    assert len(answer["result"]["big"]) == 70000
-
-
-def test_a_message_over_the_cap_is_refused_not_read_into_memory() -> None:
-    def script(connection, _server):
-        connection.sendall(bytes([0x81, 127]) + struct.pack("!Q", 1 << 40))
-
-    server = _Server(script)
-    client = CdpSocket.connect(f"ws://127.0.0.1:{server.port}/devtools/browser/x", timeout=5)
-    try:
-        with pytest.raises(FrameTooLarge):
-            client.receive()
-    finally:
-        client.close()
-
-
-def test_two_threads_never_write_their_messages_into_each_other() -> None:
-    # The reader answers pings, the trial's end sends the seal, a timer sends its own: one frame at a time.
-    inside, release, second_in = threading.Event(), threading.Event(), threading.Event()
-    written: list[bytes] = []
-
-    class _Connection:
-        def sendall(self, data: bytes) -> None:
-            if not inside.is_set():
-                inside.set()
-                release.wait(5)
-            else:
-                second_in.set()
-            written.append(data)
-
-    client = CdpSocket(_Connection())
-    first = threading.Thread(target=client.send, args=({"id": 1, "method": "a"},))
-    first.start()
-    assert inside.wait(5)
-    second = threading.Thread(target=client.send, args=({"id": 2, "method": "b"},))
-    second.start()
-    # The second waits while the first is still writing; a bounded wait, since nothing else would end it.
-    assert not second_in.wait(0.5)
-    release.set()
-    first.join(5)
-    second.join(5)
-    assert second_in.is_set() and len(written) == 2
+# The recorder's connection (the WebSocket client itself is tested in test_devtools_socket.py)
 
 
 def test_a_reader_that_ends_closes_only_its_own_connection_never_a_newer_one(tmp_path) -> None:
@@ -402,19 +288,6 @@ def test_a_reader_that_ends_closes_only_its_own_connection_never_a_newer_one(tmp
         assert recorder._socket is None and new.closed
     finally:
         recorder.close()
-
-
-def test_a_closed_connection_ends_the_read() -> None:
-    def script(connection, _server):
-        connection.sendall(_frame(b"\x03\xe8", opcode=8))
-
-    server = _Server(script)
-    client = CdpSocket.connect(f"ws://127.0.0.1:{server.port}/devtools/browser/x", timeout=5)
-    try:
-        with pytest.raises(ConnectionError):
-            client.receive()
-    finally:
-        client.close()
 
 
 # Sealing the record at the trial's end
@@ -1289,109 +1162,8 @@ def test_an_end_screenshot_the_browser_never_answers_does_not_hold_the_seal(tmp_
     assert [row["url"] for row in body["rows"]] == ["http://shop.test/"]
 
 
-# A world with no door: the browser's refusals in a kit-owned file, and the world_state file that says what it holds
-
-
-def _refused(log, host: str) -> None:
-    from fi.alk.harness.egress_proxy import EgressProxy
-
-    class _Proxy(EgressProxy):
-        via = "browser"
-
-    proxy = _Proxy([], log)
-    try:
-        proxy.refuse(host, "GET")
-    finally:
-        proxy.close()
-
-
-def test_a_world_with_no_door_keeps_the_browser_s_refusals_in_a_kit_file_cut_at_each_trial(tmp_path) -> None:
-    log = browser_record.BlockedFileLog(tmp_path / "w0-blocked.jsonl")
-    _refused(log, "www.example.com")
-    _refused(log, "www.example.com")
-    assert browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl") == [
-        {"host": "www.example.com", "method": "GET", "via": "browser", "count": 2}
-    ]
-    log.reset()
-    assert browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl") == []
-
-
-def test_a_blocked_file_is_capped_and_says_so(tmp_path) -> None:
-    log = browser_record.BlockedFileLog(tmp_path / "w0-blocked.jsonl", cap=2)
-    for host in ["a.example.com", "b.example.com", "c.example.com"]:
-        _refused(log, host)
-    found = browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl")
-    assert [one["host"] for one in found if "host" in one] == ["a.example.com", "b.example.com"]
-    assert {"truncated": True} in found
-
-
-def test_refusals_past_the_cap_add_no_more_lines_to_the_blocked_file(tmp_path) -> None:
-    path = tmp_path / "w0-blocked.jsonl"
-    log = browser_record.BlockedFileLog(path, cap=2)
-    for index in range(6):
-        _refused(log, f"h{index}.example.com")
-    lines = path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 3 and json.loads(lines[-1]) == {"truncated": True}
-
-
-def test_a_blocked_log_holds_no_more_in_memory_than_in_its_file(tmp_path) -> None:
-    log = browser_record.BlockedFileLog(tmp_path / "w0-blocked.jsonl", cap=2)
-    for index in range(6):
-        _refused(log, f"h{index}.example.com")
-    assert len(log.rows()) <= 2
-
-
-def test_a_blocked_file_that_could_not_be_cut_is_unreadable_never_the_last_trial_s(tmp_path, monkeypatch) -> None:
-    path = tmp_path / "w0-blocked.jsonl"
-    log = browser_record.BlockedFileLog(path)
-    _refused(log, "last.example.com")
-
-    def cannot(*args, **kwargs):
-        raise OSError("read-only")
-
-    monkeypatch.setattr(browser_record, "_write_text", cannot)
-    log.reset()
-    assert browser_record.blocked_from_file(path) is None
-
-
-def test_a_kit_file_larger_than_its_limit_is_never_read_whole(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(browser_record, "KIT_FILE_BYTES", 64)
-    asked: list[int] = []
-    path_open = browser_record.Path.open
-
-    class _Counted:
-        def __init__(self, handle) -> None:
-            self.handle = handle
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc) -> None:
-            self.handle.close()
-
-        def read(self, size: int = -1) -> bytes:
-            asked.append(size)
-            return self.handle.read(size)
-
-    def counted_open(path, mode="r", *args, **kwargs):
-        handle = path_open(path, mode, *args, **kwargs)
-        return _Counted(handle) if mode == "rb" else handle
-
-    monkeypatch.setattr(browser_record.Path, "open", counted_open)
-    big = tmp_path / "w0-blocked.jsonl"
-    big.write_text(json.dumps({"arguments": {"host": "a.example.com"}, "pad": "x" * 100}) + "\n")
-    assert browser_record.blocked_from_file(big) is None
-    record = tmp_path / "w0-record.json"
-    record.write_text(json.dumps({"complete": True, "rows": [], "pad": "x" * 100}))
-    assert browser_record.sealed_record(record, timeout=0.1) is None
-    # Never more than one byte past the limit is asked for, so a file of any size costs no more to refuse.
-    assert asked and all(0 <= size <= 65 for size in asked)
-
-
-def test_a_blocked_file_that_cannot_be_read_is_unreadable_never_empty(tmp_path) -> None:
-    assert browser_record.blocked_from_file(tmp_path / "missing.jsonl") is None
-    (tmp_path / "bad.jsonl").write_text("{not json\n")
-    assert browser_record.blocked_from_file(tmp_path / "bad.jsonl") is None
+# A world with no door: the world_state file that says what it holds (the kit-owned file of refusals is tested in
+# test_browser_blocked_log.py)
 
 
 def test_the_sealed_record_carries_counts_never_rows() -> None:

@@ -2786,7 +2786,8 @@ def test_a_chat_trial_s_browser_screenshots_are_uploaded_after_its_transcript(
 def test_a_browser_trial_with_no_door_keeps_a_world_state_file_saying_the_world_was_not_recorded(
     tmp_path: Path, monkeypatch: Any, include_tools: bool
 ) -> None:
-    from fi.alk.harness.browser_record import BROWSER_STATE_SCHEMA, BlockedFileLog
+    from fi.alk.harness.browser_blocked_log import BlockedFileLog
+    from fi.alk.harness.browser_record import BROWSER_STATE_SCHEMA
     from fi.alk.harness.egress_proxy import EgressProxy
 
     tool_world = _ToolWorld()
@@ -2879,7 +2880,7 @@ def _browser_trial(
     """A chat trial of a world whose browser the agent never attached to, with one page it was refused. With
     ``kit_file`` the refusal is in the kit-owned file, as a world with the kit's in-process door writes it; without,
     the world's door keeps it. With ``end_readable`` the world's end snapshot reads back."""
-    from fi.alk.harness.browser_record import BlockedFileLog
+    from fi.alk.harness.browser_blocked_log import BlockedFileLog
     from fi.alk.harness.call_runner import END_STATE_KEY, TrialRecords
     from fi.alk.harness.egress_proxy import EgressProxy
 

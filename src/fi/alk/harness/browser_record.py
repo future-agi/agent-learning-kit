@@ -30,9 +30,7 @@ import logging
 import os
 import secrets
 import shutil
-import socket
 import stat
-import struct
 import threading
 import time
 import uuid
@@ -42,10 +40,11 @@ from typing import Any
 from urllib import request as urllib_request
 from urllib.parse import urlsplit
 
+from .browser_blocked_log import blocked_from_file, read_kit_file, write_text
+from .devtools_socket import CdpSocket
 from .egress_proxy import entry_admits
 from .kit_browser import browser_used
 from .outbound import redact_outbound_text
-from .world_door import MemoryLog
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +55,6 @@ SHOT_BYTES = 8 * 1024 * 1024
 _SHOT = {"format": "jpeg", "quality": 60}
 _TEXT = 200
 _SAME_ATTEMPT_SECONDS = 2.0
-# The most of a kit-written file the platform's side reads: more than a capped record can be, so more is not one.
-KIT_FILE_BYTES = 64 * 1024 * 1024
 _ACTIONS = frozenset({"click", "typing"})
 _TARGET_FIELDS = ("tag", "role", "label", "text")
 
@@ -361,134 +358,6 @@ class BrowserRecord:
             self._truncated = True
             return
         self._rows.append({**row, "tab": self._tab(tab), "at": self.clock()})
-
-
-# The DevTools connection
-
-
-_MESSAGE_BYTES = 32 * 1024 * 1024
-_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-
-class FrameTooLarge(ConnectionError):
-    pass
-
-
-def accept_key(key: str) -> str:
-    return base64.b64encode(hashlib.sha1((key + _GUID).encode()).digest()).decode()
-
-
-class CdpSocket:
-    """A WebSocket client for one DevTools connection, on the standard library: text messages, masked as a client
-    must, pieces put back together, pings answered, and nothing over a fixed size read into memory."""
-
-    def __init__(self, connection: socket.socket) -> None:
-        self._connection = connection
-        self._buffer = b""
-        self._sending = threading.Lock()
-
-    @classmethod
-    def connect(cls, url: str, *, timeout: float = 10.0) -> CdpSocket:
-        parts = urlsplit(url)
-        if parts.scheme != "ws" or not parts.hostname or not parts.port:
-            raise ConnectionError(f"not a local DevTools address: {url}")
-        connection = socket.create_connection((parts.hostname, parts.port), timeout=timeout)
-        try:
-            key = base64.b64encode(os.urandom(16)).decode()
-            connection.sendall(
-                (
-                    f"GET {parts.path or '/'} HTTP/1.1\r\nHost: {parts.hostname}:{parts.port}\r\n"
-                    f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
-                    "Sec-WebSocket-Version: 13\r\n\r\n"
-                ).encode()
-            )
-            client = cls(connection)
-            head = client._until(b"\r\n\r\n")
-            lines = head.decode("latin-1").split("\r\n")
-            if " 101 " not in lines[0] + " ":
-                raise ConnectionError(f"the browser refused the DevTools connection: {lines[0]}")
-            answers = {
-                name.strip().lower(): value.strip()
-                for name, _, value in (line.partition(":") for line in lines[1:])
-            }
-            if answers.get("sec-websocket-accept") != accept_key(key):
-                raise ConnectionError("the DevTools connection answered with the wrong key")
-            connection.settimeout(None)
-            return client
-        except BaseException:
-            connection.close()
-            raise
-
-    def send(self, message: dict[str, Any]) -> None:
-        data = json.dumps(message).encode()
-        mask = os.urandom(4)
-        length = len(data)
-        if length < 126:
-            head = struct.pack("!BB", 0x81, 0x80 | length)
-        elif length < 65536:
-            head = struct.pack("!BBH", 0x81, 0x80 | 126, length)
-        else:
-            head = struct.pack("!BBQ", 0x81, 0x80 | 127, length)
-        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(data))
-        with self._sending:
-            self._connection.sendall(head + mask + masked)
-
-    def receive(self) -> dict[str, Any]:
-        parts: list[bytes] = []
-        size = 0
-        while True:
-            first, second = self._exact(2)
-            opcode = first & 0x0F
-            length = second & 0x7F
-            if length == 126:
-                length = struct.unpack("!H", self._exact(2))[0]
-            elif length == 127:
-                length = struct.unpack("!Q", self._exact(8))[0]
-            if size + length > _MESSAGE_BYTES:
-                raise FrameTooLarge(f"a DevTools message over {_MESSAGE_BYTES} bytes")
-            mask = self._exact(4) if second & 0x80 else b""
-            data = self._exact(length) if length else b""
-            if mask:
-                data = bytes(byte ^ mask[index % 4] for index, byte in enumerate(data))
-            if opcode == 8:
-                raise ConnectionError("the browser closed the DevTools connection")
-            if opcode == 9:
-                with self._sending:
-                    self._connection.sendall(struct.pack("!BB", 0x8A, 0x80) + os.urandom(4))
-                continue
-            if opcode == 10:
-                continue
-            parts.append(data)
-            size += length
-            if first & 0x80:
-                return json.loads(b"".join(parts))
-
-    def close(self) -> None:
-        try:
-            self._connection.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        self._connection.close()
-
-    def _until(self, marker: bytes) -> bytes:
-        while marker not in self._buffer:
-            if len(self._buffer) > 65536:
-                raise ConnectionError("the DevTools handshake was too long")
-            self._fill()
-        head, _, self._buffer = self._buffer.partition(marker)
-        return head
-
-    def _exact(self, count: int) -> bytes:
-        while len(self._buffer) < count:
-            self._fill()
-        data, self._buffer = self._buffer[:count], self._buffer[count:]
-        return data
-
-    def _fill(self) -> None:
-        chunk = self._connection.recv(65536)
-        if not chunk:
-            raise ConnectionError("the DevTools connection closed")
-        self._buffer += chunk
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -860,14 +729,14 @@ def sealed_record(record_path: Path, *, timeout: float = 5.0) -> dict[str, Any] 
     None when there is no record at all."""
     nonce = uuid.uuid4().hex
     try:
-        _write_text(seal_request_path(record_path), nonce)
+        write_text(seal_request_path(record_path), nonce)
     except OSError:
         logger.warning("browser record: the seal could not be asked for at %s", record_path)
     deadline = time.monotonic() + timeout
     body: Any = None
     while True:
         try:
-            body = json.loads(_read_kit_file(record_path))
+            body = json.loads(read_kit_file(record_path))
         except (OSError, ValueError):
             body = None
         if isinstance(body, dict) and body.get("sealed") == nonce:
@@ -882,21 +751,6 @@ def sealed_record(record_path: Path, *, timeout: float = 5.0) -> dict[str, Any] 
     body["complete"] = False
     body.setdefault("why_incomplete", "the record was not sealed in time")
     return body
-
-
-def _read_kit_file(path: Path) -> str:
-    """A kit-written file's text; ValueError when it is larger than any the kit writes."""
-    with path.open("rb") as handle:
-        data = handle.read(KIT_FILE_BYTES + 1)
-    if len(data) > KIT_FILE_BYTES:
-        raise ValueError(f"{path.name} is larger than {KIT_FILE_BYTES} bytes")
-    return data.decode("utf-8")
-
-
-def _write_text(path: Path, text: str) -> None:
-    fresh = path.with_name(f"{path.name}.{uuid.uuid4().hex}.new")
-    fresh.write_text(text, encoding="utf-8")
-    os.replace(fresh, path)
 
 
 def split_blocked(blocked: list[dict[str, Any]], record: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1108,73 +962,6 @@ BROWSER_STATE_SCHEMA = "futureagi.browser-world-state.v1"
 BROWSER_STATE_KEY = "browser_state_artifact"
 NO_WORLD_DOOR = "no_world_door"
 WORLD_END_UNREADABLE = "world_end_unreadable"
-
-
-class BlockedFileLog(MemoryLog):
-    """The browser's refused attempts in a world with no door: a kit-owned file the agent's user cannot write, cut
-    at each start of the browser, capped, and cleaned as other rows are."""
-
-    def __init__(self, path: Path, *, cap: int = RECORD_ROWS) -> None:
-        super().__init__()
-        self.path = path
-        self.cap = cap
-        self._written = 0
-        self._file_lock = threading.Lock()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.reset()
-
-    def reset(self) -> None:
-        with self._file_lock:
-            self._written = 0
-            try:
-                _write_text(self.path, "")
-            except OSError:
-                # Last start's rows must never be read as this one's: with no file the trial reads them unreadable.
-                logger.warning("browser record: the blocked log %s could not be cut", self.path)
-                try:
-                    self.path.unlink(missing_ok=True)
-                except OSError:
-                    logger.warning("browser record: the blocked log %s could not be removed either", self.path)
-        with self._lock:
-            self._rows.clear()
-
-    def write(self, row: dict[str, Any]) -> None:
-        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
-        kept = {
-            **{key: row[key] for key in ("actor_id", "outcome", "refusal_code", "method") if key in row},
-            "arguments": {key: _clean(arguments[key], 253) for key in ("host", "method", "via") if arguments.get(key)},
-            "at": time.time(),
-        }
-        with self._file_lock:
-            if self._written > self.cap:
-                return
-            if self._written < self.cap:
-                super().write(row)
-            self._written += 1
-            line = {"truncated": True} if self._written > self.cap else kept
-            try:
-                with self.path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(line, default=str) + "\n")
-            except OSError:
-                logger.warning("browser record: the blocked log %s could not be written", self.path)
-
-
-def blocked_from_file(path: Path) -> list[dict[str, Any]] | None:
-    """The browser's refusals from its kit-owned file, grouped as a trial's blocked list; None when the file cannot be
-    read, never an empty list in its place."""
-    from .call_runner import trial_state_changes
-
-    try:
-        lines = _read_kit_file(path).splitlines()
-        rows = [json.loads(line) for line in lines if line.strip()]
-    except (OSError, ValueError):
-        return None
-    if not all(isinstance(row, dict) for row in rows):
-        return None
-    truncated = any(row.get("truncated") is True for row in rows)
-    changes = trial_state_changes([row for row in rows if "truncated" not in row], {})
-    blocked = next((list(entry.get("blocked") or []) for entry in changes if entry.get("who") == "agent"), [])
-    return blocked + ([{"truncated": True}] if truncated else [])
 
 
 def browser_counts(evidence: dict[str, Any]) -> dict[str, Any]:

@@ -78,7 +78,7 @@ def world_browser_environment(
         return {}
     browser = context.browsers.get(world_index)
     if browser is None:
-        from .browser_record import BlockedFileLog
+        from .browser_blocked_log import BlockedFileLog
 
         database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
         door = any(name in endpoints for name in ("world_door", "tool_proxy"))
