@@ -1042,6 +1042,8 @@ def test_a_listed_screenshot_that_cannot_be_sent_whole_and_as_named_is_said_not_
     assert ids == ("artifact-1",)
     assert [data for _, data in adapter.kinds] == [b"\xff\xd8one"]
     assert notices == [browser_record.not_kept_notice(3)]
+    # Lost before they reached the platform: the notice never says the platform dropped them.
+    assert "platform did not keep" not in notices[0]["message"]
 
 
 def test_screenshots_the_platform_did_not_keep_are_said_and_never_fail_the_trial(tmp_path) -> None:
