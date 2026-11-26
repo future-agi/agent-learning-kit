@@ -6566,7 +6566,7 @@ def _refuse_other_sessions(
         password=credentials.password,
         dbname="postgres",
         statement="SELECT usename::text FROM pg_stat_activity "
-        f"WHERE datname = '{baseline_db}' AND usename <> current_user AND pid <> pg_backend_pid()",
+        f"WHERE datname = {_literal(baseline_db)} AND usename <> current_user AND pid <> pg_backend_pid()",
         read_only=True,
     )
     held = sorted({str(row[0]) for row in rows or [] if row and row[0]})
@@ -6603,7 +6603,7 @@ def _end_sessions_of(
         password=credentials.password,
         dbname="postgres",
         statement="SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-        f"WHERE usename = '{login.username}' AND pid <> pg_backend_pid()",
+        f"WHERE usename = {_literal(login.username)} AND pid <> pg_backend_pid()",
     )
     # Ending a session is asynchronous: wait (briefly) until none is left, so a check that follows sees them gone.
     deadline = time.monotonic() + 5.0
@@ -6617,7 +6617,7 @@ def _end_sessions_of(
             user=credentials.username,
             password=credentials.password,
             dbname="postgres",
-            statement=f"SELECT count(*) FROM pg_stat_activity WHERE usename = '{login.username}'",
+            statement=f"SELECT count(*) FROM pg_stat_activity WHERE usename = {_literal(login.username)}",
             read_only=True,
         )
         if not left or not left[0] or not left[0][0]:
@@ -6876,14 +6876,21 @@ def _grant_log_readers(run: Callable[[str, str], None], baseline_db: str) -> Non
         )
 
 
+def _literal(value: str) -> str:
+    """A name as a SQL string literal, quoted by the driver: never pasted between quotes by hand."""
+    from psycopg import sql
+
+    return sql.Literal(value).as_string(None)
+
+
 def _only_member_of(role: str, group: str) -> list[str]:
     """A per-world role in its one group and no other, and with no setting of its own: roles outlive a build, and a
     group or a setting an older harness, or the world's code, gave one would otherwise stay."""
     return [
         "DO $$ DECLARE g text; BEGIN FOR g IN SELECT gr.rolname FROM pg_auth_members a "
         "JOIN pg_roles gr ON gr.oid = a.roleid JOIN pg_roles r ON r.oid = a.member "
-        f"WHERE r.rolname = '{role}' AND gr.rolname <> '{group}' LOOP "
-        f"EXECUTE format('REVOKE %I FROM %I', g, '{role}'); END LOOP; END $$",
+        f"WHERE r.rolname = {_literal(role)} AND gr.rolname <> {_literal(group)} LOOP "
+        f"EXECUTE format('REVOKE %I FROM %I', g, {_literal(role)}); END LOOP; END $$",
         f'GRANT "{group}" TO "{role}"',
         _without_settings(role),
     ]
@@ -6892,10 +6899,10 @@ def _only_member_of(role: str, group: str) -> list[str]:
 def _without_settings(role: str) -> str:
     """Every `ALTER ROLE ... SET` a role carries, in any database, taken back."""
     return (
-        f"DO $$ DECLARE d text; BEGIN EXECUTE format('ALTER ROLE %I RESET ALL', '{role}'); "
+        f"DO $$ DECLARE d text; BEGIN EXECUTE format('ALTER ROLE %I RESET ALL', {_literal(role)}); "
         "FOR d IN SELECT db.datname FROM pg_db_role_setting s JOIN pg_database db ON db.oid = s.setdatabase "
-        f"JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = '{role}' LOOP "
-        f"EXECUTE format('ALTER ROLE %I IN DATABASE %I RESET ALL', '{role}', d); END LOOP; END $$"
+        f"JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = {_literal(role)} LOOP "
+        f"EXECUTE format('ALTER ROLE %I IN DATABASE %I RESET ALL', {_literal(role)}, d); END LOOP; END $$"
     )
 
 

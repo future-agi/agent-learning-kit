@@ -3,7 +3,10 @@ it, read on `pg_catalog` alone so each is spelled the same whichever session rea
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from psycopg import Connection
 
 # Every definition of the world's own, a digest per kind, read on `pg_catalog` alone so each is spelled the same
 # whichever session reads it: a reset compares it with its snapshot's before it commits.
@@ -71,7 +74,7 @@ _CATALOG = " UNION ALL ".join(
 )
 
 
-def catalog_digest(connection: Any) -> dict[str, str]:
+def catalog_digest(connection: Connection[Any]) -> dict[str, str]:
     """Every definition of the world's own, a digest per kind, spelled on `pg_catalog` alone (call inside a
     transaction: the search path is set for it only)."""
     connection.execute("SET LOCAL search_path = pg_catalog")

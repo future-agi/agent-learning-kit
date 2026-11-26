@@ -20,15 +20,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...world_door import WORLD_ROLE_SESSION
 from ..errors import WorldQueryRejected
 from . import Held, Snapshot, StoreError, WorldResetRefused
 from .catalog_digest import catalog_digest
 from .container import ContainerStore, docker
+
+if TYPE_CHECKING:
+    from psycopg import Connection
 
 SCHEMA = "schema.sql"
 
@@ -59,6 +62,11 @@ _FOREIGN_KEYS = (
 )
 # Every schema of the world's own: a reset puts back every one, not only `public`.
 _CUSTOMER_SCHEMA = "schemaname NOT IN ('pg_catalog', 'information_schema') AND schemaname NOT LIKE 'pg\\_%'"
+
+
+def _as_multiset(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Rows compared whatever order they come back in (a table may have no key to order by)."""
+    return sorted(repr(sorted(row.items())) for row in rows)
 
 
 def _key(schema: str, table: str) -> str:
@@ -238,7 +246,7 @@ class PostgresStore(ContainerStore):
             names = [name for name in names if not name.startswith("_alk_") and name != "harness_seed_sentinel"]
         return names
 
-    def _reset_tables(self, connection: Any) -> list[tuple[str, str]]:
+    def _reset_tables(self, connection: Connection[Any]) -> list[tuple[str, str]]:
         """Every table of the world's own, in every customer schema: (schema, table). The harness's own are left out
         for a reset by the store role, which has no right on them."""
         rows = connection.execute(
@@ -253,7 +261,7 @@ class PostgresStore(ContainerStore):
             ]
         return tables
 
-    def _column_kinds(self, connection: Any, schema: str, table: str) -> dict[str, tuple[str, str, str]]:
+    def _column_kinds(self, connection: Connection[Any], schema: str, table: str) -> dict[str, tuple[str, str, str]]:
         """Each column's (type, identity, generated): a stored generated column is never written back, and an
         identity column that is always generated takes its value back only with OVERRIDING SYSTEM VALUE."""
         rows = connection.execute(
@@ -264,7 +272,7 @@ class PostgresStore(ContainerStore):
         ).fetchall()
         return {str(name): (str(kind), str(identity), str(generated)) for name, kind, identity, generated in rows}
 
-    def _put_back(self, connection: Any, schema: str, table: str, rows: list[dict[str, Any]]) -> None:
+    def _put_back(self, connection: Connection[Any], schema: str, table: str, rows: list[dict[str, Any]]) -> None:
         """A table's rows as the snapshot held them, generated columns left to the table and identity values kept."""
         if not rows:
             return
@@ -292,7 +300,7 @@ class PostgresStore(ContainerStore):
         finally:
             connection.execute("SET LOCAL search_path = pg_catalog, pg_temp")
 
-    def _counters(self, connection: Any) -> dict[str, Any]:
+    def _counters(self, connection: Connection[Any]) -> dict[str, Any]:
         rows = connection.execute(
             f"SELECT schemaname, sequencename, last_value FROM pg_sequences WHERE {_CUSTOMER_SCHEMA}"
         ).fetchall()
@@ -303,7 +311,7 @@ class PostgresStore(ContainerStore):
             and not (getattr(self, "_restore_as_role", False) and schema == "public" and str(sequence).startswith("_alk_"))
         }
 
-    def _set_counters(self, connection: Any, counters: dict[str, Any]) -> None:
+    def _set_counters(self, connection: Connection[Any], counters: dict[str, Any]) -> None:
         """Each of the world's sequences back where the snapshot found it; one the snapshot never saw used, to its
         start."""
         for schema, sequence, start in connection.execute(
@@ -317,7 +325,7 @@ class PostgresStore(ContainerStore):
                 (_ident(str(schema), str(sequence)), value if value is not None else start, value is not None),
             )
 
-    def _primary_key(self, connection: Any, table: str, schema: str = "public") -> list[str]:
+    def _primary_key(self, connection: Connection[Any], table: str, schema: str = "public") -> list[str]:
         """The primary key columns, used only to read rows back in a stable order.
 
         Joined through ``pg_class``/``pg_namespace`` rather than a ``%s::regclass`` cast over an
@@ -339,7 +347,7 @@ class PostgresStore(ContainerStore):
         ).fetchall()
         return [row[0] for row in rows]
 
-    def _column_types(self, connection: Any, table: str, schema: str = "public") -> dict[str, str]:
+    def _column_types(self, connection: Connection[Any], table: str, schema: str = "public") -> dict[str, str]:
         """Return declared column types so writes use the source schema's representation.
 
         New managed clusters are always UTF-8, but an externally attached or older SQL_ASCII
@@ -361,7 +369,7 @@ class PostgresStore(ContainerStore):
 
         return {text(row[0]): text(row[1]) for row in rows}
 
-    def _select_ordered(self, connection: Any, table: str, schema: str = "public") -> list[dict[str, Any]]:
+    def _select_ordered(self, connection: Connection[Any], table: str, schema: str = "public") -> list[dict[str, Any]]:
         """Every row of one table, ordered by its primary key where it has one.
 
         Without that order the same data comes back in whatever sequence the heap happens to
@@ -437,17 +445,16 @@ class PostgresStore(ContainerStore):
         return Snapshot(rows=rows, counters=counters, catalog=catalog)
 
 
-    def _verify_reset(self, connection: Any, snapshot: Snapshot, tables: list[tuple[str, str]]) -> None:
+    def _verify_reset(self, connection: Connection[Any], snapshot: Snapshot, tables: list[tuple[str, str]]) -> None:
         # Deferred checks of the world's fire now, before what they did is read, never at the commit after it.
         connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         """Before a reset commits: the world as its snapshot held it, every table's rows (their count, for rows read
         from disk) and every definition, or nothing of the reset is kept and the world is refused. The world's own
         code a reset runs (a check, an index expression) is what could leave it otherwise."""
-        sorted_rows = lambda rows: sorted(repr(sorted(row.items())) for row in rows)  # noqa: E731
         for schema, table in tables:
             held = snapshot.rows.get(_key(schema, table)) or []
             now = self._select_ordered(connection, table, schema)
-            same = sorted_rows(now) == sorted_rows(held) if snapshot.catalog else len(now) == len(held)
+            same = _as_multiset(now) == _as_multiset(held) if snapshot.catalog else len(now) == len(held)
             if not same:
                 raise WorldResetRefused(
                     f"the reset left {schema}.{table} other than its snapshot ({len(now)} rows, {len(held)} expected): "
