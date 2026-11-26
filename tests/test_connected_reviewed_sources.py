@@ -195,11 +195,12 @@ def _load_world(workspace):
 
 
 def _arguments(case, name="Track a shipment"):
+    eta = next((f["value"] for f in case.get("starting_facts", []) if f["field"].rsplit("/", 1)[-1] == "eta"), "Tuesday")
     return {
         "name": name,
         "use_case": "Track an order",
         "instruction": "Ask about the status of order 4821.",
-        "tests": "Reports that order 4821 has shipped and arrives on Tuesday.",
+        "tests": f"Reports that order 4821 has shipped and arrives on {eta}.",
         "fixture": {"origin": "seed", "reviewed_source": case["id"]},
         "sub_goals": ["order-status"],
         "solution": [],
@@ -513,6 +514,7 @@ def test_grading_codes_stay_out_of_source_scenario_presentation(field, value):
         bind_source_case({**args, field:value}, case)
     saved = bind_source_case(args, case)
     assert saved["instruction"] == args["instruction"]
+    assert saved["tests"] == args["tests"]
     assert saved["fixture"]["reviewed_source"]["citations"] == case["citations"]
 
 

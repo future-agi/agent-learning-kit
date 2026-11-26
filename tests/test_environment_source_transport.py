@@ -421,7 +421,8 @@ def test_public_cases_match_connected_authoring_on_genuine_order_agent(tmp_path)
         assert binder["fixture"]["reviewed_source"] == case
         assert case["proof_digest"] not in native["instruction"]
         assert "ORDER_GRADER_SECRET_9X" not in native["instruction"]
-        assert case["category"] in native["tests"]
+        assert binder["tests"] == native["tests"]
+        assert "Reviewed source expectations:" not in native["tests"]
         unrelated = Scenario.model_validate(
             {
                 **native,

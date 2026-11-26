@@ -285,6 +285,9 @@ def _record_assertion_matches(test_text: str, instruction: str, case: Mapping[st
         _affirmed(test_text, _identifier_pattern(word)) for word in _WORDS.findall(service.casefold())
     ):
         return False
+    eta = fields.get("eta")
+    if eta and not _affirmed(test_text, _identifier_pattern(str(eta))):
+        return False
     processing = fields.get("processing_days")
     if processing is not None and str(processing).isdigit():
         days = int(processing)
@@ -366,14 +369,6 @@ def safe_source_context(case: Mapping[str, Any]) -> str:
     if sources:
         parts.append("approved source " + ", ".join(sources))
     return "; ".join(parts) or "the approved source"
-
-
-def expected_source_semantics(case: Mapping[str, Any]) -> str:
-    public = {
-        key: case.get(key)
-        for key in ("category", "starting_facts", "policy_reference", "citations")
-    }
-    return "Reviewed source expectations: " + _canonical_json(public)
 
 
 def bind_source_case(
@@ -458,10 +453,6 @@ def bind_source_case(
     variables = dict(bound.get("variables") or {})
     variables["reviewed_source_context"] = context
     bound["variables"] = variables
-    tests = str(bound.get("tests") or "").strip()
-    expected = expected_source_semantics(case)
-    if expected not in tests:
-        bound["tests"] = (tests + "\n\n" + expected).strip()
     fixture = dict(bound.get("fixture") or {})
     fixture[SOURCE_FIXTURE] = _canonical_value(case)
     bound["fixture"] = fixture
