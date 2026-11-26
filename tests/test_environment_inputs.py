@@ -476,7 +476,7 @@ def test_redaction_keeps_common_phone_formats_private(number) -> None:
 def test_text_synthetic_replacement_is_consistent_and_avoids_originals() -> None:
     source = EnvironmentSource(
         "p", "contacts.txt", "text/plain",
-        b"Contact Alice@example.com or +1-202-555-0100. Again: alice@example.com. Do not use person0001@example.invalid.",
+        b"Contact Alice@example.com or (202) 555-0100. Again: alice@example.com. Do not use person0001@example.invalid.",
         "reference",
     )
     draft = prepare_environment_inputs((source,), synthetic_text_sources=("p",))

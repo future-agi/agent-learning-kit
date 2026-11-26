@@ -586,7 +586,10 @@ def _compile_projection(
 def _synthetic_contact_replacements(parsed: RawPolicyDocument, pattern, *, email: bool):
     """Keep repeated contacts consistent across pages without retaining an original value."""
     def identity(value):
-        return value.casefold() if email else re.sub(r"\D", "", value)
+        if email:
+            return value.casefold()
+        digits = re.sub(r"\D", "", value)
+        return "1" + digits if len(digits) == 10 else digits
 
     originals = dict.fromkeys(
         identity(match.group()) for page in parsed.pages for match in pattern.finditer(page.text)
