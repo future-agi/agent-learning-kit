@@ -2984,6 +2984,9 @@ def test_a_door_log_that_cannot_be_read_leaves_the_browser_s_refusals_unreadable
     [(_, end)] = [one for one in adapter.stored if one[0] == "world_state"]
     body = json.loads(end)
     assert body.get("blocked_unreadable") is True and "blocked" not in body
+    # The sealed record says so too: the run page reads a door trial's refusals from it.
+    [agent] = [one for one in adapter.world()["state_changes"] if one.get("who") == "agent"]
+    assert agent["browser_blocked_unreadable"] is True
 
 
 def test_a_readable_world_s_end_with_its_browser_is_named_as_the_end_state_alone(

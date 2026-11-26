@@ -1246,6 +1246,30 @@ def test_with_no_record_the_sealed_record_keeps_the_proxy_s_counts() -> None:
     assert browser_record.sealed_browser_blocked(changes, None) == changes
 
 
+def test_refusals_that_could_not_be_read_leave_the_sealed_record_saying_so_never_a_shorter_list() -> None:
+    # The one source of the browser's refusals could not be read: the agent's sealed list keeps its own calls' rows,
+    # holds none of the browser's in their place, and says the browser's are unreadable.
+    door_row = {"host": "www.example.com", "method": "GET", "via": "browser", "count": 1}
+    own = {"host": "api.other.test", "method": "POST", "tool": "lookup", "count": 1}
+    changes = [{"who": "agent", "attempted": 1, "blocked": [door_row, own]}]
+    record = {"blocked_navigations": [{"url": "http://www.example.com/", "at": 1.0}]}
+    [agent] = browser_record.sealed_browser_blocked(changes, record, refused=None)
+    assert agent["browser_blocked_unreadable"] is True
+    assert agent["blocked"] == [own]
+    # Given nothing about the browser's own source, the entry's list is split as before and says nothing more.
+    [plain] = browser_record.sealed_browser_blocked(changes, record)
+    assert "browser_blocked_unreadable" not in plain
+
+
+def test_a_capped_refusal_list_leaves_the_sealed_record_saying_it_was_capped() -> None:
+    changes = [{"who": "agent", "attempted": 0}]
+    refused = [{"host": "a.example.com", "method": "GET", "via": "browser", "count": 1}, {"truncated": True}]
+    [agent] = browser_record.sealed_browser_blocked(changes, {"blocked_navigations": []}, refused=refused)
+    assert agent["browser_blocked_truncated"] is True
+    assert all("host" in one for one in agent["blocked"])
+    assert [one["host"] for one in agent["blocked"]] == ["a.example.com"]
+
+
 # Typed text and the run's artifact level
 
 
