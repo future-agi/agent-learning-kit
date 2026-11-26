@@ -412,7 +412,7 @@ def test_a_record_is_never_parsed_from_a_contract_over_the_cap(monkeypatch):
 
 
 def test_a_failed_record_keeps_the_reading(tmp_path, monkeypatch):
-    def broken(job, raw):
+    def broken(job, raw, profile=None):
         raise OSError("the disk refused the write")
 
     monkeypatch.setattr(seed_contract, "with_record", broken)
@@ -425,7 +425,7 @@ def test_a_failed_record_keeps_the_reading(tmp_path, monkeypatch):
 
 
 def test_a_failed_record_keeps_its_traceback(tmp_path, monkeypatch, caplog):
-    def broken(job, raw):
+    def broken(job, raw, profile=None):
         raise RuntimeError("rec-9")
 
     monkeypatch.setattr(seed_contract, "with_record", broken)
@@ -457,7 +457,7 @@ def test_a_save_after_the_read_is_never_overwritten(tmp_path, monkeypatch, later
     reading = _reading(tmp_path, _READ)
     real = seed_contract.with_record
 
-    def saved_meanwhile(job, raw):
+    def saved_meanwhile(job, raw, profile=None):
         # The session saves again while the record is being made.
         (reading / "contract.json").write_bytes(later)
         return real(job, raw)
@@ -479,7 +479,7 @@ def test_the_record_is_made_from_the_bytes_the_document_used(
     real = seed_contract.with_record
     seen: list[bytes] = []
 
-    def spy(job, raw):
+    def spy(job, raw, profile=None):
         seen.append(raw)
         return real(job, raw)
 
@@ -1322,7 +1322,7 @@ def _install_breaks(tmp_path, monkeypatch, runtime) -> None:
 
 
 def _check_breaks(tmp_path, monkeypatch, runtime) -> None:
-    def breaks(body, job):
+    def breaks(body, job, profile=None):
         raise RuntimeError("boom-7")
 
     monkeypatch.setattr(seed_contract, "differs", breaks)
@@ -1406,7 +1406,7 @@ def _install_holds_values(tmp_path, monkeypatch, runtime) -> None:
 
 
 def _check_holds_values(tmp_path, monkeypatch, runtime) -> None:
-    def fails(body, job):
+    def fails(body, job, profile=None):
         raise _holding_values()
 
     monkeypatch.setattr(seed_contract, "differs", fails)
@@ -1904,7 +1904,7 @@ def test_the_builder_hands_over_the_agents_source(tmp_path, monkeypatch):
     runtime._what_exists = HostedChatRuntime._what_exists.__get__(runtime)
     handed = []
 
-    def use(seed, job, source, output):
+    def use(seed, job, source, output, profile=None):
         handed.append((source, output))
         return "mismatch", []
 
@@ -2160,6 +2160,173 @@ def test_a_readings_saves_hold_only_the_record_the_reading_put_in(tmp_path):
 
     write_contract(contract, reading)
     assert _made_from(json.loads(saved.read_bytes())) == record_for(job)
+
+
+HOSTED_SOURCE = {"kind": "provider", "visibility": "public"}
+HOSTED_CONTRACT = {
+    "agent": "support",
+    "modality": "chat",
+    "real_use_cases": ["order"],
+    "tools": [{"name": "add", "args": ["item_id"]}],
+}
+VAPI = {
+    "connector": "vapi",
+    "mode": "connect_only",
+    "config": {"assistant_id": "asst-1"},
+}
+PHONE = {
+    "connector": "phone",
+    "mode": "connect_only",
+    "config": {"phone_number": "+14155550123", "target_system_prompt": "Be kind."},
+}
+PROFILE = {
+    "provider": "vapi",
+    "modality": "voice",
+    "system_prompt": "Book a table.",
+    "tools": [{"name": "book", "parameters": {"type": "object"}}],
+}
+
+
+def _hosted(agent: dict = VAPI) -> HarnessJob:
+    return _job(source=HOSTED_SOURCE, agent=agent)
+
+
+def _config_profile(job: HarnessJob) -> dict:
+    return authoring_entrypoint._load_provider_import_profile(job, None)
+
+
+@pytest.mark.parametrize("agent", [VAPI, PHONE], ids=["vapi", "phone"])
+def test_a_hosted_reading_is_recorded_by_its_profile(agent):
+    job = _hosted(agent)
+    profile = PROFILE if agent is VAPI else _config_profile(job)
+
+    assert record_for(job, profile) == {
+        "version": 1,
+        "source": {
+            "kind": "provider",
+            "connector": agent["connector"],
+            "profile_sha256": hashlib.sha256(seed_contract._canon(profile)).hexdigest(),
+        },
+        "subfolder": "",
+        "evals_sha256": hashlib.sha256(b'[{"name":"a"}]').hexdigest(),
+        "generic_harness_v1": True,
+    }
+
+
+def test_no_hosted_record_without_a_profile_or_for_an_import():
+    assert record_for(_hosted()) is None
+    assert record_for(_hosted({**VAPI, "mode": "provider_import"}), PROFILE) is None
+    assert with_record(_hosted(), json.dumps(HOSTED_CONTRACT).encode()) is None
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {**PROFILE, "system_prompt": "Cancel a table."},
+        {**PROFILE, "tools": [*PROFILE["tools"], {"name": "cancel"}]},
+    ],
+    ids=["prompt", "tool"],
+)
+def test_a_hosted_reading_differs_once_its_profile_changes(changed):
+    job = _hosted()
+    body = json.loads(
+        _seed_bytes(job, HOSTED_CONTRACT, record=record_for(job, PROFILE))
+    )
+
+    assert differs(body, job, PROFILE) == []
+    assert differs(body, job, changed) == ["source"]
+    assert differs(body, job) == ["source"]
+
+
+def test_a_phone_reading_differs_once_its_prompt_changes():
+    job = _hosted(PHONE)
+    body = json.loads(
+        _seed_bytes(job, HOSTED_CONTRACT, record=record_for(job, _config_profile(job)))
+    )
+    edited = _hosted(
+        {**PHONE, "config": {**PHONE["config"], "target_system_prompt": "Be brief."}}
+    )
+
+    assert differs(body, job, _config_profile(job)) == []
+    assert differs(body, edited, _config_profile(edited)) == ["source"]
+
+
+def test_a_hosted_seed_is_used_on_an_empty_source(tmp_path):
+    job = _hosted()
+    seed = _place(
+        tmp_path, _seed_bytes(job, HOSTED_CONTRACT, record=record_for(job, PROFILE))
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "authoring"
+
+    assert use_seed(seed, job, source, output, PROFILE) == ("used", [])
+
+    assert (output / "contract.json").read_bytes() == seed.read_bytes()
+    assert (output / "generic-harness" / "source-model.json").is_file()
+
+
+def _no_provider_api(*_args, **_kwargs):
+    raise AssertionError("a seeded build never asks the provider for the profile")
+
+
+def _hosted_builder(tmp_path: Path, job: HarnessJob) -> HostedChatRuntime:
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+    runtime = _runtime(workspace)
+    runtime.job = job.model_dump(mode="json")
+    runtime.source = tmp_path / "source"
+    runtime.source.mkdir()
+    return runtime
+
+
+def test_the_builder_checks_a_hosted_seed_against_the_cached_profile(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        authoring_entrypoint, "inspect_provider_target", _no_provider_api
+    )
+    job = _hosted()
+    seed = _place(
+        tmp_path, _seed_bytes(job, HOSTED_CONTRACT, record=record_for(job, PROFILE))
+    )
+    runtime = _hosted_builder(tmp_path, job)
+    (tmp_path / "provider-import-profile.json").write_text(
+        json.dumps(PROFILE), encoding="utf-8"
+    )
+
+    assert runtime._use_seed(seed) == ("used", [])
+
+    assert (tmp_path / "authoring" / "contract.json").read_bytes() == seed.read_bytes()
+
+
+def test_a_hosted_seed_without_the_cached_profile_is_read_again(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        authoring_entrypoint, "inspect_provider_target", _no_provider_api
+    )
+    job = _hosted()
+    seed = _place(
+        tmp_path, _seed_bytes(job, HOSTED_CONTRACT, record=record_for(job, PROFILE))
+    )
+    runtime = _hosted_builder(tmp_path, job)
+
+    assert runtime._use_seed(seed) == ("mismatch", ["source"])
+
+    assert not (tmp_path / "authoring" / "contract.json").exists()
+    assert "seed contract: mismatch; differs: source" in capsys.readouterr().err
+
+
+def test_a_phone_seed_is_checked_against_the_jobs_prompt(tmp_path):
+    job = _hosted(PHONE)
+    seed = _place(
+        tmp_path,
+        _seed_bytes(job, HOSTED_CONTRACT, record=record_for(job, _config_profile(job))),
+    )
+    runtime = _hosted_builder(tmp_path, job)
+
+    assert runtime._use_seed(seed) == ("used", [])
 
 
 # -- a seed whose agent needs a browser ----------------------------------------------------------

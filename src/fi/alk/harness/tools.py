@@ -643,6 +643,19 @@ def _modules_as_the_process_imports_them(
 _ROOTED_MODES = {"import", "construct", "unreachable"}
 
 
+def without_local_state(contract: AgentContract) -> AgentContract:
+    return contract.model_copy(
+        update={
+            "data_schema": {},
+            "base_environment": {},
+            "tools": [
+                tool.model_copy(update={"tables_read": [], "tables_changed": []})
+                for tool in contract.tools
+            ],
+        }
+    )
+
+
 def _provider_prompt_copied(contract: AgentContract, whole: str | None) -> AgentContract:
     """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
     profile is in force and code could take every text of it (``whole``). Otherwise it is left
@@ -876,6 +889,7 @@ def contract_tools(
     subfolder: str | None = None,
     save_checks: Mode | None = None,
     save_stand_in: str | None = None,
+    provider_owned_state: bool = False,
     provider_profile: dict[str, Any] | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
@@ -1120,6 +1134,15 @@ def contract_tools(
                                 "data it holds or what the person you work with said; when the code and "
                                 "their words disagree, the code's: "
                                 '{"<an amount field>": "<its minor unit and currency>", "timeout": "milliseconds"}.',
+                            },
+                            "arg_required": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": 'Arguments the tool cannot be called without, from the code (a parameter with no default) or the provider\'s schema (its `required` list): ["order_id"]. Leave out an argument that has a default.',
+                            },
+                            "arg_bounds": {
+                                "type": "object",
+                                "description": 'The lowest and highest value a number argument accepts, where the code or the provider\'s schema states one (a check, `ge`/`le`, `minimum`/`maximum`): {"quantity": {"min": 1, "max": 10}}. Only the sides that are stated.',
                             },
                             "returns": {
                                 "type": "object",
@@ -2273,9 +2296,8 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        result = _save_contract(
-            _provider_prompt_copied(checked.contract, provider_prompt), destination
-        )
+        kept = without_local_state(checked.contract) if provider_owned_state else checked.contract
+        result = _save_contract(_provider_prompt_copied(kept, provider_prompt), destination)
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result
