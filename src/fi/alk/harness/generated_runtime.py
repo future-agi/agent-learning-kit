@@ -9,11 +9,13 @@ configuration never mutate or enter the customer's source tree.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import re
 import shlex
 import shutil
 import stat
+import subprocess
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -613,6 +615,15 @@ def python_workspace_root(source: Path, component: Path) -> Path:
     return component
 
 
+def _dependency_groups(document: dict[str, Any]) -> list[str]:
+    """The dependency groups a pyproject declares (PEP 735, and uv's older `dev-dependencies` as `dev`)."""
+    groups = document.get("dependency-groups")
+    names = [str(name) for name in groups] if isinstance(groups, dict) else []
+    if (document.get("tool", {}).get("uv", {}) or {}).get("dev-dependencies"):
+        names.append("dev")
+    return names
+
+
 def select_python_extras(
     root: Path,
     requested: list[str],
@@ -650,8 +661,21 @@ def select_python_extras(
                 owners[name].append(member)
     unknown = [name for name, projects in owners.items() if not projects]
     if unknown:
+        groups = {
+            canonicalize_name(group)
+            for project in (root, *python_workspace_members(root))
+            for group in _dependency_groups(_pyproject_document(project / "pyproject.toml"))
+        }
+        named = [name for name in unknown if name in groups]
         raise GeneratedRuntimeError(
-            "generated_runtime_extra_unknown: " + ", ".join(unknown)
+            "generated_runtime_extra_unknown: "
+            + ", ".join(unknown)
+            + (
+                f" ({', '.join(named)}: a dependency group, which the install command selects, such as "
+                "`uv sync --group <name>` or `--dev`; leave it out of runtime.extras)"
+                if named
+                else ""
+            )
         )
     ambiguous = [name for name, projects in owners.items() if len(projects) > 1]
     if ambiguous:
@@ -692,6 +716,86 @@ FRAMEWORK_INSTRUMENTORS = (
     # does, has them recorded only once the SDK is there, at the API's own version.
     ("opentelemetry-api", "opentelemetry-sdk"),
 )
+# Distributions that only mark how spans are made, not an agent framework of their own.
+_NOT_FRAMEWORKS = frozenset({"opentelemetry-api"})
+_FRAMEWORKS_READ_SECONDS = 20
+
+
+def installed_frameworks(source: Path | None = None) -> dict[str, str]:
+    """The agent framework distributions installed in the agent's environment, by version.
+
+    Read from a virtual environment inside ``source`` when it has one, else from the ``python3`` the
+    generated runtime installs the agent into. That interpreter also holds the harness's own
+    dependencies, so from it only the frameworks the agent's dependency files name are counted.
+    Anything unreadable reads as none: the certificate then records no frameworks rather than wrong
+    ones.
+    """
+    wanted = {
+        canonicalize_name(name)
+        for name, _ in FRAMEWORK_INSTRUMENTORS
+        if name not in _NOT_FRAMEWORKS
+    }
+    found: dict[str, str] = {}
+    paths = (
+        [
+            str(path)
+            for pattern in (".venv/lib/python*/site-packages", "*/.venv/lib/python*/site-packages")
+            for path in sorted(source.glob(pattern))
+        ]
+        if source is not None and source.is_dir()
+        else []
+    )
+    if paths:
+        for distribution in importlib.metadata.distributions(path=paths):
+            name = canonicalize_name(distribution.metadata["Name"] or "")
+            if name in wanted:
+                found.setdefault(name, distribution.version)
+        return dict(sorted(found.items()))
+    wanted = _declared(source, wanted)
+    if not wanted:
+        return {}
+    # The interpreter's distributions as they name themselves; their names are compared here.
+    script = (
+        "import importlib.metadata as m, json\n"
+        "print(json.dumps({d.metadata['Name']: d.version for d in m.distributions() if d.metadata['Name']}))\n"
+    )
+    try:
+        completed = subprocess.run(
+            ["python3", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=_FRAMEWORKS_READ_SECONDS,
+            check=False,
+        )
+        read = json.loads(completed.stdout or "{}") if completed.returncode == 0 else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+    if not isinstance(read, dict):
+        return {}
+    for name, version in read.items():
+        if canonicalize_name(str(name)) in wanted and version:
+            found.setdefault(canonicalize_name(str(name)), str(version))
+    return dict(sorted(found.items()))
+
+
+_DEPENDENCY_FILES = ("requirements*.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile")
+
+
+def _declared(source: Path | None, wanted: set[str]) -> set[str]:
+    """The frameworks of ``wanted`` that the dependency files at the top of ``source`` name."""
+    if source is None or not source.is_dir():
+        return set()
+    text = ""
+    for pattern in _DEPENDENCY_FILES:
+        for path in sorted(source.glob(pattern)):
+            try:
+                text += path.read_text(encoding="utf-8", errors="replace")[:200_000].lower() + "\n"
+            except OSError:
+                continue
+    named = {canonicalize_name(token) for token in re.findall(r"[a-z0-9][a-z0-9._-]*", text)}
+    return wanted & named
+
+
 # Half the build step's default limit, so a stalled index skips the instrumentors and never fails the build.
 INSTRUMENTOR_INSTALL_SECONDS = 300
 
@@ -699,6 +803,12 @@ INSTRUMENTOR_INSTALL_SECONDS = 300
 def uv_run_project(command: Sequence[str] | None) -> str:
     """The project a `uv run --project <dir>` command runs in, or "" for any other command."""
     parts = list(command or [])
+    if parts[:2] == ["sh", "-c"] and len(parts) >= 3:
+        # A fixed --port rewritten to the world's port runs as ``sh -c "<argv> --port $PORT"``.
+        try:
+            parts = shlex.split(parts[2])
+        except ValueError:
+            return ""
     if parts[:2] != ["uv", "run"]:
         return ""
     for index, part in enumerate(parts):

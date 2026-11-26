@@ -31,52 +31,70 @@ from fi.alk.harness.understand import load
 _READ = "read-it"
 _NOT_ACCEPTED = "Not accepted. Fix all of these and call submit_contract again:\n  - "
 _RECEIPT = f' When you submit again, set second_look_read to "{_READ}", which shows you read this.'
-_CUT_CHAT = (
-    "second-look: you recorded modality {claimed}, and the code check stopped before reading all "
-    "of the agent's code (it holds more than the check reads, or a file it couldn't read), so it "
-    "can't say whether a browser, crawling or computer-use tool is used. A chat or voice agent "
-    "can use one in its tests or a helper script. If a person comes to this agent for a "
-    "conversation, submit again as is. If its main job is carrying out work on websites or a "
-    "computer, submit again as browser, which stops this build as not supported. Decide this "
-    "from the source; don't ask anyone."
+_WORK = (
+    "If its main job is carrying out work{instead}: by driving a web browser with a browser "
+    "library, submit again as browser, which runs it only in an environment that gives it a "
+    "browser and a list of sites; through a screen (pixels, mouse and keyboard), as computer_use; "
+    "by fetching pages by rule with no model choosing each step, as crawler. computer_use and "
+    "crawler stop this build as not supported. Decide this from the source; don't ask anyone."
 )
-_CUT_BROWSER = (
-    "second-look: you recorded modality browser, which stops this build as not supported, and "
+_STOPPED = (
     "the code check stopped before reading all of the agent's code (it holds more than the check "
     "reads, or a file it couldn't read), so it can't say whether a browser, crawling or "
-    "computer-use tool is used. A chat or voice agent can use one in its tests or a helper "
-    "script. Does a person come to this agent for a conversation, or to have it carry out work on "
-    "websites or a computer? For a conversation, submit again as chat or voice. If you're sure, "
-    "submit again as browser. Decide this from the source; don't ask anyone."
+    "computer-use tool is used. A chat or voice agent can use one in its tests or a helper script."
+)
+_FOUND_ONE = " A chat or voice agent can list one for its tests or use one in a helper script."
+_ASK = (
+    " Does a person come to this agent for a conversation, or to have it carry out work? For a "
+    "conversation, submit again as chat or voice. "
+)
+_WHAT_IT_DOES = {
+    "browser": (
+        "which runs this agent only in an environment that gives it a browser and a list of sites"
+    ),
+    "computer_use": "which stops this build as not supported",
+}
+# A kind still refused. A browser reading is kept, and runs in an environment.
+_REFUSED = "computer_use"
+
+
+def _kind_look(kind: str, evidence: str) -> str:
+    return (
+        f"second-look: you recorded modality {kind}, {_WHAT_IT_DOES[kind]}, and {evidence}"
+        + _ASK
+        + _WORK.format(instead="")
+    )
+
+
+_CUT_CHAT = (
+    "second-look: you recorded modality {claimed}, and "
+    + _STOPPED
+    + " If a person comes to this agent for a conversation, submit again as is. "
+    + _WORK.format(instead=" instead").replace("{", "{{").replace("}", "}}")
 )
 _FOUND_CHAT = (
     "second-look: you recorded modality {claimed}, and the source uses playwright. If that's a "
-    "helper and a person comes to this agent for a conversation, submit again as is. If its main "
-    "job is carrying out work on websites or a computer, submit again as browser, which stops "
-    "this build as not supported. Decide this from the source; don't ask anyone."
+    "helper and a person comes to this agent for a conversation, submit again as is. "
+    + _WORK.format(instead=" instead").replace("{", "{{").replace("}", "}}")
 )
-_FOUND_BROWSER = (
-    "second-look: you recorded modality browser, which stops this build as not supported, and "
-    "the source uses playwright. A chat or voice agent can list one for its tests or use one in "
-    "a helper script. Does a person come to this agent for a conversation, or to have it carry "
-    "out work on websites or a computer? For a conversation, submit again as chat or voice. If "
-    "its main job is that work, submit again as browser. Decide this from the source; don't ask "
-    "anyone."
-)
-_NOTHING_FOUND_BROWSER = (
-    "second-look: you recorded modality browser, which stops this build as not supported, and "
-    "no browser, crawling or computer-use tool was found in the source. Does a person come to "
-    "this agent for a conversation, or to have it carry out work on websites or a computer? For "
-    "a conversation, submit again as chat or voice. If you're sure, submit again as browser. "
-    "Decide this from the source; don't ask anyone."
-)
+_CUT_KIND = {kind: _kind_look(kind, _STOPPED) for kind in _WHAT_IT_DOES}
+_FOUND_KIND = {
+    "browser": _kind_look("browser", "the source uses playwright." + _FOUND_ONE),
+    "computer_use": _kind_look(
+        "computer_use", "the source uses playwright (playwright: browser libraries)." + _FOUND_ONE
+    ),
+}
+_NOTHING_FOUND_KIND = {
+    kind: _kind_look(kind, "no browser, crawling or computer-use tool was found in the source.")
+    for kind in _WHAT_IT_DOES
+}
 _FOUND_MESSAGE = (
-    "This agent's main job is driving a browser, operating a computer or crawling sites "
-    "(found: playwright). Only voice and chat agents are supported for now."
+    "This agent's main job is operating a computer through its screen (found: playwright). "
+    "Computer-use and crawler agents are not supported yet."
 )
 _READ_MESSAGE = (
-    "This agent's main job was read as driving a browser, operating a computer or crawling "
-    "sites. Only voice and chat agents are supported for now."
+    "This agent's main job was read as operating a computer through its screen. Computer-use "
+    "and crawler agents are not supported yet."
 )
 # Over the size a .py is read at, so never read; it names a tool, so leaving it unread cuts.
 _OVERSIZED = "# playwright\n".ljust(LARGEST_PARSED_MODULE + 1, "#")
@@ -129,8 +147,12 @@ def _reading(modality: str | None = "chat", **fields):
     return payload
 
 
-def _submitter(destination: Path, scan_root: Path, subfolder: str | None = None):
-    server = contract_tools(destination, scan_root=scan_root, subfolder=subfolder)
+def _submitter(
+    destination: Path, scan_root: Path, subfolder: str | None = None, save_checks=None
+):
+    server = contract_tools(
+        destination, scan_root=scan_root, subfolder=subfolder, save_checks=save_checks
+    )
     tool = next(one for one in server.tools if one.name == "submit_contract")
     return lambda payload: asyncio.run(tool.handler(payload))
 
@@ -278,21 +300,22 @@ def test_a_file_that_cant_matter_is_no_cut(tmp_path, monkeypatch, files, spent, 
     assert browser_scan(tmp_path) == (names, frozenset())
 
 
-@pytest.mark.parametrize("claimed", ["chat", "voice", "", "browser"])
+@pytest.mark.parametrize("claimed", ["chat", "voice", "", "browser", _REFUSED])
 @pytest.mark.parametrize("found", [[], ["playwright"]])
 @pytest.mark.parametrize("looked_again", [False, True])
 def test_nothing_cut_is_todays_verdict_and_text(claimed, found, looked_again):
-    browser = claimed == "browser"
-    if browser:
-        today = "refuse" if looked_again else "second_look"
+    kind = claimed in _WHAT_IT_DOES
+    if kind:
+        settled = "keep" if claimed == "browser" else "refuse"
+        today = settled if looked_again else "second_look"
     else:
         today = "second_look" if found and not looked_again else "keep"
     assert decide(claimed, found, looked_again=looked_again) == today
     assert decide(claimed, found, looked_again=looked_again, cut=frozenset()) == today
     if today != "second_look":
         return
-    if browser:
-        text = _FOUND_BROWSER if found else _NOTHING_FOUND_BROWSER
+    if kind:
+        text = (_FOUND_KIND if found else _NOTHING_FOUND_KIND)[claimed]
     else:
         text = _FOUND_CHAT.format(claimed=claimed or "chat")
     assert SecondLook.prompt(claimed, found) == text
@@ -308,8 +331,10 @@ def test_nothing_cut_is_todays_verdict_and_text(claimed, found, looked_again):
             "chat",
             _FOUND_CHAT.format(claimed="chat"),
         ),
-        ({"agent.py": "import playwright\n"}, "browser", _FOUND_BROWSER),
-        ({"agent.py": "import openai\n"}, "browser", _NOTHING_FOUND_BROWSER),
+        ({"agent.py": "import playwright\n"}, "browser", _FOUND_KIND["browser"]),
+        ({"agent.py": "import openai\n"}, "browser", _NOTHING_FOUND_KIND["browser"]),
+        ({"agent.py": "import playwright\n"}, _REFUSED, _FOUND_KIND[_REFUSED]),
+        ({"agent.py": "import openai\n"}, _REFUSED, _NOTHING_FOUND_KIND[_REFUSED]),
     ],
 )
 def test_an_uncut_scan_gives_todays_look(tmp_path, files, claimed, text):
@@ -325,6 +350,15 @@ def test_an_uncut_chat_reading_of_plain_code_is_saved_without_a_look(tmp_path):
     assert load(tmp_path / "out").modality == "chat"
 
 
+def _assert_stored(output: Path, answer: str) -> None:
+    """A browser answer is stored as a chat agent that needs a browser; any other as itself."""
+    contract = load(output)
+    if answer == "browser":
+        assert (contract.modality, contract.environment_needs) == ("chat", ["browser"])
+    else:
+        assert (contract.modality, contract.environment_needs) == (answer, [])
+
+
 def _cut_repo(root: Path, **more: str) -> Path:
     return _tree(root, {"agent.py": "import openai\n", "big.py": _OVERSIZED, **more})
 
@@ -336,8 +370,9 @@ def _cut_repo(root: Path, **more: str) -> Path:
         pytest.param([("voice", None, "look"), ("voice", _READ, "saved")], id="voice"),
         pytest.param([(None, None, "look"), (None, _READ, "saved")], id="no-modality"),
         pytest.param(
-            [("chat", None, "look"), ("browser", _READ, "refused")], id="then-browser"
+            [("chat", None, "look"), (_REFUSED, _READ, "refused")], id="then-computer-use"
         ),
+        pytest.param([("chat", None, "look"), ("browser", _READ, "saved")], id="then-browser"),
         pytest.param(
             [
                 ("web", None, "problem"),
@@ -361,7 +396,7 @@ def test_a_cut_chat_reading_gets_one_look(tmp_path, steps):
             assert _text(answer) == _look(_CUT_CHAT.format(claimed=modality or "chat"))
         elif then == "saved":
             assert not answer.get("is_error"), answer
-            assert load(output).modality == (modality or "chat")
+            _assert_stored(output, modality or "chat")
             assert not (output / FAILURE_FILE).exists()
         else:
             assert _refused_with(output) == _READ_MESSAGE
@@ -633,15 +668,21 @@ def test_a_package_json_npm_reads_or_refuses_is_no_cut(tmp_path, manifest, names
     "claimed, text, then, outcome",
     [
         ("chat", _FOUND_CHAT.format(claimed="chat"), "chat", "saved"),
-        ("chat", _FOUND_CHAT.format(claimed="chat"), "browser", "refused"),
-        ("browser", _FOUND_BROWSER, "chat", "saved"),
-        ("browser", _FOUND_BROWSER, "browser", "refused"),
+        ("chat", _FOUND_CHAT.format(claimed="chat"), _REFUSED, "refused"),
+        ("chat", _FOUND_CHAT.format(claimed="chat"), "browser", "saved"),
+        (_REFUSED, _FOUND_KIND[_REFUSED], "chat", "saved"),
+        (_REFUSED, _FOUND_KIND[_REFUSED], _REFUSED, "refused"),
+        ("browser", _FOUND_KIND["browser"], "browser", "saved"),
+        ("browser", _FOUND_KIND["browser"], _REFUSED, "refused"),
     ],
     ids=[
         "chat-then-chat",
+        "chat-then-computer-use",
         "chat-then-browser",
-        "browser-then-chat",
+        "computer-use-then-chat",
+        "computer-use-then-computer-use",
         "browser-then-browser",
+        "browser-then-computer-use",
     ],
 )
 def test_cut_and_found_join_in_one_look(tmp_path, claimed, text, then, outcome):
@@ -656,22 +697,30 @@ def test_cut_and_found_join_in_one_look(tmp_path, claimed, text, then, outcome):
     answer = submit(_reading(then, second_look_read=_READ))
     if outcome == "saved":
         assert not answer.get("is_error"), answer
-        assert load(output).modality == then
+        _assert_stored(output, then)
     else:
         assert _refused_with(output) == _FOUND_MESSAGE
 
 
-@pytest.mark.parametrize("then, outcome", [("browser", "refused"), ("chat", "saved")])
-def test_a_cut_browser_claim_drops_nothing_found(tmp_path, then, outcome):
+@pytest.mark.parametrize(
+    "first, then, outcome",
+    [
+        (_REFUSED, _REFUSED, "refused"),
+        (_REFUSED, "chat", "saved"),
+        ("browser", "browser", "saved"),
+        ("browser", "chat", "saved"),
+    ],
+)
+def test_a_cut_kind_claim_drops_nothing_found(tmp_path, first, then, outcome):
     output = tmp_path / "out"
     submit = _submitter(output, _cut_repo(tmp_path / "source"))
-    first = _text(submit(_reading("browser")))
-    assert first == _look(_CUT_BROWSER)
-    assert "was found" not in first
+    look = _text(submit(_reading(first)))
+    assert look == _look(_CUT_KIND[first])
+    assert "was found" not in look
     answer = submit(_reading(then, second_look_read=_READ))
     if outcome == "saved":
         assert not answer.get("is_error"), answer
-        assert load(output).modality == "chat"
+        _assert_stored(output, then)
     else:
         assert _refused_with(output) == _READ_MESSAGE
 
@@ -814,8 +863,30 @@ def test_a_large_honest_repository_gets_a_look(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 64 * 1024)
     agent_type_check._scan.cache_clear()
     assert browser_scan(repo) == ([], frozenset({"scan_total"}))
-    answer = _submitter(tmp_path / "out", repo)(_reading("chat"))
+    answer = _submitter(tmp_path / "out", repo, save_checks="thread")(_reading("chat"))
     assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
+
+
+def test_a_large_honest_repository_gets_a_look_from_the_childs_scan(tmp_path):
+    import inspect
+
+    # The child's scan stops at its limits; a stand-in says so, since a patch here can't reach it.
+    repo = _tree(
+        tmp_path / "source",
+        {
+            "service/main.py": "from playwright.sync_api import sync_playwright\n",
+            "save-stand-in.json": json.dumps({"scan": "cut"}),
+        },
+    )
+    server = contract_tools(
+        tmp_path / "out", scan_root=repo, save_checks="child", save_stand_in="_save_stand_ins"
+    )
+    handler = next(one for one in server.tools if one.name == "submit_contract").handler
+
+    answer = asyncio.run(handler(_reading("chat")))
+
+    assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
+    assert inspect.getclosurevars(handler).nonlocals["checker"].ran_in_child == 0
 
 
 _PADDING = "import os\n" + "x = 1\n" * (100 * 1024 // 6)
@@ -856,7 +927,8 @@ def test_a_line_search_with_no_room_left_is_a_cut(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_type_check, "_WALKED_SEARCHED", 8)
     repo = _padded(tmp_path / "source", **{"common/util.py": "import playwright\n"})
     assert browser_scan(repo, "agents/a") == ([], frozenset({"import_walk"}))
-    answer = _submitter(tmp_path / "out", repo, "agents/a")(_reading("chat"))
+    # The patched limit lives in this process, so the save's checks run here too.
+    answer = _submitter(tmp_path / "out", repo, "agents/a", save_checks="thread")(_reading("chat"))
     assert _text(answer) == _look(_CUT_CHAT.format(claimed="chat"))
     assert decide("chat", [], looked_again=False, cut=frozenset({"import_walk"})) == "second_look"
 

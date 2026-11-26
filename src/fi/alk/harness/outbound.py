@@ -70,6 +70,7 @@ from pydantic import (
 )
 from fi.simulate.results.futureagi import MAX_TARGET_LATENCY_TURNS
 
+from ..providers.agent import _log_redacted, _redact_text
 from .job import FailureDomain, HarnessStage
 
 logger = logging.getLogger(__name__)
@@ -277,28 +278,37 @@ _SHORTEST_REDACTABLE_SECRET = 8
 def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) -> str:
     """Scrubs a single free-text field before it can leave the sandbox on any of the three
     channels (outbound-channels.md v1.3 "Redaction (enforced before emit)"; hosted-execution-
-    seams.md v1.11 §3 "any outbound projection ... redacts userinfo"). Two things, applied in
-    order:
+    seams.md v1.11 §3 "any outbound projection ... redacts userinfo"). Three things, applied in
+    order (TH-9500):
 
-    1. URL userinfo (`_USERINFO_PATTERN`/`_mask_userinfo`, above) -- a password is masked and the
-       username kept (matching the contract's own `postgresql://harness:***@...` example); a bare
-       token/username-only userinfo (no `:`) is masked outright, since that shape is how a bearer
-       token appears, not a username.
-    2. `extra_secret_values` -- exact-substring replacement for a caller-supplied list of secret
-       values. Always `()` today: the adapter (P10) is what will know the job's declared secrets
-       and pass them in -- this parameter exists now so `build_event_record`/`build_result_receipt`
-       never need to change shape when that wiring lands.
+    1. `extra_secret_values` -- exact-substring replacement for a caller-supplied list of secret
+       values. First, so a declared secret is matched whole before the cleaner below can mask
+       part of it and leave the rest unmatched. Always `()` today: the adapter (P10) is what will
+       know the job's declared secrets and pass them in -- this parameter exists now so
+       `build_event_record`/`build_result_receipt` never need to change shape when that wiring
+       lands.
+    2. The kit's one cleaner, `providers.agent._redact_text`, all three of its steps: a URL loses
+       its userinfo, query and fragment, and keys, key blocks and named values are masked by
+       their shape. It logs nothing itself; one line names what it removed, on the cleaner's
+       own logger (not one of the loggers `MaskSecrets` filters, so the filter never re-enters),
+       and only when it changed the text.
+    3. URL userinfo (`_USERINFO_PATTERN`/`_mask_userinfo`, above), for whatever step 2 left: a
+       password is masked and the username kept; a bare token/username-only userinfo (no `:`)
+       is masked outright, since that shape is how a bearer token appears, not a username.
 
-    NOT a general secret-content scanner -- the contract's "same secret-content scan as the
-    artifact sealer" is a separate, sealer-side obligation. This is the narrow subset this module
-    can enforce on every string field it controls without false-positiving on ordinary diagnostic
-    text.
+    Step 2 removes a URL's userinfo outright, so `https://user:pw@host` now comes out as
+    `https://host`, not `https://user:***@host`.
     """
-    redacted = _USERINFO_PATTERN.sub(_mask_userinfo, value)
+    redacted = value
     for secret in extra_secret_values:
         if len(secret) >= _SHORTEST_REDACTABLE_SECRET:
             redacted = redacted.replace(secret, "***")
-    return redacted
+    refused: list[str] = []
+    hits: list[str] = []
+    cleaned = _redact_text(redacted, refused, hits)
+    if (refused or hits) and cleaned != redacted:
+        _log_redacted(refused, hits)
+    return _USERINFO_PATTERN.sub(_mask_userinfo, cleaned)
 
 
 # =================================================================================================
@@ -779,6 +789,11 @@ class TerminalPayload(BaseModel):
     reason: TerminalReason | None
     failure: TerminalEventFailure | None
     scenario_counts: ScenarioCounts
+    # Campaign provenance echo: when the submitted job's `metadata` carries a
+    # `certification` block (production certification campaigns), the terminal
+    # event returns it verbatim so the platform can bind the terminal attempt
+    # to the campaign/case that ordered it. Optional — absent on ordinary runs.
+    certification: dict[str, JsonValue] | None = None
 
     @model_validator(mode="after")
     def _terminal_stage(self) -> "TerminalPayload":
@@ -2475,6 +2490,8 @@ class SubGoalResult(BaseModel):
     verdict: Literal["pass", "fail", "not_applicable", "inconclusive", "unmeasured"] | None = None
     # What the sub-goal was decided from: `world_state`, `transcript`, `recording`, `tool_calls`.
     evidence: list[str] | None = None
+    # Whose result: `worker:<id>`, or absent for the task.
+    subject: str | None = None
 
 
 class MetricEvaluation(BaseModel):
@@ -2541,6 +2558,8 @@ class CallSummary(BaseModel):
     # The agent under test's own provider-reported figures (`provider`, `usage`, `cost_cents`,
     # `latency`), never the simulator's.
     target_metrics: dict[str, Any] | None = None
+    # Writes the world applied twice after the agent's answer was lost; sent only when there were some.
+    duplicate_commits: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":
@@ -2586,7 +2605,7 @@ def _unset_default_fields(model: BaseModel, prefix: str = "") -> list[str]:
     return names
 
 
-_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
+_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics", "duplicate_commits"})
 
 
 def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") -> None:
@@ -2596,7 +2615,7 @@ def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") ->
         for name in _LATER_CALL_FIELDS - draft.call.model_fields_set:
             body["call"].pop(name, None)
     for goal, model in zip(body["sub_goals"], draft.sub_goals):
-        for name in ("verdict", "evidence"):
+        for name in ("verdict", "evidence", "subject"):
             if name not in model.model_fields_set:
                 goal.pop(name, None)
     if "reason" not in draft.model_fields_set:
@@ -2661,6 +2680,9 @@ class ResultReceiptDraft(BaseModel):
                 raise ValueError("skipped_receipt_shape_invalid")
         elif self.status is ScenarioStatus.ERRORED and self.failure is None:
             raise ValueError("errored_receipt_requires_failure")
+        elif self.status in (ScenarioStatus.PASSED, ScenarioStatus.FAILED) and self.failure is not None:
+            # The platform refuses a graded receipt that carries a failure; refused, the result would be lost.
+            raise ValueError("graded_receipt_must_not_include_failure")
         return self
 
 

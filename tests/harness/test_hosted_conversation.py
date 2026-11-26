@@ -223,6 +223,40 @@ harness_chat:
     ]
 
 
+def test_a_disabled_stage_gets_no_workers_either(tmp_path):
+    from fi.alk.harness.backends import WorkerSpec
+
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    run:
+      enabled: false
+""",
+        encoding="utf-8",
+    )
+    policy = load_chat_policy(policy_path)
+
+    async def handler(_args):
+        return {"content": []}
+
+    tools = ToolServer(name="run", tools=[ToolSpec("run_simulation", "run", {}, handler)])
+    spec = SessionSpec(
+        system_prompt="run",
+        servers={"run": tools},
+        builtins=("Read",),
+        workers={"runner": WorkerSpec(description="runs", instructions="run", servers={"run": tools})},
+    )
+
+    filtered = apply_chat_policy(spec, stage="run", policy=policy)
+
+    # A worker brings its own tools, so keeping it would leave the stage able to act.
+    assert filtered.granted_anywhere() == []
+    assert filtered.workers == {}
+
+
 def test_chat_policy_rejects_unknown_stages(tmp_path):
     policy_path = tmp_path / "policy.yaml"
     policy_path.write_text(
@@ -240,7 +274,9 @@ harness_chat:
 
 
 class QuestionClient:
-    def __init__(self) -> None:
+    def __init__(self, reply: str = "app/api.py", answered_by: str = "") -> None:
+        self.reply = reply
+        self.answered_by = answered_by
         self.capabilities = _capabilities()
         self.turn_context = self.capabilities.turn_context
         self.command_watermark = 0
@@ -260,7 +296,8 @@ class QuestionClient:
                 "message_id": "answer-1",
                 "kind": "user_response",
                 "payload": {
-                    "content": "Use app/api.py",
+                    "content": self.reply,
+                    **({"answered_by": self.answered_by} if self.answered_by else {}),
                     "reply_to": question["message_id"],
                 },
             }
@@ -302,12 +339,63 @@ harness_chat:
         )
     )
     assert result == {
-        "content": [{"type": "text", "text": "Use app/api.py"}],
+        "content": [{"type": "text", "text": "app/api.py"}],
         "is_error": False,
     }
     question = client.events[0]
     assert question["kind"] == "question_requested"
     assert question["payload"]["options"] == ["app/api.py", "worker.py"]
+
+
+def test_typed_text_sent_while_a_question_is_open_reaches_the_model_as_possibly_a_new_request(tmp_path):
+    """The live shape: asked how to restore one case, the person typed a request about another; the chat sent it as
+    the answer, and the builder took it as one."""
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    reception:
+      enabled: true
+  lifecycle:
+    request_user_input: true
+""",
+        encoding="utf-8",
+    )
+    typed = "Bring back the scenario that was deleted a few versions ago"
+    asked = [
+        {
+            "question": "How would you like to restore it?",
+            "options": [{"label": "Exactly as it was", "description": "its history stays"}, {"label": "As a copy"}],
+        }
+    ]
+
+    def reply(content, answered_by="", questions=asked):
+        runtime = HostedChatRuntime(
+            client=QuestionClient(content, answered_by),  # type: ignore[arg-type]
+            policy=load_chat_policy(policy_path),
+            workspace=tmp_path,
+            source=tmp_path,
+            job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+        )
+        result = asyncio.run(runtime._ask("AskUserQuestion", {"questions": questions}, None))
+        return result.updated_input["answers"][questions[0]["question"]]
+
+    # The chat records how the reply reached it. Typed into the message box while options were offered: said so.
+    framed = reply(typed, "typed")
+    assert typed in framed and "instead of picking one of the options" in framed and "different request" in framed
+    # Typed text that happens to read like an option is still typed: the words are never compared.
+    assert "instead of picking one of the options" in reply("Exactly as it was", "typed")
+    # Picked from the question's options, one or several, in any wording or language: as it is.
+    assert reply("Exactly as it was", "picked") == "Exactly as it was"
+    assert reply("Exactly as it was, As a copy", "picked") == "Exactly as it was, As a copy"
+    assert reply("जैसा था वैसा ही", "picked") == "जैसा था वैसा ही"
+    # A client that records nothing (an older page, the CLI) is taken at its word.
+    assert reply(typed) == typed
+    # A question with no options can only be answered by typing.
+    open_question = [{"question": "Which file starts the agent?"}]
+    assert reply("app/api.py", "typed", open_question) == "app/api.py"
 
 
 def test_runtime_reuses_warm_state_and_does_not_reexecute_cold_replays(
@@ -592,7 +680,7 @@ def test_answer_does_not_acknowledge_queued_followup(tmp_path, monkeypatch):
     result = asyncio.run(
         runtime._ask("AskUserQuestion", {"question": "Which file?"}, None)
     )
-    assert result["content"][0]["text"] == "Use app/api.py"
+    assert result["content"][0]["text"] == "app/api.py"
     assert runtime._turn_acknowledged_through == 1
     asyncio.run(runtime._handle((asyncio.run(client.commands()))[-1]))
     assert client.events[-1]["acknowledge_through"] == 4

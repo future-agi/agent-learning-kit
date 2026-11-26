@@ -913,7 +913,7 @@ def test_setup_and_ready_still_allow_empty_source_after_the_r1_2_fix(
 
 def test_mutation_vacuous_empty_check_pass_is_caught(tmp_path: Path) -> None:
     # Mutation table (R1-2): simulates deleting `allow_empty=False` from the `check` call site in
-    # `_load_one`, i.e. reverting to the pre-fix behavior where an existing-but-empty check file
+    # `load_one`, i.e. reverting to the pre-fix behavior where an existing-but-empty check file
     # silently compiled to a no-op "held" callable -- a vacuous deterministic pass.
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
@@ -1015,7 +1015,7 @@ def test_plain_subgoal_names_are_unaffected_by_the_r1_3_fix(tmp_path: Path) -> N
 def test_mutation_subgoal_name_sanitization_reproduces_the_bundle_escape(
     tmp_path: Path,
 ) -> None:
-    # Mutation table (R1-3): simulates deleting the `_validate_subgoal_name` call in `_load_one` --
+    # Mutation table (R1-3): simulates deleting the `_validate_subgoal_name` call in `load_one` --
     # an absolute-path sub_goal name would once again resolve `check_path` to a file entirely
     # outside `checks/` (and outside the sealed bundle), reading and compiling it.
     outside = tmp_path / "outside.py"
@@ -1697,17 +1697,17 @@ def test_mutation_skip_compile_check_is_killed(tmp_path: Path) -> None:
 
 
 def test_mutation_judged_flag_dropped_is_killed_by_5b_verdict_assertions() -> None:
-    # Mutant: `_load_one` always sets `judged=""`, as if the "no checks/<name>.py -> judged"
+    # Mutant: `load_one` always sets `judged=""`, as if the "no checks/<name>.py -> judged"
     # branch were deleted.
     #
     # R1-6/R1-8 fold-in (p12-review-r1.md LOW findings): the original version of this test named
     # the 5b consumer-proof test in its own identifier but never actually ran it -- it asserted on
-    # `_load_one`'s output directly instead, which is true but does not exercise the killing
+    # `load_one`'s output directly instead, which is true but does not exercise the killing
     # assertion it claims to. This version runs the REAL
     # `test_consumer_proof_real_scheduler_evaluates_wrapped_scenarios` under the patch and checks
     # THAT it raises. No `async def`/`asyncio.run` wrapper needed either (R1-8): that test already
     # drives its own `asyncio.run` internally, and nothing here awaits anything.
-    original_load_one = ss._load_one
+    original_load_one = ss.load_one
 
     def _dropped_judged(folder: Path, **_read_as_the_real_one_is):
         compiled = original_load_one(folder)
@@ -1723,7 +1723,7 @@ def test_mutation_judged_flag_dropped_is_killed_by_5b_verdict_assertions() -> No
             ready=compiled.ready,
         )
 
-    with mock.patch.object(ss, "_load_one", _dropped_judged):
+    with mock.patch.object(ss, "load_one", _dropped_judged):
         with pytest.raises(AssertionError):
             test_consumer_proof_real_scheduler_evaluates_wrapped_scenarios()
 
@@ -1741,7 +1741,7 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
     real = ss.load_scenarios(tmp_path)[0]
     assert real.scenario_key == ""  # baseline: verbatim carry holds
 
-    original_load_one = ss._load_one
+    original_load_one = ss.load_one
 
     def _synthesizes_key(folder: Path, **_read_as_the_real_one_is):
         compiled = original_load_one(folder)
@@ -1754,7 +1754,7 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
             ready=compiled.ready,
         )
 
-    with mock.patch.object(ss, "_load_one", _synthesizes_key):
+    with mock.patch.object(ss, "load_one", _synthesizes_key):
         mutant = ss.load_scenarios(tmp_path)[0]
         assert mutant.scenario_key != ""  # the mutant's defect: no longer verbatim
 
@@ -3138,19 +3138,6 @@ def test_a_quiet_line_is_held_to_a_sixth_of_a_slice() -> None:
     assert _over_its_share({"interface": "quiet_line"}, grid, quiet, 18, "q0") == ""
 
 
-def test_a_family_name_is_not_reached_for_a_third_time() -> None:
-    from fi.alk.harness.scenario import Persona, Scenario
-    from fi.alk.harness.scenario_tools import _already_in_the_suite
-
-    kept = [Scenario(name="a", persona=Persona(name="Marcus Vance"))]
-    ask = {"name": "c", "persona": {"name": "Heather Vance"}}
-
-    assert _already_in_the_suite(ask, kept, {"philip vance"})
-    assert _already_in_the_suite(ask, kept, set()) == ""
-    other = {"name": "c", "persona": {"name": "Heather Lam"}}
-    assert _already_in_the_suite(other, kept, {"philip vance"}) == ""
-
-
 def test_names_a_sibling_writer_journalled_count_as_taken(tmp_path) -> None:
     from fi.alk.harness.scenario import Persona, Scenario
     from fi.alk.harness.scenario_tools import _first_names_on_disk, journal_scenario
@@ -3274,3 +3261,336 @@ def test_a_caller_acting_on_someone_elses_record_is_told_whose_it_is(monkeypatch
     assert scenario_tools.records_of_someone_else(caller("Ravi Patel", {"order_id": "caller says"}), _P("/tmp")) == ""
     # Only identifiers something fixes for the caller say whose record it is.
     assert scenario_tools.records_of_someone_else(caller("Maya Chen", {}), _P("/tmp")) == ""
+
+
+def test_a_catalogued_worker_subject_reaches_the_graded_sub_goal(tmp_path: Path) -> None:
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "coded",
+        scenario_key="coded",
+        sub_goals=["coded"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    scenario = ss.load_scenarios(tmp_path)[0]
+    as_task = ss._with_claims(scenario, {"coded": {"what": "x"}}).sub_goals[0]
+    as_worker = ss._with_claims(scenario, {"coded": {"what": "x", "subject": "worker:refund"}}).sub_goals[0]
+    assert (as_task.subject, as_task.worker) == ("task", "")
+    assert (as_worker.subject, as_worker.worker) == ("worker:refund", "refund")
+
+
+def test_a_worker_subject_in_the_bundle_catalogue_reaches_the_loaded_scenario(tmp_path: Path) -> None:
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "coded",
+        scenario_key="coded",
+        sub_goals=["coded"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    (tmp_path / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "coded", "what": "x", "check": "def check(world, calls):\n    return None\n",
+                                   "subject": "worker:refund"}]}),
+        encoding="utf-8",
+    )
+    assert ss.load_scenarios(tmp_path)[0].sub_goals[0].worker == "refund"
+
+
+def _ledger_root(tmp_path: Path, *, mode: str = "service", roles: dict | None = None) -> Path:
+    """An environment whose order tools are served by the agent's own ledger, holding order 1043, with an attached
+    orders.csv listing 1043 and 2001."""
+    (tmp_path / "knowledge").mkdir()
+    (tmp_path / "knowledge" / "orders.csv").write_text(
+        "order_id,customer_id,item\n1043,C-2,Rain jacket\n2001,C-1,Tent\n", encoding="utf-8"
+    )
+    (tmp_path / "knowledge" / "roles.json").write_text(
+        json.dumps(roles if roles is not None else {"knowledge/orders.csv": "seed_records"}), encoding="utf-8"
+    )
+    contract = {
+        "agent": "desk",
+        "tools": [{"name": "get_order"}],
+        "tool_entrypoints": [{"tool": "get_order", "mode": mode}],
+        "base_environment": {"orders": [{"order_id": "1043", "item": "Rain jacket", "amount": 89.0}]},
+    }
+    (tmp_path / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    return tmp_path
+
+
+def _order_case(order: str):
+    from fi.alk.harness.scenario import Scenario
+
+    return Scenario(
+        name=f"refund-{order}",
+        instruction=f"You want a refund for order {order}.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": order}}],
+    )
+
+
+def test_a_case_on_a_row_only_a_context_only_records_file_lists_is_refused(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    world = SimpleNamespace(state=lambda: {})
+
+    said = _records_only_a_context_file_holds(_order_case("2001"), world, root)
+    assert said and "2001 is only in knowledge/orders.csv" in said[0]
+    # A row the agent's own data holds too is served, whatever the file says.
+    assert _records_only_a_context_file_holds(_order_case("1043"), world, root) == []
+
+
+@pytest.mark.parametrize(
+    "mode,roles",
+    [("world", None), ("service", {"knowledge/orders.csv": "policy"})],
+    ids=["tools-read-the-world", "not-a-records-file"],
+)
+def test_a_records_file_the_tools_can_read_or_a_file_of_another_role_refuses_nothing(
+    tmp_path: Path, mode: str, roles: dict | None
+) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path, mode=mode, roles=roles)
+    assert _records_only_a_context_file_holds(_order_case("2001"), SimpleNamespace(state=lambda: {}), root) == []
+
+
+def test_submitting_a_case_on_a_context_only_row_is_refused(tmp_path: Path) -> None:
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class Desk(GeneratedWorld):
+        name = "desk"
+        tools = [{"name": "get_order"}]
+        handlers = {"get_order": "def handle(args, db):\n    return {}\n"}
+
+    world = Desk(":memory:")
+    world.connection.executescript("CREATE TABLE orders(order_id TEXT); INSERT INTO orders VALUES ('1043');")
+    save(world, tmp_path, notes="test", sequences=[])
+    root = _ledger_root(tmp_path)
+
+    said = accept_scenario(
+        _order_case("2001").model_dump(), world_root=root, catalogue=Catalogue(sub_goals=[]), kept=[], persist=False
+    )
+
+    assert said.get("is_error") and "2001 is only in knowledge/orders.csv" in said["content"][0]["text"], said
+
+
+def test_a_records_file_led_by_a_date_or_an_amount_refuses_no_case_on_a_served_record(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text(
+        "delivered_on,amount,order_id\n2026-11-01,89.00,1043\n2026-11-02,210.00,2001\n", encoding="utf-8"
+    )
+    since = Scenario(
+        name="refund-since",
+        instruction="You want a refund.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": "1043", "since": "2026-11-02"}}],
+    )
+    world = SimpleNamespace(state=lambda: {})
+
+    assert _records_only_a_context_file_holds(since, world, root) == []
+    assert "2001" in _records_only_a_context_file_holds(_order_case("2001"), world, root)[0]
+
+
+def test_a_column_the_tools_argument_names_match_is_read_as_ids(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text("item,ref\nTent,R-2001\n", encoding="utf-8")
+    case = Scenario(name="by-ref", instruction="x", solution=[{"tool": "get_order", "arguments": {"ref": "R-2001"}}])
+
+    said = _records_only_a_context_file_holds(case, SimpleNamespace(state=lambda: {}), root)
+    assert said and "R-2001" in said[0]
+
+
+@pytest.mark.parametrize("column", ["id", "Order No", "number"])
+def test_a_column_no_argument_names_is_never_guessed_to_hold_ids(tmp_path: Path, column: str) -> None:
+    """Nothing declares that `id` holds what `order_id` carries: the harness does not guess from the column's name."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text(f"{column},item\n2001,Tent\n", encoding="utf-8")
+
+    assert _records_only_a_context_file_holds(_order_case("2001"), SimpleNamespace(state=lambda: {}), root) == []
+
+
+@pytest.mark.parametrize("column", ["order_id", "Order ID", "order-id", "ORDER_ID"])
+def test_a_column_named_as_the_argument_is_read_whatever_its_case_or_separators(tmp_path: Path, column: str) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    (root / "knowledge" / "orders.csv").write_text(f"{column},item\n2001,Tent\n", encoding="utf-8")
+
+    said = _records_only_a_context_file_holds(_order_case("2001"), SimpleNamespace(state=lambda: {}), root)
+    assert said and "2001" in said[0]
+
+
+def test_a_lookup_expected_to_come_back_not_found_is_never_refused_for_a_context_only_row(tmp_path: Path) -> None:
+    """An adversarial case: the caller asks about order 2001, which is not in the agent's system, and the right answer
+    is "not found". Only acting on the row (a refund) needs the tools to serve it."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+    contract["tool_entrypoints"] = [
+        {"tool": "get_order", "mode": "service", "effect": "read"},
+        {"tool": "issue_refund", "mode": "service", "effect": "write"},
+    ]
+    (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    world = SimpleNamespace(state=lambda: {})
+
+    not_found = Scenario(
+        name="order-not-in-the-system",
+        instruction="You ask about order 2001.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": "2001"}}],
+    )
+    assert _records_only_a_context_file_holds(not_found, world, root) == []
+    refunded = Scenario(
+        name="refund-2001",
+        instruction="You want a refund for order 2001.",
+        solution=[
+            {"tool": "get_order", "arguments": {"order_id": "2001"}},
+            {"tool": "issue_refund", "arguments": {"order_id": "2001"}},
+        ],
+    )
+    said = _records_only_a_context_file_holds(refunded, world, root)
+    assert said and "2001 is only in knowledge/orders.csv" in said[0]
+
+
+def test_an_instruction_naming_a_missing_record_the_reference_only_looks_up_is_kept(tmp_path: Path) -> None:
+    """An adversarial case: the caller asks to be picked up at plc_blr_airport, which the service does not know, and
+    the right answer is that it cannot find it. Booking a ride from it would still be refused."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _identifiers_the_instruction_invents
+
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "tool_entrypoints": [
+                    {"tool": "find_place", "mode": "service", "effect": "read"},
+                    {"tool": "book_ride", "mode": "service", "effect": "write"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    world = SimpleNamespace(state=lambda: {"places": [{"place_id": "plc_market_st"}]})
+    instruction = "You ask for a ride from plc_blr_airport."
+
+    looked_up = Scenario(
+        name="unknown-pickup",
+        instruction=instruction,
+        solution=[{"tool": "find_place", "arguments": {"place_id": "plc_blr_airport"}}],
+    )
+    assert _identifiers_the_instruction_invents(looked_up, world, tmp_path) == []
+    booked = Scenario(
+        name="book-unknown-pickup",
+        instruction=instruction,
+        solution=[
+            {"tool": "find_place", "arguments": {"place_id": "plc_blr_airport"}},
+            {"tool": "book_ride", "arguments": {"pickup": "plc_blr_airport"}},
+        ],
+    )
+    said = _identifiers_the_instruction_invents(booked, world, tmp_path)
+    assert said and "plc_blr_airport" in said[0]
+
+
+def test_a_lookup_by_get_with_no_declared_effect_reads_and_a_post_with_none_acts(tmp_path: Path) -> None:
+    """The contract's own rule: an empty effect reads the HTTP method, so an undeclared GET lookup is read-only and an
+    undeclared POST step acts on its record."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_only_a_context_file_holds
+
+    root = _ledger_root(tmp_path)
+    contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+    contract["tool_entrypoints"] = [
+        {"tool": "get_order", "mode": "service", "method": "GET"},
+        {"tool": "issue_refund", "mode": "service", "method": "POST"},
+    ]
+    (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    world = SimpleNamespace(state=lambda: {})
+
+    not_found = Scenario(
+        name="order-not-in-the-system",
+        instruction="You ask about order 2001.",
+        solution=[{"tool": "get_order", "arguments": {"order_id": "2001"}}],
+    )
+    assert _records_only_a_context_file_holds(not_found, world, root) == []
+    refunded = Scenario(
+        name="refund-2001",
+        instruction="You want a refund for order 2001.",
+        solution=[{"tool": "issue_refund", "arguments": {"order_id": "2001"}}],
+    )
+    said = _records_only_a_context_file_holds(refunded, world, root)
+    assert said and "2001 is only in knowledge/orders.csv" in said[0]
+
+
+def _named(name: str, person: str, **fields):
+    from fi.alk.harness.scenario import Scenario
+
+    return Scenario(name=name, instruction="i", persona={"name": person}, **fields)
+
+
+def test_only_a_repeated_full_name_is_refused_never_a_shared_word_of_one():
+    from fi.alk.harness.scenario_tools import _already_in_the_suite
+
+    kept = [_named(f"s{n}", f"Given{n} Sterling") for n in range(5)]
+
+    assert _already_in_the_suite({"name": "next", "persona": {"name": "Another Sterling"}}, kept, wanted=12) == ""
+    assert "already has a caller named" in _already_in_the_suite(
+        {"name": "next", "persona": {"name": "Given3 Sterling"}}, kept, wanted=12
+    )
+
+
+def test_a_cell_holds_its_share_of_a_large_suite_before_a_like_case_is_refused():
+    from fi.alk.harness.scenario_tools import _already_in_the_suite
+
+    cell = {"intent": "refund", "situation": "late"}
+    grid = {"intent": ["refund", "status"], "situation": ["late", "on time"]}  # four cells
+    kept = [_named(f"s{n}", f"Person{n} Family{n}", coverage=cell, sub_goals=["refunded"]) for n in range(2)]
+    ask = {"name": "next", "coverage": cell, "sub_goals": ["refunded"], "persona": {"name": "New Person"}}
+
+    # A suite of eight over four cells: two a cell, so a third alike case adds nothing.
+    assert "holds its share of this suite (2)" in _already_in_the_suite(ask, kept, wanted=8, grid=grid)
+    # A suite of twelve: three a cell.
+    assert _already_in_the_suite(ask, kept, wanted=12, grid=grid) == ""
+    # Without a plan or a size, one alike case is enough, as before.
+    assert "already occupies this cell" in _already_in_the_suite(ask, kept[:1])
+
+
+def test_the_build_s_authoring_stage_never_suggests_dealing_rounds(tmp_path: Path) -> None:
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.contract import AgentContract
+
+    with mock.patch.object(stage, "world_summary", lambda _: "w"), mock.patch.object(
+        stage, "load_skill", lambda *a, **k: "s"
+    ), mock.patch.object(stage, "discovered_skills", lambda **k: ""):
+        planner, _ = stage.open_stage(AgentContract(agent="a"), out=tmp_path / "suite", wanted=200)
+    said = planner._spec.system_prompt
+    writer = planner._spec.workers[stage.WRITER]
+
+    assert "Do not deal rounds with suite_progress `deal`" in said and "Deal each round" not in said
+    assert "deal from suite_progress" not in writer.description
+    assert "Your brief carries a deal" not in writer.instructions
+    # The stage still hands the suite out to writers, as on the proven build.
+    assert planner._spec.workers

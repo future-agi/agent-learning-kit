@@ -18,9 +18,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The version the hook's exporter handling was read against, and the newest that installs
-        # beside the kit: 0.21.0 and later need openai>=3, and the kit pins openai<3.
-        openai-agents: ["0.18.3", "0.20.0"]
+        # 0.18.3, the version the hook's exporter handling was read against, and 0.20.0, the newest
+        # on openai 2; 0.24.0, the reference example's pin, and 0.25.0, the newest, on openai 3
+        # (0.21.0 and later need openai>=3).
+        openai-agents: ["0.18.3", "0.20.0", "0.24.0", "0.25.0"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,9 +37,139 @@ jobs:
             -k real_openai_agents_sdk | tee pytest.out
           ! grep -q "skipped" pytest.out
 
-  clean-install:
+  langgraph-reference:
+    # The LangGraph reference agent on the versions its requirements file pins, driven through
+    # the kit's adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langgraph_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langgraph_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
+  tool-trace-other-pythons:
+    # The tool tracer's own subprocesses on another Python, which reads frames differently from
+    # 3.12 (a suspension ends on a RESUME on 3.13; a close or a cancel is not carried by the
+    # profile call event). pytest runs on 3.12 as in the other jobs; ALK_TEST_PYTHON points the
+    # tracer's subprocesses at the matrix Python.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        traced-python: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      # The traced Python first and 3.12 last: the last one set up is `python` on the path, which
+      # runs pytest.
+      - uses: actions/setup-python@v5
+        id: traced
+        with:
+          python-version: ${{ matrix.traced-python }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit
+        run: python -m pip install . pytest
+      - name: Run the tool tracer tests with the tracer on Python ${{ matrix.traced-python }}
+        env:
+          ALK_TEST_PYTHON: ${{ steps.traced.outputs.python-path }}
+        run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
+
+  python-3-12-3:
+    # The hosted image's own Python: Ubuntu 24.04's python3.12, which is 3.12.3 (Dockerfile.hosted,
+    # /opt/alk-venv). "3.12" elsewhere floats to the newest release, and setup-python has no
+    # 3.12.3 build for the current Ubuntu image, so this runs in the official 3.12.3 image, where
+    # pytest and the tracer's subprocesses both run on it. 3.12.3 closes a generator paused at a
+    # bare yield without an event, as 3.13.3 does, so the tool tracer runs here, and the kit
+    # finds, reads and documents an agent here as the sandbox does.
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container: python:3.12.3-slim-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the interpreter is 3.12.3
+        run: python -c "import sys; assert sys.version_info[:3] == (3, 12, 3), sys.version"
+      - name: Install the kit
+        run: python -m pip install . pytest
+      - name: Run the tool tracer tests on Python 3.12.3
+        run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
+      - name: Run the finding, reading and agent-document tests on Python 3.12.3
+        shell: bash
+        # A skip hides a test from the 3.12.3 check. The only ones allowed are the container's
+        # own: it runs as root, which reads a mode-000 folder, on a case-sensitive disk.
+        run: >-
+          set -o pipefail;
+          python -m pytest -q -rs
+          tests/harness/test_agent_scan.py
+          tests/harness/test_scan_walk.py
+          tests/harness/test_scan_folders.py
+          tests/harness/test_scan_document.py
+          tests/harness/test_scan_ai.py
+          tests/harness/test_import_lines.py
+          tests/harness/test_import_lines_diff.py
+          tests/harness/test_reading_entry.py
+          tests/harness/test_agent_reading.py
+          tests/harness/test_framework_detection.py
+          tests/harness/test_authoring_entrypoint_find_agents.py
+          tests/harness/test_python_source_codecs.py
+          tests/harness/test_newer_python_syntax.py
+          tests/harness/test_source_tool_evidence.py
+          tests/harness/test_instrumentation_evidence.py
+          tests/harness/test_agent_type_refusal.py
+          | tee pytest.out;
+          ! grep '^SKIPPED' pytest.out
+          | grep -v -e 'root reads a mode-000' -e "case-sensitive disk can't spell"
+
+  langchain-reference:
+    # The LangChain reference agent on the versions its requirements file pins, driven through
+    # the kit's LangGraph adapter against a local endpoint. The pins are for this job only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit with the reference's pinned libraries
+        run: >-
+          python -m pip install . pytest
+          -r examples/harness/langchain_support/requirements.txt
+      - name: Run the reference on its pins, failing if it skips
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_langchain_reference.py \
+            -k pinned_libraries | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
+  clean-install:
+    # Install, doctor, the local simulation and the suites that need their own SDK versions. The
+    # long test run is kit-tests: this job takes 1 to 4 of its 15 minutes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # minimum-livekit: LiveKit 1.8.3, the minimum the kit supports, which needs openai 2.
+        # newest: the kit with nothing else pinned, as a fresh install gets it (openai 3, the
+        # newest litellm), running the same main suite. No LiveKit there: the LiveKit versions
+        # that take openai 3 need OpenTelemetry 1.45, which google-adk 2.7 doesn't allow.
+        dependencies: [minimum-livekit, newest]
+    name: clean-install (${{ matrix.dependencies }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,8 +191,113 @@ jobs:
           python -c "import json, pathlib;
           report=json.loads(pathlib.Path('smoke-report.json').read_text());
           assert report['status'] == 'ran' and report['report']['results']"
+      - name: Install test dependencies on the newest versions
+        if: matrix.dependencies == 'newest'
+        run: |
+          python -m pip install . pytest pytest-asyncio 'hypothesis>=6.140'
+          python -c "import importlib.metadata as m; print({p: m.version(p) for p in ('openai', 'litellm', 'httpx2')})"
       - name: Install test dependencies
-        # Exercise the minimum LiveKit version supported by pyproject.toml.
+        if: matrix.dependencies == 'minimum-livekit'
+        # Exercise the minimum LiveKit version supported by pyproject.toml. It needs openai 2, so
+        # the tests below run on openai 2; the last step runs the openai 3 ones.
+        run: >-
+          python -m pip install '.[livekit]' pytest pytest-asyncio 'hypothesis>=6.140'
+          'livekit-agents==1.8.3'
+          'livekit-plugins-cartesia==1.8.3'
+          'livekit-plugins-deepgram==1.8.3'
+          'livekit-plugins-elevenlabs==1.8.3'
+          'livekit-plugins-google==1.8.3'
+          'livekit-plugins-openai==1.8.3'
+          'livekit-plugins-silero==1.8.3'
+      - name: Pin the Claude Agent SDK to the lock's version
+        # The image installs the SDK at uv.lock's version, so the tests run the Claude Code CLI
+        # that ships (test_secret_paths.py drives it; TH-9042). Only the SDK is pinned here.
+        run: >-
+          python -m pip install "claude-agent-sdk==$(python -c "import tomllib;
+          print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package']
+          if p['name'] == 'claude-agent-sdk'))")"
+      - name: Rerun the Claude cost tests on the locked SDK
+        # The hosted image installs from uv.lock, while the step above gets pip's newest SDK. The
+        # two handle a resumed session differently, so the cost tests run on both. It runs in both
+        # rows: a test keeps this step unconditional.
+        run: |
+          version=$(python -c "import tomllib; lock = tomllib.load(open('uv.lock', 'rb')); print(next(p['version'] for p in lock['package'] if p['name'] == 'claude-agent-sdk'))")
+          python -m pip install "claude-agent-sdk==$version"
+          python -m pytest -q tests/harness/test_claude_cost.py
+      - name: Run the Claude Agent SDK reference on the SDK it pins
+        if: matrix.dependencies == 'minimum-livekit'
+        # Its real-CLI test runs the CLI bundled in the SDK the example pins, and refuses any other.
+        run: |
+          version=$(sed -n 's/^claude-agent-sdk==//p' examples/harness/claude_agent_sdk_support/requirements.txt)
+          python -m pip install "claude-agent-sdk==$version" 'traceai-claude-agent-sdk==0.1.2'
+          python -m pytest -q tests/harness/test_claude_agent_sdk_reference.py
+      - name: Run the measuring suite with the SDK instrumentors
+        if: matrix.dependencies == 'minimum-livekit'
+        # ALK's own environment has no traceAI instrumentors, so these tests would skip. They
+        # run here with them, on the OpenTelemetry the lock pins (1.39.1): an older SDK flushes
+        # differently, and measuring has to work on it.
+        run: >-
+          python -m pip install
+          'traceai-openai==0.1.15' 'traceai-anthropic==0.1.14' 'traceai-langchain==0.2.1'
+          'openai==2.54.0' 'anthropic==2.8.0' 'langchain-openai==1.8.0' 'langfuse==4.15.6'
+          'opentelemetry-api==1.39.1' 'opentelemetry-sdk==1.39.1'
+          'opentelemetry-exporter-otlp-proto-http==1.39.1' 'opentelemetry-proto==1.39.1'
+          && python -m pytest -q tests/harness/test_simulation_measure.py
+      - name: Run the tracing cleaner on the locked fi-instrumentation-otel
+        if: matrix.dependencies == 'minimum-livekit'
+        # The hosted image installs what uv.lock pins (fi-instrumentation-otel 1.0.0, with the
+        # traceAI instrumentors of the hosted-tracing extra), not the newest release the steps
+        # above resolve. The cleaner masks secrets in what is exported, so its tests run on that
+        # install as well.
+        run: >-
+          python -m pip install uv
+          && uv export --frozen --extra hosted-tracing --no-hashes --no-emit-project
+          --output-file locked-requirements.txt
+          && python -m venv .locked-venv
+          && .locked-venv/bin/python -m pip install -r locked-requirements.txt
+          && .locked-venv/bin/python -m pip install --no-deps .
+          && .locked-venv/bin/python -m pytest -q tests/harness/test_observability.py
+      - name: Run the raw-request measuring tests and the OpenAI instrumentor on openai 3
+        if: matrix.dependencies == 'minimum-livekit'
+        # The steps above run on openai 2: LiveKit 1.8.3, the minimum the kit supports, needs it.
+        # openai 3 sends through httpx2, so measuring must see a raw call there too. The tests are
+        # chosen by node id, so no filter deselects a file, and the step fails if any of them skip.
+        shell: bash
+        run: |
+          python -m pip install 'openai>=3,<4'
+          python -m pytest -q -rs \
+            tests/harness/test_simulation_measure.py::test_a_raw_model_request_marks_its_call_partial \
+            tests/harness/test_simulation_measure.py::test_a_request_through_the_real_httpx2_marks_partial \
+            tests/test_evals_openai_instrumentor.py | tee openai3.out
+          ! grep -q "skipped" openai3.out
+
+  kit-tests:
+    # The engine, dispatch, acceptance and harness suites, split out of clean-install, where they
+    # took 8.5 to 11.5 of its 15 minutes and cancelled runs at random. Same install and SDK pin
+    # as clean-install's. 40 minutes: a run takes 12 to 27.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same two rows as clean-install: the main suite runs on the minimum LiveKit (openai 2)
+        # and on the newest versions (openai 3).
+        dependencies: [minimum-livekit, newest]
+    name: kit-tests (${{ matrix.dependencies }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install test dependencies on the newest versions
+        if: matrix.dependencies == 'newest'
+        run: |
+          python -m pip install . pytest pytest-asyncio 'hypothesis>=6.140'
+          python -c "import importlib.metadata as m; print({p: m.version(p) for p in ('openai', 'litellm', 'httpx2')})"
+      - name: Install test dependencies
+        if: matrix.dependencies == 'minimum-livekit'
+        # Exercise the minimum LiveKit version supported by pyproject.toml. It needs openai 2.
         run: >-
           python -m pip install '.[livekit]' pytest pytest-asyncio 'hypothesis>=6.140'
           'livekit-agents==1.8.3'
@@ -83,10 +319,10 @@ jobs:
         # pre-existing failures unrelated to the voice engine (CLI golden-path,
         # init presets, plus test_config_and_facades hangs) — track those
         # separately so this gate stays green and meaningful.
-        # Deselected below, failing on dev too: the two sandbox-server tests are TH-8978, and the
-        # six in tests/test_harness.py fail on dev 70fc43bd as they do here (recorded in the
-        # older-findings register). (The run is one folded line, so they are named here rather
-        # than beside each --deselect.)
+        # Deselected below: test_the_system_prompt_stays_within_budget is out until its budget
+        # is decided (the scenario writer's prompt is 170k characters against a 90k budget set on
+        # 23 Sep). (The run is one folded line, so it is named here rather than beside its
+        # --deselect.)
         run: >-
           python -m pytest -q
           tests/runtime/test_livekit_engine.py
@@ -97,21 +333,31 @@ jobs:
           tests/test_retell_transport_validation.py
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
+          tests/test_retell_webcall_bridge.py
           tests/harness/test_process_runtime.py
+          tests/harness/test_multi_agent_compatibility_references.py
           tests/harness/test_source_folder.py
           tests/test_harness_sandbox_server.py
-          --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
-          --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
+          tests/test_harness_refusals.py
+          tests/test_harness_generated_runtime.py
+          tests/test_harness_service_environments.py
           tests/test_harness_architecture.py
           tests/test_harness_credentials.py
+          tests/harness/test_controller_env.py
+          tests/harness/test_call_runner.py
+          tests/harness/test_tool_evidence.py
+          tests/harness/test_chat_call_runner.py
+          tests/harness/test_http_completed_events.py
+          tests/harness/test_http_native_response.py
+          tests/harness/test_http_sse_stream.py
           tests/test_harness_secrets.py
+          tests/test_evals_openai_instrumentor.py
+          tests/test_live_mcp_worker_errors.py
+          tests/harness/test_grade.py
+          tests/harness/test_vertex_gemini_backend.py
+          tests/harness/test_claude_workers.py
           tests/test_harness.py
-          --deselect tests/test_harness.py::test_hosted_claude_session_uses_durable_resume_and_restricted_tools
-          --deselect tests/test_harness.py::test_a_skill_only_names_tools_its_stage_actually_has
-          --deselect tests/test_harness.py::test_connect_only_provider_world_cannot_create_shadow_state
           --deselect tests/test_harness.py::test_the_system_prompt_stays_within_budget
-          --deselect tests/test_harness.py::test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try
-          --deselect tests/test_harness.py::test_dropping_every_scenario_needs_an_explicit_everything
           tests/harness/test_contract_model.py
           tests/harness/test_contract_writer.py
           tests/harness/test_runtime_repair.py
@@ -133,6 +379,16 @@ jobs:
           tests/harness/test_hosted_authoring_entrypoint.py
           tests/harness/test_certify_only.py
           tests/harness/test_bundle_author_v2.py
+          tests/harness/test_in_process_door.py
+          tests/harness/test_framework_tool_spans.py
+          tests/harness/test_python_extras.py
+          tests/harness/test_tool_certification.py
+          tests/harness/test_contract.py
+          tests/harness/test_tool_module_rewrite.py
+          tests/harness/test_reading_routes.py
+          tests/harness/test_reading_guidance.py
+          tests/harness/test_reading_replay.py
+          tests/harness/test_chat_readiness.py
           tests/harness/test_python_tool_trace_bootstrap.py
           tests/harness/test_workflow_intent.py
           tests/harness/test_simulation_mark_bootstrap.py
@@ -143,7 +399,10 @@ jobs:
           tests/providers
           tests/harness/test_observability.py
           tests/harness/test_scenario_source_provision_agent.py
+          tests/harness/test_outbound.py
+          tests/harness/test_contract_writer.py
           tests/harness/test_framework_detection.py
+          tests/harness/test_framework_support.py
           tests/harness/test_openai_agents_reference.py
           tests/harness/test_hosted_entrypoint.py
           tests/harness/test_hosted_entrypoint_provision_retry.py
@@ -151,15 +410,22 @@ jobs:
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
           tests/harness/test_google_adk_reference.py
+          tests/harness/test_http_streamed_tool_calls.py
+          tests/harness/test_livekit_reference.py
           tests/harness/test_python_source_codecs.py
           tests/harness/test_executor_completed_counts.py
           tests/harness/test_deep_agents_reference.py
           tests/harness/test_langgraph_http_adapter.py
+          tests/harness/test_langgraph_reference.py
           tests/harness/test_reading_entry.py
           tests/harness/test_agent_reading.py
+          tests/harness/test_newer_python_syntax.py
           tests/harness/test_crewai_reference.py
+          tests/harness/test_langchain_reference.py
           tests/harness/test_scan_walk.py
           tests/harness/test_browser_scan_cut.py
+          tests/harness/test_save_child.py
+          tests/harness/test_save_checker.py
           tests/harness/test_import_lines.py
           tests/harness/test_import_lines_diff.py
           tests/harness/test_scan_folders.py
@@ -168,44 +434,17 @@ jobs:
           tests/harness/test_agent_scan.py
           tests/harness/test_authoring_entrypoint_find_agents.py
           tests/harness/test_seed_contract.py
+          tests/harness/test_browser_environment.py
           tests/test_bump_deployment_values.py
           tests/test_release_workflow.py
+          tests/test_e2b_template_build_id.py
           tests/test_release_pr_step.py
           tests/episode
-      - name: Rerun the Claude cost tests on the locked SDK
-        # The hosted image installs from uv.lock, while the step above gets pip's newest SDK. The
-        # two handle a resumed session differently, so the cost tests run on both.
+      - name: Run the LiveKit reference on the version it pins, failing if it skips
+        if: matrix.dependencies == 'minimum-livekit'
+        # This row installs livekit-agents 1.8.3, the reference's pin. The newest row has no
+        # livekit extra, so the tests that import the example skip there.
+        shell: bash
         run: |
-          version=$(python -c "import tomllib; lock = tomllib.load(open('uv.lock', 'rb')); print(next(p['version'] for p in lock['package'] if p['name'] == 'claude-agent-sdk'))")
-          python -m pip install "claude-agent-sdk==$version"
-          python -m pytest -q tests/harness/test_claude_cost.py
-      - name: Run the Claude Agent SDK reference on the SDK it pins
-        # Its real-CLI test runs the CLI bundled in the SDK the example pins, and refuses any other.
-        run: |
-          version=$(sed -n 's/^claude-agent-sdk==//p' examples/harness/claude_agent_sdk_support/requirements.txt)
-          python -m pip install "claude-agent-sdk==$version" 'traceai-claude-agent-sdk==0.1.2'
-          python -m pytest -q tests/harness/test_claude_agent_sdk_reference.py
-      - name: Run the measuring suite with the SDK instrumentors
-        # ALK's own environment has no traceAI instrumentors, so these tests would skip. They
-        # run here with them, on the OpenTelemetry the lock pins (1.39.1): an older SDK flushes
-        # differently, and measuring has to work on it.
-        run: >-
-          python -m pip install
-          'traceai-openai==0.1.15' 'traceai-anthropic==0.1.14' 'traceai-langchain==0.2.1'
-          'openai==2.54.0' 'anthropic==2.8.0' 'langchain-openai==1.8.0' 'langfuse==4.15.6'
-          'opentelemetry-api==1.39.1' 'opentelemetry-sdk==1.39.1'
-          'opentelemetry-exporter-otlp-proto-http==1.39.1' 'opentelemetry-proto==1.39.1'
-          && python -m pytest -q tests/harness/test_simulation_measure.py
-      - name: Run the tracing cleaner on the locked fi-instrumentation-otel
-        # The hosted image installs what uv.lock pins (fi-instrumentation-otel 1.0.0, with the
-        # traceAI instrumentors of the hosted-tracing extra), not the newest release the steps
-        # above resolve. The cleaner masks secrets in what is exported, so its tests run on that
-        # install as well.
-        run: >-
-          python -m pip install uv
-          && uv export --frozen --extra hosted-tracing --no-hashes --no-emit-project
-          --output-file locked-requirements.txt
-          && python -m venv .locked-venv
-          && .locked-venv/bin/python -m pip install -r locked-requirements.txt
-          && .locked-venv/bin/python -m pip install --no-deps .
-          && .locked-venv/bin/python -m pytest -q tests/harness/test_observability.py
+          python -m pytest -q -rs tests/harness/test_livekit_reference.py | tee livekit.out
+          ! grep -q "skipped" livekit.out

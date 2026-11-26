@@ -1318,6 +1318,12 @@ def validate_runtime_plan_patch(
         raise ValueError("runtime_repair_ingress_repair_not_allowed")
     if patch.base_contract_hash != _contract_hash(contract):
         raise ValueError("runtime_repair_base_contract_hash_mismatch")
+    from .framework_servers import langgraph_config_problem
+
+    # A `langgraph dev` server reads only a LangGraph JSON config: any other file is never the fix.
+    problem = langgraph_config_problem(root, patch.runtime.model_dump())
+    if problem:
+        raise ValueError(f"runtime_repair_langgraph_config_invalid: {problem}")
     if not set(patch.diagnostic_codes) or not set(patch.diagnostic_codes).issubset(
         allowed_diagnostic_codes
     ):
@@ -1837,7 +1843,10 @@ def validate_runtime_plan_patch(
     # Revalidate the whole contract so nested updates cannot bypass canonical validators.
     candidate = AgentContract.model_validate(candidate.model_dump(mode="python"))
     if candidate.modality == "chat":
-        if problem := generated_chat_interface_problem(candidate.runtime):
+        from .tools import _build_writes_the_interface
+
+        problem = generated_chat_interface_problem(candidate.runtime)
+        if problem and not _build_writes_the_interface(candidate.runtime, root, recorded):
             raise ValueError(problem)
     return candidate
 

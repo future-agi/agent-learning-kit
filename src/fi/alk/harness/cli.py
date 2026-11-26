@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -39,6 +40,13 @@ from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
 from .scenarios import opening as scenario_opening
 from .session import TEXT, Event
+from .secrets import (
+    CONTROLLER_CONNECTION_NAMES,
+    RUNNER_RESERVED_ENVIRONMENT,
+    RUNTIME_CONFIGURATION_NAMES_ENV,
+    client_name_reserved,
+    runtime_configuration_environment,
+)
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
 from .understand import SUBMIT_REMINDER, load, open_stage, opening, reading_settings
@@ -803,6 +811,14 @@ async def _simulate(args: argparse.Namespace) -> int:
     return 0 if summary["passed"] == summary["scenarios"] else 2
 
 
+_LOG = logging.getLogger(__name__)
+_MANIFEST = RUNTIME_CONFIGURATION_NAMES_ENV
+
+
+# Names a repository .env never sets: the kit's own, stamped into a stored reading.
+_NEVER_FROM_REPOSITORY = frozenset({"ALK_BUILD_ID"})
+
+
 def _load_connection_env(source: Path) -> list[str]:
     """Fill missing connection variables from the submitted repository.
 
@@ -812,6 +828,13 @@ def _load_connection_env(source: Path) -> list[str]:
     path must never replace the host's model-provider credential path.
     """
     loaded: list[str] = []
+    # The sandbox controller always defines this manifest (even as ""), so its presence, never its
+    # truthiness, says the repository is the job's: the controller's environment holds the
+    # runner's own credentials, and a repository file must not add to it.
+    inside = _MANIFEST in os.environ
+    controller_names: list[str] = []
+    runtime_names: list[str] = []
+    skipped_names: list[str] = []
     for candidate in (source / ".env.local", source / ".env"):
         if not candidate.is_file():
             continue
@@ -826,9 +849,52 @@ def _load_connection_env(source: Path) -> list[str]:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
-            if name not in os.environ:
-                os.environ[name] = value
-                loaded.append(name)
+            if name in _NEVER_FROM_REPOSITORY:
+                # Set by the sandbox template, in either branch: a repository can't say which kit
+                # build wrote a reading.
+                skipped_names.append(name)
+                continue
+            if not inside:
+                if name not in os.environ:
+                    os.environ[name] = value
+                    loaded.append(name)
+                continue
+            if name in CONTROLLER_CONNECTION_NAMES:
+                if name not in os.environ:
+                    os.environ[name] = value
+                    loaded.append(name)
+                    controller_names.append(name)
+            elif (
+                client_name_reserved(name)
+                or name in RUNNER_RESERVED_ENVIRONMENT
+                or name.startswith("ALK_")
+            ):
+                # A name that steers a client process, or the runner's own: never sent on. An owned
+                # name the agent may need (GOOGLE_CLOUD_PROJECT, NODE_ENV) goes to the runtime below;
+                # activation copies only allowlisted names back, so it can't reach the controller.
+                skipped_names.append(name)
+            else:
+                (namespaced,) = runtime_configuration_environment({name: value})
+                if name not in os.environ and namespaced not in os.environ:
+                    os.environ[namespaced] = value
+                    names = [
+                        item
+                        for item in os.environ.get(_MANIFEST, "").split(",")
+                        if item
+                    ]
+                    if name not in names:
+                        names.append(name)
+                    os.environ[_MANIFEST] = ",".join(sorted(names))
+                    loaded.append(name)
+                    runtime_names.append(name)
+    if inside and (controller_names or runtime_names or skipped_names):
+        # Names only, never values.
+        _LOG.info(
+            "repository .env inside the sandbox controller: controller %s, runtime %s, skipped %s",
+            sorted(set(controller_names)),
+            sorted(set(runtime_names)),
+            sorted(set(skipped_names)),
+        )
     return loaded
 
 
@@ -1265,6 +1331,15 @@ async def _auto(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     status = 1
+            if label == "understand" and not status:
+                # The kind is known only now; refused before anything is installed for it.
+                from .browser_environment import refuse_saved_contract
+
+                refusal = refuse_saved_contract(destination, getattr(job, "metadata", None))
+                if refusal is not None:
+                    emit("harness.stage.failed", label, status=EXIT_REFUSED, code=refusal)
+                    _report_failure_file(destination)
+                    return EXIT_REFUSED
             if label == "scenarios" and not status and job.require_tool_workflow:
                 from .contract import AgentContract, validate_tool_workflow
 

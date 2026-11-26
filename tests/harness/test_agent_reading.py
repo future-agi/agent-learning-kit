@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import builtins
 import dataclasses
+import hashlib
 import itertools
 import json
 import logging
@@ -37,7 +38,7 @@ from fi.alk.harness import (
     spend,
     tools,
 )
-from fi.alk.harness.backends import StageDone
+from fi.alk.harness.backends import CALL_BUDGET_SPENT, CallBudgetSpent, StageDone
 from fi.alk.harness.backends.base import qualified
 from fi.alk.harness.config import chosen_model
 from fi.alk.harness.contract import AgentContract
@@ -53,7 +54,7 @@ from fi.alk.harness.job import (
 from fi.alk.harness.reading_entry import READING_JOB_INVALID, run_reading_mode
 from fi.alk.harness.tools import CONTRACT_SERVER, _checked_contract
 from fi.alk.harness.understand import SUBMIT_REMINDER, reading_settings
-from fi.alk.providers.agent import build_authored_agent
+from fi.alk.providers.agent import Agent, build_authored_agent
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "frameworks"
 SUPPORT = "agents/support"
@@ -390,6 +391,88 @@ def test_the_framework_is_a_builds_shape(tmp_path, model, write, expected):
     assert agent["agent"]["extension"]["framework"] == expected
 
 
+@pytest.mark.skipif(
+    sys.version_info >= (3, 13), reason="the kit's own interpreter is 3.12; 3.13 parses these"
+)
+def test_a_file_the_kits_python_cannot_parse_is_named_in_the_agent_document(tmp_path, model):
+    # The kit reads the agent's source on Python 3.12; a file in 3.13's or 3.14's syntax isn't
+    # read, and the agent document says which file and why, never a reading in part without a
+    # word.
+    source = _repo(tmp_path)
+    (source / "box.py").write_text("class Box[T=int]:\n    item: T\n", encoding="utf-8")
+    (source / "greet.py").write_text("def greet(n):\n    return t'hi {n}'\n", encoding="utf-8")
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    agent = json.loads((tmp_path / "reading" / "agent.json").read_text(encoding="utf-8"))
+    unparsed = agent["agent"]["extension"]["source"]["unparsed"]
+    assert {one["path"]: one["python"] for one in unparsed} == {
+        "box.py": "3.13",
+        "greet.py": "3.14",
+    }
+    assert all("the kit reads source with Python 3.12" in one["reason"] for one in unparsed)
+
+
+def test_a_document_naming_an_unparsed_file_is_a_valid_stored_agent(tmp_path, model):
+    # A plain syntax error is unparsed on every Python, so this runs everywhere.
+    source = _repo(tmp_path)
+    (source / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    output = tmp_path / "reading"
+    written = (output / "agent.json").read_bytes()
+    document = json.loads(written)
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert document["agent"]["extension"]["source"]["unparsed"] == [
+        {
+            "path": "broken.py",
+            "python": "",
+            "reason": f"broken.py doesn't parse on Python {version} (line 1), "
+            "so this file was not read",
+        }
+    ]
+    # The hash covers the note: the platform validates the stored agent this way.
+    Agent.model_validate(document["agent"])
+    # A build of the same contract and source makes the same document.
+    built = scenario_source.authored_agent_document(
+        (output / "contract.json").read_text(encoding="utf-8"),
+        subfolder=None,
+        framework=document["agent"]["extension"].get("framework"),
+        source=source,
+    )
+    assert written == json.dumps(built, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def test_an_agent_the_kits_python_reads_whole_has_no_unparsed_list(tmp_path, model):
+    _repo(tmp_path)
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    agent = json.loads((tmp_path / "reading" / "agent.json").read_text(encoding="utf-8"))
+    assert "unparsed" not in agent["agent"]["extension"].get("source", {})
+
+
+def test_an_agent_the_kits_python_reads_whole_gets_the_document_it_got_before(tmp_path, model):
+    # The platform keeps one description per version and refuses a second, different one, so a
+    # reading with nothing unparsed writes the very bytes a build of the same contract writes.
+    _repo(tmp_path)
+    model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    output = tmp_path / "reading"
+    written = (output / "agent.json").read_bytes()
+    framework = json.loads(written)["agent"]["extension"].get("framework")
+    before = scenario_source.authored_agent_document(
+        (output / "contract.json").read_text(encoding="utf-8"), subfolder=None, framework=framework
+    )
+    assert written == json.dumps(before, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
 def test_with_no_folder_named_the_framework_comes_from_the_contracts_folder(tmp_path, model):
     source = _repo(tmp_path)
     shutil.copy(EXAMPLES / "llamaindex_agent.py", source / SUPPORT)
@@ -409,20 +492,37 @@ def test_with_no_folder_named_the_framework_comes_from_the_contracts_folder(tmp_
     }
 
 
-def test_a_browser_agent_is_refused_by_the_real_gate(tmp_path, model):
+def test_a_computer_use_agent_is_refused_by_the_real_gate(tmp_path, model):
     _repo(tmp_path)
-    fake = model(_submits({"modality": "browser"}, cost_usd=0.37))
+    fake = model(_submits({"modality": "computer_use"}, cost_usd=0.37))
     output = tmp_path / "reading"
 
     assert _run(tmp_path, _job(subfolder=SCRAPER)) == 78
 
-    assert _failure_in(output)["code"] == "agent_type_unsupported"
-    # One second look before any refusal: the browser answer to it stands and is refused.
+    failure = _failure_in(output)
+    assert failure["code"] == "agent_type_unsupported"
+    assert failure["details"] == {"agent_type": "computer_use", "tools": ["playwright"]}
+    # One second look before any refusal: the answer to it stands and is refused.
     assert fake.submissions == 2
     assert len(fake.sent) == 1
     assert not (output / "agent.json").exists()
     assert not (output / "contract.json").exists()
     _assert_cost(output, 0.37, True)
+
+
+def test_a_browser_agent_is_read_as_a_chat_agent_that_needs_a_browser(tmp_path, model):
+    _repo(tmp_path)
+    fake = model(_submits({**CHAT, "modality": "browser"}))
+    output = tmp_path / "reading"
+
+    # A reading knows no job, so it never refuses for want of a browser: it records the need.
+    assert _run(tmp_path, _job(subfolder=SCRAPER)) == 0
+
+    contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
+    assert (contract["modality"], contract["environment_needs"]) == ("chat", ["browser"])
+    # The second look comes first; what else the gate asks of this fixture is not this test's.
+    assert fake.submissions >= 2
+    assert not (output / "failure.json").exists()
 
 
 def test_a_missing_folder_is_refused_as_a_build_refuses_it(tmp_path, model):
@@ -1875,6 +1975,8 @@ def test_a_cancelled_contract_save_writes_nothing(tmp_path, monkeypatch, where, 
     only after the scan, and the refusing call reaches its write with no wait after the scan.
     So the scan is its only wait (``scan-browser``).
     """
+    # It patches checks the save would otherwise run in a child, so they run in this process.
+    monkeypatch.setenv("ALK_SAVE_CHECKS", "thread")
     subfolder = SCRAPER if where == "scan-browser" else SUPPORT
     spec, output = _reading_spec(tmp_path, _job(subfolder=subfolder))
     tool = _submit_contract(spec)
@@ -1930,6 +2032,8 @@ def test_the_readings_gemini_tools_run_on_its_loop(tmp_path, monkeypatch):
     So the reading's last cancel reaches it. ADK's tool_thread_pool_config would move it to a
     thread's own loop, but only in live mode in the locked 2.7.1, which a reading never uses.
     """
+    # It patches checks the save would otherwise run in a child, so they run in this process.
+    monkeypatch.setenv("ALK_SAVE_CHECKS", "thread")
     from google.adk.models.google_llm import Gemini
     from google.adk.models.llm_response import LlmResponse
     from google.adk.runners import Runner
@@ -2650,3 +2754,337 @@ def test_a_password_in_the_prompt_reaches_no_file_the_reading_writes(tmp_path, m
         )
     )
     assert holding == [f"source/{SUPPORT}/prompt.txt"]
+
+
+# -- the reading's call limit -------------------------------------------------------------------
+
+_CALL_LIMIT_SENTENCE = (
+    "We stopped reading this agent because it was taking too many steps. Nothing was saved."
+)
+
+
+@pytest.mark.parametrize(
+    ("raw", "calls"),
+    [(None, 60), ("", 60), ("25", 25), (" 7 ", 7), ("0", 60), ("-3", 60), ("1.5", 60), ("x", 60)],
+)
+def test_the_call_limit_is_a_positive_whole_number_or_sixty(monkeypatch, raw, calls):
+    if raw is None:
+        monkeypatch.delenv(agent_reading.CALL_LIMIT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, raw)
+
+    assert agent_reading.call_limit_setting() == calls
+
+
+@pytest.mark.parametrize(("raw", "budget"), [(None, 60), ("25", 25)])
+def test_the_reading_session_carries_the_call_limit(tmp_path, model, monkeypatch, raw, budget):
+    if raw is None:
+        monkeypatch.delenv(agent_reading.CALL_LIMIT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, raw)
+    _repo(tmp_path)
+    fake = model(_writes(CHAT))
+
+    assert _run(tmp_path) == 0
+
+    assert [spec.call_budget for spec in fake.created] == [budget]
+    # A reader's own allowance is the reading's, not a build's 40.
+    assert [spec.workers["agent_reader"].max_turns for spec in fake.created] == [12]
+
+
+def test_a_passing_reading_records_the_calls_it_made(tmp_path, model):
+    _repo(tmp_path)
+    model(_writes(CHAT, calls=9, turns=3, cost_usd=0.1))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 0
+
+    (stage,) = _cost_in(output)["stages"]
+    assert (stage["calls"], stage["turns"]) == (9, 3)
+    # The limit in force is kept beside the calls, since the platform keeps no failure details.
+    assert stage["call_limit"] == 60
+
+
+def test_a_spent_call_budget_has_its_own_code_and_gets_no_reminder(tmp_path, model, monkeypatch):
+    monkeypatch.delenv(agent_reading.CALL_LIMIT_ENV, raising=False)
+    _repo(tmp_path)
+    fake = model(
+        _ends(outcome=CALL_BUDGET_SPENT, is_error=True, calls=60, cost_usd=0.4),
+        name="vertex-gemini",
+    )
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 78
+
+    assert len(fake.sent) == 1
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
+    assert failure["message"] == _CALL_LIMIT_SENTENCE
+    assert failure["details"] == {"calls": 60, "limit": 60}
+    # Every call the budget let through came back with its usage.
+    _assert_cost(output, 0.4, True)
+
+
+def test_a_contract_saved_before_the_budget_ran_out_still_stands(tmp_path, model):
+    _repo(tmp_path)
+    model(_writes(CHAT, outcome=CALL_BUDGET_SPENT, is_error=True, calls=60))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 0
+
+    assert (output / "agent.json").exists()
+    assert not (output / "failure.json").exists()
+
+
+@pytest.mark.parametrize("delegates", [False, True], ids=["main-loop", "with-readers"])
+def test_one_gemini_budget_holds_the_main_loop_and_its_readers(
+    tmp_path, model, monkeypatch, delegates
+):
+    def reply(who, calls):
+        if delegates and who != "agent_reader":
+            return _gemini_calls("agent_reader", {"request": "Trace the add tool."}, len(calls))
+        return _gemini_calls("Glob", {"pattern": "*.py"}, len(calls))
+
+    sent, calls = _real_gemini(monkeypatch, reply)
+    monkeypatch.setenv(agent_reading.CALL_LIMIT_ENV, "5")
+    _repo(tmp_path)
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 78
+
+    # Five calls went out, well under the main loop's 70 turns and a reader's 40, and no reminder
+    # opened another budget.
+    assert len(calls) == 5
+    assert len(sent) == 1
+    if delegates:
+        # The readers' calls are counted with the main loop's, against the one budget.
+        assert "agent_reader" in calls
+        assert any(who != "agent_reader" for who in calls)
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
+    assert failure["message"] == _CALL_LIMIT_SENTENCE
+    assert failure["details"] == {"calls": 5, "limit": 5}
+    assert [(stage["calls"], stage["call_limit"]) for stage in _cost_in(output)["stages"]] == [(5, 5)]
+    # No request went out past the budget, so every call made is in the total.
+    _assert_cost(output, _gemini_priced(5), True)
+
+
+def _past_the_budget(*calls: int, saves: dict | None = None):
+    """A Claude-shaped turn: the backend says a call went past the budget as the calls arrive, and
+    the turn goes on until the reading stops it."""
+
+    async def turn(live):
+        if saves is not None:
+            _save(live.backend.output, saves)
+        for count in calls:
+            yield CallBudgetSpent(calls=count)
+        await live.interrupted.wait()
+        yield _done(outcome="error_during_execution", is_error=True)
+
+    return turn
+
+
+def test_a_call_past_the_budget_stops_the_reading_like_the_time_limit(tmp_path, model):
+    _repo(tmp_path)
+    fake = model(_past_the_budget(61, 62, 63))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 78
+
+    assert len(fake.interrupts) == 1
+    assert len(fake.sent) == 1
+    failure = _failure_in(output)
+    assert (failure["code"], failure["retryable"]) == ("agent_reading_call_limit", False)
+    assert failure["message"] == _CALL_LIMIT_SENTENCE
+    # The calls already on their way when the first call past the budget was seen count too.
+    assert failure["details"] == {"calls": 63, "limit": 60}
+    # A request cut off by the stop may be billed without being in the total.
+    assert _cost_in(output)["complete"] is False
+
+
+def test_a_contract_saved_before_a_call_past_the_budget_is_kept(tmp_path, model):
+    _repo(tmp_path)
+    model(_past_the_budget(61, saves=CHAT))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path) == 0
+
+    assert (output / "agent.json").exists()
+    assert not (output / "failure.json").exists()
+
+
+_HOSTED_SOURCE = {"kind": "provider", "visibility": "public"}
+_HOSTED = {
+    "vapi": {"connector": "vapi", "config": {"assistant_id": "asst-1"}},
+    "retell": {"connector": "retell", "config": {"agent_id": "agent-1"}},
+    "retell_chat": {"connector": "retell_chat", "config": {"agent_id": "agent-1"}},
+    "phone": {
+        "connector": "phone",
+        "config": {"phone_number": "+14155550123", "target_system_prompt": "Be kind."},
+    },
+    "livekit": {
+        "connector": "livekit",
+        "config": {"agent_name": "lk", "target_system_prompt": "Be kind."},
+    },
+}
+_CACHED = {
+    "provider": "vapi",
+    "modality": "voice",
+    "source_target_id": "asst-1",
+    "system_prompt": "Book a table.",
+    "tools": [{"name": "book", "parameters": {"type": "object"}}],
+}
+
+
+def _hosted_job(connector: str, mode: str = "connect_only") -> dict:
+    return {
+        **_job(source=_HOSTED_SOURCE),
+        "agent": {**_HOSTED[connector], "mode": mode},
+    }
+
+
+def _sha(profile: dict) -> str:
+    from fi.alk.harness.seed_contract import _canon
+
+    return hashlib.sha256(_canon(profile)).hexdigest()
+
+
+def _sources_opened(monkeypatch) -> list[tuple[str, dict]]:
+    real = agent_reading.resolve_source
+    opened: list[tuple[str, dict]] = []
+
+    def resolve(kind, **kwargs):
+        opened.append((kind, kwargs))
+        return real(kind, **kwargs)
+
+    monkeypatch.setattr(agent_reading, "resolve_source", resolve)
+    return opened
+
+
+def _no_provider_api(monkeypatch) -> None:
+    monkeypatch.setattr(authoring_entrypoint, "inspect_provider_target", _never)
+
+
+def _read_hosted(root: Path, job: dict, *flags: str) -> int:
+    job_path = root / "job.json"
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+    (root / "source").mkdir(exist_ok=True)
+    return authoring_entrypoint.main(
+        [
+            str(job_path),
+            "--source",
+            str(root / "source"),
+            "--output",
+            str(root / "reading"),
+            "--read-agent-only",
+            *flags,
+        ]
+    )
+
+
+@pytest.mark.parametrize("connector", sorted(_HOSTED))
+def test_a_connect_only_hosted_agent_is_accepted(connector):
+    assert (
+        agent_reading._check_job(HarnessJob.model_validate(_hosted_job(connector)))
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
+        _hosted_job("vapi", mode="provider_import"),
+        _job(source={"kind": "remote", "endpoint": "https://agent.example.com/chat"}),
+        {
+            **_job(source={"kind": "image", "image": "registry.example.com/agent:1"}),
+            "execution": "local",
+        },
+    ],
+    ids=["provider_import", "remote", "image"],
+)
+def test_a_hosted_reading_still_refuses(job):
+    refused = agent_reading._check_job(HarnessJob.model_validate(job))
+
+    assert refused is not None
+    assert (refused.code, refused.retryable) == (READING_JOB_INVALID, False)
+
+
+@pytest.mark.parametrize("connector", ["vapi", "retell", "retell_chat"])
+def test_a_provider_agent_is_read_from_the_cached_profile(
+    tmp_path, model, monkeypatch, connector
+):
+    _no_provider_api(monkeypatch)
+    opened = _sources_opened(monkeypatch)
+    cached = {**_CACHED, "provider": connector}
+    cache = tmp_path / "provider-import-profile.json"
+    cache.write_text(json.dumps(cached), encoding="utf-8")
+    fake = model(_writes(CHAT))
+    output = tmp_path / "reading"
+
+    code = _read_hosted(
+        tmp_path, _hosted_job(connector), "--provider-profile-cache", str(cache)
+    )
+
+    assert code == 0
+    assert _names(output) == {"contract.json", "agent.json", "cost.json"}
+    assert [(kind, kwargs["profile"]) for kind, kwargs in opened] == [
+        ("provider", cached)
+    ]
+    assert len(fake.created) == 1
+    record = json.loads((output / "contract.json").read_text(encoding="utf-8"))[
+        "reading_inputs"
+    ]
+    assert record["source"] == {
+        "kind": "provider",
+        "connector": connector,
+        "profile_sha256": _sha(cached),
+    }
+    assert record["subfolder"] == ""
+
+
+def test_a_provider_agent_without_its_profile_is_refused_without_the_network(
+    tmp_path, model, monkeypatch
+):
+    _no_provider_api(monkeypatch)
+    fake = model(_writes(CHAT))
+    output = tmp_path / "reading"
+
+    assert _read_hosted(tmp_path, _hosted_job("vapi")) == 78
+
+    failure = _failure_in(output)
+    assert (failure["code"], failure["domain"], failure["retryable"]) == (
+        READING_JOB_INVALID,
+        "platform_sync",
+        False,
+    )
+    assert fake.created == []
+    assert not (output / "contract.json").exists()
+
+
+@pytest.mark.parametrize("connector", ["phone", "livekit"])
+def test_a_phone_or_livekit_agent_is_read_from_its_config(
+    tmp_path, model, monkeypatch, connector
+):
+    _no_provider_api(monkeypatch)
+    opened = _sources_opened(monkeypatch)
+    fake = model(_writes(CHAT))
+    output = tmp_path / "reading"
+    job = _hosted_job(connector)
+
+    assert _read_hosted(tmp_path, job) == 0
+
+    assert not (output / "failure.json").exists()
+    assert (output / "agent.json").exists()
+    [(kind, kwargs)] = opened
+    profile = kwargs["profile"]
+    assert kind == "provider"
+    assert (profile["provider"], profile["system_prompt"], profile["tools"]) == (
+        connector,
+        "Be kind.",
+        [],
+    )
+    assert len(fake.created) == 1
+    record = json.loads((output / "contract.json").read_text(encoding="utf-8"))[
+        "reading_inputs"
+    ]
+    assert record["source"]["profile_sha256"] == _sha(profile)

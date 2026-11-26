@@ -236,6 +236,10 @@ class ProviderSource:
             "user-supplied prompt; it is not a verified provider inspection. There is no source "
             "code to search or open. Do not invent behavior or tool inputs absent from this "
             "definition.\n\n"
+            "Its `tools` list names every tool the agent can call, the provider's own controls "
+            "included: a call transfer or an end-call tool is one of the agent's tools even with "
+            "no function or arguments. Record each one in the contract's tools under the same "
+            "name, with its destinations and what it does to the call in its effects.\n\n"
             f"PROVIDER DEFINITION:\n{json.dumps(self.profile, indent=2, sort_keys=True)}"
         )
 
