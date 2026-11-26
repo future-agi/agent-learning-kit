@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import sys
+from pathlib import Path
 
 from fi.alk.harness.process_runtime import (
     ProcessRuntimeProvider,
@@ -204,7 +205,9 @@ def test_records_that_differ_only_in_times_ids_or_counters_still_collapse():
     assert collapsed.count("INFO poll") == 1
 
 
-def test_poll_lines_with_iso_offset_timestamps_collapse_so_the_root_error_survives(tmp_path):
+def test_poll_lines_with_iso_offset_timestamps_collapse_so_the_root_error_survives(
+    tmp_path,
+):
     from fi.alk.harness.process_diagnostics import retain_process_log
 
     work = tmp_path / "work"
@@ -241,7 +244,9 @@ def test_omission_notes_that_outgrow_the_read_still_keep_the_last_root_error(tmp
     assert body.endswith("ERROR worker: root cause is a missing api key\n")
 
 
-def test_poll_lines_with_letter_and_digit_ids_collapse_so_the_root_error_survives(tmp_path):
+def test_poll_lines_with_letter_and_digit_ids_collapse_so_the_root_error_survives(
+    tmp_path,
+):
     import random
     import string
 
@@ -288,7 +293,9 @@ def test_a_long_dash_run_written_by_the_agent_collapses_in_linear_time():
 def test_an_underscore_prefixed_hex_id_collapses_like_any_other_id():
     from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
 
-    lines = "".join(f"INFO poll req_{n:010x} state=pending\n" for n in (0x3941907E58, 0x1A2B3C4D5E))
+    lines = "".join(
+        f"INFO poll req_{n:010x} state=pending\n" for n in (0x3941907E58, 0x1A2B3C4D5E)
+    )
     collapsed = _collapse_repeated_lines(lines + "ERROR root cause\n")
     assert "[earlier copies of the next line omitted: 1]" in collapsed
 
@@ -300,7 +307,8 @@ def test_a_nul_byte_in_the_log_does_not_break_collapsing(tmp_path):
     work.mkdir()
     log = work / "process.log"
     log.write_bytes(
-        b"binary \x00a\x00 junk\n" * 3 + b"ERROR worker: root cause is a missing api key\n"
+        b"binary \x00a\x00 junk\n" * 3
+        + b"ERROR worker: root cause is a missing api key\n"
     )
     retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
     body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
@@ -1021,3 +1029,66 @@ def test_retained_log_drops_a_derived_world_role_password(tmp_path):
     text = next((tmp_path / "artifacts").rglob("*.log")).read_text()
     assert derived not in text
     assert "connect failed" in text and "@127.0.0.1:5432/w0" in text
+
+
+def _retained(tmp_path: Path, text: str) -> str:
+    from fi.alk.harness.process_diagnostics import retain_process_log
+
+    work = tmp_path / "work"
+    work.mkdir()
+    log = work / "process.log"
+    log.write_text(text)
+    retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
+    return next((tmp_path / "artifacts").rglob("*.log")).read_text()
+
+
+def test_a_java_exception_keeps_its_own_cause_when_a_later_one_shares_it(tmp_path):
+    cause = "Caused by: java.net.ConnectException: Connection refused\n\tat Client.connect(Client.java:42)\n"
+    first = (
+        "java.lang.IllegalStateException: booking failed\n\tat Booking.book(Booking.java:10)\n"
+        + cause
+    )
+    second = (
+        "java.lang.IllegalArgumentException: bad slot\n\tat Booking.slot(Booking.java:20)\n"
+        + cause
+    )
+
+    body = _retained(tmp_path, first + "INFO retrying\n" + second)
+
+    assert first in body and second in body
+    assert "omitted" not in body
+
+
+def test_a_go_panic_keeps_its_goroutine_and_frames_when_a_later_panic_repeats_them(
+    tmp_path,
+):
+    def panic(message: str, line: int) -> str:
+        return f"panic: {message}\n\ngoroutine 1 [running]:\nmain.main()\n\t/app/main.go:{line} +0x1d\n"
+
+    first, second = panic("booking failed", 10), panic("bad slot", 20)
+    body = _retained(tmp_path, first + second)
+
+    assert first in body and second in body
+
+
+def test_a_python_traceback_still_keeps_its_own_frames_and_error(tmp_path):
+    frames = 'Traceback (most recent call last):\n  File "/app/agent.py", line 10, in run\n    speak()\n'
+    first, second = (
+        frames + "HTTPStatusError: 402 Payment Required\n",
+        frames + "RuntimeError: session closed\n",
+    )
+
+    body = _retained(tmp_path, first + "INFO poll\n" + second)
+
+    assert first in body and second in body
+
+
+def test_a_digit_inside_a_name_tells_two_errors_apart(tmp_path):
+    body = _retained(
+        tmp_path,
+        "ERROR model gpt-4 not found\nERROR model gpt-5 not found\nERROR llm-2 down\nERROR llm-3 down\n",
+    )
+
+    for line in ("gpt-4 not found", "gpt-5 not found", "llm-2 down", "llm-3 down"):
+        assert line in body
+    assert "omitted" not in body

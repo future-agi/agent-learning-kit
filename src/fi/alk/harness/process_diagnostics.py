@@ -390,6 +390,16 @@ def mask_source_secrets(text: str, masks: Iterable[str]) -> str:
 
 
 _DIGITS = str.maketrans("", "", "0123456789")
+# Times and addresses: volatile wherever they appear, digits next to letters included (a "T" or a "Z").
+_VOLATILE = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?\b"
+    r"|0x[0-9a-fA-F]+"
+)
+# A name that carries digits (gpt-4, llm-2, s3transfer2): part of what the record is about, not a counter.
+_NAME_WITH_DIGITS = re.compile(
+    r"(?<![0-9A-Za-z])[A-Za-z][A-Za-z0-9]*(?:[-_.][A-Za-z0-9]+)*(?![0-9A-Za-z])"
+)
 # Numbers that tell two errors apart: a status, exit or signal code, an HTTP code.
 _MEANINGFUL = re.compile(
     r"(?i)(?:status(?:_code)?|code|exit(?:\s+(?:code|status))?|returncode|signal|http(?:/\d\.\d)?)"
@@ -409,17 +419,40 @@ _OPAQUE_ID = re.compile(
 _CHAINED = (
     "During handling of the above exception",
     "The above exception was the direct cause",
+    # Java and the other JVM languages print an exception's cause and suppressed ones unindented.
+    "Caused by:",
+    "Suppressed:",
 )
+# A Go panic's stack: each goroutine's header, then for each frame its function line, unindented, and its file line,
+# indented. Both belong to the panic above them.
+_GOROUTINE = re.compile(r"goroutine \d+ \[[^\]]*\]:\s*$")
 
 
 def _records(lines: list[str]) -> list[list[str]]:
-    """Split log lines into records: a line with its indented continuation lines, and a Python
-    traceback kept whole from its header to its exception line, chained tracebacks included."""
+    """Split log lines into records: a line with its continuation lines (indented ones, a JVM exception's
+    cause, a Go panic's goroutine stacks), and a Python traceback kept whole from its header to its exception
+    line, chained tracebacks included."""
 
     records: list[list[str]] = []
     in_traceback = False
-    for line in lines:
+    in_goroutine = False
+    for index, line in enumerate(lines):
         indented = line[:1] in (" ", "\t")
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if records and _GOROUTINE.match(line):
+            records[-1].append(line)
+            in_goroutine = True
+            continue
+        if (
+            records
+            and in_goroutine
+            and line.rstrip().endswith(")")
+            and following[:1] in (" ", "\t")
+        ):
+            records[-1].append(line)
+            continue
+        if not (indented or not line.strip()):
+            in_goroutine = False
         if line.startswith("Traceback (most recent call last)"):
             # Python prints a blank line between "...direct cause..." and the next traceback.
             said = [one for one in records[-1] if one.strip()] if records else []
@@ -447,7 +480,7 @@ def _shape(record: list[str]) -> str:
     (status, exit and HTTP codes) kept, so only real copies share a shape."""
 
     # NUL brackets the placeholders below, so a NUL in the log itself must not reach them.
-    text = _OPAQUE_ID.sub("#", "".join(record).replace("\0", ""))
+    text = _VOLATILE.sub("#", _OPAQUE_ID.sub("#", "".join(record).replace("\0", "")))
     kept: list[str] = []
 
     def hold(match: re.Match[str]) -> str:
@@ -455,7 +488,15 @@ def _shape(record: list[str]) -> str:
         # A placeholder with no digits, so removing digits cannot touch it.
         return "\0" + chr(0xE000 + len(kept) - 1) + "\0"
 
-    held = _MEANINGFUL.sub(hold, text).translate(_DIGITS)
+    def hold_name(match: re.Match[str]) -> str:
+        return (
+            hold(match) if any(c.isdigit() for c in match.group(0)) else match.group(0)
+        )
+
+    # Only digits that stand alone (counters, durations, sizes) are dropped.
+    held = _NAME_WITH_DIGITS.sub(hold_name, _MEANINGFUL.sub(hold, text)).translate(
+        _DIGITS
+    )
     return re.sub("\0(.)\0", lambda m: kept[ord(m.group(1)) - 0xE000], held)
 
 
