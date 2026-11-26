@@ -172,18 +172,26 @@ def read_reviewed_snapshot(path: Path) -> ReviewedEnvironmentInputs:
 
 
 def project_evidence(
-    reviewed: ReviewedEnvironmentInputs, *, task: str, count: int
+    reviewed: ReviewedEnvironmentInputs,
+    *,
+    task: str,
+    count: int,
+    assigned_cases: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     compiled = compile_environment_inputs(reviewed)
-    generated = _reviewable_scenarios(
-        reviewed,
-        environment_requirements=EnvironmentRequirements(task=task),
-        requested_count=count,
-    )
+    if assigned_cases is None:
+        generated = _reviewable_scenarios(
+            reviewed,
+            environment_requirements=EnvironmentRequirements(task=task),
+            requested_count=count,
+        )
+        assigned_cases = [
+            _public_source_case(draft) for draft in _distinct_source_drafts(generated)
+        ]
     evidence: dict[str, Any] = {
         "documents": [],
         "records": [],
-        "cases": [_public_source_case(draft) for draft in _distinct_source_drafts(generated)],
+        "cases": assigned_cases,
         "scenario_count": count,
     }
     for environment in compiled.agent_environments:

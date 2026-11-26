@@ -28,6 +28,7 @@ from .source_grounding import (
 SNAPSHOT_PATH = Path("/run/futureagi/reviewed-source-snapshot.json")
 PIN_FILE = "reviewed-source.json"
 _RECEIPT = "source_review_receipt"
+_ASSIGNMENT = "assigned_source_cases"
 _DOCUMENTS = "source_review_documents"
 _SOURCE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -225,6 +226,7 @@ def prepare_reviewed_build(
         has_pin
         or snapshot is not None
         or path.exists()
+        or _ASSIGNMENT in metadata
         or _RECEIPT in metadata
         or _DOCUMENTS in metadata
     ):
@@ -282,10 +284,32 @@ def prepare_reviewed_build(
             "digest": reviewed.snapshot_digest,
             "schema_digest": digest,
         }
+        assigned = metadata.get(_ASSIGNMENT)
+        if assigned is not None:
+            if not isinstance(assigned, list) or len(assigned) > int(
+                raw_job.get("scenario_count") or 10
+            ):
+                raise ReleaseError(
+                    "source_case_invalid", "The approved case assignment is invalid."
+                )
+            for case in assigned:
+                if not isinstance(case, dict) or set(case) != {
+                    "id",
+                    "category",
+                    "purpose",
+                    "starting_facts",
+                    "policy_reference",
+                    "citations",
+                }:
+                    raise ReleaseError(
+                        "source_case_invalid",
+                        "The approved case assignment is invalid.",
+                    )
         evidence = project_evidence(
             reviewed,
             task=f"Test the behavior of {metadata.get('agent_name') or 'the connected agent'}",
             count=int(raw_job.get("scenario_count") or 10),
+            assigned_cases=assigned,
         )
     except EnvironmentInputError as exc:
         raise ReleaseError(
@@ -294,7 +318,9 @@ def prepare_reviewed_build(
     clean = {
         **raw_job,
         "metadata": {
-            k: v for k, v in metadata.items() if k not in {_RECEIPT, _DOCUMENTS}
+            k: v
+            for k, v in metadata.items()
+            if k not in {_RECEIPT, _DOCUMENTS, _ASSIGNMENT}
         },
     }
     approved = ReviewedBuild(pin=pin, evidence=evidence)

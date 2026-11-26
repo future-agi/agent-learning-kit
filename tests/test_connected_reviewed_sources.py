@@ -626,3 +626,23 @@ def test_actionable_headings_qualify_their_list_items(rule, item):
     ]
     standalone = PolicyStatement("rule", rule, span)
     assert _reference_passages((standalone,)) == (standalone,)
+
+
+def test_private_case_assignment_survives_generator_changes(tmp_path, monkeypatch):
+    from fi.alk.harness.design import reviewed_sources
+
+    launch = _launch(tmp_path / "case", _reviewed_order_knowledge("Tuesday", infer_schema=True))
+    _, original = _prepare(launch)
+    job = launch[0]
+    job["metadata"]["assigned_source_cases"] = original.cases
+
+    def changed_generator(*args, **kwargs):
+        raise AssertionError("An assigned case must not be generated again")
+
+    monkeypatch.setattr(reviewed_sources, "_reviewable_scenarios", changed_generator)
+    public, restored = _prepare(launch)
+    assert restored.cases == original.cases
+    assert "assigned_source_cases" not in public["metadata"]
+    job["metadata"]["assigned_source_cases"] = [{**original.cases[0], "hidden_answer": "reject"}]
+    with pytest.raises(ReleaseError, match="source_case_invalid"):
+        _prepare(launch)

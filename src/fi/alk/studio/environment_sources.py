@@ -136,6 +136,7 @@ class GenerateScenariosRequest(_ImmutableValue):
     ]
     bundle_manifest: dict[str, Any] | None = None
     distinct_source_cases: bool = False
+    validate_bundle_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -234,6 +235,12 @@ def _generate_scenarios(request: GenerateScenariosRequest) -> dict[str, Any]:
     }
     if request.bundle_manifest is not None:
         result["bundle_digest"] = _bundle_digest(request.bundle_manifest, pin)
+    if request.validate_bundle_only:
+        if request.bundle_manifest is None:
+            raise EnvironmentInputError(
+                "source_bundle_invalid", "Supply the reviewed bundle manifest."
+            )
+        return result
     generated = _reviewable_scenarios(
         reviewed,
         environment_requirements=request.environment_requirements,

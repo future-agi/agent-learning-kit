@@ -487,6 +487,10 @@ def test_generation_verifies_bundle_metadata_and_canonical_digest():
         _generate(snapshot, bundle_manifest=body)["result"]["bundle_digest"]
         == body["digest"]
     )
+    verified = _generate(snapshot, bundle_manifest=body, validate_bundle_only=True)["result"]
+    assert verified["bundle_digest"] == body["digest"]
+    assert "scenarios" not in verified
+    assert _generate(snapshot, validate_bundle_only=True)["error"]["code"] == "source_bundle_invalid"
     body["metadata"]["reviewed_source"]["schema_digest"] = "sha256:" + "c" * 64
     body["digest"] = seal_bundle_v2(EnvironmentBundleV2.model_validate(body))
     assert (
