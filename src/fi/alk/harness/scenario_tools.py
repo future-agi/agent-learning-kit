@@ -78,7 +78,7 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check, same_id
-from .proofs import load_proofs, proof_key, record_proof, record_unprovable
+from .proofs import discard_proofs, load_proofs, proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
 from .source_grounding import reviewed_action_arguments
 from .releases import ReleaseError
@@ -4636,6 +4636,7 @@ def scenario_tools(
                     "Dropping every scenario needs everything=true. Do that only when the "
                     "person asked to start the suite over; otherwise drop scenarios by name."
                 )
+            discard_proofs(destination, {proof_key(one) for one in kept})
             kept.clear()
             return _ok(_EMPTIED)
         key = next((one.scenario_key for one in kept if one.name == name), "")
@@ -4643,6 +4644,7 @@ def scenario_tools(
         kept[:] = [one for one in kept if one.name != name]
         if len(kept) == before:
             return _err(f"no scenario called {name!r}")
+        discard_proofs(destination, {key})
         if not kept:
             return _ok(_EMPTIED)
         write_scenarios(kept, destination, catalogue)

@@ -3016,6 +3016,7 @@ def test_restore_exactly_without_searching_is_refused_with_the_restore_call_then
     import asyncio
 
     from fi.alk.harness.folder import document_for
+    from fi.alk.harness.proofs import load_proofs
     from fi.alk.harness.scenario_tools import REMOVED_CASES, scenario_tools
 
     root, contract, _catalogue = _built_environment(tmp_path)
@@ -3024,7 +3025,9 @@ def test_restore_exactly_without_searching_is_refused_with_the_restore_call_then
     assert not asyncio.run(tools["submit_scenario"](_delta())).get("is_error")
     assert not asyncio.run(tools["submit_scenario"](_delta(name="adds-two-big-macs"))).get("is_error")
     key, content = kept[0].scenario_key, document_for(kept[0])
+    assert key in load_proofs(root)
     assert not asyncio.run(tools["drop_scenario"]({"name": "adds-a-big-mac"})).get("is_error")
+    assert key not in load_proofs(root)
     assert not (root / REMOVED_CASES).exists()
 
     asked: list[str] = []
