@@ -199,10 +199,10 @@ same file holds the door's action log and says only the tables are missing. The 
 world's end state under `end_state_artifact` only when the file holds the world's tables; a file
 holding the browser's record without them is named under `browser_state_artifact`. With no client
 attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. Typed text
-leaves with the run from `traces-and-recordings` up, as screenshots do; at a lower level each
-typing row keeps where and that it happened, its text is left out, and the file says
-`typed_text: not_kept_at_level` (one setting, `TYPED_TEXT_NEEDS_RECORDINGS`, keeps it at `traces`
-too). Screenshots are uploaded last, as
+leaves with the trace, wherever the `world_state` file goes; secret fields never hold it. One
+setting, `TYPED_TEXT_NEEDS_RECORDINGS`, holds it to `traces-and-recordings` instead: below that each
+typing row then keeps where and that it happened, its text is left out, and the file says
+`typed_text: not_kept_at_level`. Screenshots are uploaded last, as
 the `screenshot` kind, kept from `traces-and-recordings` up; at a lower level the browser still
 takes them in the world, none is sent, and the trial says the level is why. Together they take at
 most half of the job's upload budget, so traces uploaded after them keep room. One the kit cannot send

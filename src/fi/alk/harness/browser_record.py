@@ -1002,9 +1002,10 @@ def browser_counts(evidence: dict[str, Any]) -> dict[str, Any]:
     return counts
 
 
-# Typed text is kept where the run's level keeps recordings, as the browser's screenshots are. The one setting: with
-# False, a run at `traces` keeps it too. Secrets are masked either way, as the record is made.
-TYPED_TEXT_NEEDS_RECORDINGS = True
+# What the agent typed is the evidence of what it did, so it leaves with the trace (the world_state file). Secret
+# fields are never kept as text and declared secrets are masked, at any level. The one setting: True holds typed text
+# to `traces-and-recordings`, as screenshots are.
+TYPED_TEXT_NEEDS_RECORDINGS = False
 TYPED_TEXT_NOT_KEPT_AT_LEVEL = "not_kept_at_level"
 
 
