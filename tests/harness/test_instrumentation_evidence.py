@@ -768,6 +768,19 @@ def test_a_root_dockerfile_cmd_decides_before_the_workdirs(tmp_path: Path) -> No
     assert _saved_instrumentation(tmp_path, files, _INFERRED) == "none"
 
 
+def test_a_python_callback_beside_a_node_dockerfile_keeps_its_python_reading(tmp_path: Path) -> None:
+    """The root Dockerfile is a frontend's: the planner builds the Python agent and never runs that CMD."""
+    files = {
+        "agent.py": "from fi_instrumentation import register\n\n\ndef agent_callback(message):\n    return message\n",
+        "requirements.txt": "fi-instrumentation-otel\n",
+        "Dockerfile": 'FROM node:22\nCMD ["node", "web/server.js"]\n',
+        "web/package.json": _package({}),
+        "web/server.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, {**_INFERRED, "workdir": ""}) == "traceai"
+
+
 def test_an_independent_package_under_a_traced_parent_is_read_alone(tmp_path: Path) -> None:
     """A parent manifest that does not declare the agent's package in its workspaces is another project's."""
     files = {

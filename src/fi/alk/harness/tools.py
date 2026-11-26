@@ -617,6 +617,10 @@ def _instrumentation_reader(
             return "unknown", ""
         if language != "node":
             return "other", ""
+    elif language and language != "node" and not (runtime.command or runtime.language.strip()):
+        # Only a Dockerfile CMD made it Node, and the planner builds another language: that
+        # Dockerfile is another component's (a frontend's), and its CMD never runs the agent.
+        return "other", ""
     if component is None:
         # The planner refuses this component; its workdir is read as written.
         return "node", runtime.workdir
