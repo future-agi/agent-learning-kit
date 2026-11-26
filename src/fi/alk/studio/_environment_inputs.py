@@ -78,12 +78,14 @@ from pydantic import TypeAdapter, ValidationError
 
 from fi.alk.studio._environment_input_parsers import (
     MAX_DESIGN_BYTES,
+    MAX_POLICY_STATEMENTS,
     MAX_SOURCE_FILES,
     PARSER_REVISION,
     POLICY_PARSER_REVISION,
     RawPolicyDocument,
     RawRecordDocument,
     SourceParseError,
+    _policy_literal,
     _statement_spans,
     parse_environment_source,
 )
@@ -638,7 +640,7 @@ def _prepare_policy_source(
     *,
     redact: bool = False,
     synthetic: bool = False,
-) -> tuple[ParsedPolicySource, tuple[SourceDiagnostic, ...]]:
+) -> tuple[ParsedPolicySource | FailedEnvironmentSource, tuple[SourceDiagnostic, ...]]:
     replacements = _synthetic_contacts(parsed) if synthetic else {}
 
     def replace_contact(match):
@@ -660,6 +662,15 @@ def _prepare_policy_source(
     statements: list[PolicyStatement] = []
     for raw_page, page in zip(parsed.pages, pages):
         for index, (start, end) in enumerate(_statement_spans(page.text, source.role), start=1):
+            if source.role == "policy" and len(statements) == MAX_POLICY_STATEMENTS:
+                return FailedEnvironmentSource(pin=pin, filename=source.filename), (
+                    SourceDiagnostic(
+                        code="source_too_large",
+                        severity="blocking",
+                        message=f"Split the policy into files of at most {MAX_POLICY_STATEMENTS:,} statements.",
+                        span=SourceSpan(source_id=source.source_id, page=page.page),
+                    ),
+                )
             statements.append(
                 PolicyStatement(
                     statement_id=f"{source.source_id}:page:{page.page}:statement:{index}",
@@ -1022,26 +1033,7 @@ def _propose_inputs(
 
 
 def _propose_policy_rule(statement: PolicyStatement) -> PolicyRuleProposal:
-    text = " ".join(line.strip() for line in statement.text.strip().splitlines())
-    match = re.fullmatch(
-        r"""(?:the )?(?:response|[A-Za-z]+ responses) must (not )?contain (?:(['"])(.+?)\2|([A-Za-z][\w-]*))\.?""",
-        text,
-        re.IGNORECASE,
-    )
-    value = (match[3] or match[4]) if match else None
-    forbidden = bool(match and match[1])
-    if not match:
-        # A literal wording check only applies when the policy explicitly covers every response.
-        imperative = re.fullmatch(
-            r"""(never |do not |always )?include (?:the (?:phrase|word) )?(["'])([^"']+)\2 in (every|any|all) (?:responses?|replies|reply)\.?""",
-            text,
-            re.IGNORECASE,
-        )
-        if imperative:
-            negative = (imperative[1] or "").lower() in {"never ", "do not "}
-            if negative == (imperative[4].lower() == "any"):
-                forbidden = negative
-                value = imperative[3]
+    value, forbidden = _policy_literal(statement.text)
     return PolicyRuleProposal(
         rule_id=statement.statement_id + ":rule",
         statement_id=statement.statement_id,

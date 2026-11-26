@@ -2093,20 +2093,88 @@ def test_incremental_document_import_keeps_old_pages_and_removes_newly_hidden_pa
 def test_policy_pdf_extracts_distinct_rules_with_exact_page_offsets():
     source = _policy_source(
         'Refund policy\nThe response must\ncontain "Approved. Thank you". '
-        'The response must not contain "secret".\nIf a manager agrees,\n'
+        'The response must not contain "secret".\n\nIf a manager agrees,\n'
         'the response must contain "override".'
     )
     draft = prepare_environment_inputs((source,))
     parsed = draft.sources[0]
     assert [r.check_type for r in draft.proposals.policy_rules] == [
-        None, "contains", "not_contains", None,
+        None,
+        "contains",
+        "not_contains",
+        None,
     ]
     assert [r.check_arguments.get("value") for r in draft.proposals.policy_rules] == [
-        None, "Approved. Thank you", "secret", None,
+        None,
+        "Approved. Thank you",
+        "secret",
+        None,
     ]
     for statement in parsed.statements:
         assert statement.span.page == 1
-        assert parsed.pages[0].text[statement.span.start:statement.span.end] == statement.text
+        assert (
+            parsed.pages[0].text[statement.span.start : statement.span.end]
+            == statement.text
+        )
     reference = prepare_environment_inputs((replace(source, role="reference"),))
     assert not reference.proposals.policy_rules
-    assert len(reference.sources[0].statements) == 1
+    assert len(reference.sources[0].statements) == 2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'If the destination is in the U.S.\nthe response must contain "HOLD".',
+        'Use the exact example "Warning.\nThe response must contain ERROR.\nDo not retry."',
+        "For training, display “Warning. The response must contain ERROR. Do not retry.”",
+        'The response must contain "APPROVED". This applies only to verified accounts.',
+        "If the request is verified:\nThe response must contain HOLD.\nThe response must contain REVIEW.",
+        "If the request is escalated:\n1. The response must contain HOLD.\n2. The response must contain REVIEW.",
+    ],
+)
+def test_pdf_wrapped_conditions_and_quoted_examples_stay_reference(text):
+    draft = prepare_environment_inputs((_policy_source(text),))
+    assert not any(rule.check_type for rule in draft.proposals.policy_rules)
+
+
+def test_numbered_pdf_rules_keep_their_labels_and_individual_checks():
+    draft = prepare_environment_inputs(
+        (
+            _policy_source(
+                '1. The response must contain "A".\n2. The response must not contain "B".'
+            ),
+        )
+    )
+    assert [
+        (r.check_type, r.check_arguments["value"]) for r in draft.proposals.policy_rules
+    ] == [
+        ("contains", "A"),
+        ("not_contains", "B"),
+    ]
+    assert [s.text[:2] for s in draft.sources[0].statements] == ["1.", "2."]
+
+
+def test_numbered_pdf_clause_keeps_the_qualifying_second_sentence():
+    source = _policy_source(
+        "1. Returns are accepted through day 37. Day 38 is late.\n2. Refunds above $425 require escalation. Use ORCHID-72."
+    )
+    statements = prepare_environment_inputs((source,)).sources[0].statements
+    assert [s.text for s in statements] == [
+        "1. Returns are accepted through day 37. Day 38 is late.",
+        "2. Refunds above $425 require escalation. Use ORCHID-72.",
+    ]
+
+
+def test_policy_statement_budget_blocks_the_whole_policy(monkeypatch):
+    monkeypatch.setattr("fi.alk.studio._environment_inputs.MAX_POLICY_STATEMENTS", 2)
+    draft = prepare_environment_inputs(
+        (
+            _policy_source(
+                "The response must contain ONE. The response must contain TWO. The response must contain THREE."
+            ),
+        )
+    )
+    assert [(d.code, d.severity) for d in draft.diagnostics] == [
+        ("source_too_large", "blocking")
+    ]
+    assert not draft.proposals.policy_rules

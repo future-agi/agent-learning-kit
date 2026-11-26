@@ -15,6 +15,7 @@ MAX_SOURCE_BYTES = 25 * 1024 * 1024
 MAX_SOURCE_FILES = 100
 MAX_DESIGN_BYTES = 200 * 1024 * 1024
 MAX_PDF_PAGES = 2_000
+MAX_POLICY_STATEMENTS = 10_000
 MAX_EXTRACTED_TEXT_CHARS = 10 * 1024 * 1024
 MAX_RECORD_FIELDS = 500
 MAX_RECORD_ROWS = 100_000
@@ -374,27 +375,79 @@ def _document_label(line: str) -> bool:
 
 
 # Ignore punctuation inside quoted literals when looking for sentence boundaries.
-_POLICY_BOUNDARY = re.compile(r"""("[^"\n]*"|'[^'\n]*')|(?<=[.!?])\s+(?=[A-Z])|\n+""")
+_POLICY_BOUNDARY = re.compile(
+    r"""("[^"]*(?:"|\Z)|“[^”]*(?:”|\Z)|‘[^’]*(?:’|\Z)|(?<!\w)'[^']*(?:'|\Z))|(?<=[.!?])\s+|\n+"""
+)
+# A visual line wrap after an abbreviation does not end its sentence.
+_ABBREVIATION = re.compile(
+    r"(?:\b(?:[A-Za-z]\.)+|\b(?:Dr|Mr|Mrs|Ms|Prof|vs|etc|Inc|No)\.)$", re.I
+)
+
+
+_POLICY_ITEM = re.compile(r"(?m)^[ \t]*(?:\d+[.)]|[-*•])\s+")
+_INTRODUCED_LIST = re.compile(r"[:：]\s*\n\s*(?:\d+[.)]|[-*•])\s+")
+
+
+def _policy_literal(text: str) -> tuple[str | None, bool]:
+    text = " ".join(line.strip() for line in text.strip().splitlines())
+    text = re.sub(r"^(?:\d+[.)]|[-*•])\s+", "", text)
+    match = re.fullmatch(
+        r"""(?:the )?(?:response|[A-Za-z]+ responses) must (not )?contain (?:"([^"]+)"|'([^']+)'|([A-Za-z][\w-]*))\.?""",
+        text,
+        re.IGNORECASE,
+    )
+    value = (match[2] or match[3] or match[4]) if match else None
+    forbidden = bool(match and match[1])
+    if not match:
+        # A literal wording check only applies when the policy explicitly covers every response.
+        imperative = re.fullmatch(
+            r"""(never |do not |always )?include (?:the (?:phrase|word) )?(["'])([^"']+)\2 in (every|any|all) (?:responses?|replies|reply)\.?""",
+            text,
+            re.IGNORECASE,
+        )
+        if imperative:
+            negative = (imperative[1] or "").lower() in {"never ", "do not "}
+            if negative == (imperative[4].lower() == "any"):
+                forbidden = negative
+                value = imperative[3]
+    return value, forbidden
+
+
+def _sentences(text: str, start: int, end: int) -> Iterator[tuple[int, int]]:
+    for boundary in _POLICY_BOUNDARY.finditer(text, start, end):
+        left = boundary.start()
+        if boundary[1] is not None or text[left - 1] not in ".!?":
+            continue
+        if _ABBREVIATION.search(text[max(start, left - 24):left]):
+            continue
+        yield start, left
+        start = boundary.end()
+    yield start, end
 
 
 def _statement_spans(text: str, role: str) -> Iterator[tuple[int, int]]:
     for paragraph in re.finditer(r"\S(?:.*?\S)?(?=\n\s*\n|\Z)", text, re.DOTALL):
         start, end = paragraph.span()
-        if role == "policy":
-            # PDF extraction retains visual line wraps. A wrapped condition and its
-            # consequence must stay together or a conditional rule becomes unconditional.
-            for boundary in _POLICY_BOUNDARY.finditer(paragraph.group()):
-                if boundary[1] is not None:
-                    continue
-                left = paragraph.start() + boundary.start()
-                if left - start <= 10 and re.fullmatch(r"\d+\.", text[start:left]):
-                    continue
-                if text[left - 1] in ".!?" or (
-                    left - start <= 160 and _document_label(text[start:left])
-                ):
-                    yield start, left
-                    start = paragraph.start() + boundary.end()
-        yield start, end
+        if role != "policy":
+            yield start, end
+            continue
+        newline = text.find("\n", start, min(end, start + 161))
+        if newline >= 0 and _document_label(text[start:newline]):
+            yield start, newline
+            start = newline + 1
+        if _POLICY_ITEM.match(text, start, end) and not _INTRODUCED_LIST.search(text, start, end):
+            # Keep conditions and follow-on sentences with their numbered clause.
+            for item in _POLICY_ITEM.finditer(text, start, end):
+                if item.start() > start:
+                    yield start, item.start() - 1
+                    start = item.start()
+            yield start, end
+        elif all(_policy_literal(text[a:b])[0] for a, b in _sentences(text, start, end)):
+            yield from _sentences(text, start, end)
+        else:
+            # Mixed prose may qualify the preceding or following wording. The
+            # paragraph remains reference material instead of an unconditional check.
+            yield start, end
 
 
 def _normalize_text(value: str) -> str:
