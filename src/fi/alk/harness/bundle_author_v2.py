@@ -76,6 +76,7 @@ from .framework_servers import (
     server_start_seconds,
     serves_port_option,
 )
+from .process_runtime import NODE_TOOLCHAIN_PROBE as _NODE_TOOLCHAIN_PROBE
 from .generated_runtime import (
     GeneratedRuntimeError,
     _python_install,
@@ -1502,14 +1503,6 @@ _NODE_LANGUAGES = {"node", "nodejs"}
 # Corepack runs the exact npm the source pins. COREPACK_ENV_FILE=0 keeps a source .corepack.env from
 # choosing the registry or integrity keys; it is argv, so no declared environment value overrides it.
 _NPM_INSTALL = ["env", "COREPACK_ENV_FILE=0", "corepack", "npm", "ci", "--ignore-scripts"]
-# Toolchain probes run isolated (-I): they start in the source tree, whose modules must not shadow the stdlib.
-# The build reads a probe's ``runtime_unsupported:`` exit as the image's failure, not the agent's.
-_NODE_TOOLCHAIN_PROBE = (
-    "import shutil,subprocess,sys; "
-    "node=shutil.which('node'); corepack=shutil.which('corepack'); "
-    "node and corepack or sys.exit('runtime_unsupported: runtime_node_toolchain_missing: provision Node and Corepack in the certified image'); "
-    "print('Node toolchain '+subprocess.check_output([node,'--version'],text=True).strip(),flush=True)"
-)
 _NODE_LAYOUT_UNSUPPORTED = (
     "runtime_node_layout_unsupported: Not supported yet: npm/pnpm workspaces, pnpm and yarn. "
     "Use a single npm package with package-lock.json."
