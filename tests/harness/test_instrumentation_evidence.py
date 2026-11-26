@@ -737,3 +737,32 @@ def test_a_manifest_with_both_sdks_is_traceai(tmp_path: Path) -> None:
     }
 
     assert detect_instrumentation(_repository(tmp_path, {"package.json": _package(both)})) == "traceai"
+
+
+_INFERRED = {"language": "", "command": [], "workdir": "agent"}
+
+
+def test_a_node_agent_known_only_from_its_dockerfile_is_read_from_its_package_json(
+    tmp_path: Path,
+) -> None:
+    """No language and no command: the workdir Dockerfile's CMD is what makes it Node, as the planner reads it."""
+    files = {
+        "helper.py": "import json\n",
+        "agent/package.json": _package({"@future-agi/omega-runtime": "^0.4.0"}),
+        "agent/server.js": "require('http');\n",
+        "agent/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _INFERRED) == "traceai"
+
+
+def test_a_root_dockerfile_cmd_decides_before_the_workdirs(tmp_path: Path) -> None:
+    """The planner reads the root Dockerfile first; a Python CMD there keeps the Python reading."""
+    files = {
+        "helper.py": "import json\n",
+        "Dockerfile": 'FROM python:3.12\nCMD ["python", "helper.py"]\n',
+        "agent/package.json": _package({"@future-agi/omega-runtime": "^0.4.0"}),
+        "agent/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _INFERRED) == "none"

@@ -556,7 +556,7 @@ def _checked_against_source(
     if (
         runtime is not None
         and source_root is not None
-        and runs_javascript(runtime.language, runtime.command)
+        and runs_javascript(runtime.language, _launch_command(source_root, runtime, subfolder))
     ):
         # The selected runtime decides the reader: a Node or Bun agent is read from its
         # package.json, whatever Python helpers its folder holds.
@@ -812,6 +812,30 @@ def _stop_message(destination: Path) -> str:
 
 # alk.yaml and the Compose files together; the largest real Compose file seen is 53 KB.
 _SAVE_YAML_BYTES = 128 * 1024
+
+
+def _launch_command(source_root: Path, runtime: Runtime, subfolder: str | None) -> list[str]:
+    """The command the planner starts: ``runtime.command``, else, with no language either, the
+    Dockerfile CMD it reads. That is the start folder's (the repository root, or the bound workdir
+    in a subfolder), then the one in ``runtime.workdir``."""
+    if runtime.command or runtime.language.strip():
+        return list(runtime.command)
+    from .bundle_author_v2 import BundleAuthorError, _dockerfile_run
+
+    root = source_root.resolve()
+    workdir = (root / runtime.workdir.strip()).resolve() if runtime.workdir.strip() else root
+    for folder in dict.fromkeys((workdir,) if subfolder else (root, workdir)):
+        if not folder.is_relative_to(root) or not folder.is_dir():
+            continue
+        try:
+            command = _dockerfile_run(folder)
+        except BundleAuthorError:
+            # A CMD the planner refuses (shell form, not JSON) names no runtime to read by;
+            # the save's evidence falls back to the folder's own files.
+            continue
+        if command:
+            return command
+    return []
 
 
 def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> str | None:
