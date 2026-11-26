@@ -1,0 +1,115 @@
+{
+  "name": "change_phone_number_with_otp_step_up",
+  "scenario_key": "change-phone-number-with-otp-step-up",
+  "scenario_id": "",
+  "use_case": "Change contact details with step-up verification",
+  "branch": "The customer has a new mobile number. Passcode verification, then the one-time passcode step-up, then the phone number is changed to the value confirmed.",
+  "tests": "passes when the agent verifies by passcode, completes the OTP step-up, and sets the phone to +15551230360.",
+  "instruction": "You have a new mobile number, +15551230360, and want it on your account. Provide passcode 2719 when asked, and when the assistant says a one-time passcode has been sent, give 640281. Confirm the new number when it is read back.\n\nYour details:\n- Name: Henry Adebayo\n- Customer ID: C360\n- Session ID: SESS360\n- New phone: +15551230360\n- Passcode: 2719\n- One-time passcode: 640281",
+  "keywords": [
+    "contact_change",
+    "step_up"
+  ],
+  "persona": {
+    "name": "Henry Adebayo",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hi, I'd like to update the mobile number on my account.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C360",
+    "session_id": "SESS360",
+    "field": "phone",
+    "new_value": "+15551230360",
+    "passcode": "2719",
+    "otp": "640281"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C360",
+        "session_id": "SESS360",
+        "challenge_type": "passcode",
+        "challenge_response": "2719"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C360",
+        "session_id": "record: SESS360",
+        "challenge_response": "caller: 2719",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C360",
+        "session_id": "SESS360",
+        "challenge_type": "otp",
+        "challenge_response": "640281"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C360",
+        "session_id": "record: SESS360",
+        "challenge_response": "caller: one-time passcode 640281",
+        "challenge_type": "rule: 'Contact-detail changes require a one-time passcode step-up on the verified session'"
+      }
+    },
+    {
+      "tool": "update_contact_details",
+      "arguments": {
+        "customer_id": "C360",
+        "session_id": "SESS360",
+        "field": "phone",
+        "new_value": "+15551230360",
+        "request_key": "REQ-C360-PHONE-1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C360",
+        "session_id": "record: SESS360",
+        "field": "caller: phone",
+        "new_value": "caller: +15551230360"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "change_contact_details",
+    "disposition": "phone",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "contact_details_updated_after_step_up",
+    "step_up_explained_and_enforced"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -80,7 +80,10 @@ async def _record_text_usage(
     funding: str,
     transcript: Transcript | None,
     failure: BaseException | None,
+    agent_tokens: int = 0,
 ) -> None:
+    """`agent_tokens` is the agent under test's own model use when we host it; it is billed in
+    `text_call` with the simulator's."""
     if reporter is None:
         return
     partial = transcript or getattr(failure, "partial_transcript", None)
@@ -89,13 +92,16 @@ async def _record_text_usage(
         if isinstance(partial, Transcript)
         else 0
     )
-    completed = transcript is not None
+    # A call that failed midway still carries the transcript it got, for the record; it is billed as
+    # failed, under the failure's domain, all the same.
+    # A cancelled call has neither: it ended without a transcript, so it did not complete.
+    completed = failure is None and transcript is not None
     try:
         await asyncio.to_thread(
             reporter.record,
             action="text_call",
             scenario_key=scenario_key,
-            amount=simulator_tokens,
+            amount=simulator_tokens + agent_tokens,
             funding=funding,
             occurred_at=started,
             outcome="completed" if completed else "failed",

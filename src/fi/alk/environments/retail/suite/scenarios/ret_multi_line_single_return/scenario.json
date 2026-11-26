@@ -1,0 +1,125 @@
+{
+  "name": "ret_multi_line_single_return",
+  "scenario_key": "ret-multi-line-single-return",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer C402 returns two different line items (SH05 and AP01) from delivered order O402 in a single return authorization",
+  "tests": "the agent creates a single return authorization containing both SH05 and AP01 for order O402",
+  "instruction": "You ordered two items in order O402: Canvas Low-Top Sneakers (SKU SH05) and an Organic Cotton Crewneck T-Shirt (SKU AP01). You want to return both items together.\n\nYour details:\n- Name: Elena Rostova\n- Email: elena.rostova@example.com\n- Postal Code: 98101\n- Order ID: O402\n- Items to return: SKU SH05 (Quantity 1), SKU AP01 (Quantity 1)\n- Reason: Changed mind",
+  "keywords": [
+    "return_authorization",
+    "multiple_items"
+  ],
+  "persona": {
+    "name": "Elena Rostova",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Architect",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "Hi there! I would like to return two items from my recent order O402: the sneakers (SH05) and the t-shirt (AP01).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O402",
+    "customer_id": "C402",
+    "skus": [
+      "SH05",
+      "AP01"
+    ],
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "98101",
+        "order_id": "O402"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O402"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O402",
+        "items": [
+          {
+            "sku": "SH05",
+            "quantity": 1,
+            "reason": "changed_mind"
+          },
+          {
+            "reason": "changed_mind",
+            "sku": "AP01",
+            "quantity": 1
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "order_id": "O402",
+        "customer_id": "C402",
+        "items": [
+          {
+            "quantity": 1,
+            "sku": "SH05",
+            "reason": "changed_mind"
+          },
+          {
+            "quantity": 1,
+            "sku": "AP01",
+            "reason": "changed_mind"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O402",
+        "customer_id": "record: customer C402",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "disposition": "cooperative",
+    "task": "return_eligible_item",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "counterparty": "verified_owner"
+  },
+  "sub_goals": [
+    "subgoal_return_created",
+    "subgoal_confirm_before_creation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

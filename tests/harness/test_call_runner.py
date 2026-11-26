@@ -2056,6 +2056,8 @@ class _FakeConnection:
 
     def execute(self, statement: str, params: Any = None) -> _FakeCursor:
         self.executed.append(statement)
+        if "_alk_trace_failures" in statement:  # no call ran untraced
+            return _FakeCursor([(False,)], ["present"])
         if "to_regclass" in statement:
             # A world without the trial tables yet: the catalog read finds none of their columns.
             return _FakeCursor([], ["relname", "attname"])
@@ -3363,7 +3365,7 @@ def test_a_hand_off_record_among_the_agent_s_calls_takes_no_action_id_and_moves_
         Call(name="Approvals worker", arguments={}, delegated_to="Approvals worker", handoff=True),
         Call(name="request_approval", arguments={}, ok=True, at=1.0),
     )
-    monkeypatch.setattr(runner, "_collect_calls", lambda _runtime: calls)
+    monkeypatch.setattr(runner, "_collect_calls", lambda _runtime, **_: calls)
     _run(
         runner,
         _FakeScenario("k1"),
@@ -4192,6 +4194,7 @@ def test_a_shared_worker_never_bypasses() -> None:
 def test_a_door_row_from_before_channels_is_not_a_bypass(monkeypatch) -> None:
     rows = [{"name": "issue_refund", "arguments": {}, "ok": True, "at": 1.0}]
     monkeypatch.setattr(cr, "read_tool_trace", lambda _address: rows)
+    monkeypatch.setattr(cr, "_trace_failures", lambda _address: 0)  # no call ran untraced
     monkeypatch.setattr(cr, "_find_postgres_endpoint", lambda _runtime: type("E", (), {"address": "x"})())
     (call,) = cr.collect_tool_trace_calls(object())
     assert call.channel is None
@@ -5799,3 +5802,105 @@ def test_a_call_the_world_failed_on_with_no_test_condition_makes_the_trial_ours_
 
     assert reasons == ("The world failed on the agent's file_request call, so this trial cannot be graded.",) * 3
     assert cr.world_failure_notices(None) == []
+
+
+def _bound_voice_run(tmp_path, monkeypatch, read_trace, reported=("find_orders",), *, bound=True):
+    """One imported Retell voice trial whose provider reports `reported`. The world is
+    request-bound and its agent's `find_orders` is mapped onto the environment's
+    `search_orders`, unless `bound` is False."""
+    _job, context = _context(
+        tmp_path=tmp_path,
+        connector="retell",
+        mode=ProviderExecutionMode.PROVIDER_IMPORT,
+        config={"agent_id": "a"},
+        secrets={RETELL_API_KEY: "k"},
+        evidence_seam=EvidenceSeam.TOOL_TRACE,
+    )
+    contract = context.bundle_dir / "contract.json"
+    body = json.loads(contract.read_text()) if contract.is_file() else {}
+    contract.write_text(
+        json.dumps({**body, "tools": [{"name": "find_orders", "args": ["zip"]}]})
+    )
+    server = context.bundle_dir / "generated" / "tool-server"
+    server.mkdir(parents=True)
+    (server / "tools.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "search_orders",
+                    "description": "Find orders.",
+                    "parameters": {"type": "object", "properties": {}},
+                    "mutates_state": False,
+                }
+            ]
+        )
+    )
+    if bound:
+        monkeypatch.setattr(
+            cr, "_bind_call", lambda *_args: cr._RequestBinding(dsn="x", token="t")
+        )
+        monkeypatch.setattr(cr, "_stray_calls", lambda *_args: {"count": 0})
+    monkeypatch.setattr(cr, "_clear_tool_trace_calls", lambda *_args: None)
+    monkeypatch.setattr(cr, "collect_tool_trace_calls", read_trace)
+    report = _report(
+        result_metadata={
+            "evidence": [
+                {
+                    "adapter": "retell",
+                    "metadata": {
+                        "tool_calls": [
+                            {"name": name, "arguments": {"zip": "30301"}, "result": "ok", "ok": True}
+                            for name in reported
+                        ]
+                    },
+                }
+            ]
+        }
+    )
+
+    async def place_call(_spec):
+        return report
+
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    return _run(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"provider_target_id": "c"}),
+    )
+
+
+def test_a_bound_voice_call_whose_trace_cannot_be_read_is_unmeasured(tmp_path, monkeypatch) -> None:
+    def unreadable(_runtime, **_kwargs):
+        raise cr.ToolCaptureFailed("tool_trace incomplete: 1 call(s) ran untraced")
+
+    outcome = _bound_voice_run(tmp_path, monkeypatch, unreadable, reported=("find_orders", "end_call"))
+
+    assert outcome.calls == ()
+    assert outcome.tool_capture_failed is True
+    assert outcome.evidence_collected is False
+
+
+@pytest.mark.parametrize("reported", ["find_orders", "search_orders"])
+def test_a_served_tool_a_bound_voice_world_never_ran_is_no_evidence(tmp_path, monkeypatch, reported) -> None:
+    outcome = _bound_voice_run(tmp_path, monkeypatch, lambda _r, **_k: (), reported=(reported, "end_call"))
+
+    assert [call.name for call in outcome.calls] == ["end_call"]
+    assert outcome.tool_capture_failed is True
+    assert outcome.evidence_collected is False
+    assert outcome.unmeasured == (cr.WORLD_RAN_NONE,)
+
+
+def test_a_bound_voice_call_with_no_world_call_keeps_the_platforms_own_actions(tmp_path, monkeypatch) -> None:
+    outcome = _bound_voice_run(tmp_path, monkeypatch, lambda _r, **_k: (), reported=("end_call",))
+
+    assert [call.name for call in outcome.calls] == ["end_call"]
+    assert outcome.tool_capture_failed is False
+    assert outcome.evidence_collected is True
+    assert outcome.unmeasured == ()
+
+
+def test_a_voice_call_with_no_binding_still_falls_back_to_the_providers_calls(tmp_path, monkeypatch) -> None:
+    outcome = _bound_voice_run(tmp_path, monkeypatch, lambda _r, **_k: (), bound=False)
+
+    assert [call.name for call in outcome.calls] == ["find_orders"]
+    assert outcome.tool_capture_failed is False

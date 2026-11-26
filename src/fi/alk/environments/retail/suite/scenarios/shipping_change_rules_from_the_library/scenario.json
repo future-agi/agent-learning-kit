@@ -1,0 +1,68 @@
+{
+  "name": "shipping_change_rules_from_the_library",
+  "scenario_key": "shipping-change-rules-from-the-library",
+  "scenario_id": "",
+  "use_case": "Change or cancel an order before it ships",
+  "branch": "A customer with no order in hand asks about policy rules for cancelling or redirecting an order after it has shipped",
+  "tests": "the agent reads the approved Shipping Changes and Cancellations document (shipping_policy, v2.0) and answers that changes are permitted only while processing, citing the document and version",
+  "instruction": "You want to know Northgate Outfitters' policy on whether an order can be cancelled or redirected to a new address after it has already shipped, and what the customer should do instead. You do not have an active order number.\n\nYour details:\n- Name: Brian Kelly",
+  "keywords": [
+    "shipping_policy",
+    "policy_lookup"
+  ],
+  "persona": {
+    "name": "Brian Kelly",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, could you explain your policy regarding whether an order can be cancelled or sent to a new address after it has already shipped?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "file_id": "shipping_policy",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Shipping'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "shipping_policy",
+        "includeComments": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: file shipping_policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

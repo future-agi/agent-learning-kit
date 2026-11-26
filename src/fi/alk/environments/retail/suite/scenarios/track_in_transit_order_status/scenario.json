@@ -1,0 +1,79 @@
+{
+  "name": "track_in_transit_order_status",
+  "scenario_key": "track-in-transit-order-status",
+  "scenario_id": "",
+  "use_case": "Track an order, report a damaged delivery",
+  "branch": "Inquiring status of an in-transit order with tracking number and carrier event available",
+  "tests": "the agent verifies order ownership and retrieves shipment tracking to report carrier and last event",
+  "instruction": "You ordered items under order O07 and want to check where your shipment currently is.\n\nYour details:\nName: Grace Hopper\nEmail: grace.hopper@example.com\nPostal code: 02138\nOrder ID: O07",
+  "keywords": [
+    "track_order"
+  ],
+  "persona": {
+    "name": "Grace Hopper",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I would like to check the tracking status of my order O07.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "customer_id": "C07",
+    "order_id": "O07",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O07",
+        "postal_code": "02138"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_shipment_tracking",
+      "arguments": {
+        "order_id": "O07",
+        "customer_id": "C07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C07",
+        "order_id": "caller: order number O07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "task": "track_order_report_damage",
+    "overlay_intensity": "absent",
+    "disposition": "cooperative",
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "tracking_reported",
+    "subgoal_verify_ownership_first"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
