@@ -3485,3 +3485,27 @@ def test_a_reader_left_in_another_group_with_its_own_settings_is_put_back_to_its
         run(f'DROP DATABASE IF EXISTS "{world_db}"')
         run(f'DROP ROLE IF EXISTS "{reader.username}"')
         run(f'DROP ROLE IF EXISTS "{extra}"')
+
+
+
+@pytest.mark.parametrize("reader", [None, "postgresql://alk_r3:pw@db/w3"])
+def test_the_world_s_reader_is_settled_after_a_reset_like_the_agent_s_role(monkeypatch, reader):
+    """The world's reader runs the attached servers' code, which may change its own settings and password like any
+    role: the store puts it back after every reset with the agent's and the store role. Without one, nothing extra."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores.postgres import attached_world_store
+
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    endpoint = SimpleNamespace(
+        address="postgresql://harness:pw@db/w3",
+        tool_address="postgresql://alk_w3:pw@db/w3",
+        store_address="postgresql://alk_s3:pw@db/w3",
+        log_address="postgresql://alk_l3:pw@db/w3",
+        reader_address=reader,
+    )
+
+    store = attached_world_store(endpoint)
+
+    assert store._world_role_names() == sorted(["alk_w3", "alk_s3", *(["alk_r3"] if reader else [])])
