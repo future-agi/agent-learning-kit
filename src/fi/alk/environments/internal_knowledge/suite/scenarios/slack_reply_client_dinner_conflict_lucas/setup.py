@@ -1,0 +1,3 @@
+def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E11"}, by="id")
+    world.put("slack_approvals", {"approval_id": "APP-KN-405", "actor_id": "U_KDESK", "channel_id": "CH_HELPPOL", "content_hash": "sha256:32583b01a6540096d17c61c2b600e6a227459d958a4519dc00a80228215ecf44", "approved_text": "Client Entertainment Guidelines 1.0 section 1 caps client entertainment at $100 per person, while Sales Hospitality Standard 1.0 section 1 allows $150 per person, and no precedence rule is configured between them. The Knowledge Desk has flagged this conflict to the owner of the Client Entertainment Guidelines for clarification.", "status": "approved", "expires_at": "2026-11-30T00:00:00Z"})

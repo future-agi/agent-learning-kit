@@ -92,6 +92,10 @@ def _psycopg() -> Any:
     return psycopg
 
 
+def _catalogue_text(value: Any) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
 class PostgresStore(ContainerStore):
     """A Postgres container the agent under test is pointed at."""
 
@@ -142,9 +146,26 @@ class PostgresStore(ContainerStore):
 
     def execute(self, statement: str, params: Sequence[Any] = ()) -> int:
         """Run one mutation and report the rows it actually changed."""
+        if (held := getattr(self, "_held", None)) is not None:
+            return max(0, int(held.execute(statement, tuple(params)).rowcount or 0))
         with self._connect() as connection:
             cursor = connection.execute(statement, tuple(params))
             return max(0, int(cursor.rowcount or 0))
+
+    def hold(self) -> None:
+        """Keep one tool call's statements in one transaction on one connection, until
+        ``release``: its writes land together or not at all, and it reads what it wrote."""
+        self._held = _psycopg().connect(self.dsn())
+
+    def release(self, keep: bool) -> None:
+        held, self._held = self._held, None
+        try:
+            if keep:
+                held.commit()
+            else:
+                held.rollback()
+        finally:
+            held.close()
 
     def query(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         """Run one read statement, on a connection Postgres itself will not let write.
@@ -159,8 +180,17 @@ class PostgresStore(ContainerStore):
         ordinary ``LIKE '%turkey%'`` with nothing to bind then reads its own ``%t`` as an
         unmatched one and raises before the statement ever reaches Postgres.
         """
+        if (held := getattr(self, "_held", None)) is not None:
+            return self._read_held(held, statement, params)
         # A check's read names the world's tables as the world's own SQL does: system functions first, read-only.
         return self._read(self._reader_address(), statement, params, _SYSTEM_FIRST)
+
+    @staticmethod
+    def _read_held(held: Any, statement: str, params: Sequence[Any]) -> list[dict[str, Any]]:
+        """Inside a held call: read on its own connection, so it sees what the call wrote."""
+        cursor = held.execute(statement, tuple(params) if params else None)
+        columns = [description[0] for description in cursor.description or []]
+        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
     def read_log(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         """A read of the harness's own tables (every name qualified) as the world's log reader, on the system's own
@@ -172,6 +202,8 @@ class PostgresStore(ContainerStore):
 
     def query_as_world(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         """``query`` as the agent's tools' own role, under the world's row security: a handler's read."""
+        if (held := getattr(self, "_held", None)) is not None:
+            return self._read_held(held, statement, params)
         return self._read(self.dsn(), statement, params, "")
 
     def _reader_address(self) -> str:
@@ -206,7 +238,7 @@ class PostgresStore(ContainerStore):
         rows = connection.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
         ).fetchall()
-        names = [row[0] for row in rows]
+        names = [_catalogue_text(row[0]) for row in rows]
         if getattr(self, "_restore_as_role", False):
             # The world's own tables: the harness's (its log, its marker) are no world role's to read or reset.
             names = [name for name in names if not name.startswith("_alk_") and name != "harness_seed_sentinel"]
@@ -232,7 +264,7 @@ class PostgresStore(ContainerStore):
             """,
             (table,),
         ).fetchall()
-        return [row[0] for row in rows]
+        return [_catalogue_text(row[0]) for row in rows]
 
     def _column_types(self, connection: Any, table: str) -> dict[str, str]:
         """Return declared column types so writes use the source schema's representation.
@@ -251,10 +283,7 @@ class PostgresStore(ContainerStore):
             (table,),
         ).fetchall()
 
-        def text(value: Any) -> str:
-            return value.decode("utf-8") if isinstance(value, bytes) else str(value)
-
-        return {text(row[0]): text(row[1]) for row in rows}
+        return {_catalogue_text(row[0]): _catalogue_text(row[1]) for row in rows}
 
     def _select_ordered(self, connection: Any, table: str) -> list[dict[str, Any]]:
         """Every row of one table, ordered by its primary key where it has one.

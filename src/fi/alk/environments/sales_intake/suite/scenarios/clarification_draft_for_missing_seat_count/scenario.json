@@ -1,0 +1,94 @@
+{
+  "name": "clarification_draft_for_missing_seat_count",
+  "scenario_key": "clarification-draft-for-missing-seat-count",
+  "scenario_id": "",
+  "use_case": "Ask for missing facts instead of inventing them",
+  "branch": "Quillon Travel's email (lead L11) gives no seat count; rep Jordan Ellis asks the desk to draft a reply asking for it, for review, without guessing a number",
+  "tests": "the agent reads Ava Morales's thread and drafts a reply to her on that thread asking how many seats they need, sending nothing",
+  "instruction": "You are Jordan Ellis, BrightDesk's account executive for the United States. Ava Morales from Quillon Travel (lead L11) emailed sales@ but did not say how many agents they have. Ask the desk to draft a reply asking for it so you can review and send it. Do not suggest a number.\n\nYour details:\n- Name: Jordan Ellis\n- Role: Account executive, A01\n- Lead: L11",
+  "keywords": [
+    "draft",
+    "missing information"
+  ],
+  "persona": {
+    "name": "Jordan Ellis",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Account Executive",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Quillon Travel emailed without a seat count. Can you draft a reply asking them? I'll review it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L11",
+    "thread_id": "th_s03_quillon_no_seats",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s03_quillon_no_seats"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: Ava Morales's thread"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Quillon's lead L11"
+      }
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "to": [
+          "ava.morales@quillon.example"
+        ],
+        "replyToMessageId": "smsg_004",
+        "subject": "Re: Quillon Travel: support tooling",
+        "body": "Hello Ava, thank you for your interest. To recommend the right setup, how many support agents would use BrightDesk? Best regards, BrightDesk sales"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "replyToMessageId": "record: Ava's message"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "draft_reply",
+    "disposition": "missing_information",
+    "interaction": "multi_turn",
+    "counterparty": "colleague",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "draft_created_for_review",
+    "missing_info_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

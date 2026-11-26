@@ -24,14 +24,12 @@ from typing import Any
 
 from ...providers.agent import _redact
 from ..backends import SessionSpec, tool, tool_server
-
-from ..catalogue import criteria_text
+from ..catalogue import Catalogue, SuiteEval, criteria_text
+from ..checks import Outcome, reference_of, run_check
 from ..config import chosen_model
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..session import Stage
-from ..checks import Outcome, run_check
-from ..catalogue import Catalogue, SuiteEval
 from ..world.runtime import GeneratedWorld
 from .conversation import Transcript
 
@@ -163,11 +161,15 @@ class Result:
 
 
 def _claims(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
-    """The sub-goals of this scenario that nothing observable can settle."""
+    """The sub-goals of this scenario with a judged half: the ones nothing observable can settle,
+    and the judged half of every `both` goal, whose check settles the records and whose judge
+    settles what the agent said. A goal with both halves holds only when both do."""
     judged: list[tuple[str, str]] = []
     for name in scenario.sub_goals:
         sub_goal = catalogue.named(name)
-        if sub_goal is not None and not sub_goal.deterministic():
+        if sub_goal is None:
+            continue
+        if not sub_goal.deterministic() or sub_goal.judged.strip():
             judged.append((criteria_text(sub_goal.judged or sub_goal.what), name))
     return judged
 
@@ -227,9 +229,7 @@ def _verdict_tool(collected: list[dict[str, Any]]) -> Any:
             ]
         }
 
-    return tool_server(
-        name=JUDGE_SERVER, version="0.1.0", tools=[submit_verdict]
-    )
+    return tool_server(name=JUDGE_SERVER, version="0.1.0", tools=[submit_verdict])
 
 
 def _on_platform(
@@ -546,7 +546,17 @@ def grade_sub_goals(
         sub_goal = catalogue.named(name)
         if sub_goal is None or not sub_goal.deterministic():
             continue
-        outcomes.append(run_check(sub_goal.check, world, calls, name=name))
+        outcomes.append(
+            run_check(
+                sub_goal.check,
+                world,
+                calls,
+                name=name,
+                # The values the scenario marks fixed: what a reference-aware check compares the
+                # run's targets against (plan §3.2, review of #99).
+                reference=reference_of(scenario.solution),
+            )
+        )
     return outcomes
 
 

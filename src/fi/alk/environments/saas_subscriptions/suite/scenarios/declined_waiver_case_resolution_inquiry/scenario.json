@@ -1,0 +1,80 @@
+{
+  "name": "declined_waiver_case_resolution_inquiry",
+  "scenario_key": "declined-waiver-case-resolution-inquiry",
+  "scenario_id": "",
+  "use_case": "Open a billing case or report a payment",
+  "branch": "Member Charlie User asks why waiver case BC-302 was declined by finance",
+  "tests": "retrieves case BC-302 and explains finance's recorded resolution reason",
+  "instruction": "You are Charlie User, member at CloudScale. You want to find out the recorded resolution and reason why waiver case BC-302 was declined.\n\nYour details:\n- Name: Charlie User\n- Company: CloudScale\n- Tenant ID: T03\n- User ID: U03_MEMBER\n- Case ID: BC-302",
+  "keywords": [
+    "billing_case"
+  ],
+  "persona": {
+    "name": "Charlie User",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Why was waiver case BC-302 declined for CloudScale?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "case_id": "BC-302",
+    "tenant_id": "T03",
+    "origin": "seed",
+    "actor_id": "U03_MEMBER"
+  },
+  "solution": [
+    {
+      "tool": "get_user_role",
+      "arguments": {
+        "user_id": "U03_MEMBER",
+        "tenant_id": "T03",
+        "actor_id": "U03_MEMBER"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_billing_case_status",
+      "arguments": {
+        "case_id": "BC-302",
+        "actor_id": "U03_MEMBER",
+        "tenant_id": "T03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "case_id": "record: BC-302"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "member",
+    "interface": "clean_chat",
+    "disposition": "case_declined",
+    "task": "get_case_status",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "case_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
