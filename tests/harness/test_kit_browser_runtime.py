@@ -139,6 +139,18 @@ def test_a_browser_that_does_not_start_fails_the_spawn(tmp_path, error) -> None:
     assert (raised.value.code, raised.value.domain) == ("spawn_failed", pr.FailureDomain.INFRASTRUCTURE)
 
 
+def test_a_browser_that_cannot_be_made_fails_the_spawn_as_the_platform_s(tmp_path) -> None:
+    manifest, freeze, context, _, _ = _browser_world(tmp_path)
+
+    def make(world_index, log):
+        raise OSError("no port for the browser's relay")
+
+    context = dataclasses.replace(context, browser_factory=make)
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        _spawn(manifest, freeze, context)
+    assert (raised.value.code, raised.value.domain) == ("spawn_failed", pr.FailureDomain.INFRASTRUCTURE)
+
+
 def test_a_contract_that_cannot_be_read_is_logged_not_taken_silently_for_no_browser(tmp_path, caplog) -> None:
     (tmp_path / "contract.json").write_text("{not json")
     assert br.contract_needs_browser(tmp_path) is False

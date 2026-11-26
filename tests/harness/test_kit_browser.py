@@ -320,6 +320,41 @@ def _kit(tmp_path, profiles):
     )
 
 
+def test_a_browser_whose_proxy_cannot_be_made_leaves_no_relay_open(tmp_path, monkeypatch) -> None:
+    made: list[DevToolsRelay] = []
+    real = kit_browser.DevToolsRelay
+
+    def relay(state_path):
+        made.append(real(state_path))
+        return made[-1]
+
+    def no_proxy(*args, **kwargs):
+        raise OSError("no port for the proxy")
+
+    monkeypatch.setattr(kit_browser, "DevToolsRelay", relay)
+    monkeypatch.setattr(kit_browser, "BrowserProxy", no_proxy)
+    with pytest.raises(OSError, match="no port for the proxy"):
+        _kit(tmp_path, [])
+    [opened] = made
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", opened.port), timeout=1).close()
+
+
+def test_closing_a_browser_whose_stop_fails_still_closes_its_relay_and_proxy(tmp_path) -> None:
+    kit = _kit(tmp_path, [])
+    kit.start()
+
+    def broken(handle):
+        raise OSError("the browser would not stop")
+
+    kit._stop = broken
+    with pytest.raises(OSError, match="would not stop"):
+        kit.close()
+    for port in (kit.relay.port, int(kit.proxy.url.rsplit(":", 1)[1].strip("/"))):
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+
+
 def test_each_start_is_a_new_empty_profile_and_the_last_one_is_gone(tmp_path) -> None:
     profiles: list = []
     kit = _kit(tmp_path, profiles)
