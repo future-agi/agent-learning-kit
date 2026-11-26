@@ -17,6 +17,7 @@ the guess.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Sequence
@@ -84,6 +85,13 @@ def attached_world_store(endpoint: Any) -> AttachedPostgresStore:
             restore_as_role=True,
             reader_dsn=endpoint.store_address,
             log_dsn=endpoint.log_address,
+            roles_admin_dsn=endpoint.address,
+            role_dsns=tuple(
+                one
+                for one in (endpoint.tool_address, endpoint.store_address, endpoint.log_address,
+                            getattr(endpoint, "door_address", None))
+                if one
+            ),
         )
     return AttachedPostgresStore(system_first(endpoint.address), admin_dsn=endpoint.address)
 
@@ -420,10 +428,15 @@ class PostgresStore(ContainerStore):
             }
             with connection.transaction():
                 catalog = catalog_digest(connection)
+        roles = self._world_roles_state()
+        if roles is not None:
+            catalog["world roles"] = roles
         return Snapshot(rows=rows, counters=counters, catalog=catalog)
 
 
     def _verify_reset(self, connection: Any, snapshot: Snapshot, tables: list[tuple[str, str]]) -> None:
+        # Deferred checks of the world's fire now, before what they did is read, never at the commit after it.
+        connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         """Before a reset commits: the world as its snapshot held it, every table's rows (their count, for rows read
         from disk) and every definition, or nothing of the reset is kept and the world is refused. The world's own
         code a reset runs (a check, an index expression) is what could leave it otherwise."""
@@ -525,16 +538,63 @@ class PostgresStore(ContainerStore):
                     self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
                 self._set_counters(connection, snapshot.counters)
                 self._verify_reset(connection, snapshot, tables)
-                self._keep_own_password(connection)
+        self._settle_world_roles(snapshot)
 
-    def _keep_own_password(self, connection: Any) -> None:
-        """Last in the reset's transaction, after every statement that ran the world's code: the store role's password
-        set back to the one it logs in with. Any role may change its own password, so a check the reset ran could
-        have given it another, which would then let anyone holding it in, past the world's row security."""
-        password = _psycopg().conninfo.conninfo_to_dict(getattr(self, "_reader_dsn", None) or "").get("password")
-        if password:
-            sql = _psycopg().sql
-            connection.execute(sql.SQL("ALTER ROLE CURRENT_USER PASSWORD {}").format(sql.Literal(password)))
+    def _world_role_names(self) -> list[str]:
+        conninfo = _psycopg().conninfo.conninfo_to_dict
+        return sorted({str(conninfo(dsn).get("user")) for dsn in self._role_dsns if conninfo(dsn).get("user")})
+
+    def _world_roles_state(self) -> str | None:
+        """The world's own roles as the harness set them (each one's password verifier and settings), read as the
+        harness: any role may change its own password and settings, so the world's code (a check the reset ran, the
+        agent's own SQL) could have, and a reset that does not see it would carry it to the next trial. The verifiers
+        are kept here, never in the snapshot."""
+        if not self._roles_admin_dsn or not self._role_dsns:
+            return None
+        names = self._world_role_names()
+        with _psycopg().connect(self._roles_admin_dsn, autocommit=True, options=PINNED_SEARCH_PATH) as connection:
+            rows = connection.execute(
+                "SELECT a.rolname, coalesce(a.rolpassword, ''), coalesce((SELECT string_agg(concat_ws(':', "
+                "s.setdatabase, s.setconfig::text), ',' ORDER BY s.setdatabase) FROM pg_db_role_setting s "
+                "WHERE s.setrole = a.oid), '') FROM pg_authid a WHERE a.rolname = ANY(%s) ORDER BY a.rolname",
+                (names,),
+            ).fetchall()
+        for name, verifier, _settings in rows:
+            self._verifiers.setdefault(str(name), str(verifier))
+        return hashlib.sha256(repr(rows).encode()).hexdigest()
+
+    def _settle_world_roles(self, snapshot: Snapshot) -> None:
+        """After a reset commits: the world's own roles put back as the snapshot found them, as the harness. Their
+        settings cleared, each password set back (its verifier, never the password itself), and every session of
+        theirs ended, so none keeps what was set meanwhile. Nothing changed, nothing done."""
+        held = snapshot.catalog.get("world roles")
+        if held is None or self._world_roles_state() == held:
+            return
+        sql = _psycopg().sql
+        names = self._world_role_names()
+        with _psycopg().connect(self._roles_admin_dsn, autocommit=True, options=PINNED_SEARCH_PATH) as connection:
+            for name in names:
+                role = sql.Identifier(name)
+                connection.execute(sql.SQL("ALTER ROLE {} RESET ALL").format(role))
+                for (database,) in connection.execute(
+                    "SELECT d.datname FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase "
+                    "WHERE s.setrole = %s::regrole",
+                    (name,),
+                ).fetchall():
+                    connection.execute(
+                        sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(role, sql.Identifier(str(database)))
+                    )
+                if self._verifiers.get(name):
+                    connection.execute(
+                        sql.SQL("ALTER ROLE {} PASSWORD {}").format(role, sql.Literal(self._verifiers[name]))
+                    )
+            connection.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ANY(%s) "
+                "AND pid <> pg_backend_pid()",
+                (names,),
+            )
+        if self._world_roles_state() != held:
+            raise WorldResetRefused("the world's own roles could not be put back as the harness set them")
 
     def save_to(self, path: str | Path) -> None:
         """Save both the records and the DDL a fresh Postgres store needs."""
@@ -682,8 +742,15 @@ class AttachedPostgresStore(PostgresStore):
         restore_as_role: bool = False,
         reader_dsn: str | None = None,
         log_dsn: str | None = None,
+        roles_admin_dsn: str | None = None,
+        role_dsns: Sequence[str] = (),
     ) -> None:
         self._external_dsn = dsn
+        # With world roles: the harness's own address, used only to read and put back the world's own roles (no
+        # statement of the world's runs on it), and the address of each of those roles.
+        self._roles_admin_dsn = roles_admin_dsn
+        self._role_dsns = tuple(role_dsns)
+        self._verifiers: dict[str, str] = {}
         # The world's store role (with world roles): the harness's reads, snapshot and reset of the world's rows,
         # past their row security; ``dsn`` stays the agent's tools' own role, under it.
         self._reader_dsn = reader_dsn

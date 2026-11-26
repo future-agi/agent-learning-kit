@@ -1818,9 +1818,10 @@ class PostgresRoster:
 
 
 # A session the harness opens as one of a world's roles: what the agent's own role settings could otherwise decide
-# for it (its search path, read-only by default, a timeout), set here.
+# for it (its search path, read-only by default, a timeout, how dates and times read), set here.
 WORLD_ROLE_SESSION = (
-    "-c search_path=public -c default_transaction_read_only=off -c statement_timeout=0 -c lock_timeout=0"
+    "-c search_path=public -c default_transaction_read_only=off -c statement_timeout=0 -c lock_timeout=0 "
+    "-c TimeZone=UTC -c DateStyle=ISO -c IntervalStyle=postgres"
 )
 
 

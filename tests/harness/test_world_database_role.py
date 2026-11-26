@@ -2185,8 +2185,9 @@ def test_a_door_bundle_whose_world_has_no_action_log_yet_takes_its_grants():
 
 @real_postgres
 def test_a_password_the_world_s_code_gives_the_store_role_during_a_reset_never_takes(door_worlds, monkeypatch):
-    """Any role may change its own password: a check the reset runs as the store role gives it one of its own. The
-    reset sets the store role's own password back last in its transaction, so the planted one never logs in."""
+    """Any role may change its own password: a check the reset runs as the store role gives it one of its own. Once
+    the reset commits, the harness puts the password back and ends the role's sessions, so the planted one never
+    logs in."""
     from fi.alk.harness import privilege
 
     superuser, world, _door, _reset = door_worlds(True)
@@ -2264,10 +2265,13 @@ def test_an_agent_s_role_settings_neither_refuse_a_reset_nor_shape_the_harness_s
         with psycopg.connect(address, autocommit=True) as connection:
             connection.execute("ALTER ROLE CURRENT_USER SET default_transaction_read_only = on")
             connection.execute("ALTER ROLE CURRENT_USER SET search_path = nowhere")
-    store.restore(snapshot)
-    # Found on the harness's own path, not the role's `nowhere`; a write, not refused as read-only.
+            connection.execute("ALTER ROLE CURRENT_USER SET TimeZone = 'Asia/Kolkata'")
+    # Within the trial: found on the harness's own path, not the role's `nowhere`; times read in UTC; a write, not
+    # refused as read-only.
     [seen] = store.query_as_world("SELECT count(*) AS n FROM riders")
+    assert store.query_as_world("SELECT current_setting('TimeZone') AS zone") == [{"zone": "UTC"}]
     assert PostgresRecords(world)("UPDATE riders SET name = name", []) == seen["n"]
+    store.restore(snapshot)
     reset(0)
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute(
@@ -2294,6 +2298,83 @@ def test_a_large_object_the_seed_left_writable_carries_no_note_across_trials(doo
         agent.execute("SELECT lo_put(%s, 0, 'answer')", (oid,))
     with pytest.raises(WorldResetRefused, match="large objects"):
         store.restore(snapshot)
+
+
+@real_postgres
+def test_what_an_agent_does_to_its_own_role_is_undone_by_the_next_reset(door_worlds, monkeypatch):
+    """Any role may change its own settings and password: the agent's role, in one trial, sets a statement timeout
+    and a password of its own and keeps a session open. The reset after it clears the settings, puts the password
+    back and ends the session, so the next trial's tools connect and run as before."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    kept = psycopg.connect(world, autocommit=True)
+    kept.execute("ALTER ROLE CURRENT_USER SET statement_timeout = 1")
+    kept.execute("ALTER ROLE CURRENT_USER PASSWORD 'mine'")
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole", (urlsplit(world).username,)
+        ).fetchone() == (0,)
+    with pytest.raises(psycopg.OperationalError):
+        kept.execute("SELECT 1")
+    mine = urlunsplit(urlsplit(world)._replace(
+        netloc=f"{urlsplit(world).username}:mine@{urlsplit(world).hostname}:{urlsplit(world).port}"
+    ))
+    with pytest.raises(psycopg.OperationalError):
+        psycopg.connect(mine).close()
+    with psycopg.connect(world, autocommit=True) as tools:
+        assert tools.execute("SHOW statement_timeout").fetchone() == ("0",)
+
+
+@real_postgres
+@pytest.mark.parametrize("deferred", ("changes the store role's password", "writes a row"))
+def test_a_deferred_check_of_the_world_s_runs_before_the_reset_is_verified(door_worlds, monkeypatch, deferred):
+    """A check the reset runs turns triggers back on, and a deferred constraint trigger of the world's would then run
+    at commit, after the reset was verified. It runs before the verify instead: a row it writes refuses the world, and
+    a password it gives the store role is put back once the reset commits."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    store_url = door_worlds.store_url
+    act = (
+        "EXECUTE 'ALTER ROLE ' || quote_ident(current_user) || ' PASSWORD ''late''';"
+        if deferred.startswith("changes")
+        else "INSERT INTO trail.seen VALUES (current_user);"
+    )
+    _owned_by_the_login(
+        superuser,
+        "CREATE SCHEMA trail; GRANT USAGE ON SCHEMA trail TO PUBLIC; "
+        "CREATE TABLE trail.seen (who text); GRANT SELECT, INSERT, UPDATE, DELETE ON trail.seen TO PUBLIC; "
+        "CREATE FUNCTION public.wake() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
+        "PERFORM set_config('session_replication_role', 'origin', true); RETURN true; END $$; "
+        f"CREATE FUNCTION public.later() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN {act} RETURN NULL; END $$; "
+        "CREATE TABLE public.notes (id int PRIMARY KEY); INSERT INTO public.notes VALUES (1); "
+        "CREATE CONSTRAINT TRIGGER at_commit AFTER INSERT ON public.notes DEFERRABLE INITIALLY DEFERRED "
+        "FOR EACH ROW EXECUTE FUNCTION public.later(); "
+        "ALTER TABLE public.notes ADD CONSTRAINT woken CHECK (wake()) NOT VALID; "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools; TRUNCATE trail.seen",
+    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("SET session_replication_role = replica; DELETE FROM public.notes")
+    if deferred.startswith("writes"):
+        with pytest.raises(WorldResetRefused, match="trail.seen"):
+            store.restore(snapshot)
+        return
+    store.restore(snapshot)
+    late = urlunsplit(urlsplit(store_url)._replace(
+        netloc=f"{urlsplit(store_url).username}:late@{urlsplit(store_url).hostname}:{urlsplit(store_url).port}"
+    ))
+    with pytest.raises(psycopg.OperationalError):
+        psycopg.connect(late).close()
+    psycopg.connect(store_url).close()
 
 
 _SHOUTING = (

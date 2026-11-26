@@ -6853,8 +6853,9 @@ def _no_notify(run: Callable[[str, str], None], baseline_db: str) -> None:
 
 
 def _no_large_objects(run: Callable[[str, str], None], baseline_db: str) -> None:
-    """No world role may make a large object: one outlives a reset of the world's rows, so an agent could leave itself
-    a note for the next trial. (Reading one the seed made is untouched; a reset refuses a world with a new one.)"""
+    """No world role may make a new large object with `lo_create`, `lo_creat` or `lo_from_bytea` (`lo_import` is a
+    superuser's already): one outlives a reset of the world's rows. Large objects the seed made keep the rights the
+    seed gave them; a reset checks their contents where its role may read them."""
     for function in ("lo_create(oid)", "lo_creat(integer)", "lo_from_bytea(oid, bytea)"):
         run(baseline_db, f"REVOKE EXECUTE ON FUNCTION pg_catalog.{function} FROM PUBLIC")
 
