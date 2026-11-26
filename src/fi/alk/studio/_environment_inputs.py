@@ -583,32 +583,50 @@ def _compile_projection(
     return tuple(environments)
 
 
-def _synthetic_contact_replacements(parsed: RawPolicyDocument, pattern, *, email: bool):
-    """Keep repeated contacts consistent across pages without retaining an original value."""
-    def identity(value):
-        if email:
-            return value.casefold()
-        digits = re.sub(r"\D", "", value)
-        return "1" + digits if len(digits) == 10 else digits
+_POLICY_CONTACT = re.compile(
+    rf"(?P<email>{_EMAIL_RE.pattern})|(?P<phone>{_PHONE_RE.pattern})(?:[ \t]*(?:ext(?:ension)?\.?|x)[ \t]*(?P<extension>\d+))?",
+    re.IGNORECASE,
+)
+_IDENTIFIER_LABEL = re.compile(
+    r"\b(?:order|invoice|ticket|record|tracking|case|reference|account|product|customer)"
+    r"(?:[ _-]*(?:id|number|no\.?|code))?\s*[:#=]?\s*$", re.IGNORECASE,
+)
 
+
+def _contact_key(match: re.Match) -> tuple[str, str] | None:
+    if match["email"]:
+        return "email", match["email"].casefold()
+    phone = match["phone"]
+    if phone.isdecimal() and _IDENTIFIER_LABEL.search(match.string, max(0, match.start() - 60), match.start()):
+        return None
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) == 10:
+        digits = "1" + digits
+    return "phone", digits + ("x" + match["extension"] if match["extension"] else "")
+
+
+def _synthetic_contacts(parsed: RawPolicyDocument):
     originals = dict.fromkeys(
-        identity(match.group()) for page in parsed.pages for match in pattern.finditer(page.text)
+        key for page in parsed.pages for match in _POLICY_CONTACT.finditer(page.text)
+        if (key := _contact_key(match)) is not None
     )
+    indices = {"email": 0, "phone": 0}
     replacements = {}
-    index = 0
-    for original in originals:
+    for key in originals:
+        kind, _ = key
         while True:
-            index += 1
-            # The 555-0100 through 555-0199 block is reserved for fictional use.
-            group, suffix = divmod(index - 1, 100)
-            candidate = (
-                f"person{index:04d}@example.invalid" if email
-                else f"+1-202-555-{100 + suffix:04d}" + (f" ext {group}" if group else "")
-            )
-            if identity(candidate) not in originals:
+            index = indices[kind]
+            indices[kind] += 1
+            if kind == "email":
+                value = f"person{index + 1:04d}@example.invalid"
+            else:
+                # 555-0100 through 555-0199 are reserved for fictional use.
+                extension, suffix = divmod(index, 100)
+                value = f"+1-202-555-{100 + suffix:04d}" + (f" ext {extension}" if extension else "")
+            if _contact_key(_POLICY_CONTACT.fullmatch(value)) not in originals:
                 break
-        replacements[original] = candidate
-    return lambda match: replacements[identity(match.group())]
+        replacements[key] = value
+    return replacements
 
 
 def _prepare_policy_source(
@@ -619,18 +637,18 @@ def _prepare_policy_source(
     redact: bool = False,
     synthetic: bool = False,
 ) -> tuple[ParsedPolicySource, tuple[SourceDiagnostic, ...]]:
-    email_replacement = _synthetic_contact_replacements(parsed, _EMAIL_RE, email=True) if synthetic else "[email removed]"
-    phone_replacement = _synthetic_contact_replacements(parsed, _PHONE_RE, email=False) if synthetic else "[phone removed]"
-    contact_pattern = re.compile(f"(?P<email>{_EMAIL_RE.pattern})|{_PHONE_RE.pattern}", re.IGNORECASE)
+    replacements = _synthetic_contacts(parsed) if synthetic else {}
 
     def replace_contact(match):
-        replacement = email_replacement if match.lastgroup == "email" else phone_replacement
-        return replacement(match) if synthetic else replacement
+        key = _contact_key(match)
+        if key is None:
+            return match.group()
+        return replacements[key] if synthetic else f"[{key[0]} removed]"
 
     pages = tuple(
         ParsedPolicyPage(
             page=item.page,
-            text=contact_pattern.sub(replace_contact, item.text)
+            text=_POLICY_CONTACT.sub(replace_contact, item.text)
             if redact or synthetic
             else item.text,
         )
@@ -664,7 +682,7 @@ def _prepare_policy_source(
                     span=SourceSpan(source_id=source.source_id, page=page.page),
                 )
             )
-        if not (redact or synthetic) and (_EMAIL_RE.search(page.text) or _PHONE_RE.search(page.text)):
+        if not (redact or synthetic) and any(_contact_key(m) for m in _POLICY_CONTACT.finditer(page.text)):
             diagnostics.append(
                 SourceDiagnostic(
                     code="source_privacy_unresolved",

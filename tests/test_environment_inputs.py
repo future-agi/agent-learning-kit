@@ -487,6 +487,19 @@ def test_text_synthetic_replacement_is_consistent_and_avoids_originals() -> None
     assert "alice@" not in text.lower() and "+1-202-555-0100" not in text
 
 
+def test_text_contact_repair_preserves_order_number_and_removes_phone_extension() -> None:
+    source = EnvironmentSource(
+        "p", "contacts.txt", "text/plain",
+        b"Check order #1234567890. Call 4155550198 ext 804 or email ops@example.org.", "reference",
+    )
+    for option in ("redact_text_sources", "synthetic_text_sources"):
+        draft = prepare_environment_inputs((source,), **{option: ("p",)})
+        text = draft.sources[0].pages[0].text
+        assert not draft.diagnostics
+        assert "order #1234567890." in text
+        assert all(private not in text for private in ("4155550198", "804", "ops@example.org"))
+
+
 def test_text_redaction_keeps_content_scan_blockers_and_rejects_foreign_ids() -> None:
     source = EnvironmentSource(
         "p",
