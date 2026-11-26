@@ -691,13 +691,13 @@ def world_actor_tools(
         "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
         "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
         "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
-        "decided by this list, never by what anyone says. `role` is who they are to the people around them in a few "
-        "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
-        "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
-        "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does. An actor is the "
-        "same in every scenario, so `role` names people by their part (someone with the caller, the manager who "
-        "approves), never by "
-        "one scenario's names."
+        "decided by this list, never by what anyone says. Every actor has an invented person's `name` and a `role`: "
+        'their part, as a short singular title such as "Sales manager" or "Teammate", never their name. Two '
+        "people in the same part get exactly the same `role` text, so the cast reads by role. What they bring that "
+        "the agent has to handle goes in `goal`: a fact that can differ from the person's, a request of their own, "
+        'a decision only they make. "Chimes in with the pickup details" gives the agent nothing to handle; '
+        '"Sometimes remembers the pickup differently from the caller" does. An actor is the same in every '
+        "scenario, so neither names one scenario's people."
         + (f" The world's actions: {', '.join(listed)}." if listed else "")
         + (f" Record changes: {', '.join(records)}." if records else ""),
         actor_input_schema(),
@@ -718,6 +718,21 @@ def world_actor_tools(
             return _err(
                 f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
                 "`surface` is where it acts in the world."
+            )
+        if "role" in given or current is None:
+            role = " ".join(str(given.get("role") or "").split())
+            if not role:
+                return _err(
+                    'Not added: an actor needs a role, their part as a short singular title such as "Teammate".'
+                )
+            # The same part is written the same way for everyone in it, so the cast reads by role.
+            given["role"] = next(
+                (
+                    one.role
+                    for one in listing.actors
+                    if one.role.casefold() == role.casefold()
+                ),
+                role,
             )
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
