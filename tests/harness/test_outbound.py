@@ -1976,15 +1976,16 @@ def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_and_othe
 
 
 def test_screenshots_take_no_more_than_their_share_and_a_later_trace_still_fits() -> None:
-    # Many browser trials photograph their pages: their screenshots stop at their share of the job's budget, so a
-    # trace uploaded after all of them is still taken.
+    # Many browser trials photograph their pages until nothing is left: their screenshots stop at their share of the
+    # job's budget, so a trace of half the budget uploaded after all of them is still taken.
     tracker = ArtifactBudgetTracker(max_artifact_bytes=100)
-    share = int(100 * SCREENSHOT_SHARE)
-    for index in range(share):
-        assert tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}")
-        tracker.record(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}")
-    assert not tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest="shot-past-share")
-    assert tracker.would_admit(ArtifactKind.TRACE, 100 - share, digest="trace")
+    taken = 0
+    for index in range(100):
+        if tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}"):
+            tracker.record(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}")
+            taken += 1
+    assert taken == int(100 * SCREENSHOT_SHARE) <= 50
+    assert tracker.would_admit(ArtifactKind.TRACE, 50, digest="trace")
     # A screenshot already taken is no new spend.
     assert tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest="shot-0")
 
