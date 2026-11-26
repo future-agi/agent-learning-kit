@@ -21,7 +21,8 @@
  * read when they are exported, which a batching exporter does after the call may have ended or
  * the next one begun, so the hook keeps the recent windows in which it saw the call file (see
  * `CallWindows`) and stamps a span with the call whose window holds its start time. A span that
- * started outside every window is left unstamped, never given another call.
+ * started outside every window is never given a call: it keeps one the exporter named itself
+ * only when that is a call the hook saw.
  *
  * Every other request is untouched. Nothing runs without the ingest key and the collector
  * endpoint, or while the sandbox measures the agent itself (`FI_SIMULATION_INSTRUMENT`): that
@@ -191,6 +192,11 @@ class CallWindows {
     }
     return null;
   }
+
+  /** Whether the hook saw the call file name this call. */
+  saw(call) {
+    return this.windows.some((window) => window.call === call);
+  }
 }
 
 function stringAttribute(key, value) {
@@ -205,6 +211,11 @@ function putAttributes(holder, entries) {
     ...attributes.filter((one) => !(one && keys.has(one.key))),
     ...entries.map(([key, value]) => stringAttribute(key, value)),
   ];
+}
+
+function callOf(attribute) {
+  const value = attribute.value;
+  return value && typeof value === "object" && typeof value.stringValue === "string" ? value.stringValue : null;
 }
 
 function nanos(value) {
@@ -242,8 +253,11 @@ function markedJson(text, pairs, calls) {
         if (call) {
           putAttributes(span, [[CALL_KEY, call]]);
         } else if (Array.isArray(span.attributes)) {
-          // Only the hook names a span's call: one the exporter set itself is never sent.
-          span.attributes = span.attributes.filter((one) => !(one && one.key === CALL_KEY));
+          // A span no window holds keeps a call the exporter named itself only when the hook saw
+          // that call: the tail of a call after the last look, never a call this process never ran.
+          span.attributes = span.attributes.filter(
+            (one) => !(one && one.key === CALL_KEY && !(calls && calls.saw(callOf(one)))),
+          );
         }
       }
     }

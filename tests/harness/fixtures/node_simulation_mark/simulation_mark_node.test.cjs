@@ -953,3 +953,42 @@ test("only the configured scheme, host, port and path are the collector", async 
     }
   }
 });
+
+test("an exporter's own call id on a span the hook cannot place is kept only when it names a call the hook saw", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
+  const callFile = path.join(dir, "simulation_call_execution_id");
+  // The tail of call A: its spans start after the hook's last look, so no window holds them.
+  const script = `
+    import fs from "node:fs";
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const hold = (ms) => { const until = Date.now() + ms; while (Date.now() < until); };
+    const ns = () => BigInt(Date.now()) * 1000000n;
+    const span = (name, start, call) => ({ traceId: "0af7651916cd43dd8448eb211c80319c", spanId: "b7ad6b7169203331", name,
+      startTimeUnixNano: String(start), endTimeUnixNano: String(start + 1000n),
+      attributes: call ? [{ key: "fi.simulator.call_execution_id", value: { stringValue: call } }] : [] });
+    fs.writeFileSync(${JSON.stringify(callFile)}, "call-a");
+    await wait(250);
+    hold(150);
+    const tail = ns();
+    hold(20);
+    fs.unlinkSync(${JSON.stringify(callFile)});
+    await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans: [
+        span("labeled", tail, "call-a"), span("unseen", tail, "call-z"), span("bare", tail),
+      ] }] }] }),
+    });
+  `;
+  const result = await run(script, envFor(collector, callFile));
+  assert.equal(result.code, 0, result.stderr);
+  const exported = JSON.parse(collector.seen[0].body.toString());
+  const stamps = Object.fromEntries(
+    exported.resourceSpans[0].scopeSpans[0].spans.map((one) => [
+      one.name,
+      attributes(one.attributes)["fi.simulator.call_execution_id"] ?? null,
+    ]),
+  );
+  assert.deepEqual(stamps, { labeled: "call-a", unseen: null, bare: null });
+});
