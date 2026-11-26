@@ -132,6 +132,8 @@ class _Tab:
         self.ws = ws
         self.next = 0
         self.session = None
+        # What the browser sent this client besides answers: its events.
+        self.events: list[dict] = []
 
     async def call(
         self, method: str, params: dict | None = None, *, session: bool = True
@@ -145,6 +147,8 @@ class _Tab:
             answer = json.loads(await self.ws.recv())
             if answer.get("id") == self.next:
                 return answer
+            if "method" in answer:
+                self.events.append(answer)
 
     async def open(self, url: str) -> str:
         await self.call("Page.navigate", {"url": url})
@@ -576,3 +580,49 @@ def test_typing_sent_as_input_is_kept_and_an_action_made_by_script_is_not(browse
     assert [row["text"] for row in rows if row["kind"] == "typing"][-1] == "blue hats"
     assert not [row for row in rows if "scripted words" in json.dumps(row)]
     assert any(row["kind"] == "navigation" for row in rows)
+
+
+def test_an_agent_that_looks_through_every_world_of_its_page_cannot_write_the_record(browser) -> None:
+    # The agent holds the page through DevTools: it is told of every script world, the recorder's among them. In each
+    # world not its own it calls every function a fresh world does not have, with a made-up row. None is a row.
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/form")
+        await page.call("Runtime.enable")
+        await page.call("Runtime.evaluate", {"expression": "1"})
+        tree = await page.call("Page.getFrameTree")
+        frame = tree["result"]["frameTree"]["frame"]["id"]
+        fresh = await page.call("Page.createIsolatedWorld", {"frameId": frame, "worldName": "agent-own"})
+        own = fresh["result"]["executionContextId"]
+        names = await page.call(
+            "Runtime.evaluate",
+            {"expression": "Object.getOwnPropertyNames(globalThis)", "contextId": own, "returnByValue": True},
+        )
+        known = json.dumps(names["result"]["result"]["value"])
+        row = json.dumps({"kind": "click", "url": "http://forged.example/", "target": {"text": "forged-any-world"}})
+        contexts = [
+            one["params"]["context"] for one in page.events if one.get("method") == "Runtime.executionContextCreated"
+        ]
+        assert any(not (one.get("auxData") or {}).get("isDefault") for one in contexts)
+        for context in contexts:
+            if context["id"] == own:
+                continue
+            await page.call(
+                "Runtime.evaluate",
+                {
+                    "expression": f"""(() => {{
+                        const known = new Set({known});
+                        for (const name of [...Object.getOwnPropertyNames(globalThis), ...Object.keys(globalThis)]) {{
+                            if (known.has(name)) continue;
+                            try {{ if (typeof globalThis[name] === 'function') globalThis[name]({json.dumps(row)}); }}
+                            catch (e) {{}}
+                        }}
+                    }})()""",
+                    "contextId": context["id"],
+                },
+            )
+
+    _run(kit, steps)
+    rows = _settled(kit)["rows"]
+    assert not [row for row in rows if "forged-any-world" in json.dumps(row)]
