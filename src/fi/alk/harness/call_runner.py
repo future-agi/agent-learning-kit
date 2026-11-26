@@ -73,6 +73,7 @@ from .actor_meter import ActorMeter
 from .world_door import (
     logged_ok,
     logged_outcome,
+    logged_rows,
     pinned_options,
     NOT_STOPPED,
     door_failure,
@@ -1251,7 +1252,7 @@ def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
         f'SELECT * FROM public."{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
     )
     columns = [description[0] for description in cursor.description or []]
-    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    return logged_rows(dict(zip(columns, row, strict=True)) for row in cursor.fetchall())
 
 
 def collect_tool_trace_calls(

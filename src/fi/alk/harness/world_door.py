@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
@@ -447,6 +447,12 @@ def logged_outcome(row: Mapping[str, Any]) -> str:
     if outcome in (None, "", "committed"):
         return "committed" if ok else ("faulted" if outcome else "refused")
     return str(outcome)
+
+
+def logged_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Log rows with ``outcome`` as `logged_outcome` reads it, so every reader compares the same answer: a failed call
+    a column default left 'committed' reads faulted, and an older row without outcomes reads committed only when ok."""
+    return [{**row, "outcome": logged_outcome(row)} for row in rows]
 
 
 def is_committed(row: Mapping[str, Any]) -> bool:
@@ -1699,14 +1705,17 @@ class PostgresLog:
         with self._connect(options="-c default_transaction_read_only=on") as connection:
             cursor = connection.execute("SELECT * FROM public._alk_tool_trace ORDER BY at ASC")
             columns = [one[0] for one in cursor.description or []]
-            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+            return logged_rows(dict(zip(columns, row, strict=True)) for row in cursor.fetchall())
 
     def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any, Response | None] | None:
         action = _ACTION if self._records_action() else "NULL"
         with self._connect() as connection:
             row = connection.execute(
                 f"SELECT {action}, arguments, result FROM public._alk_tool_trace "  # noqa: S608 - a fixed column name
-                "WHERE idempotency_key = %s AND actor_id = %s AND outcome = 'committed' ORDER BY at LIMIT 1",
+                # Committed and ok (`logged_outcome`): a failed call a column default left 'committed' is no result to
+                # replay.
+                "WHERE idempotency_key = %s AND actor_id = %s AND outcome = 'committed' "
+                "AND lower(ok::text) IN ('true', 't') ORDER BY at LIMIT 1",
                 (key, actor),
             ).fetchone()
             if not row:
@@ -1857,7 +1866,7 @@ class MemoryLog:
 
     def rows(self) -> list[dict[str, Any]]:
         with self._lock:
-            return [dict(one) for one in self._rows]
+            return logged_rows(self._rows)
 
     def committed(self, key: str, actor: str) -> tuple[str | None, Any, Any, Response | None] | None:
         found = next(

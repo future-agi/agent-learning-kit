@@ -184,7 +184,8 @@ _TOOL_TRACE_DDL = (
     "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
     "action_id text NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text), "
     "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
-    "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
+    # No default: a row that does not say what came of it is read by `logged_outcome`, never assumed committed.
+    "outcome text, refusal text, refusal_code text, "
     "on_behalf_of text, idempotency_key text, action text);\n"
     # The columns a prebuilt world's own tool server writes, so one row carries both sets; `action` (the world action in
     # full) for a table made before it was recorded.

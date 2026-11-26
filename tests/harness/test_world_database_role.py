@@ -2126,6 +2126,50 @@ def test_an_older_log_keeps_each_call_s_own_outcome_not_its_default():
         _customer_sql(**admin, statement=f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
 
 
+@real_postgres
+def test_a_failed_call_a_default_left_committed_reads_faulted_and_is_never_replayed():
+    """A tool server that writes no outcome, on a log with the older default: the failed call reads faulted to every
+    reader of the log (the door's, the runner's), and a retry with its key is not answered from it."""
+    from fi.alk.harness.call_runner import _action_log_rows
+
+    parts = urlsplit(_REAL)
+    database = f"alk_log_{uuid.uuid4().hex[:8]}"
+    admin = dict(host=parts.hostname or "localhost", port=parts.port or 5432, user=parts.username,
+                 password=parts.password or "", dbname="postgres")
+    _customer_sql(**admin, statement=f'CREATE DATABASE "{database}"')
+    try:
+        _customer_sql(**{**admin, "dbname": database}, statement=(
+            "CREATE TABLE public._alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+            "actor_id text NOT NULL DEFAULT 'agent', idempotency_key text, action text, "
+            "outcome text NOT NULL DEFAULT 'committed'); "
+            "INSERT INTO public._alk_tool_trace (name, arguments, ok, error, at, idempotency_key) "
+            "VALUES ('refund', '{}', false, 'boom', 1.0, 'key-1')"))
+        url = urlunsplit(parts._replace(path=f"/{database}"))
+        log = world_door.PostgresLog(url)
+        assert [row["outcome"] for row in log.rows()] == ["faulted"]
+        assert log.committed("key-1", "agent") is None
+        with psycopg.connect(url, autocommit=True) as connection:
+            assert [row["outcome"] for row in _action_log_rows(connection)] == ["faulted"]
+    finally:
+        _customer_sql(**admin, statement=f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+@real_postgres
+def test_a_bundle_made_with_the_older_outcome_default_builds_and_loses_it():
+    """A bundle whose migrations made the log as an older harness did (outcome NOT NULL DEFAULT 'committed'): the
+    harness takes its log over with today's column, so the build is not refused for the shape it once wrote."""
+    older = author._TOOL_TRACE_DDL.replace("outcome text,", "outcome text NOT NULL DEFAULT 'committed',", 1)
+    assert older != author._TOOL_TRACE_DDL
+    superuser, _migrator, baseline, _checked, _before, run = _migrated(older, "")
+    try:
+        assert run(superuser, baseline, "SELECT a.attnotnull, d.adbin IS NULL FROM pg_attribute a LEFT JOIN pg_attrdef d "
+                   "ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = "
+                   "'public._alk_tool_trace'::regclass AND a.attname = 'outcome'") == [(False, True)]
+    finally:
+        _dropped(superuser, baseline, run)
+
+
 _SHOUTING = (
     "CREATE TABLE public.parent (id serial PRIMARY KEY, name text);\n"
     "CREATE TABLE public.child (id serial PRIMARY KEY, parent_id int REFERENCES public.parent (id));\n"

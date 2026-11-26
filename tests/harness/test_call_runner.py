@@ -3517,11 +3517,13 @@ def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_f
 
     monkeypatch.setattr(cr, "_read_only", connect)
     log = cr._ActionLog("postgresql://world")
-    assert log() == log() == [{"name": "approve"}] and len(opened) == 1
+    # Each row comes with what came of it, as `logged_outcome` reads it.
+    read = [{"name": "approve", "outcome": "committed"}]
+    assert log() == log() == read and len(opened) == 1
     opened[0].fail = True
     with pytest.raises(RuntimeError):
         log()
-    assert opened[0].closed and log() == [{"name": "approve"}] and len(opened) == 2
+    assert opened[0].closed and log() == read and len(opened) == 2
 
 
 def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it(

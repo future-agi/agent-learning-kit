@@ -280,7 +280,7 @@ class HostedWorld(HttpObservationHandle):
     ) -> list[dict[str, Any]]:
         """This trial's action log: every action attempted in the world, whose it was and what came of it. No log is
         no events; a log that cannot be read raises `EvidenceUnavailable`."""
-        from ..world_door import EvidenceUnavailable, is_attempt, logged_outcome
+        from ..world_door import EvidenceUnavailable, is_attempt, logged_rows
 
         try:
             rows = self._read_log("SELECT * FROM public._alk_tool_trace ORDER BY at, id")
@@ -294,10 +294,10 @@ class HostedWorld(HttpObservationHandle):
             raise EvidenceUnavailable("the world's action log could not be read") from exc
         return [
             row
-            for row in rows
+            for row in logged_rows(rows)
             if is_attempt(row)
             and (actor_id is None or (row.get("actor_id") or "agent") == actor_id)
-            and (outcome is None or logged_outcome(row) == outcome)
+            and (outcome is None or row["outcome"] == outcome)
         ]
 
     # -- writing ------------------------------------------------------------------------------

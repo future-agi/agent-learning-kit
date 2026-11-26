@@ -6348,6 +6348,17 @@ def _harness_shape_problems(
     return sorted(problems)
 
 
+# The action log's `outcome` as an older harness made it (committed unless said otherwise), made today's: no default.
+_OLDER_OUTCOME_COLUMN = (
+    "DO $$ BEGIN IF EXISTS (SELECT FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid = a.attrelid "
+    "AND d.adnum = a.attnum WHERE a.attrelid = to_regclass('public._alk_tool_trace') AND a.attname = 'outcome' "
+    "AND a.attnotnull AND a.atttypid = 'text'::regtype "
+    "AND pg_get_expr(d.adbin, d.adrelid) = $q$'committed'::text$q$) THEN "
+    "ALTER TABLE public._alk_tool_trace ALTER COLUMN outcome DROP DEFAULT, ALTER COLUMN outcome DROP NOT NULL; "
+    "END IF; END $$"
+)
+
+
 def _adopt_harness_tables(
     *,
     port: int,
@@ -6376,6 +6387,10 @@ def _adopt_harness_tables(
         )
 
     found = [str(row[0]) for row in run(HARNESS_TABLES_WITH_CODE, read_only=True) or [] if row]
+    if not found:
+        # A bundle made before outcomes lost their default: its log, exactly as the older harness made it, takes
+        # today's column.
+        run(_OLDER_OUTCOME_COLUMN)
     found += _harness_shape_problems(
         port=port,
         credentials=credentials,
