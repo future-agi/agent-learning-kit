@@ -781,6 +781,21 @@ def test_a_python_callback_beside_a_node_dockerfile_keeps_its_python_reading(tmp
     assert _saved_instrumentation(tmp_path, files, {**_INFERRED, "workdir": ""}) == "traceai"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [["npm", "start"], ["npm", "run", "start"], ["pnpm", "start"], ["yarn", "start"]],
+    ids=["npm_start", "npm_run_start", "pnpm", "yarn"],
+)
+def test_an_npm_start_command_with_no_language_is_read_from_its_package_json(
+    tmp_path: Path, command: list[str]
+) -> None:
+    """A package manager starts the package the planner builds, so the planner names the language."""
+    files = {"package.json": _package({"@traceai/fi-core": "^1.4.1"}), "index.js": "require('http');\n"}
+
+    runtime = {"language": "", "command": command, "workdir": ""}
+    assert _saved_instrumentation(tmp_path, files, runtime) == "traceai"
+
+
 def test_an_independent_package_under_a_traced_parent_is_read_alone(tmp_path: Path) -> None:
     """A parent manifest that does not declare the agent's package in its workspaces is another project's."""
     files = {

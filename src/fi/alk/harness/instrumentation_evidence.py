@@ -62,6 +62,8 @@ _JAVASCRIPT_LANGUAGES = NODE_LANGUAGES | {"bun"}
 _WORKSPACE_PATTERNS = 256
 _WORKSPACE_PATTERN_LENGTH = 256
 _JAVASCRIPT_LAUNCHERS = frozenset({"node", "bun"})
+# A package manager starts the package the planner builds; the planner names its language.
+_PACKAGE_LAUNCHERS = frozenset({"npm", "pnpm", "yarn"})
 
 
 def detect_instrumentation(
@@ -132,12 +134,14 @@ def detect_node_instrumentation(source_root: Path, workdir: str) -> str:
 
 def runs_javascript(language: str, command: Sequence[str]) -> bool | None:
     """Whether the selected runtime is Node or Bun: by its language, the planner's names for Node
-    included, or with none by its command. None when it names neither."""
+    included, or with none by its command. None when it names neither, or when a package manager
+    starts it: the package it starts decides."""
     language = language.strip().lower()
     if language:
         return language in _JAVASCRIPT_LANGUAGES
     if command:
-        return Path(str(command[0])).name.lower() in _JAVASCRIPT_LAUNCHERS
+        launcher = Path(str(command[0])).name.lower()
+        return None if launcher in _PACKAGE_LAUNCHERS else launcher in _JAVASCRIPT_LAUNCHERS
     return None
 
 
