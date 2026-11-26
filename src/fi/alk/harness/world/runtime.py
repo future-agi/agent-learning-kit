@@ -19,9 +19,9 @@ import json
 import re
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 from ..environment import EnvironmentAdapter, EnvironmentSnapshot, ToolExecutionResult
 
@@ -171,6 +171,20 @@ def _is_refusal(raised: BaseException, refusal_signature: str = "") -> bool:
     )
 
 
+# A `refusal_code`: the service would not accept the request's shape (HTTP 422), so the action itself never ran.
+REQUEST_NOT_ACCEPTED = "request_not_accepted"
+# The tool ran and said no (a rule, a record not found), as the world door records a refusal.
+WORLD_RULE = "world_rule"
+
+
+def refusal_code_for(status: int) -> str:
+    """Why an HTTP answer refused a call: a 422 is the request the tool would not accept, any other 4xx the tool's
+    own answer (`WORLD_RULE`, a not-found among them), and anything else no refusal of the tool's."""
+    if status == 422:
+        return REQUEST_NOT_ACCEPTED
+    return WORLD_RULE if 400 <= status < 500 else ""
+
+
 @dataclass
 class Call:
     """One tool call and what the world did with it."""
@@ -178,9 +192,11 @@ class Call:
     name: str
     arguments: dict[str, Any]
     result: Any = None
-    ok: bool = True
-    error: str = ""
-    refused: bool = False
+    # None on ok, error, refused and refusal_code: a step recorded without running (`prove.not_run`), which neither
+    # went through nor was turned down.
+    ok: bool | None = True
+    error: str | None = ""
+    refused: bool | None = False
     # When it happened, seconds since the epoch. What lets a recording and a list of calls be
     # read as one thing: without it the UI can show what the agent did but not when, and "when"
     # is the whole question for a spoken run.
@@ -190,7 +206,7 @@ class Call:
     task_id: str = ""
     task_label: str = ""
     # Why a refused call was refused: "world_rule" when the tool ran and said no, otherwise what stopped it first.
-    refusal_code: str = ""
+    refusal_code: str | None = ""
     # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
     delegated_to: str = ""
     ended_at: float = 0.0
@@ -208,8 +224,21 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # The HTTP path a call through the tool proxy went to; empty for any other source.
+    endpoint: str = ""
+    # The channel the world saw the call come in on, from its door row: "" for the shared address, a worker's id for
+    # that worker's own channel, None when there was no door row or the row is from before channels. Never lent.
+    channel: str | None = None
     # The world committed it, but the answer never reached the agent.
     answer_lost: bool = False
+    # Which source's record this is ("world", "span", "tracer" or "agent"; see tool_evidence.py), and the other
+    # sources that saw the same call. These name where the record came from and are not part of the call, so two
+    # records that differ only here are equal.
+    source: str = field(default="", compare=False)
+    seen_by: list[str] = field(default_factory=list, compare=False)
+    # A tool-trace file line's own mark: the framework hook or observer that wrote it, empty when the kit's tracer or
+    # the agent wrote it.
+    trace_mark: str = field(default="", compare=False)
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -261,8 +290,11 @@ def graded_calls(calls: Sequence[Call]) -> list[Call]:
 
 def _worker_event(call: Call) -> dict[str, Any]:
     """Where a call sits among the app's agents, as the runtime recorded it, for a call any runtime attributed."""
+    # The id the agent gave its own call says nothing of where the call sits among its agents
+    # ("agent" is tool_evidence.AGENT, the agent's own account).
+    ids_only_call_id = call.source == "agent" and set(call.runtime_ids) <= {"call_id"}
     if not (
-        call.runtime_ids
+        (call.runtime_ids and not ids_only_call_id)
         or call.worker_id
         or call.worker_label
         or call.delegated_to
@@ -284,8 +316,38 @@ def _worker_event(call: Call) -> dict[str, Any]:
     }
 
 
-def trace_row(call: Call) -> dict[str, Any]:
-    """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said."""
+def worker_events(
+    call: Call, workers: Mapping[str, str] | None = None
+) -> list[dict[str, Any]]:
+    """The call as normalised worker events, the shape documented in HOW-IT-WORKS.md (worker events): its tool call,
+    hand-off or control pass, then a hand-off's return once its worker came back. `workers` maps the name a framework
+    gives each declared worker to its id, so `worker_id` and `by` are the contract's ids wherever a name matches."""
+    placed = _worker_event(call)
+    kind = placed.get("kind", "tool_call")
+    agent = call.worker_id or call.worker_label or None
+    named = agent if kind == "tool_call" else call.delegated_to
+    status = "refused" if call.refused else "ok" if call.ok else "error"
+    event: dict[str, Any] = {
+        "type": kind,
+        "id": placed.get("span_id", ""),
+        "worker_id": (workers or {}).get(named or "", named),
+        "worker_name": named,
+        "parent_id": placed.get("parent_span_id", ""),
+        "relationship": placed.get("relationship", "unknown"),
+        "tool": call.name,
+        "at": call.at,
+    }
+    if kind == "tool_call":
+        return [{**event, "ended_at": call.ended_at or None, "status": status}]
+    event.update(by=(workers or {}).get(agent or "", agent), by_name=agent)
+    if kind != "delegated" or not call.ended_at:
+        return [event]
+    return [event, {**event, "type": "returned", "at": call.ended_at, "status": status}]
+
+
+def trace_row(call: Call, workers: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said; `workers` as
+    `worker_events` takes it."""
     return {
         "name": call.name,
         "arguments": call.arguments,
@@ -307,13 +369,101 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+        # Why the world refused it, as its action log coded it.
+        **({"refusal_code": call.refusal_code} if call.refusal_code else {}),
         **{
             key: True
             for key in ("input_omitted", "output_omitted", "answer_lost")
             if getattr(call, key)
         },
         **_worker_event(call),
+        "worker_events": worker_events(call, workers),
+        **({"source": call.source} if call.source else {}),
+        **({"seen_by": list(call.seen_by)} if call.seen_by else {}),
+        **({"trace_mark": call.trace_mark} if call.trace_mark else {}),
     }
+
+
+def _records(held: Any, column: str) -> list[Mapping[str, Any]]:
+    """The records of one table or collection, whether kept as a list of rows or as a mapping by key. A record kept
+    under a key and lacking `column` is matched on that key."""
+    if isinstance(held, Mapping):
+        return [
+            value if column in value else {**value, column: key}
+            for key, value in held.items()
+            if isinstance(value, Mapping)
+        ]
+    if isinstance(held, list):
+        return [row for row in held if isinstance(row, Mapping)]
+    return []
+
+
+def _same(one: Any, other: Any) -> bool:
+    """Equal as values, or as the text they are written as: an id held as 1045 is the "1045" a call sends. A boolean
+    only ever equals a boolean, so True never matches a held 1."""
+    if isinstance(one, bool) or isinstance(other, bool):
+        return isinstance(one, bool) and isinstance(other, bool) and one is other
+    return one == other or str(one) == str(other)
+
+
+def as_gone_through(calls: Sequence[Call], tools: Collection[str]) -> list[Call]:
+    """`calls` with each one of `tools` made without running (neither ok nor refused) read as gone through: what a
+    check would say if those steps had succeeded, for telling a check that failed only on an unknown result from one
+    that fails anyway."""
+    return [
+        replace(call, ok=True, refused=False, refusal_code="", error="")
+        if call.ok is None and call.name in tools
+        else call
+        for call in calls
+    ]
+
+
+def as_refused(calls: Sequence[Call], tools: Collection[str]) -> list[Call]:
+    """`calls` with each one of `tools` made without running read as refused by the tool (`WORLD_RULE`): what a check
+    would say if those steps had been turned down, the other reading of an unknown result."""
+    return [
+        replace(call, ok=False, refused=True, refusal_code=WORLD_RULE, error="refused")
+        if call.ok is None and call.name in tools
+        else call
+        for call in calls
+    ]
+
+
+def record_refusal(world: Any, name: str, arguments: Mapping[str, Any]) -> Call | None:
+    """The refusal the contract records for `name` that this call's record meets (`ToolSpec.refusals`), answered as
+    the tool's service answers it: refused with that HTTP status, before the tool changes anything. None when no
+    recorded refusal applies, when the world runs the agent's own code natively (that code is the truth), or when
+    the world cannot be read."""
+    refusals = (getattr(world, "refusals", None) or {}).get(name) or ()
+    if not refusals or getattr(world, "native_runtime", False):
+        return None
+    try:
+        state = world.state()
+    except Exception:  # noqa: BLE001 - an unreadable world answers by its handlers as before
+        return None
+    for refusal in refusals:
+        sent = arguments.get(refusal.get("argument"))
+        values = refusal.get("values") or []
+        if sent is None:
+            continue
+        column = str(refusal.get("column") or "")
+        for record in _records(state.get(refusal.get("table")), column):
+            if not _same(record.get(column), sent):
+                continue
+            held = record.get(refusal.get("field"))
+            if any(_same(held, value) for value in values):
+                status = int(refusal.get("status") or 400)
+                message = str(refusal.get("message") or "") or f"{name} refused with HTTP {status}"
+                return Call(
+                    name=name,
+                    arguments=dict(arguments),
+                    result={"detail": message},
+                    ok=False,
+                    refused=True,
+                    refusal_code=refusal_code_for(status),
+                    error=json.dumps({"detail": message}),
+                )
+    return None
 
 
 class GeneratedWorld(EnvironmentAdapter):
@@ -340,6 +490,10 @@ class GeneratedWorld(EnvironmentAdapter):
     # How this agent says no in a returned value. A tool that answers "Error: no such order" is
     # refusing, and recording that as a success would hide the very behaviour worth testing.
     refusal_signature: str = ""
+    # The contract's record refusals by tool (`ToolSpec.refusals`, as dicts), answered before a handler runs.
+    refusals: dict[str, list[dict[str, Any]]] = {}
+    # The reference steps a record refusal answered in this proof, never counted as assumed (`prove.run_steps`).
+    answered_by_record: list[Any] = []
 
     def __init__(
         self, database: str | Path = ":memory:", *, store: Any = None, kind: str = ""
@@ -351,6 +505,8 @@ class GeneratedWorld(EnvironmentAdapter):
         # agent's tools leak into a later agent authored by the same worker process.
         self.tools = copy.deepcopy(type(self).tools)
         self.handlers = dict(type(self).handlers)
+        self.refusals = copy.deepcopy(type(self).refusals)
+        self.answered_by_record = []
         self.state_object = copy.deepcopy(type(self).state_object)
         self.source_subfolder = ""
         self.database = str(database)
@@ -460,9 +616,9 @@ class GeneratedWorld(EnvironmentAdapter):
         return ToolExecutionResult(
             tool_call_id=call_id,
             tool_name=name or "unknown",
-            content=call.error if not call.ok else content,
+            content=(call.error or "") if not call.ok else content,
             result=call.result,
-            success=call.ok,
+            success=bool(call.ok),
             error=call.error or None,
             state_updates=self.state(),
         )
@@ -492,6 +648,9 @@ class GeneratedWorld(EnvironmentAdapter):
                 )
             )
 
+        refused = record_refusal(self, name, args)
+        if refused is not None:
+            return self._record(refused)
         namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
         try:
             exec(compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace)

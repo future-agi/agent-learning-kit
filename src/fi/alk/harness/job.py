@@ -10,10 +10,22 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 import json
+import logging
+import os
 import re
-from typing import Protocol
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Iterable, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
@@ -43,6 +55,12 @@ class SourceKind(str, Enum):
 class SourceVisibility(str, Enum):
     PRIVATE = "private"
     PUBLIC = "public"
+
+
+def is_commit_sha(value: str) -> bool:
+    """A full commit SHA: 40 hex characters, either case. The one rule for a GitHub source's
+    commit, at intake and on the job, so the two can't drift."""
+    return len(value) == 40 and all(char in "0123456789abcdef" for char in value.lower())
 
 
 class RepositorySource(BaseModel):
@@ -94,10 +112,7 @@ class RepositorySource(BaseModel):
         if not required:
             raise ValueError(f"source_locator_missing: {self.kind.value}")
         if self.kind is SourceKind.GITHUB and self.commit_sha:
-            normalized = self.commit_sha.lower()
-            if len(normalized) != 40 or any(
-                char not in "0123456789abcdef" for char in normalized
-            ):
+            if not is_commit_sha(self.commit_sha):
                 raise ValueError("github_commit_sha_invalid")
         return self
 
@@ -282,6 +297,84 @@ class HarnessExecutionManifestEntry(BaseModel):
     call_execution_id: str = Field(min_length=1)
 
 
+class _ExecutionPlan(BaseModel):
+    """A scenario plan judged whole. Each fault is its own field, so one pass reports a bad
+    entry, a repeated key and a wrong count together; ``parse_execution_manifest`` fills it."""
+
+    scenario_count: int
+    entries: list[HarnessExecutionManifestEntry]
+    # Taken from the raw entries, so a key repeated beside an entry that fails is still seen.
+    execution_keys: list[Any]
+    entry_count: int
+
+    @field_validator("entries", mode="before")
+    @classmethod
+    def _a_nonempty_list(cls, value: object) -> object:
+        if not isinstance(value, list) or not value:
+            raise ValueError("execution_manifest_invalid")
+        return value
+
+    @field_validator("execution_keys")
+    @classmethod
+    def _unique(cls, keys: list[Any]) -> list[Any]:
+        named = [key for key in keys if isinstance(key, str)]
+        if len(named) != len(set(named)):
+            raise ValueError("execution_manifest_duplicate_key")
+        return keys
+
+    @field_validator("entry_count")
+    @classmethod
+    def _one_per_scenario(cls, count: int, info: ValidationInfo) -> int:
+        expected = info.data.get("scenario_count")
+        if expected is not None and count != expected:
+            raise ValueError("execution_manifest_count_mismatch")
+        return count
+
+
+def parse_execution_manifest(
+    manifest: object, scenario_count: int
+) -> list[HarnessExecutionManifestEntry]:
+    """The platform's scenario plan, checked whole: every entry, every key, and one entry per
+    scenario. A ``ValidationError`` lists every fault at once; an entry's own error is placed
+    at ``("entries", index, field)``. The one rule for the plan, at intake and on the job."""
+    entries = manifest if isinstance(manifest, list) else []
+    return _ExecutionPlan.model_validate(
+        {
+            "scenario_count": scenario_count,
+            "entries": manifest,
+            "execution_keys": [
+                entry.get("execution_key") if isinstance(entry, dict) else None
+                for entry in entries
+            ],
+            # Not a list is already its own fault; a count on top of it says nothing more.
+            "entry_count": len(entries) if entries else scenario_count,
+        }
+    ).entries
+
+
+class ActorsSwitch(BaseModel):
+    """`metadata.actors`: whether scenarios include actors and faults, and the default share of scenarios with one."""
+
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    enabled: bool
+    share: list[float]
+
+    @model_validator(mode="after")
+    def _share_is_a_range(self) -> "ActorsSwitch":
+        if len(self.share) != 2 or not 0.0 <= self.share[0] <= self.share[1] <= 1.0:
+            # The share is [min, max] with 0 <= min <= max <= 1.
+            raise ValueError("actors_share_invalid")
+        return self
+
+
+ACTORS_OFF = ActorsSwitch(enabled=False, share=[0.0, 0.0])
+# Where a hosted entrypoint publishes its job's switch for the rest of its process.
+ACTORS_SWITCH_ENV = "ALK_ACTORS_SWITCH"
+# Present only in a hosted sandbox: there, a process with no published switch reads actors off.
+HOSTED_JOB_PATH = Path("/work/job.json")
+
+
 class HarnessJobMetadata(BaseModel):
     """The entries of `HarnessJob.metadata` the SDK reads by name, typed.
 
@@ -297,19 +390,91 @@ class HarnessJobMetadata(BaseModel):
     customer_code_environment: dict[str, str] = Field(default_factory=dict)
     # The hosts a controlled run lets the agent reach; absent when the platform does not control its egress.
     egress_allowed_hosts: list[str] | None = None
+    actors: ActorsSwitch | None = None
 
 
-def routed_through_gateway(target_model: object) -> bool:
-    """True for a model name the model gateway must route, such as `vertex_ai/gemini-3.7-flash`.
+def actors_switch(metadata: Mapping[str, Any] | None, *, hosted: bool) -> ActorsSwitch | None:
+    """The job's switch. Absent: off for a hosted job, None (the kit's default, on) for a local one. Malformed: off."""
+    if not isinstance(metadata, Mapping) or "actors" not in metadata:
+        return ACTORS_OFF if hosted else None
+    try:
+        switch = HarnessJobMetadata.model_validate({"actors": metadata["actors"]}).actors
+    except ValueError:
+        switch = None
+    if switch is None:
+        logging.getLogger(__name__).warning("actors switch in the job is malformed, so actors are off")
+        return ACTORS_OFF
+    return switch
+
+
+def publish_actors_switch(metadata: Mapping[str, Any] | None, *, hosted: bool) -> None:
+    """Publish the job's switch to this process and the ones it starts (`current_actors_switch`)."""
+    switch = actors_switch(metadata, hosted=hosted)
+    if switch is None:
+        os.environ.pop(ACTORS_SWITCH_ENV, None)
+    else:
+        os.environ[ACTORS_SWITCH_ENV] = switch.model_dump_json()
+
+
+def current_actors_switch() -> ActorsSwitch | None:
+    """The published switch; with none, off in a hosted sandbox and None (the kit's default) elsewhere."""
+    raw = os.environ.get(ACTORS_SWITCH_ENV)
+    if raw is None:
+        return ACTORS_OFF if HOSTED_JOB_PATH.is_file() else None
+    try:
+        return ActorsSwitch.model_validate_json(raw)
+    except ValueError:
+        return ACTORS_OFF
+
+
+def job_actors_switch(job: Any) -> ActorsSwitch | None:
+    return actors_switch(getattr(job, "metadata", None), hosted=getattr(job, "execution", None) is ExecutionMode.HOSTED)
+
+
+def actors_on(switch: ActorsSwitch | None) -> bool:
+    return switch is None or switch.enabled
+
+
+# OpenAI's own model families, the only bare names the model gateway serves in the Agents SDK's
+# default request style. Every other bare name is another provider's model, which it routes.
+_OPENAI_MODEL_FAMILY = re.compile(
+    r"ft:|(?:gpt|chatgpt|o[1-9]|text-embedding|codex|davinci|babbage|whisper|tts|dall-e|"
+    r"omni-moderation|computer-use)(?:[-_.:\d]|$)",
+    re.IGNORECASE,
+)
+
+
+def routed_through_gateway(
+    target_model: object, direct_names: Iterable[str] = ()
+) -> bool:
+    """True for a model name the model gateway must route: a prefixed name such as
+    `vertex_ai/gemini-3.7-flash`, or a bare name outside OpenAI's own model families, such as
+    `gemini-2.0-flash`, unless the job lists it in ``direct_names`` (an Azure OpenAI deployment
+    name such as `prod-gpt4o` that the agent sends to Azure itself).
 
     The first segment is compared case-sensitively because the Agents SDK does the same: only
-    the exact prefix `openai` is stripped and sent on as a bare OpenAI name.
+    the exact prefix `openai` is stripped, and the rest is sent on, so the rest decides.
     """
-    return (
-        isinstance(target_model, str)
-        and "/" in target_model
-        and target_model.partition("/")[0] != "openai"
-    )
+    if not isinstance(target_model, str):
+        return False
+    name = target_model.strip()
+    if name.startswith("openai/"):
+        name = name.removeprefix("openai/")
+    elif "/" in name:
+        return True
+    if not name:
+        return False
+    if "/" in name:
+        return True
+    if name in {str(direct).strip() for direct in direct_names}:
+        return False
+    return not _OPENAI_MODEL_FAMILY.match(name)
+
+
+def _with_openai_prefix(target_model: str) -> str:
+    """The model name with the SDK's openai/ prefix, written once."""
+    name = target_model.strip()
+    return name if name.startswith("openai/") else f"openai/{name}"
 
 
 class HarnessJob(BaseModel):
@@ -358,6 +523,14 @@ class HarnessJob(BaseModel):
         }
         return frozenset(process_secret_environment_names(names))
 
+    def routes_target_model_through_gateway(self) -> bool:
+        """Whether the model gateway routes this job's target model (``routed_through_gateway``,
+        with the deployment names the job lists in ``direct_model_names`` left direct)."""
+        return routed_through_gateway(
+            self.agent.config.get("target_model"),
+            self.agent.config.get("direct_model_names") or (),
+        )
+
     def authoring_guidance(self) -> list[str]:
         instructions = list(self.guidance)
         if self.metadata.get("generic_harness_v1") is True:
@@ -392,11 +565,12 @@ class HarnessJob(BaseModel):
                 "provider/model must be configured through the agent's supported settings, "
                 "then verified with a real chat. Do not substitute a different provider."
             )
-        if routed_through_gateway(target_model):
+        if self.routes_target_model_through_gateway():
             instructions.append(
                 "If the agent uses the OpenAI Agents SDK and passes its model as a name to "
                 "Agent(model=...) or RunConfig(model=...), give it "
-                f"the requested model written as openai/{target_model}: the SDK refuses or "
+                f"the requested model written as {_with_openai_prefix(target_model)}: the "
+                "SDK refuses or "
                 "reroutes a name whose first segment is not openai, and it removes openai/ and "
                 "sends the rest unchanged to its configured endpoint. A name handed to a model "
                 "object such as OpenAIChatCompletionsModel(model=...) is sent unchanged, so "
@@ -429,20 +603,18 @@ class HarnessJob(BaseModel):
             raise ValueError(f"harness_job_version_unsupported: {self.schema_version}")
         execution_manifest = self.metadata.get("execution_manifest")
         if execution_manifest is not None:
-            if not isinstance(execution_manifest, list) or not execution_manifest:
-                raise ValueError("execution_manifest_invalid")
-            parsed_manifest = [
-                HarnessExecutionManifestEntry.model_validate(entry)
-                for entry in execution_manifest
-            ]
-            execution_keys = [entry.execution_key for entry in parsed_manifest]
-            if len(execution_keys) != len(set(execution_keys)):
-                raise ValueError("execution_manifest_duplicate_key")
-            if len(parsed_manifest) != self.scenario_count:
-                raise ValueError("execution_manifest_count_mismatch")
             self.metadata["execution_manifest"] = [
-                entry.model_dump(mode="json") for entry in parsed_manifest
+                entry.model_dump(mode="json")
+                for entry in parse_execution_manifest(
+                    execution_manifest, self.scenario_count
+                )
             ]
+        direct_model_names = self.agent.config.get("direct_model_names")
+        if direct_model_names is not None and (
+            not isinstance(direct_model_names, list)
+            or not all(isinstance(n, str) and n.strip() for n in direct_model_names)
+        ):
+            raise ValueError("direct_model_names_must_be_a_list_of_names")
         if (
             self.execution is ExecutionMode.LOCAL
             and self.source.kind is SourceKind.GITHUB
@@ -547,6 +719,9 @@ class FailureCause(str, Enum):
     AGENT_NOT_READY_IN_TIME = "agent_not_ready_in_time"
     CHAT_TARGET_TIMEOUT = "chat_target_timeout"
     CHAT_TARGET_REFUSED = "chat_target_refused"
+    # A process the agent depends on, not the agent, was not ready in time. Its name stays out:
+    # the manifest the user wrote names it.
+    DEPENDENCY_NOT_READY_IN_TIME = "dependency_not_ready_in_time"
 
 
 class FailureOwner(str, Enum):

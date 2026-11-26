@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from fi import agentcc
 
@@ -356,7 +356,9 @@ def scrubbed_command(command: str) -> str:
     return f"env -i {assignments} bash -c {shlex.quote(command)}"
 
 
-def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
+def gate_hooks(
+    granted: Iterable[str], workers: Mapping[str, Iterable[str]] | None = None
+) -> dict[str, Any]:
     """Deny anything a stage was not given, at the point the SDK actually asks.
 
     ``can_use_tool`` alone does not do this. An ``allowed_tools`` entry approves those tools
@@ -367,16 +369,33 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
 
     A PreToolUse hook is consulted for every call, which is what the deny-by-default rule needed
     in order to be true rather than intended.
+
+    With ``workers`` (each worker's name and its tools), a call from inside a worker is held to
+    that worker's tools and a call from the session itself to ``granted``: the CLI offers the
+    session every worker's built-ins, so that the workers can have them. A call from a sub-agent
+    not named there is refused.
     """
     from claude_agent_sdk.types import HookMatcher
 
     permitted = {*granted, "AskUserQuestion"}
+    per_worker = (
+        None
+        if workers is None
+        else {name: {*names, "AskUserQuestion"} for name, names in workers.items()}
+    )
+
+    def tools_of(payload: dict[str, Any]) -> set[str]:
+        # The CLI puts agent_id on a call only when a sub-agent makes it.
+        if per_worker is None or not payload.get("agent_id"):
+            return permitted
+        return per_worker.get(str(payload.get("agent_type") or ""), set())
 
     async def refuse(
         payload: dict[str, Any], _tool_use_id: Any, _context: Any
     ) -> dict[str, Any]:
         name = str(payload.get("tool_name") or "")
-        if name in permitted:
+        here = tools_of(payload)
+        if name in here:
             arguments = payload.get("tool_input") or {}
             refusal = secret_refusal(name, arguments, payload.get("cwd"))
             if refusal:
@@ -407,7 +426,7 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
                     f"{name} is not part of this stage. You have "
-                    f"{', '.join(sorted(permitted)) or 'no other tools'}, and everything you "
+                    f"{', '.join(sorted(here)) or 'no other tools'}, and everything you "
                     "produce goes through those, because those are what check it."
                 ),
             }
@@ -416,7 +435,9 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
     return {"PreToolUse": [HookMatcher(hooks=[refuse])]}
 
 
-def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
+def permission_gate(
+    ask: Any | None = None, granted: Iterable[str] = (), own: Iterable[str] | None = None
+) -> Any:
     """Decide what a stage may do: nothing it was not given.
 
     Deny by default, not deny-a-list. A session is offered whatever tools its host happens to
@@ -426,15 +447,20 @@ def permission_gate(ask: Any | None = None, granted: Iterable[str] = ()) -> Any:
 
     Tools granted through ``allowed_tools`` are approved before this is consulted, so this only
     ever sees the ones that were not.
+
+    With ``own``, a call the session makes itself, not from inside a worker, is held to those
+    tools rather than to ``granted``, which also holds its workers'.
     """
     permitted = set(granted)
+    own_tools = None if own is None else set(own)
 
     async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
         if tool_name == "AskUserQuestion" and ask is not None:
             return await ask(tool_name, payload, context)
-        if tool_name in permitted:
+        from_itself = own_tools is not None and not getattr(context, "agent_id", None)
+        if tool_name in (own_tools if from_itself else permitted):
             return PermissionResultAllow(updated_input=payload)
         return PermissionResultDeny(
             message=(

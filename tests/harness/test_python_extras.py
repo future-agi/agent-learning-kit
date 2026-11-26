@@ -250,3 +250,22 @@ def test_noninstallable_pip_project_cannot_silently_drop_extras(tmp_path):
         GeneratedRuntimeError, match="pip_extras_require_installable_project"
     ):
         _python_install(tmp_path, SimpleNamespace(extras=["cloud"]), [])
+
+
+def test_a_dependency_group_named_as_an_extra_is_refused_with_what_it_is(tmp_path) -> None:
+    """As the deep agents build met it: `uv sync --dev` in `graphs/python`, whose `dev` is a dependency group."""
+    from fi.alk.harness.generated_runtime import GeneratedRuntimeError, select_python_extras
+
+    project = tmp_path / "graphs" / "python"
+    project.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(
+        "[project]\nname='deep'\nversion='1'\n[dependency-groups]\ndev=['pytest']\n", encoding="utf-8"
+    )
+    with pytest.raises(GeneratedRuntimeError) as refused:
+        select_python_extras(project, ["dev"])
+    message = str(refused.value)
+    assert message.startswith("generated_runtime_extra_unknown: dev")
+    assert "a dependency group" in message and "leave it out of runtime.extras" in message
+    # A name that is neither keeps the message it had.
+    with pytest.raises(GeneratedRuntimeError, match=r"^generated_runtime_extra_unknown: gpu$"):
+        select_python_extras(project, ["gpu"])

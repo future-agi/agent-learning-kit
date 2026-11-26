@@ -12,7 +12,7 @@ import random
 import stat
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -727,6 +727,7 @@ class Harness:
 def _build_harness(
     *,
     scenarios: list[FakeScenario],
+    job: HarnessJob | None = None,
     fence_after: int | None = None,
     fence_on_url_substring: str | None = None,
     fence_on_terminal_event: bool = False,
@@ -758,7 +759,7 @@ def _build_harness(
         corrupt_bundle(bundle_dir)
 
     job_path = tmp / "job.json"
-    _write_job(job_path, _job(parallelism=parallelism, artifacts=artifacts))
+    _write_job(job_path, job or _job(parallelism=parallelism, artifacts=artifacts))
 
     if build_output is not None:
         # `write_build_output` (process_runtime.py) writes here; no test previously did, so
@@ -2287,6 +2288,101 @@ def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> 
     asyncio.run(scenario())
 
 
+def test_certification_chat_two_scenarios_emit_bound_transcripts_and_provenance() -> None:
+    async def scenario() -> None:
+        certification = {
+            "campaign_id": "campaign-1",
+            "case_key": "chat-case",
+            "suite_digest": "a" * 64,
+        }
+        job = _job(connector="retell_chat").model_copy(
+            update={"metadata": {"certification": certification}}
+        )
+        scenarios = [
+            FakeScenario(
+                f"chat-{index}",
+                f"platform-chat-{index}",
+                [FakeSubGoal("holds", True)],
+            )
+            for index in range(2)
+        ]
+        harness = _build_harness(scenarios=scenarios, instances=1, job=job)
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        terminal = harness.transport.terminal_events()[0]
+        assert terminal["payload"]["certification"] == certification
+        for expected in scenarios:
+            receipt = harness.transport.receipts[("job-1", expected.scenario_key)]
+            transcript = receipt["call"]["transcript_artifact"]
+            assert receipt["status"] == "passed"
+            assert transcript is not None
+            assert transcript.removeprefix("sha256:") in harness.transport.artifacts
+            assert receipt["call"]["recording_artifacts"] == []
+
+    asyncio.run(scenario())
+
+
+def test_certification_voice_two_scenarios_emit_transcripts_and_recordings() -> None:
+    async def scenario() -> None:
+        certification = {
+            "campaign_id": "campaign-1",
+            "case_key": "voice-case",
+            "suite_digest": "b" * 64,
+        }
+
+        class RecordingCallRunner(FakeCallRunner):
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> CallOutcome:
+                outcome = await super().run(scenario, runtime)
+                recording = await self._adapter.upload_artifact(
+                    b"voice-recording",
+                    kind=ob.ArtifactKind.RECORDING_COMBINED,
+                    scenario_key=scenario.scenario_key,
+                )
+                return replace(
+                    outcome, recording_artifacts=(recording,) if recording else ()
+                )
+
+        job = _job(
+            connector="vapi",
+            artifacts=HarnessArtifactPolicy(level=ArtifactLevel.FULL),
+        ).model_copy(update={"metadata": {"certification": certification}})
+        scenarios = [
+            FakeScenario(
+                f"voice-{index}",
+                f"platform-voice-{index}",
+                [FakeSubGoal("holds", True)],
+            )
+            for index in range(2)
+        ]
+        harness = _build_harness(scenarios=scenarios, instances=1, job=job)
+        harness.deps.build_call_runner = lambda adapter, context: RecordingCallRunner(
+            adapter
+        )
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        terminal = harness.transport.terminal_events()[0]
+        assert terminal["payload"]["certification"] == certification
+        for expected in scenarios:
+            receipt = harness.transport.receipts[("job-1", expected.scenario_key)]
+            transcript = receipt["call"]["transcript_artifact"]
+            recordings = receipt["call"]["recording_artifacts"]
+            assert receipt["status"] == "passed"
+            assert transcript is not None
+            assert transcript.removeprefix("sha256:") in harness.transport.artifacts
+            assert len(recordings) == 1
+            assert recordings[0].removeprefix("sha256:") in harness.transport.artifacts
+
+    asyncio.run(scenario())
+
+
 # =================================================================================================
 # Additional tests closing mutation-honesty gaps -- cases where mutating the guarded code paths
 # would have passed the suite unnoticed.
@@ -2663,6 +2759,47 @@ def test_redaction_end_to_end_secret_never_crosses_any_channel() -> None:
         assert "***" in terminal["payload"]["failure"]["message"]
         receipt_body = transport.receipts[("job-1", "s1")]
         assert "***" in receipt_body["failure"]["message"]
+
+    asyncio.run(scenario())
+
+
+def test_terminal_event_echoes_the_jobs_certification_metadata() -> None:
+    # Campaign provenance passthrough: `run_job` wires `job.metadata.certification`
+    # into the adapter after job.json parses; the terminal event must return it
+    # verbatim so the platform can bind the terminal attempt to the campaign/case.
+    async def scenario() -> None:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter.set_certification_metadata(
+            {
+                "campaign_id": "cmp-123",
+                "case_key": "cert-case",
+                "suite_digest": "a" * 64,
+            }
+        )
+        await adapter.emit_terminal(stage=HarnessStage.COMPLETED)
+        await adapter.drain(complete=True)
+        terminal = transport.terminal_events()[0]
+        assert terminal["payload"]["certification"] == {
+            "campaign_id": "cmp-123",
+            "case_key": "cert-case",
+            "suite_digest": "a" * 64,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_terminal_event_omits_certification_on_ordinary_runs() -> None:
+    # Ordinary (non-certification) jobs carry no `metadata.certification` — the
+    # key must be absent entirely, keeping their terminal payload byte-identical
+    # to before the echo existed.
+    async def scenario() -> None:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        await adapter.emit_terminal(stage=HarnessStage.COMPLETED)
+        await adapter.drain(complete=True)
+        terminal = transport.terminal_events()[0]
+        assert "certification" not in terminal["payload"]
 
     asyncio.run(scenario())
 
@@ -3227,11 +3364,21 @@ def test_a_receipt_note_with_a_secret_across_the_platform_s_limit_never_sends_pa
     assert "sk-live-" not in sent and "qqqq" not in sent
 
 
-def test_a_receipt_note_whose_url_credentials_grow_when_masked_still_fits_the_platform_s_limit() -> None:
+def test_a_receipt_note_whose_url_credentials_are_dropped_fits_the_limit() -> None:
+    # The cleaner drops a URL's userinfo outright (TH-9500), so this note shrinks when cleaned.
     sent = _receipt_reason_sent("did not reach the agent: " + "s://u:p@h " * 47)
 
+    assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS
+    assert "u:p" not in sent and "p@" not in sent
+
+
+def test_a_receipt_note_that_grows_when_cleaned_is_cut_to_the_limit() -> None:
+    # Each "token=a1b2 " (11 chars) becomes "token=[redacted] " (17), so 47 of them pass the
+    # limit only after cleaning: the note must be cleaned before it is cut.
+    sent = _receipt_reason_sent("did not reach the agent: " + "token=a1b2 " * 47)
+
     assert len(sent) <= he._RECEIPT_REASON_MAX_CHARS and sent.endswith("…[truncated]")
-    assert ":p@" not in sent and "s://u:***@h" in sent
+    assert "a1b2" not in sent
 
 
 def test_cancel_before_provision_skips_provisioning_entirely() -> None:
@@ -4464,6 +4611,7 @@ def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4496,6 +4644,7 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4531,6 +4680,7 @@ def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     monkeypatch.setattr(
@@ -4815,6 +4965,7 @@ def test_the_callers_voice_speaks_their_language(monkeypatch):
 
     from fi.alk.harness.simulator_voice import simulator_definition
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
@@ -4900,6 +5051,7 @@ def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -4930,6 +5082,7 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
     from types import SimpleNamespace
 
     from fi.simulate.agent.definition import TTSConfig
+    pytest.importorskip("livekit.agents")
     from fi.simulate.simulation import livekit_models
 
     captured = {}
@@ -5304,6 +5457,14 @@ def test_hosted_compose_uses_broker_and_observation_world(monkeypatch):
     assert selected == ["broker", "observation"]
     assert harness.provisioner.provision_calls == 1
     assert harness.provisioner.closed
+
+
+def test_a_scenario_start_reaches_the_platform_as_the_call_starts() -> None:
+    """Not held for the receipt: a call the person stops mid-way is known to be in flight while its seal is waited on."""
+    transport = FakeTransport()
+    adapter = _build_adapter(transport)
+    asyncio.run(adapter.scenario_started(scenario_key="s1", world_index=0, scenario_attempt=1))
+    assert [record["type"] for record in transport.event_records] == ["scenario_started"]
 
 
 def test_bad_subfolder_fails_terminal_before_compose(monkeypatch):
@@ -5689,6 +5850,26 @@ def test_activity_events_in_the_job_response_lose_url_credentials(tmp_path, monk
     assert "hunter2" not in events and "sk-1" not in events
 
 
+def test_a_tool_result_is_cleaned_before_it_is_cut_at_600_characters():
+    """TH-9500 X1 (plan v1.1 section 6, r1 M1): session.py:388 cleans before it cuts, so a key
+    past character 597 is masked whole, and a query URL before it can't move the cut rules."""
+    from fi.alk.harness.backends.base import SessionSpec, ToolReturned
+    from fi.alk.harness.session import RESULT, Stage, Turn
+
+    key = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    # Cut first, 6 of the key's characters would be left before the "...": too few for the
+    # rule that masks a key cut short.
+    text = "see https://h.example/x?a=1 then " + "y " * 277 + key
+    assert text.index(key) + len("ghp_A1b2C3") == 597
+    stage = Stage(SessionSpec(system_prompt=""), name="understand")
+
+    [event] = stage._events(ToolReturned(id="c1", text=text), Turn())
+
+    assert event.kind == RESULT
+    assert "A1b2C3" not in event.text
+    assert event.text == "see https://h.example/x then " + "y " * 277 + "[redacted]"
+
+
 def test_the_activity_printed_to_stdout_loses_url_credentials(capsys, monkeypatch):
     """Change review r1, A-H1: the platform keeps the tail of the guest's stdout."""
     from fi.alk.harness import cli
@@ -5790,3 +5971,186 @@ def test_the_job_masks_every_value_in_spans_but_the_platform_settings(
     assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
     assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
     assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"
+
+
+def test_a_transcript_upload_the_platform_did_not_take_is_tried_again_before_the_receipt_drops_it() -> None:
+    # A backend restarted mid-run refused a transcript upload; the receipt used to drop the transcript at once.
+    from types import SimpleNamespace
+
+    class Flaky:
+        def __init__(self, real: Any, fails: int) -> None:
+            self.real, self.fails = real, fails
+
+        def upload(self, digest: str, data: bytes, **kwargs: Any) -> Any:
+            if self.fails > 0:
+                self.fails -= 1
+                down = ob.ChannelError(ob.ChannelOutcome.CHANNEL_FAILED, None, "channel_failed", "backend restarting")
+                return SimpleNamespace(error=down)
+            return self.real.upload(digest, data, **kwargs)
+
+    async def receipt_after(fails: int) -> tuple[dict[str, Any], FakeTransport]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter._artifacts = Flaky(adapter._artifacts, fails)
+        adapter._upload_retry_backoff = (0.0, 0.0)
+        transcript = await adapter.upload_artifact(
+            b'{"messages": []}', kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1"
+        )
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        await adapter.receipt(
+            ResultReceipt(
+                scenario_key="s1",
+                scenario_id="platform-s1",
+                scenario_attempt=1,
+                world_index=0,
+                status="passed",
+                sub_goals=(),
+                evaluations=(),
+                call=Call(),
+                failure=None,
+            )
+        )
+        return transport.receipts[("job-1", "s1")], transport
+
+    body, transport = asyncio.run(receipt_after(fails=2))
+    assert body["call"]["transcript_artifact"] is not None
+    assert body["call"]["transcript_artifact"].split(":", 1)[1] in transport.artifacts
+    # Refused through every retry: only then is it left out of the receipt.
+    body, _ = asyncio.run(receipt_after(fails=10))
+    assert body["call"]["transcript_artifact"] is None
+
+    # A refusal that is final (an item the platform will never take) is not queued to try again.
+    async def refused_for_good() -> tuple[str | None, int]:
+        adapter = _build_adapter(FakeTransport())
+
+        class Refusing:
+            def upload(self, *_args: Any, **_kwargs: Any) -> Any:
+                final = ob.ChannelError(ob.ChannelOutcome.PERMANENT_ITEM, None, "artifact_budget_exceeded", "too big")
+                return SimpleNamespace(error=final)
+
+        adapter._artifacts = Refusing()
+        said = await adapter.upload_artifact(b"x", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+        return said, len(adapter._failed_uploads)
+
+    assert asyncio.run(refused_for_good()) == (None, 0)
+
+
+def test_a_receipt_retries_only_within_the_best_effort_window_and_skips_an_upload_another_retry_took() -> None:
+    from types import SimpleNamespace
+
+    down = ob.ChannelError(ob.ChannelOutcome.CHANNEL_FAILED, None, "channel_failed", "backend restarting")
+
+    class Down:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def upload(self, *_args: Any, **_kwargs: Any) -> Any:
+            self.calls += 1
+            return SimpleNamespace(error=down)
+
+    async def window_spent() -> tuple[dict[str, Any], int]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter._artifacts = Down()
+        adapter._upload_retry_backoff = (600.0,)
+        adapter.best_effort_deadline = lambda: time.monotonic() - 1
+        transcript = await adapter.upload_artifact(b"{}", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="passed",
+            sub_goals=(), evaluations=(), call=Call(), failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")], len(adapter._failed_uploads)
+
+    body, still_queued = asyncio.run(window_spent())
+    # No wait past the window: dropped from this receipt, still queued for the final flush.
+    assert body["call"]["transcript_artifact"] is None and still_queued == 1
+
+    # Mid-run, before any flush window, a receipt waits at most one backoff step, never the whole ladder.
+    async def mid_run() -> tuple[dict[str, Any], int]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        down_now = Down()
+        adapter._artifacts = down_now
+        adapter._upload_retry_backoff = (0.05, 600.0)
+        assert adapter.best_effort_deadline() is None
+        transcript = await adapter.upload_artifact(b"{}", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key="s1")
+
+        class Call:
+            started_at = "2026-01-01T00:00:00.000Z"
+            ended_at = "2026-01-01T00:00:01.000Z"
+            duration_ms = 1000
+            turns = 1
+            transcript_artifact = transcript
+            recording_artifacts = ()
+
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="passed",
+            sub_goals=(), evaluations=(), call=Call(), failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")], down_now.calls
+
+    body, tries = asyncio.run(mid_run())
+    # The first upload, a try at once and one after the first step: never the 600 s one.
+    assert body["call"]["transcript_artifact"] is None and tries == 3
+
+    async def taken_meanwhile() -> set[str]:
+        adapter = _build_adapter(FakeTransport())
+        adapter._upload_retry_backoff = ()
+        adapter._failed_uploads = {
+            "a": (b"a", ob.ArtifactKind.TRANSCRIPT, "s1"),
+            "b": (b"b", ob.ArtifactKind.TRANSCRIPT, "s1"),
+        }
+
+        class TakesTheOther:
+            def upload(self, digest: str, *_args: Any, **_kwargs: Any) -> Any:
+                adapter._failed_uploads.pop("b", None)
+                return SimpleNamespace(error=None)
+
+        adapter._artifacts = TakesTheOther()
+        await adapter.retry_failed_uploads()
+        return set(adapter._failed_uploads)
+
+    assert asyncio.run(taken_meanwhile()) == set()
+
+
+def test_a_receipt_s_duplicate_commits_reach_the_platform_as_a_field() -> None:
+    from fi.alk.harness.hosted_scheduler import CallSummary
+
+    async def sent(duplicates: int) -> dict[str, Any]:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        call = CallSummary(
+            started_at="2026-01-01T00:00:00.000Z",
+            ended_at="2026-01-01T00:00:01.000Z",
+            duration_ms=1000,
+            turns=1,
+            duplicate_commits=duplicates,
+        )
+        receipt = ResultReceipt(
+            scenario_key="s1", scenario_id="platform-s1", scenario_attempt=1, world_index=0, status="failed",
+            sub_goals=(), evaluations=(), call=call, failure=None,
+        )
+        await asyncio.wait_for(adapter.receipt(receipt), timeout=5)
+        return transport.receipts[("job-1", "s1")]
+
+    assert asyncio.run(sent(2))["call"]["duplicate_commits"] == 2
+    assert "duplicate_commits" not in asyncio.run(sent(0))["call"]

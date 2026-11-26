@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import gc
 import json
 import os
 import re
@@ -38,8 +37,15 @@ from fi.alk.harness.agent_type_check import (
     failure_message,
     is_browser,
     modality_text,
+    reading_kind,
+    tool_kind,
 )
-from fi.alk.harness.contract import AgentContract, known_modalities
+from fi.alk.harness.contract import (
+    AgentContract,
+    how_it_runs,
+    known_modalities,
+    validate_contract,
+)
 from fi.alk.harness.failure_file import FAILURE_FILE, write_failure_file
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
 from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
@@ -48,13 +54,15 @@ from fi.alk.harness.sources import GitHubSource, RepoSource
 from fi.alk.harness.tools import CONTRACT_SERVER, contract_tools
 from fi.alk.harness.understand import load, open_stage
 
+# A kind that is still refused. A browser reading is kept, and runs in an environment.
+_REFUSED = "computer_use"
 _FOUND_MESSAGE = (
-    "This agent's main job is driving a browser, operating a computer or crawling sites "
-    "(found: playwright). Only voice and chat agents are supported for now."
+    "This agent's main job is operating a computer through its screen (found: playwright). "
+    "Computer-use and crawler agents are not supported yet."
 )
 _READ_MESSAGE = (
-    "This agent's main job was read as driving a browser, operating a computer or crawling "
-    "sites. Only voice and chat agents are supported for now."
+    "This agent's main job was read as operating a computer through its screen. Computer-use "
+    "and crawler agents are not supported yet."
 )
 _FINISHED = ".futureagi-build-finished.json"
 _STOP = "Don't submit again or do more work; tell the person."
@@ -113,8 +121,8 @@ def _submit_tool(server):
     return next(one for one in server.tools if one.name == "submit_contract")
 
 
-def _submitter(destination: Path, scan_root: Path | None = None):
-    tool = _submit_tool(contract_tools(destination, scan_root=scan_root))
+def _submitter(destination: Path, scan_root: Path | None = None, save_checks=None):
+    tool = _submit_tool(contract_tools(destination, scan_root=scan_root, save_checks=save_checks))
     return lambda payload: asyncio.run(tool.handler(payload))
 
 
@@ -1877,9 +1885,16 @@ def test_an_oversized_python_file_is_left_out(tmp_path):
     "claimed, found, looked_again, expected",
     [
         ("browser", ["playwright"], False, "second_look"),
-        ("browser", ["playwright"], True, "refuse"),
+        ("browser", ["playwright"], True, "keep"),
         ("browser", [], False, "second_look"),
-        ("browser", [], True, "refuse"),
+        ("browser", [], True, "keep"),
+        ("computer_use", ["playwright"], False, "second_look"),
+        ("computer_use", ["playwright"], True, "refuse"),
+        ("computer_use", [], False, "second_look"),
+        ("computer_use", [], True, "refuse"),
+        ("crawler", ["scrapy"], False, "second_look"),
+        ("crawler", ["scrapy"], True, "refuse"),
+        ("crawler", [], True, "refuse"),
         ("chat", ["playwright"], False, "second_look"),
         ("chat", ["playwright"], True, "keep"),
         ("chat", [], False, "keep"),
@@ -1895,13 +1910,70 @@ def test_decide_rows(claimed, found, looked_again, expected):
 
 
 @pytest.mark.parametrize(
-    "claimed",
-    [" Browser ", ["browser"], ["browser", "chat"], "computer_use", "cua", "COMPUTER_USE"],
+    "claimed, kind",
+    [
+        (" Browser ", "browser"),
+        (["browser"], "browser"),
+        (["browser", "chat"], "browser"),
+        ("computer_use", "computer_use"),
+        ("cua", "computer_use"),
+        ("COMPUTER_USE", "computer_use"),
+        (" Crawler ", "crawler"),
+        (["chat", "crawler"], "crawler"),
+        # A mixed answer: the refused kind wins.
+        (["browser", "computer_use"], "computer_use"),
+        (["crawler", "browser"], "crawler"),
+        (["browser", "cua", "crawler"], "computer_use"),
+    ],
 )
-def test_decide_normalises_every_form_of_browser(claimed):
+def test_decide_normalises_every_form_of_each_kind(claimed, kind):
+    assert reading_kind(modality_text(claimed)) == kind
     assert decide(claimed, ["playwright"], looked_again=False) == "second_look"
     assert decide(claimed, [], looked_again=False) == "second_look"
-    assert decide(claimed, ["playwright"], looked_again=True) == "refuse"
+    expected = "keep" if kind == "browser" else "refuse"
+    assert decide(claimed, ["playwright"], looked_again=True) == expected
+
+
+@pytest.mark.parametrize("claimed", ["chat", "voice", "", "not a browser", "browsers", "chat via browser"])
+def test_a_conversation_or_free_text_names_no_kind(claimed):
+    assert reading_kind(modality_text(claimed)) == ""
+
+
+@pytest.mark.parametrize(
+    "name, kind",
+    [
+        ("playwright", "browser"),
+        ("selenium", "browser"),
+        ("browser-use", "browser"),
+        ("Playwright MCP", "browser"),
+        ("PlayWrightBrowserToolkit", "browser"),
+        ("computer-use tool", "computer_use"),
+        ("pyautogui", "computer_use"),
+        ("pywinauto", "computer_use"),
+        ("e2b-desktop", "computer_use"),
+        ("scrapy", "crawler"),
+        ("crawl4ai", "crawler"),
+        ("firecrawl", "crawler"),
+        ("@mendable/firecrawl-js", "crawler"),
+        ("crawlee", "crawler"),
+        ("@crawlee/*", "crawler"),
+        ("scrapegraphai", "crawler"),
+        ("apify-client", "crawler"),
+    ],
+)
+def test_each_found_tool_has_a_kind(name, kind):
+    assert tool_kind(name) == kind
+
+
+def test_every_name_the_check_can_find_has_the_kind_it_was_meant_to():
+    # The names the lists can produce, so a tool added later without a kind reads as a browser
+    # tool only if it is one.
+    names = {
+        *(name.replace("_", "-") for name in agent_type_check.BROWSER_IMPORTS),
+        *agent_type_check.BROWSER_PACKAGES,
+    }
+    for name in agent_type_check.COMPUTER_USE_TOOLS | agent_type_check.CRAWLER_TOOLS:
+        assert name in names | {"computer-use tool", "@crawlee/*"}, name
 
 
 # The second look on its own
@@ -1918,20 +1990,48 @@ def test_a_disagreement_gets_one_look_and_the_next_answer_stands():
     assert look.verdict("chat", None, ["playwright"], given_before=True) == "keep"
 
 
-def test_a_browser_reading_always_gets_a_look_before_a_refusal():
+def test_a_refused_reading_always_gets_a_look_before_a_refusal():
+    look = SecondLook()
+    assert look.verdict(_REFUSED, None, ["playwright"], given_before=False) == "second_look"
+    text = look.issue(_REFUSED, ["playwright"], "abcd1234")
+    assert "the source uses playwright (playwright: browser libraries)" in text
+    assert "stops this build as not supported" in text
+    assert look.verdict(_REFUSED, "abcd1234", ["playwright"], given_before=True) == "refuse"
+
+
+def test_a_refused_reading_with_nothing_found_says_so_in_its_look():
+    look = SecondLook()
+    assert look.verdict(_REFUSED, None, [], given_before=False) == "second_look"
+    assert "no browser, crawling or computer-use tool was found" in look.issue(
+        _REFUSED, [], "abcd1234"
+    )
+    assert look.verdict(_REFUSED, None, [], given_before=True) == "refuse"
+
+
+def test_a_browser_reading_gets_a_look_and_is_then_kept():
     look = SecondLook()
     assert look.verdict("browser", None, ["playwright"], given_before=False) == "second_look"
-    assert "the source uses playwright" in look.issue("browser", ["playwright"], "abcd1234")
-    assert look.verdict("browser", "abcd1234", ["playwright"], given_before=True) == "refuse"
+    text = look.issue("browser", ["playwright"], "abcd1234")
+    assert "the source uses playwright." in text
+    assert "an environment that gives it a browser and a list of sites" in text
+    assert "submit again as browser" in text
+    assert look.verdict("browser", "abcd1234", ["playwright"], given_before=True) == "keep"
 
 
-def test_a_browser_reading_with_nothing_found_says_so_in_its_look():
+def test_a_browser_reading_over_a_crawler_names_the_crawler_in_its_look():
+    text = SecondLook.prompt("browser", ["playwright", "scrapy"])
+    assert "playwright: browser libraries; scrapy: crawling tools" in text
+
+
+def test_a_browser_value_then_a_refused_answer_without_one_gets_a_look():
     look = SecondLook()
-    assert look.verdict("browser", None, [], given_before=False) == "second_look"
-    assert "no browser, crawling or computer-use tool was found" in look.issue(
-        "browser", [], "abcd1234"
-    )
-    assert look.verdict("browser", None, [], given_before=True) == "refuse"
+    look.verdict("browser", None, [], given_before=False)
+    look.issue("browser", [], "abcd1234")
+    assert look.verdict("browser", "abcd1234", [], given_before=True) == "keep"
+    assert look.verdict("browser", None, [], given_before=True) == "keep"
+    # A different kind may have run beside the answer unread.
+    assert look.verdict(_REFUSED, None, [], given_before=True) == "second_look"
+    assert look.verdict("chat", None, ["playwright"], given_before=True) == "second_look"
 
 
 def test_a_call_that_started_before_the_look_gets_one_of_its_own():
@@ -1960,6 +2060,7 @@ def test_modality_text_and_is_browser():
     assert modality_text(None) == ""
     assert modality_text(["Browser", "chat"]) == "browser\nchat"
     assert is_browser("browser\nchat")
+    assert is_browser("crawler")
     assert not is_browser("chat")
     assert not is_browser("browsers")
 
@@ -1984,7 +2085,7 @@ def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    _submitter(tmp_path / "out", tmp_path)(_reading("chat"))
+    _submitter(tmp_path / "out", tmp_path, "thread")(_reading("chat"))
     assert threads and threads[0] is not threading.main_thread()
 
 
@@ -1997,7 +2098,7 @@ def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch, mo
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    answer = _submitter(output, tmp_path)(_reading(modality))
+    answer = _submitter(output, tmp_path, "thread")(_reading(modality))
     assert not (output / "contract.json").exists()
     # The stop itself, not a second look: the reading was refused while the scan ran. A browser
     # reading would otherwise be asked for a second look before the write's own check.
@@ -2023,8 +2124,8 @@ def test_the_file_is_what_the_platform_reads():
     assert FAILURE_FILE == "failure.json"
 
 
-@pytest.mark.parametrize("modality", ["browser", ["browser"]])
-def test_a_wrapped_browser_reading_is_refused(tmp_path, browser_repo, modality):
+@pytest.mark.parametrize("modality", [_REFUSED, [_REFUSED], "crawler", ["browser", "crawler"]])
+def test_a_wrapped_refused_reading_is_refused(tmp_path, browser_repo, modality):
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
     assert "second-look" in _text(submit({"contract": _reading(modality)}))
@@ -2060,8 +2161,8 @@ def test_scan_finds_the_agents_own_folder(tmp_path):
     output = tmp_path / "out"
     submit = _submitter_in(output, _folder_repo(tmp_path), "agents/b")
     # A browser reading gets one look first, naming what the folder uses; the answer then stands.
-    assert "the source uses playwright" in submit(_reading("browser"))["content"][0]["text"]
-    submit(_reading("browser"))
+    assert "the source uses playwright" in submit(_reading(_REFUSED))["content"][0]["text"]
+    submit(_reading(_REFUSED))
     assert _failure(output)["code"] == "agent_type_unsupported"
     assert "playwright" in _failure(output)["message"]
 
@@ -2317,15 +2418,17 @@ def test_free_text_mentioning_browser_gets_a_problem_not_a_block(tmp_path, brows
     assert not (output / FAILURE_FILE).exists()
 
 
-def test_browser_with_tool_gets_a_second_look_naming_it_then_is_refused(tmp_path, browser_repo):
+def test_a_refused_kind_with_tool_gets_a_second_look_naming_it_then_is_refused(
+    tmp_path, browser_repo
+):
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
-    look = submit(_reading("browser"))
+    look = submit(_reading(_REFUSED))
     assert look.get("is_error")
-    assert "second-look: you recorded modality browser" in _text(look)
+    assert f"second-look: you recorded modality {_REFUSED}" in _text(look)
     assert "the source uses playwright" in _text(look)
     assert not (output / FAILURE_FILE).exists()
-    answer = submit(_reading("browser"))
+    answer = submit(_reading(_REFUSED))
     assert not answer.get("is_error")
     assert _FOUND_MESSAGE in _text(answer)
     assert "Don't submit again or do more work; tell the person." in _text(answer)
@@ -2335,7 +2438,7 @@ def test_browser_with_tool_gets_a_second_look_naming_it_then_is_refused(tmp_path
         "code": "agent_type_unsupported",
         "message": _FOUND_MESSAGE,
         "retryable": False,
-        "details": {"agent_type": "browser", "tools": ["playwright"]},
+        "details": {"agent_type": _REFUSED, "tools": ["playwright"]},
     }
     assert not (output / "contract.json").exists()
 
@@ -2356,11 +2459,11 @@ def _in_one_model_message(tool, modality: str, *, together: bool):
 def test_two_browser_readings_waiting_on_the_scan_both_get_the_second_look(tmp_path, plain_repo):
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-    for answer in _in_one_model_message(tool, "browser", together=True):
+    for answer in _in_one_model_message(tool, _REFUSED, together=True):
         assert answer.get("is_error")
         assert "second-look" in _text(answer)
     assert not (output / FAILURE_FILE).exists()
-    assert _STOP in _text(asyncio.run(tool.handler(_reading("browser", second_look_read=_READ))))
+    assert _STOP in _text(asyncio.run(tool.handler(_reading(_REFUSED, second_look_read=_READ))))
     assert (output / FAILURE_FILE).exists()
 
 
@@ -2392,7 +2495,7 @@ def test_a_chat_answer_without_the_value_stands_after_one_look(tmp_path, browser
 def test_a_browser_answer_without_the_value_stands_after_one_look(tmp_path, plain_repo):
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-    answers = [asyncio.run(tool.handler(_reading("browser"))) for _ in range(5)]
+    answers = [asyncio.run(tool.handler(_reading(_REFUSED))) for _ in range(5)]
     assert _looks(answers) == [True, False, False, False, False]
     assert _STOP in _text(answers[1])
     assert _failure(output)["code"] == "agent_type_unsupported"
@@ -2401,7 +2504,11 @@ def test_a_browser_answer_without_the_value_stands_after_one_look(tmp_path, plai
 
 @pytest.mark.parametrize(
     "repo, modality, written",
-    [("plain_repo", "browser", FAILURE_FILE), ("browser_repo", "chat", "contract.json")],
+    [
+        ("plain_repo", _REFUSED, FAILURE_FILE),
+        ("browser_repo", "chat", "contract.json"),
+        ("plain_repo", "browser", "contract.json"),
+    ],
 )
 def test_a_wrong_value_every_time_still_ends_after_one_look(
     tmp_path, request, repo, modality, written
@@ -2427,9 +2534,9 @@ def _next_message(tool, *payloads):
 def test_a_call_without_the_value_beside_an_answer_does_not_undo_it(tmp_path, plain_repo):
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading(_REFUSED))))
     chat_answer, browser_answer = _next_message(
-        tool, _reading("chat", second_look_read=_READ), _reading("browser")
+        tool, _reading("chat", second_look_read=_READ), _reading(_REFUSED)
     )
     assert not chat_answer.get("is_error")
     assert "second-look" in _text(browser_answer)
@@ -2441,9 +2548,9 @@ def test_a_browser_call_before_a_chat_answer_with_the_value_stops_the_build(tmp_
     # The browser call is in the state of an answer to an unanswered look, so it stands.
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading(_REFUSED))))
     browser_answer, chat_answer = _next_message(
-        tool, _reading("browser"), _reading("chat", second_look_read=_READ)
+        tool, _reading(_REFUSED), _reading("chat", second_look_read=_READ)
     )
     assert _STOP in _text(browser_answer)
     assert _STOP in _text(chat_answer)
@@ -2458,8 +2565,8 @@ def test_a_browser_call_after_a_chat_answer_neither_with_the_value_stops_the_bui
     # message will undo what it saves.
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
-    chat_answer, browser_answer = _next_message(tool, _reading("chat"), _reading("browser"))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading(_REFUSED))))
+    chat_answer, browser_answer = _next_message(tool, _reading("chat"), _reading(_REFUSED))
     assert not chat_answer.get("is_error")
     assert _STOP in _text(browser_answer)
     assert load(output) is None
@@ -2469,7 +2576,7 @@ def test_a_browser_call_after_a_chat_answer_neither_with_the_value_stops_the_bui
 def _looked_at(tmp_path, repo):
     """A handler that has given one second look, and that look's answer."""
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=repo))
-    return tool, asyncio.run(tool.handler(_reading("browser")))
+    return tool, asyncio.run(tool.handler(_reading(_REFUSED)))
 
 
 def test_a_second_look_says_what_to_send_back(tmp_path, plain_repo):
@@ -2480,7 +2587,7 @@ def test_a_second_look_says_what_to_send_back(tmp_path, plain_repo):
 def test_each_second_look_gets_its_own_value(tmp_path, plain_repo, monkeypatch):
     monkeypatch.setattr(tools, "_new_receipt", _REAL_RECEIPT)
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
-    answers = [_text(one) for one in _in_one_model_message(tool, "browser", together=True)]
+    answers = [_text(one) for one in _in_one_model_message(tool, _REFUSED, together=True)]
     first, second = [answer.split('second_look_read to "')[1].split('"')[0] for answer in answers]
     assert first != second
 
@@ -2491,9 +2598,9 @@ def test_an_earlier_value_still_counts_once_a_value_came_back(tmp_path, plain_re
     monkeypatch.setattr(tools, "_new_receipt", lambda: next(values))
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-    assert all(_looks(_in_one_model_message(tool, "browser", together=True)))
+    assert all(_looks(_in_one_model_message(tool, _REFUSED, together=True)))
     assert not asyncio.run(tool.handler(_reading("chat", second_look_read="second"))).get("is_error")
-    assert _STOP in _text(asyncio.run(tool.handler(_reading("browser", second_look_read="first"))))
+    assert _STOP in _text(asyncio.run(tool.handler(_reading(_REFUSED, second_look_read="first"))))
     assert _failure(output)["code"] == "agent_type_unsupported"
 
 
@@ -2509,7 +2616,7 @@ def test_a_second_look_answered_with_its_value_stands(tmp_path, browser_repo):
 def _answered(tmp_path, repo):
     """A handler whose second look came back with its value, as a chat answer that was saved."""
     tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=repo))
-    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading(_REFUSED))))
     assert not asyncio.run(tool.handler(_reading("chat", second_look_read=_READ))).get("is_error")
     return tool
 
@@ -2518,7 +2625,7 @@ def _answered(tmp_path, repo):
 def test_a_value_it_never_gave_is_not_a_second_look(tmp_path, plain_repo, made_up):
     output = tmp_path / "out"
     tool = _answered(tmp_path, plain_repo)
-    answer = asyncio.run(tool.handler(_reading("browser", second_look_read=made_up)))
+    answer = asyncio.run(tool.handler(_reading(_REFUSED, second_look_read=made_up)))
     assert "second-look" in _text(answer)
     assert not (output / FAILURE_FILE).exists()
     assert load(output).modality == "chat"
@@ -2527,7 +2634,7 @@ def test_a_value_it_never_gave_is_not_a_second_look(tmp_path, plain_repo, made_u
 def test_a_value_before_any_second_look_is_not_a_second_look(tmp_path, plain_repo):
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-    answer = asyncio.run(tool.handler(_reading("browser", second_look_read=_READ)))
+    answer = asyncio.run(tool.handler(_reading(_REFUSED, second_look_read=_READ)))
     assert "second-look" in _text(answer)
     assert not (output / FAILURE_FILE).exists()
 
@@ -2535,9 +2642,9 @@ def test_a_value_before_any_second_look_is_not_a_second_look(tmp_path, plain_rep
 @pytest.mark.parametrize(
     "packed",
     [
-        {"contract": _reading("browser"), "second_look_read": _READ},
-        {"contract": _reading("browser", second_look_read=_READ)},
-        {"contract": json.dumps(_reading("browser", second_look_read=_READ))},
+        {"contract": _reading(_REFUSED), "second_look_read": _READ},
+        {"contract": _reading(_REFUSED, second_look_read=_READ)},
+        {"contract": json.dumps(_reading(_REFUSED, second_look_read=_READ))},
     ],
 )
 def test_the_value_counts_however_the_contract_was_packaged(tmp_path, plain_repo, packed):
@@ -2565,10 +2672,10 @@ def test_a_failed_removal_still_writes_the_failure(tmp_path, browser_repo, monke
         return real(self, *args, **kwargs)
 
     submit = _submitter(output, browser_repo)
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
     monkeypatch.setattr(Path, "unlink", refuse)
     with pytest.raises(PermissionError):
-        submit(_reading("browser"))
+        submit(_reading(_REFUSED))
     assert (output / FAILURE_FILE).exists()
 
 
@@ -2577,10 +2684,10 @@ def test_a_failed_write_still_removes_the_earlier_reading(tmp_path, browser_repo
     output.mkdir()
     (output / "contract.json").write_text("{}", encoding="utf-8")
     submit = _submitter(output, browser_repo)
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
     _failing_write(monkeypatch)
     with pytest.raises(OSError, match="disk full"):
-        submit(_reading("browser"))
+        submit(_reading(_REFUSED))
     assert load(output) is None
 
 
@@ -2589,8 +2696,8 @@ def test_a_refused_new_reading_removes_the_earlier_one(tmp_path, browser_repo):
     output.mkdir()
     (output / "contract.json").write_text("{}", encoding="utf-8")
     submit = _submitter(output, browser_repo)
-    submit(_reading("browser"))
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
+    submit(_reading(_REFUSED))
     assert (output / FAILURE_FILE).exists()
     assert not (output / "contract.json").exists()
     assert load(output) is None
@@ -2631,7 +2738,7 @@ def test_a_chat_agent_first_read_as_browser_is_saved_after_its_look(
     source = _tree(tmp_path / "source", files)
     output = tmp_path / "out"
     submit = _submitter(output, source)
-    look = submit(_reading("browser"))
+    look = submit(_reading(_REFUSED))
     assert f"the source uses {tool}" in _text(look)
     assert not (output / FAILURE_FILE).exists()
     answer = submit(_reading("chat", **({"second_look_read": _READ} if with_value else {})))
@@ -2643,8 +2750,8 @@ def test_a_chat_agent_first_read_as_browser_is_saved_after_its_look(
 def test_chat_resubmission_after_a_refusal_saves_nothing(tmp_path, browser_repo):
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
-    submit(_reading("browser"))
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
+    submit(_reading(_REFUSED))
     answer = submit(_reading("chat"))
     assert not answer.get("is_error")
     assert _FOUND_MESSAGE in _text(answer)
@@ -2683,10 +2790,10 @@ def _failing_write(monkeypatch):
 def test_writer_failure_blocks_resubmission(tmp_path, browser_repo, monkeypatch):
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
     _failing_write(monkeypatch)
     with pytest.raises(OSError, match="disk full"):
-        submit(_reading("browser"))
+        submit(_reading(_REFUSED))
     assert not (output / FAILURE_FILE).exists()
     answer = submit(_reading("chat"))
     assert not answer.get("is_error")
@@ -2699,21 +2806,176 @@ def test_writer_failure_leaves_the_handler(tmp_path, browser_repo, monkeypatch):
     # with no file the build would end as a crash.
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
     _failing_write(monkeypatch)
     with pytest.raises(OSError, match="disk full"):
-        submit(_reading("browser"))
+        submit(_reading(_REFUSED))
     assert not (output / FAILURE_FILE).exists()
 
 
-# Browser reading, no tool found
+# The refused kinds, over code of their kind
 
 
-def test_browser_with_no_tool_gets_a_second_look(tmp_path, plain_repo):
+@pytest.mark.parametrize(
+    "files, kind, tools",
+    [
+        ({"agent.py": "import pyautogui\n"}, "computer_use", ["pyautogui"]),
+        (
+            {"agent.py": 'TOOLS = [{"computer_use": {"environment": "browser"}}]\n'},
+            "computer_use",
+            ["computer-use tool"],
+        ),
+        ({"spider.py": "import scrapy\n"}, "crawler", ["scrapy"]),
+        ({"crawl.py": "from crawl4ai import AsyncWebCrawler\n"}, "crawler", ["crawl4ai"]),
+    ],
+    ids=["pyautogui", "computer-use-tool", "scrapy", "crawl4ai"],
+)
+def test_a_refused_kind_over_its_own_code_is_refused_naming_both(tmp_path, files, kind, tools):
     output = tmp_path / "out"
-    answer = _submitter(output, plain_repo)(_reading("browser"))
+    submit = _submitter(output, _tree(tmp_path / "source", files))
+    look = _text(submit(_reading(kind)))
+    assert f"second-look: you recorded modality {kind}, which stops this build" in look
+    assert f"the source uses {', '.join(tools)}." in look
+    submit(_reading(kind, second_look_read=_READ))
+    failure = _failure(output)
+    assert failure["code"] == "agent_type_unsupported"
+    assert failure["details"] == {"agent_type": kind, "tools": tools}
+    assert not (output / "contract.json").exists()
+
+
+def test_a_browser_reading_over_a_crawler_is_told_so_and_then_kept(tmp_path):
+    output = tmp_path / "out"
+    repo = _tree(tmp_path / "source", {"agent.py": "import playwright\nimport scrapy\n"})
+    submit = _submitter(output, repo)
+    look = _text(submit(_reading("browser")))
+    assert "the source uses playwright, scrapy (playwright: browser libraries; scrapy: crawling tools)" in look
+    assert not submit(_reading("browser", second_look_read=_READ)).get("is_error")
+    assert load(output).environment_needs == ["browser"]
+
+
+# A browser reading is kept
+
+
+@pytest.mark.parametrize("modality", ["browser", ["browser"], ["Browser", "chat"]])
+def test_a_browser_reading_is_stored_as_chat_that_needs_a_browser(tmp_path, browser_repo, modality):
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    look = submit(_reading(modality))
+    assert "second-look: you recorded modality browser" in _text(look)
+    answer = submit(_reading(modality, second_look_read=_READ))
+    assert not answer.get("is_error"), answer
+    contract = load(output)
+    assert (contract.modality, contract.environment_needs) == ("chat", ["browser"])
+    assert how_it_runs(contract) == ("chat", frozenset({"browser"}))
+    assert not (output / FAILURE_FILE).exists()
+
+
+def _saved_as_browser(submit) -> None:
+    submit(_reading("browser"))
+    assert not submit(_reading("browser", second_look_read=_READ)).get("is_error")
+
+
+def _kept_need(output: Path) -> None:
+    contract = load(output)
+    assert (contract.modality, contract.environment_needs) == ("chat", ["browser"])
+
+
+def test_a_chat_answer_after_a_browser_answer_gets_a_look_before_the_need_goes(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    _saved_as_browser(submit)
+    # Nothing was found and chat would otherwise stand at once.
+    look = _text(submit(_reading("chat")))
+    assert "second-look: you recorded modality chat" in look
+    assert "An earlier answer of this reading recorded browser" in look
+    _kept_need(output)
+    # The look's answer stands: the need goes only now.
+    assert not submit(_reading("chat", second_look_read=_READ)).get("is_error")
+    assert load(output).environment_needs == []
+
+
+def test_a_chat_answer_beside_the_browser_answer_gets_a_look_of_its_own(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    asyncio.run(tool.handler(_reading("browser")))
+
+    async def together():
+        return await asyncio.gather(
+            tool.handler(_reading("browser", second_look_read=_READ)), tool.handler(_reading("chat"))
+        )
+
+    browser, chat = asyncio.run(together())
+    assert not browser.get("is_error"), browser
+    assert "second-look: you recorded modality chat" in _text(chat)
+    _kept_need(output)
+
+
+def test_a_chat_answer_carrying_the_browser_looks_value_gets_a_look_of_its_own(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    _saved_as_browser(submit)
+    # The value it sends back is the one the browser answer already used.
+    assert "second-look: you recorded modality chat" in _text(submit(_reading("chat", second_look_read=_READ)))
+    _kept_need(output)
+
+
+def test_on_a_browser_repo_a_chat_answer_after_an_unanswered_look_keeps_the_need_until_its_own_look(
+    tmp_path, browser_repo
+):
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    submit(_reading("browser"))
+    # No value came back: the next answer stands, and it reads browser.
+    assert not submit(_reading("browser")).get("is_error")
+    _kept_need(output)
+    assert "second-look: you recorded modality chat" in _text(submit(_reading("chat")))
+    _kept_need(output)
+
+
+def test_a_new_reading_over_a_browser_contract_on_disk_gives_a_chat_answer_a_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    _saved_as_browser(_submitter(output, plain_repo))
+    again = _submitter(output, plain_repo)
+    assert "second-look: you recorded modality chat" in _text(again(_reading("chat")))
+    _kept_need(output)
+    # A browser answer in the new reading gets its own look as any reading's does.
+    fresh = _submitter(output, plain_repo)
+    assert "second-look: you recorded modality browser" in _text(fresh(_reading("browser")))
+
+
+@pytest.mark.parametrize("needs", [["browser"], ["database"], "browser"])
+def test_a_need_the_reading_writes_itself_is_never_saved(tmp_path, plain_repo, needs):
+    output = tmp_path / "out"
+    answer = _submitter(output, plain_repo)(_reading("chat", environment_needs=needs))
+    assert not answer.get("is_error"), answer
+    contract = load(output)
+    assert (contract.modality, contract.environment_needs) == ("chat", [])
+
+
+def test_a_need_the_contract_check_does_not_know_is_a_problem():
+    contract = AgentContract.model_validate({"agent": "a", "environment_needs": ["database"]})
+    assert "environment_needs:unknown:database" in validate_contract(contract)
+    voice = AgentContract.model_validate(
+        {"agent": "a", "modality": "voice", "environment_needs": ["browser"]}
+    )
+    assert "environment_needs:browser-needs-chat:voice" in validate_contract(voice)
+    chat = AgentContract.model_validate({"agent": "a", "environment_needs": ["browser"]})
+    assert not [p for p in validate_contract(chat) if p.startswith("environment_needs")]
+
+
+def test_an_older_contract_stored_as_browser_runs_as_it_did():
+    contract = AgentContract.model_validate({"agent": "a", "modality": "browser"})
+    assert how_it_runs(contract) == ("browser", frozenset())
+
+
+# A refused kind read, no tool found
+
+
+def test_a_refused_kind_with_no_tool_gets_a_second_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    answer = _submitter(output, plain_repo)(_reading(_REFUSED))
     assert answer["is_error"]
-    assert "second-look: you recorded modality browser" in _text(answer)
+    assert f"second-look: you recorded modality {_REFUSED}" in _text(answer)
     assert "Does a person come to this agent for a conversation" in _text(answer)
     assert "don't ask anyone" in _text(answer)
     assert not (output / FAILURE_FILE).exists()
@@ -2723,30 +2985,30 @@ def test_browser_with_no_tool_gets_a_second_look(tmp_path, plain_repo):
 def test_second_look_then_chat_saves_as_chat(tmp_path, plain_repo):
     output = tmp_path / "out"
     submit = _submitter(output, plain_repo)
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
     answer = submit(_reading("chat"))
     assert not answer.get("is_error")
     assert load(output).modality == "chat"
     assert not (output / FAILURE_FILE).exists()
 
 
-def test_second_look_then_browser_is_refused_with_no_tools(tmp_path, plain_repo):
+def test_second_look_then_a_refused_kind_is_refused_with_no_tools(tmp_path, plain_repo):
     output = tmp_path / "out"
     submit = _submitter(output, plain_repo)
-    submit(_reading("browser"))
-    answer = submit(_reading("browser", second_look_read=_READ))
+    submit(_reading(_REFUSED))
+    answer = submit(_reading(_REFUSED, second_look_read=_READ))
     assert not answer.get("is_error")
     assert _READ_MESSAGE in _text(answer)
-    assert _failure(output)["details"] == {"agent_type": "browser", "tools": []}
+    assert _failure(output)["details"] == {"agent_type": _REFUSED, "tools": []}
     assert not (output / "contract.json").exists()
 
 
 def test_no_scan_root_behaves_as_no_tool(tmp_path):
     output = tmp_path / "out"
     submit = _submitter(output, None)
-    assert "second-look" in _text(submit(_reading("browser")))
+    assert "second-look" in _text(submit(_reading(_REFUSED)))
     assert not (output / FAILURE_FILE).exists()
-    submit(_reading("browser", second_look_read=_READ))
+    submit(_reading(_REFUSED, second_look_read=_READ))
     assert _failure(output)["details"]["tools"] == []
 
 
@@ -2783,7 +3045,7 @@ def test_conversation_with_tool_then_browser_is_refused_naming_it(tmp_path, brow
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
     submit(_reading(modality))
-    submit(_reading("browser"))
+    submit(_reading(_REFUSED))
     assert _failure(output)["message"] == _FOUND_MESSAGE
     assert _failure(output)["details"]["tools"] == ["playwright"]
     assert not (output / "contract.json").exists()
@@ -2816,7 +3078,7 @@ def test_one_scan_and_one_look_when_an_answer_comes_back_without_its_value(
 ):
     output = tmp_path / "out"
     scans = _counted_scans(monkeypatch)
-    submit = _submitter(output, browser_repo)
+    submit = _submitter(output, browser_repo, "thread")
     assert "second-look" in _text(submit(_reading("chat")))
     # An answer with the value stands, even when the contract is then sent back for another fix.
     rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
@@ -2831,19 +3093,19 @@ def test_a_different_answer_without_the_value_after_an_answer_gets_a_look(tmp_pa
     # It could have run beside that answer, unread.
     output = tmp_path / "out"
     submit = _submitter(output, plain_repo)
-    assert "second-look" in _text(submit(_reading("browser")))
+    assert "second-look" in _text(submit(_reading(_REFUSED)))
     rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
     assert rejected["is_error"] and "second-look" not in _text(rejected)
-    assert "second-look" in _text(submit(_reading("browser")))
+    assert "second-look" in _text(submit(_reading(_REFUSED)))
     assert not (output / FAILURE_FILE).exists()
 
 
 def test_calls_waiting_on_the_first_scan_share_it(tmp_path, plain_repo, monkeypatch):
     scans = _counted_scans(monkeypatch)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def first_message():
-        return await asyncio.gather(*(tool.handler(_reading("browser")) for _ in range(3)))
+        return await asyncio.gather(*(tool.handler(_reading(_REFUSED)) for _ in range(3)))
 
     assert all(_looks(asyncio.run(first_message())))
     assert scans == [plain_repo]
@@ -2860,11 +3122,11 @@ def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", slow)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def first_message():
-        cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
-        waiting = asyncio.ensure_future(tool.handler(_reading("browser")))
+        cancelled = asyncio.ensure_future(tool.handler(_reading(_REFUSED)))
+        waiting = asyncio.ensure_future(tool.handler(_reading(_REFUSED)))
         await asyncio.to_thread(started.wait, 10)
         cancelled.cancel()
         await asyncio.sleep(0)
@@ -2884,7 +3146,7 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, m
         return outcome
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    submit = _submitter(tmp_path / "out", plain_repo)
+    submit = _submitter(tmp_path / "out", plain_repo, "thread")
     with pytest.raises(OSError, match="gone"):
         submit(_reading("chat"))
     assert not submit(_reading("chat")).get("is_error")
@@ -2902,7 +3164,7 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call_in_the_same_message(
         return outcome
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def one_message():
         with pytest.raises(OSError, match="gone"):
@@ -2925,16 +3187,16 @@ def test_a_scan_that_finished_after_its_only_caller_was_cancelled_is_not_run_aga
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", slow)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
 
     async def cancelled_then_next():
-        cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
+        cancelled = asyncio.ensure_future(tool.handler(_reading(_REFUSED)))
         await asyncio.to_thread(started.wait, 10)
         (scan,) = asyncio.all_tasks() - {asyncio.current_task(), cancelled}
         cancelled.cancel()
         release.set()
         await asyncio.wait({scan})
-        return await tool.handler(_reading("browser"))
+        return await tool.handler(_reading(_REFUSED))
 
     assert "second-look" in _text(asyncio.run(cancelled_then_next()))
     assert scans == [plain_repo]
@@ -2952,15 +3214,15 @@ def test_a_scan_left_running_on_a_closed_loop_is_started_again(tmp_path, plain_r
         return [], frozenset()
 
     monkeypatch.setattr(tools, "browser_scan", scan)
-    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo, save_checks="thread"))
     closed = asyncio.new_event_loop()
     try:
-        closed.create_task(tool.handler(_reading("browser")))
+        closed.create_task(tool.handler(_reading(_REFUSED)))
         closed.run_until_complete(asyncio.to_thread(started.wait, 10))
     finally:
         closed.close()
     try:
-        assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+        assert "second-look" in _text(asyncio.run(tool.handler(_reading(_REFUSED))))
     finally:
         release.set()
     assert len(scans) == 2
@@ -2981,8 +3243,8 @@ def test_both_build_modes_reach_the_scan(tmp_path, browser_repo):
     conversational = open_for_building(None, out=tmp_path / "conversational", source=source)
     for stage, output in ((staged, "staged"), (conversational, "conversational")):
         tool = _submit_tool(_server_of(stage))
-        assert "playwright" in _text(asyncio.run(tool.handler(_reading("browser"))))
-        asyncio.run(tool.handler(_reading("browser")))
+        assert "playwright" in _text(asyncio.run(tool.handler(_reading(_REFUSED))))
+        asyncio.run(tool.handler(_reading(_REFUSED)))
         assert _failure(tmp_path / output)["details"]["tools"] == ["playwright"]
 
 
@@ -2990,8 +3252,8 @@ def test_github_source_reaches_the_scan(tmp_path, browser_repo):
     source = GitHubSource(name="fixture", root=browser_repo, url="https://github.test/a/b")
     stage, _ = open_stage(source, out=tmp_path / "out")
     tool = _submit_tool(_server_of(stage))
-    assert "playwright" in _text(asyncio.run(tool.handler(_reading("browser"))))
-    asyncio.run(tool.handler(_reading("browser")))
+    assert "playwright" in _text(asyncio.run(tool.handler(_reading(_REFUSED))))
+    asyncio.run(tool.handler(_reading(_REFUSED)))
     assert _failure(tmp_path / "out")["details"]["tools"] == ["playwright"]
 
 
@@ -3254,9 +3516,8 @@ def test_hosted_authoring_main_passes_the_refusal_through(tmp_path, monkeypatch)
 
 
 def _runtime(workspace: Path, *, state=None, control_only=True) -> HostedChatRuntime:
-    runtime = object.__new__(HostedChatRuntime)
-    runtime.workspace = workspace
-    runtime.job = {"scenario_count": 2}
+    from fi.alk.harness import hosted_chat_entrypoint as entrypoint
+
     emitted: list[tuple[str, dict]] = []
 
     async def emit(kind, **fields):
@@ -3265,12 +3526,16 @@ def _runtime(workspace: Path, *, state=None, control_only=True) -> HostedChatRun
     context = {"capabilities": {"control_only": control_only}}
     if state is not None:
         context["status"] = {"state": state}
-    runtime.client = SimpleNamespace(turn_context=context, command_watermark=3, emit=emit)
+    client = SimpleNamespace(turn_context=context, command_watermark=3, emit=emit)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(entrypoint, "resolve", lambda: SimpleNamespace(name="test"))
+        patch.setattr(entrypoint, "publish_actors_switch", lambda *args, **kwargs: None)
+        runtime = HostedChatRuntime(
+            client=client, policy=SimpleNamespace(), workspace=workspace, source=workspace,
+            job={"scenario_count": 2},
+        )
     runtime.emitted = emitted
     runtime.conversation = SimpleNamespace(stage_name="understand", stage=None)
-    runtime._nudge = None
-    runtime._from_platform = False
-    runtime._last_progress, runtime._idle_turns, runtime._opened_with = None, 0, None
     runtime._what_exists = lambda: (False, False)
     runtime._after_saved = lambda: None
     runtime.handled = []
@@ -3407,11 +3672,28 @@ def test_set_modality_to_browser_changes_nothing(tmp_path, why):
     path.write_text(saved, encoding="utf-8")
     done, said = amend.set_modality(contract, tmp_path, modality=" Browser ", why=why)
     assert done is False
-    assert said == "browser agents aren't supported, so the type stays chat."
+    assert said == (
+        "whether an agent drives a browser is settled when it is read, not during a build, so "
+        "the type stays chat. Read the agent again to change it."
+    )
     assert contract.modality == "chat"
     assert contract.amendments == []
     assert path.read_text(encoding="utf-8") == saved
     assert not (tmp_path / FAILURE_FILE).exists()
+
+
+@pytest.mark.parametrize("named", ["voice", "browser"])
+def test_a_browser_agent_stays_chat_mid_build(tmp_path, named):
+    contract = AgentContract.model_validate({**_reading("chat"), "environment_needs": ["browser"]})
+    saved = json.dumps(contract.model_dump())
+    path = tmp_path / amend.CONTRACT
+    path.write_text(saved, encoding="utf-8")
+    done, said = amend.set_modality(contract, tmp_path, modality=named, why="it takes calls")
+    assert done is False
+    assert "the type stays chat" in said
+    assert (contract.modality, contract.environment_needs) == ("chat", ["browser"])
+    assert contract.amendments == []
+    assert path.read_text(encoding="utf-8") == saved
 
 
 def test_set_modality_to_voice_still_works(tmp_path):
@@ -3431,6 +3713,8 @@ def test_skill_text_asks_the_new_question():
     text = " ".join(load_skill("understand-agent").split())
     assert "does a person come to this agent for a conversation, or to have it carry out that work?" in text
     assert "A coding agent is chat." in text
+    assert "record how it is reached (its endpoint, its runtime) exactly as for chat" in text
+    assert "**computer_use**" in text and "**crawler**" in text
     assert "a browser it drives" not in text
     assert "through a browser" not in text
 
@@ -3438,7 +3722,13 @@ def test_skill_text_asks_the_new_question():
 def test_schema_description_carries_the_new_question(tmp_path):
     schema = _submit_tool(contract_tools(tmp_path)).input_schema
     description = schema["properties"]["modality"]["description"]
-    assert "an agent a person uses to carry out work on websites or a computer is browser" in description
+    assert (
+        "an agent a person uses to carry out work by driving a web browser with a browser "
+        "library is browser"
+    ) in description
+    assert "record how it is reached as for chat" in description
+    assert "computer_use" in description and "crawler" in description
+    assert set(schema["properties"]["modality"]["enum"]) >= {"browser", "computer_use", "crawler"}
     assert "browser-driving" not in description
 
 
@@ -3698,7 +3988,10 @@ def test_script_type_imports_are_dropped_as_before():
     assert _script_imports(code) == ["./c", "./far"]
 
 
-def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
+def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path, monkeypatch):
+    import threading
+
+    from fi.alk.harness import credentials
     from fi.alk.harness.tools import contract_tools
 
     # Each keyword cost the old pattern a 1,000-character rescan: 0.6 s for this file, on the loop.
@@ -3707,7 +4000,10 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
     files["agents/a/r.ts"] = _quote_left_open(1_000_000)
     repo = _tree(tmp_path / "repo", {**files, "agents/a/agent.py": "x = 1\n"})
     destination = tmp_path / "out"
-    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+    # The patched scan lives in this process, so the save's checks run here, off the loop.
+    server = contract_tools(
+        destination, source_root=repo, scan_root=repo, subfolder="agents/a", save_checks="thread"
+    )
     reading = {
         "agent": "a",
         "modality": "chat",
@@ -3717,38 +4013,61 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
         "runtime": {"language": "python"},
         "tools": [{"name": "add", "args": ["i"]}],
     }
+    beat = threading.Event()
+    seen: dict = {"threads": set()}
+    scan = credentials._script_imports
+
+    def scan_that_waits_for_the_loop(content):
+        # Off the loop, the loop keeps beating while this waits; on it, no beat could come.
+        seen["threads"].add(threading.get_ident())
+        if "loop_beat_meanwhile" not in seen:
+            beat.clear()
+            seen["loop_beat_meanwhile"] = beat.wait(10)
+        return scan(content)
+
+    monkeypatch.setattr(credentials, "_script_imports", scan_that_waits_for_the_loop)
 
     async def save():
-        worst = [0.0]
+        seen["loop"] = threading.get_ident()
         done = asyncio.Event()
 
-        async def beat():
-            last = time.perf_counter()
+        async def beating():
             while not done.is_set():
+                beat.set()
                 await asyncio.sleep(0.01)
-                now = time.perf_counter()
-                worst[0], last = max(worst[0], now - last), now
 
-        beating = asyncio.create_task(beat())
-        started = time.perf_counter()
-        result = await server.tools[0].handler(reading)
-        waited = time.perf_counter() - started
+        task = asyncio.create_task(beating())
+        # A save made while the session's checks still run answers "not checked in time" (on a
+        # loaded host they can outlast the deadline), and the model writes again: so does this.
+        for _ in range(60):
+            result = await server.tools[0].handler(reading)
+            if not _text(result).startswith("not checked in time"):
+                break
+            await asyncio.sleep(0.5)
         done.set()
-        await beating
-        return result, worst[0], waited
+        await task
+        return result
 
-    # The heap the tests before this one built is frozen, so a full collection of it can't land
-    # inside the save. The save's own collections still count.
-    gc.collect()
-    gc.freeze()
-    try:
-        result, worst, waited = asyncio.run(save())
-    finally:
-        gc.unfreeze()
+    result = asyncio.run(save())
 
     assert not result.get("is_error"), result
-    assert worst < 0.25
-    assert waited < 2
+    assert seen["threads"] and seen["loop"] not in seen["threads"]
+    assert seen["loop_beat_meanwhile"] is True
+
+
+def test_the_script_import_scan_grows_with_the_file_not_its_square():
+    from fi.alk.harness.credentials import _script_imports
+
+    def work(text: str) -> float:
+        # This thread's own CPU time: other processes and waits on the GIL don't count.
+        started = time.thread_time()
+        _script_imports(text)
+        return time.thread_time() - started
+
+    for crafted in (_type_keywords, lambda size: _quote_left_open(size)):
+        small, large = work(crafted(250_000)), work(crafted(1_000_000))
+        # Four times the file is about four times the work; a rescan per keyword is sixteen.
+        assert large < 8 * max(small, 0.005), (crafted, small, large)
 
 
 def _quote_left_open(size: int) -> str:
@@ -7007,3 +7326,173 @@ def test_a_decode_total_spent_exactly_doesnt_say_the_walk_stopped(tmp_path, monk
 
     found, stopped = _save_walk(repo)
     assert not stopped and repo / "common" / "web.py" in found
+
+
+def test_a_build_proves_its_suite_after_its_validation(tmp_path, no_waiting, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / _FINISHED).write_text("{}", encoding="utf-8")
+    job = HarnessJob(
+        job_id="built",
+        run_id="built",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        scenario_count=2,
+        metadata={"generic_harness_v1": True, "used_scenario_keys": ["refund-late", "status-check"]},
+    )
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    steps = []
+
+    deadlines = []
+
+    async def validate(*args, **kwargs):
+        steps.append("validated")
+        deadlines.append(kwargs.get("deadline_at"))
+
+    monkeypatch.setattr(authoring_entrypoint, "_review_while_writing", lambda *args: None)
+    monkeypatch.setattr("fi.alk.harness.authoring_runtime_validation.validate_and_repair", validate)
+    monkeypatch.setattr(
+        authoring_entrypoint, "_prove_scenarios", lambda path, deadline, *, stage: steps.append(("proved", path, stage))
+    )
+    monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", "3600")
+    before = time.time()
+    status = authoring_entrypoint.main(
+        [str(job_path), "--source", str(source), "--output", str(output), "--await-harness"],
+        validate_runtime=True,
+    )
+    assert status == 0
+    assert steps == ["validated", ("proved", output.resolve(), "build")]
+    # The validation knows when the build is stopped: its start plus the build's time budget.
+    assert before + 3600 <= deadlines[0] <= time.time() + 3600
+    # Keys the environment gave before are taken for every writer of this build.
+    from fi.alk.harness.scenario import used_keys
+
+    assert {"refund-late", "status-check"} <= used_keys(output.resolve())
+
+
+# The scan and the save in the save checker's child, through every way the server is held
+
+
+def _checker_of(handler):
+    import inspect
+
+    return inspect.getclosurevars(handler).nonlocals["checker"]
+
+
+def test_a_scan_that_raises_twice_in_the_child_counts_as_cut(tmp_path, plain_repo):
+    from fi.alk.harness.save_checker import SessionChecksFailed
+
+    (plain_repo / "save-stand-in.json").write_text(json.dumps({"scan": "raise"}))
+    tool = _submit_tool(
+        contract_tools(
+            tmp_path / "out",
+            scan_root=plain_repo,
+            save_checks="child",
+            save_stand_in="_save_stand_ins",
+        )
+    )
+
+    async def calls():
+        with pytest.raises(SessionChecksFailed):
+            await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    answer = asyncio.run(calls())
+
+    # A scan that never answered can't say there is no browser tool: the reading gets a look.
+    assert "second-look" in _text(answer)
+    assert "stopped before reading all of the agent's code" in _text(answer)
+    assert not (tmp_path / "out" / "contract.json").exists()
+    assert _checker_of(tool.handler).ran_in_child == 0
+
+
+def test_the_hosted_builders_copy_of_the_server_saves_in_the_child(
+    tmp_path, plain_repo, monkeypatch
+):
+    import gc
+
+    from fi.alk.harness.builder import open_for_building
+
+    monkeypatch.delenv("ALK_SAVE_CHECKS", raising=False)
+    output = tmp_path / "out"
+    stage = open_for_building(None, out=output, source=RepoSource(name="fixture", root=plain_repo))
+    # The hosted chat puts a copy of each server in place of the one the stage opened with.
+    _runtime(tmp_path)._guard(stage.spec)
+    gc.collect()
+    tool = _submit_tool(_server_of(stage))
+
+    async def calls():
+        # The first is asked for the prompt's lines; the second is accepted.
+        await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    answer = asyncio.run(calls())
+
+    assert not answer.get("is_error"), answer
+    assert load(output).modality == "chat"
+    assert _checker_of(tool.handler).ran_in_child == 1
+
+
+def test_a_stage_opened_again_leaves_no_child_behind(tmp_path, plain_repo, monkeypatch):
+    import gc
+    import multiprocessing
+
+    from fi.alk.harness.builder import open_for_building
+
+    monkeypatch.delenv("ALK_SAVE_CHECKS", raising=False)
+    source = RepoSource(name="fixture", root=plain_repo)
+    before = {child.pid for child in multiprocessing.active_children()}
+    first = open_for_building(None, out=tmp_path / "out", source=source)
+    handler = _submit_tool(_server_of(first)).handler
+
+    async def calls(handler):
+        await handler(_reading("chat"))
+        return await handler(_reading("chat"))
+
+    assert not asyncio.run(calls(handler)).get("is_error")
+    started = {child.pid for child in multiprocessing.active_children()} - before
+    assert started
+
+    del first, handler
+    again = open_for_building(None, out=tmp_path / "out", source=source)
+    gc.collect()
+
+    assert not started & {child.pid for child in multiprocessing.active_children()}
+    assert _submit_tool(_server_of(again))
+
+
+@pytest.mark.parametrize("where", ["scan", "check"])
+def test_a_checker_that_keeps_losing_its_child_ends_the_stage_with_a_failure(
+    tmp_path, plain_repo, monkeypatch, where
+):
+    from fi.alk.harness.save_checker import ChildKeepsEnding
+
+    destination = tmp_path / "out"
+    tool = _submit_tool(
+        contract_tools(destination, scan_root=plain_repo, save_checks="thread")
+    )
+    checker = _checker_of(tool.handler)
+
+    async def worn(*args, **kwargs):
+        raise ChildKeepsEnding(3)
+
+    monkeypatch.setattr(checker, where, worn)
+
+    async def calls():
+        return [await tool.handler(_reading("chat")), await tool.handler(_reading("chat"))]
+
+    first, second = asyncio.run(calls())
+
+    # The stage ends with a failure that names the cause, as the agent-type refusal does.
+    for answer in (first, second):
+        assert not answer.get("is_error")
+        assert _STOP in _text(answer)
+    failure = _failure(destination)
+    assert failure["code"] == "save_checks_child_keeps_ending"
+    assert failure["retryable"] is False
+    assert failure["details"] == {"deaths": 3}
+    assert not (destination / "contract.json").exists()

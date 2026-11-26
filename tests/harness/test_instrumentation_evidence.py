@@ -420,9 +420,11 @@ def test_only_files_naming_what_the_scan_looks_for_are_parsed(
         },
     )
     seen: list[str] = []
-    real = instrumentation_evidence.parsed
+    real = instrumentation_evidence.parsed_or_syntax_error
     monkeypatch.setattr(
-        instrumentation_evidence, "parsed", lambda text: seen.append(text) or real(text)
+        instrumentation_evidence,
+        "parsed_or_syntax_error",
+        lambda text: seen.append(text) or real(text),
     )
 
     assert detect_instrumentation(source) == "traceai"
