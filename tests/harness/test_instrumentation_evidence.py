@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import instrumentation_evidence, python_source
+from fi.alk.harness import instrumentation_evidence, python_source, tools
 from fi.alk.harness.instrumentation_evidence import detect_instrumentation
 from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
 from fi.alk.harness.tools import accept_contract
@@ -766,3 +766,135 @@ def test_a_root_dockerfile_cmd_decides_before_the_workdirs(tmp_path: Path) -> No
     }
 
     assert _saved_instrumentation(tmp_path, files, _INFERRED) == "none"
+
+
+def test_an_independent_package_under_a_traced_parent_is_read_alone(tmp_path: Path) -> None:
+    """A parent manifest that does not declare the agent's package in its workspaces is another project's."""
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "agent/package.json": _package({}),
+        "agent/index.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, {**_NODE_RUNTIME, "workdir": "agent"}) == "none"
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "expected"),
+    [
+        (["packages/*"], "traceai"),
+        ({"packages": ["packages/**"]}, "traceai"),
+        (["./packages/agent/"], "traceai"),
+        (["apps/*"], "none"),
+    ],
+    ids=["glob", "yarn_object", "spelled_path", "other_members"],
+)
+def test_a_workspace_root_counts_only_for_a_member_it_declares(
+    tmp_path: Path, workspaces: object, expected: str
+) -> None:
+    files = {
+        "package.json": json.dumps(
+            {"name": "repo", "workspaces": workspaces, "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        "packages/agent/package.json": _package({}),
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(
+            _repository(tmp_path, files), "packages/agent"
+        )
+        == expected
+    )
+
+
+def test_an_unread_manifest_ends_the_walk(tmp_path: Path) -> None:
+    """A package.json past the size limit is still the agent's package: the walk stops there."""
+    padding = " " * instrumentation_evidence._LARGEST_PACKAGE_JSON
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "agent/package.json": _package({}) + padding,
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(_repository(tmp_path, files), "agent/src")
+        == "none"
+    )
+
+
+@pytest.mark.parametrize("language", ["typescript", "javascript", "js", "ts", "nodejs"])
+def test_a_language_the_planner_reads_as_node_is_read_from_its_package_json(
+    tmp_path: Path, language: str
+) -> None:
+    files = {"package.json": _package({}), "agent/package.json": _package({"@traceai/fi-core": "^1.4.1"})}
+
+    runtime = {"language": language, "command": ["node", "index.js"], "workdir": "agent"}
+    assert _saved_instrumentation(tmp_path, files, runtime) == "traceai"
+
+
+def test_the_root_workdir_sentinel_reads_the_root_manifest(tmp_path: Path) -> None:
+    """The planner reads workdir "/" as the repository root."""
+    files = {"package.json": _package({"@traceai/fi-core": "^1.4.1"}), "index.js": "require('http');\n"}
+
+    assert _saved_instrumentation(tmp_path, files, {**_NODE_RUNTIME, "workdir": "/"}) == "traceai"
+
+
+def test_a_single_nested_node_component_the_planner_infers_is_read_from_its_package_json(
+    tmp_path: Path,
+) -> None:
+    """No language, no command, no Dockerfile: the planner picks the one component in the repository."""
+    files = {
+        "agent/package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "agent/index.js": "require('http');\n",
+    }
+
+    runtime = {"language": "", "command": [], "workdir": "", "dockerfile": "", "compose_file": ""}
+    assert _saved_instrumentation(tmp_path, files, runtime) == "traceai"
+
+
+_PYTHON_WITHOUT_READABLE_SOURCE = {
+    "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+    "pyproject.toml": "[project]\nname = 'agent'\n",
+    "build/agent.py": "import json\n",
+}
+
+
+def test_an_explicit_python_runtime_never_reads_package_json(tmp_path: Path) -> None:
+    runtime = {"language": "python", "command": ["python", "-m", "agent"]}
+
+    assert _saved_instrumentation(tmp_path, _PYTHON_WITHOUT_READABLE_SOURCE, runtime) == "none"
+
+
+def _session_saved(tmp_path: Path, files: dict[str, str], runtime: dict, cached: str) -> str:
+    """The save as the save child runs it: with the session's early answer, read before the runtime was known."""
+    source = _repository(tmp_path / "source", files)
+    recorded = json.loads(RECORDED_CONTRACT.read_text(encoding="utf-8"))
+    payload = {**recorded, "runtime": {**recorded["runtime"], **runtime}}
+    checked = tools._checked_contract(
+        payload,
+        source_root=source,
+        require_setup_contract=False,
+        subfolder=None,
+        instrumentation=cached,
+    )
+    assert not isinstance(checked, dict), checked
+    return checked.instrumentation
+
+
+def test_the_sessions_early_answer_is_replaced_for_a_node_runtime(tmp_path: Path) -> None:
+    files = {"package.json": _package({"@traceai/fi-core": "^1.4.1"}), "scripts/build.py": "import json\n"}
+
+    assert _session_saved(tmp_path, files, _NODE_RUNTIME, cached="none") == "traceai"
+
+
+def test_the_sessions_manifest_answer_is_dropped_for_a_python_runtime(tmp_path: Path) -> None:
+    """The session read package.json because it found no Python file; a Python runtime never counts it."""
+    runtime = {"language": "python", "command": ["python", "-m", "agent"]}
+
+    assert _session_saved(tmp_path, _PYTHON_WITHOUT_READABLE_SOURCE, runtime, cached="traceai") == "none"
+
+
+def test_the_sessions_python_answer_is_kept_for_a_python_runtime(tmp_path: Path) -> None:
+    files = {"agent.py": "from fi_instrumentation import register\n"}
+    runtime = {"language": "python", "command": ["python", "agent.py"]}
+
+    assert _session_saved(tmp_path, files, runtime, cached="traceai") == "traceai"

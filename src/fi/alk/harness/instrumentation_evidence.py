@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import os
 import stat
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from .generated_runtime import NODE_LANGUAGES
 from .import_lines import import_lines
 from .python_source import EscapeBudget, ParseBudget, parsed_or_syntax_error, read_module
 from .source_folder import is_within
@@ -53,20 +56,27 @@ _NODE_OTEL_SDKS = frozenset(
 # gRPC exporters would send spans no call is stamped on, so they read as untraced, as gRPC does
 # for Python.
 _NODE_JSON_EXPORTER = "@opentelemetry/exporter-trace-otlp-http"
-_JAVASCRIPT_LANGUAGES = frozenset({"node", "nodejs", "bun"})
+# The planner's names for Node, and Bun.
+_JAVASCRIPT_LANGUAGES = NODE_LANGUAGES | {"bun"}
+# A workspace root's member patterns are read up to these bounds.
+_WORKSPACE_PATTERNS = 256
+_WORKSPACE_PATTERN_LENGTH = 256
 _JAVASCRIPT_LAUNCHERS = frozenset({"node", "bun"})
 
 
-def detect_instrumentation(source_root: Path | None, reached: Iterable[Path] = ()) -> str:
+def detect_instrumentation(
+    source_root: Path | None, reached: Iterable[Path] = (), *, manifests: bool = True
+) -> str:
     """How the agent is traced, from its imports: the files in ``source_root``, and the Python
     files in ``reached``, the code it imports from elsewhere in the repository, under one budget.
-    With no Python file to read, from the packages the folder's package.json depends on.
+    With no Python file to read, and ``manifests``, from the packages the folder's package.json
+    depends on: only while the runtime is unknown, since a Python runtime never runs them.
     """
     if source_root is None:
         return "none"
     imported, python_read = _python_imports(source_root.resolve(), reached)
     if not python_read:
-        return _node_instrumentation(source_root.resolve())
+        return _node_instrumentation(source_root.resolve()) if manifests else "none"
     if any(
         name.split(".")[0] == "fi_instrumentation"
         or name.split(".")[0].startswith("traceai_")
@@ -89,32 +99,94 @@ def detect_instrumentation(source_root: Path | None, reached: Iterable[Path] = (
 
 
 def detect_node_instrumentation(source_root: Path, workdir: str) -> str:
-    """How a Node or Bun agent is traced, whatever other files its folder holds: from the
-    package.json at ``runtime.workdir`` and those above it, up to its package root (the first that
-    names a ``packageManager`` or ``workspaces``), where a workspace hoists its packages. Nothing
+    """How a Node or Bun agent is traced, whatever other files its folder holds: from its package,
+    the nearest package.json at ``runtime.workdir`` or above it, and from the workspace root just
+    above that package when the root's ``workspaces`` names it, since a workspace hoists its
+    members' packages. A manifest above that names no such member is another project's. Nothing
     above the repository is read.
     """
     root = source_root.resolve()
     folder = (root / (workdir.strip() or ".")).resolve()
     if not folder.is_relative_to(root):
         return "none"
-    dependencies: set[str] = set()
-    for candidate in (folder, *folder.parents):
-        if not candidate.is_relative_to(root):
-            break
-        manifest = _package_manifest(candidate / _PACKAGE_JSON)
-        dependencies |= _dependencies(manifest)
-        if "packageManager" in manifest or "workspaces" in manifest:
-            break
+    package = next(
+        (candidate for candidate in (folder, *folder.parents)
+         if candidate.is_relative_to(root) and _manifest_exists(candidate)),
+        None,
+    )
+    if package is None:
+        return "none"
+    # An unread manifest (a link, or past the size limit) still marks the package.
+    dependencies = _dependencies(_package_manifest(package / _PACKAGE_JSON))
+    above = next(
+        (candidate for candidate in package.parents
+         if candidate.is_relative_to(root) and _manifest_exists(candidate)),
+        None,
+    )
+    if above is not None:
+        workspace = _package_manifest(above / _PACKAGE_JSON)
+        if _names_member(workspace, package.relative_to(above).as_posix()):
+            dependencies |= _dependencies(workspace)
     return _node_answer(dependencies)
 
 
-def runs_javascript(language: str, command: Sequence[str]) -> bool:
-    """Whether the selected runtime is Node or Bun: by its language, or with none by its command."""
+def runs_javascript(language: str, command: Sequence[str]) -> bool | None:
+    """Whether the selected runtime is Node or Bun: by its language, the planner's names for Node
+    included, or with none by its command. None when it names neither."""
     language = language.strip().lower()
     if language:
         return language in _JAVASCRIPT_LANGUAGES
-    return bool(command) and Path(str(command[0])).name.lower() in _JAVASCRIPT_LAUNCHERS
+    if command:
+        return Path(str(command[0])).name.lower() in _JAVASCRIPT_LAUNCHERS
+    return None
+
+
+def reads_python(source_root: Path, reached: Iterable[Path] = ()) -> bool:
+    """Whether ``detect_instrumentation`` finds a Python file to read here; nothing is parsed."""
+    root = source_root.resolve()
+    return next(iter(_python_folders(root)), None) is not None or any(
+        path.suffix == ".py" and not is_within(path, root) for path in reached
+    )
+
+
+def _manifest_exists(folder: Path) -> bool:
+    try:
+        (folder / _PACKAGE_JSON).lstat()
+    except OSError:
+        return False
+    return True
+
+
+def _names_member(workspace: dict[str, Any], member: str) -> bool:
+    """Whether a workspace root's ``workspaces`` (a list, or Yarn's ``{"packages": [...]}``)
+    names the member folder, written relative to the root."""
+    patterns = workspace.get("workspaces")
+    if isinstance(patterns, dict):
+        patterns = patterns.get("packages")
+    if not isinstance(patterns, list):
+        return False
+    parts = tuple(member.split("/"))
+    for pattern in patterns[:_WORKSPACE_PATTERNS]:
+        if not isinstance(pattern, str) or len(pattern) > _WORKSPACE_PATTERN_LENGTH:
+            continue
+        spelled = pattern.strip().removeprefix("./").strip("/")
+        if spelled and not spelled.startswith("!") and _matches(tuple(spelled.split("/")), parts):
+            return True
+    return False
+
+
+def _matches(pattern: tuple[str, ...], parts: tuple[str, ...]) -> bool:
+    """A workspace glob against a folder, one segment at a time; ``**`` spans any number."""
+
+    @functools.cache
+    def at(p: int, q: int) -> bool:
+        if p == len(pattern):
+            return q == len(parts)
+        if pattern[p] == "**":
+            return at(p + 1, q) or (q < len(parts) and at(p, q + 1))
+        return q < len(parts) and fnmatchcase(parts[q], pattern[p]) and at(p + 1, q + 1)
+
+    return at(0, 0)
 
 
 def _node_instrumentation(root: Path) -> str:
@@ -164,6 +236,32 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> tuple[set[str],
     local: set[str] = set()
     budget = ParseBudget()
     escapes = EscapeBudget(reader="instrumentation scan")
+    for directory, files in _python_folders(root, every=True):
+        if directory.parent == root and "__init__.py" in files:
+            # Only a package at the top of the repository sits ahead of the
+            # installed one; app/opentelemetry is imported as app.opentelemetry.
+            local.add(directory.name)
+        for file_name in sorted(files):
+            if not file_name.endswith(".py"):
+                continue
+            python_read = True
+            if directory == root:
+                # Only a module at the top of the repository sits ahead of the
+                # installed package on the import path.
+                local.add(file_name[: -len(".py")])
+            _read_imports(directory / file_name, budget, escapes, imported)
+    for path in sorted(reached):
+        # The folder's own files were read above.
+        if path.suffix == ".py" and not is_within(path, root):
+            python_read = True
+            _read_imports(path, budget, escapes, imported)
+    return {name for name in imported if name.split(".")[0] not in local}, python_read
+
+
+def _python_folders(root: Path, *, every: bool = False) -> Iterable[tuple[Path, list[str]]]:
+    """The folders the scan reads, each with its files: those holding a ``.py`` file, or with
+    ``every`` all of them. An installed package (a ``.dist-info`` beside it) and the skipped
+    names are not entered."""
     for directory, subdirectories, files in os.walk(root):
         if Path(directory) != root and any(
             name.endswith(".dist-info") for name in subdirectories
@@ -174,25 +272,8 @@ def _python_imports(root: Path, reached: Iterable[Path] = ()) -> tuple[set[str],
         subdirectories[:] = sorted(
             name for name in subdirectories if name not in _SKIPPED_DIRECTORIES
         )
-        if Path(directory).parent == root and "__init__.py" in files:
-            # Only a package at the top of the repository sits ahead of the
-            # installed one; app/opentelemetry is imported as app.opentelemetry.
-            local.add(Path(directory).name)
-        for file_name in sorted(files):
-            if not file_name.endswith(".py"):
-                continue
-            python_read = True
-            if Path(directory) == root:
-                # Only a module at the top of the repository sits ahead of the
-                # installed package on the import path.
-                local.add(file_name[: -len(".py")])
-            _read_imports(Path(directory) / file_name, budget, escapes, imported)
-    for path in sorted(reached):
-        # The folder's own files were read above.
-        if path.suffix == ".py" and not is_within(path, root):
-            python_read = True
-            _read_imports(path, budget, escapes, imported)
-    return {name for name in imported if name.split(".")[0] not in local}, python_read
+        if every or any(name.endswith(".py") for name in files):
+            yield Path(directory), files
 
 
 def _read_imports(
