@@ -386,66 +386,70 @@ def safe_source_context(case: Mapping[str, Any]) -> str:
     return "; ".join(parts) or "the approved source"
 
 
-def bind_source_case(
-    args: Mapping[str, Any], case: Mapping[str, Any], *, require_relevance: bool = True
-) -> dict[str, Any]:
-    if require_relevance:
-        fields = _record_fields(case)
-        codes = set(_action_codes(fields))
-        for field in ("code", "service_code", "escalation_code", "qualification_label"):
-            codes.update(
-                re.findall(
-                    r"\b[A-Z][A-Z0-9]+-\d+\b", str(fields.get(field) or ""), re.I
-                )
-            )
+def reveals_source_answer(visible: str, case: Mapping[str, Any]) -> bool:
+    """Detect an approved grading answer in text that will become a scenario label or situation."""
+    fields = _record_fields(case)
+    codes = set(_action_codes(fields))
+    for field in ("code", "service_code", "escalation_code", "qualification_label"):
         codes.update(
             re.findall(
-                r"\b(?:code|label)\s+(?:is\s+)?([A-Z][A-Z0-9]+-\d+)\b",
-                str(case.get("policy_reference") or ""),
-                re.I,
+                r"\b[A-Z][A-Z0-9]+-\d+\b", str(fields.get(field) or ""), re.I
             )
         )
-        visible = " ".join(
-            str(args.get(k) or "") for k in ("name", "instruction", "use_case")
-        )
-        if fields.get("condition") and fields.get("queue"):
-            queue = r"[ _-]+".join(
-                re.escape(word) for word in re.split(r"[-_ ]+", str(fields["queue"]))
-            )
-            if re.search(r"(?<![a-z0-9])" + queue + r"(?![a-z0-9])", visible, re.I):
-                raise ValueError("source_case_answer_in_situation")
-            priority = re.escape(str(fields.get("priority") or ""))
-            if priority and re.search(
-                r"\b(?:"
-                + priority
-                + r"[ -]+priority|priority\s*[:=]?\s*"
-                + priority
-                + r")\b",
-                visible,
-                re.I,
-            ):
-                raise ValueError("source_case_answer_in_situation")
-        score = re.search(
-            r"\brelevance score of (\d+)\b",
+    codes.update(
+        re.findall(
+            r"\b(?:code|label)\s+(?:is\s+)?([A-Z][A-Z0-9]+-\d+)\b",
             str(case.get("policy_reference") or ""),
             re.I,
         )
-        if score and re.search(
-            r"\bscore\s*(?:of|is|=|:)?\s*" + score[1] + r"\b", visible, re.I
+    )
+    if fields.get("condition") and fields.get("queue"):
+        queue = r"[ _-]+".join(
+            re.escape(word) for word in re.split(r"[-_ ]+", str(fields["queue"]))
+        )
+        if re.search(r"(?<![a-z0-9])" + queue + r"(?![a-z0-9])", visible, re.I):
+            return True
+        priority = re.escape(str(fields.get("priority") or ""))
+        if priority and re.search(
+            r"\b(?:"
+            + priority
+            + r"[ -]+priority|priority\s*[:=]?\s*"
+            + priority
+            + r")\b",
+            visible,
+            re.I,
         ):
-            raise ValueError("source_case_answer_in_situation")
-        for code in codes:
-            letters, digits = code.rsplit("-", 1)
-            if re.search(
-                r"(?<![A-Za-z0-9])"
-                + re.escape(letters)
-                + r"[-_ ]?"
-                + re.escape(digits)
-                + r"(?![A-Za-z0-9])",
-                visible,
-                re.I,
-            ):
-                raise ValueError("source_case_answer_in_situation")
+            return True
+    score = re.search(
+        r"\brelevance score of (\d+)\b",
+        str(case.get("policy_reference") or ""),
+        re.I,
+    )
+    if score and re.search(
+        r"\bscore\s*(?:of|is|=|:)?\s*" + score[1] + r"\b", visible, re.I
+    ):
+        return True
+    for code in codes:
+        letters, digits = code.rsplit("-", 1)
+        if re.search(
+            r"(?<![A-Za-z0-9])"
+            + re.escape(letters)
+            + r"[-_ ]?"
+            + re.escape(digits)
+            + r"(?![A-Za-z0-9])",
+            visible,
+            re.I,
+        ):
+            return True
+    return False
+
+
+def bind_source_case(
+    args: Mapping[str, Any], case: Mapping[str, Any], *, require_relevance: bool = True
+) -> dict[str, Any]:
+    visible = " ".join(str(args.get(k) or "") for k in ("name", "instruction", "use_case"))
+    if require_relevance and reveals_source_answer(visible, case):
+        raise ValueError("source_case_answer_in_situation")
     if require_relevance and not scenario_relates_to_case(args, case):
         raise ValueError("source_case_unrelated")
     bound = dict(args)

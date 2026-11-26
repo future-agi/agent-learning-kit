@@ -53,7 +53,7 @@ from ..world.tools import DRAFT
 from .contract import write_contract
 from .handlers import ALLOWED_IMPORTS, behaviour_problems, source_problems
 from .proof import ViewProof
-from ..source_grounding import SOURCE_OUTCOME_GUIDANCE, action_code_guidance, record_role_problem
+from ..source_grounding import SOURCE_OUTCOME_GUIDANCE, action_code_guidance, record_role_problem, reveals_source_answer
 from .reviewed_sources import REVIEW_REQUIRED, load_evidence
 from .workspace import (
     Design,
@@ -355,7 +355,12 @@ class DesignTools:
                 *proposal.dependencies,
             ]
         )
+        headings = "\n".join(proposal.use_cases)
         for case in load_evidence(self.workspace, design).get("cases", []):
+            if reveals_source_answer(headings, case):
+                return _err("Revise the use-case headings before requesting approval. Describe the situation "
+                            "without disclosing the expected code, queue, priority, or score in the heading; "
+                            "retain the complete approved policy and its outcomes in the rules.")
             if problem := record_role_problem(proposal_text, case):
                 return _err(
                     "Revise the proposal before requesting approval. " + problem

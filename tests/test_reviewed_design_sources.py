@@ -809,3 +809,21 @@ def test_build_approval_requires_resolving_every_dependency(tmp_path):
         save_design(tmp_path, design)
         assert settle_proposal(tmp_path, "Build this") is expected
         assert (load_design(tmp_path).proposal is not None) is expected
+
+
+def test_revealed_policy_answer_is_corrected_before_first_design_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS_MODEL", "test-model")
+    open_design(tmp_path, name="returns")
+    stage, tools = _stage(tmp_path)
+    rule = "Refunds above $425 require human escalation. The escalation code is ORCHID-72."
+    monkeypatch.setattr("fi.alk.harness.design.tools.load_evidence", lambda *_: {"cases":[{"policy_reference":rule}]})
+    proposal = {"one_liner":"Handle returns", "summary":"Evaluate refunds", "rules":[rule],
+                "use_cases":["Escalate above $425 with code ORCHID-72"]}
+    try:
+        assert _tool(stage, "design", "propose_design", proposal)["is_error"]
+        assert load_design(tmp_path).pending_proposal is None
+        proposal["use_cases"] = ["High-value refund escalation"]
+        assert not _tool(stage, "design", "propose_design", proposal).get("is_error")
+        assert load_design(tmp_path).proposal.rules == [rule]
+    finally:
+        tools.world.close()
