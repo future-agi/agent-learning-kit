@@ -30,6 +30,7 @@ import logging
 import os
 import shutil
 import socket
+import stat
 import struct
 import threading
 import time
@@ -166,13 +167,21 @@ class BrowserRecord:
         self._why_incomplete: str | None = None
         self._shots: list[dict[str, Any]] = []
         self._shots_capped = False
+        self._shots_sealed = False
 
     def keep_shot(self, when: str, size: int, *, shots: int, shot_bytes: int) -> tuple[bool, list[str]]:
         """Whether a screenshot of ``size`` bytes is kept, and the files of earlier ones it displaces. A page's is
         kept while one place stays free for the end's; the end's is always kept, displacing the latest pages' to
         stay within the bytes."""
         with self._lock:
+            if self._shots_sealed:
+                # The sealed record names its screenshots: none of them may go, and none is added after.
+                return False, []
             used = sum(one["bytes"] for one in self._shots)
+            if size > shot_bytes:
+                # Larger than every screenshot together may be: never kept, never cut.
+                self._shots_capped = True
+                return False, []
             if when != "end":
                 if len(self._shots) + 1 < shots and used + size <= shot_bytes:
                     return True, []
@@ -185,6 +194,11 @@ class BrowserRecord:
                 dropped.append(gone["file"])
                 self._shots_capped = True
             return True, dropped
+
+    def seal_shots(self) -> None:
+        """The record is sealed: the screenshots it names are the trial's, and none is kept or displaced after."""
+        with self._lock:
+            self._shots_sealed = True
 
     def photographed(
         self, tab: str, *, when: str, url: str, file: str, size: int, artifact_id: str | None = None
@@ -513,6 +527,7 @@ class BrowserRecorder:
         """Write the record marked with ``nonce`` once every event the browser sent before now is in it."""
 
         def sealed(_answer: dict[str, Any]) -> None:
+            self.record.seal_shots()
             self.write(sealed=nonce)
 
         once = threading.Lock()
@@ -524,6 +539,7 @@ class BrowserRecorder:
             try:
                 self._command("Browser.getVersion", then=sealed)
             except Exception:  # noqa: BLE001 - no connection: nothing more can arrive, the record is as it is
+                self.record.seal_shots()
                 self.write(sealed=nonce)
 
         session = self._last_session
@@ -858,12 +874,13 @@ async def upload_screenshots(
     ids: list[str] = []
     lost = 0
     for one in evidence.get("screenshots") or []:
-        name = str((one or {}).get("file") or "")
-        path = shots_dir / name
-        if not name or Path(name).name != name or not path.is_file() or path.is_symlink():
+        row = one if isinstance(one, dict) else {}
+        data = _listed_shot(shots_dir, row)
+        if data is None:
+            # Listed in the record and not sendable whole, as named: not kept, and said.
+            lost += 1
             continue
         try:
-            data = path.read_bytes()[:SHOT_BYTES]
             stored = await adapter.upload_artifact(data, kind=ArtifactKind.SCREENSHOT, scenario_key=scenario_key)
         except Exception:  # noqa: BLE001 - a lost screenshot never fails the trial
             stored = None
@@ -874,6 +891,37 @@ async def upload_screenshots(
     if lost:
         notices.append(not_kept_notice(lost))
     return tuple(ids), notices
+
+
+def _listed_shot(shots_dir: Path, row: dict[str, Any]) -> bytes | None:
+    """A listed screenshot's bytes: a plain file in the folder, not through a link, no larger than a screenshot may
+    be, and the bytes its row names when it names any. None otherwise."""
+    name = str(row.get("file") or "")
+    if not name or Path(name).name != name:
+        return None
+    try:
+        fd = os.open(shots_dir / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = b""
+        while len(data) <= SHOT_BYTES:
+            piece = os.read(fd, SHOT_BYTES + 1 - len(data))
+            if not piece:
+                break
+            data += piece
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(data) > SHOT_BYTES:
+        return None
+    named = row.get("artifact_id")
+    if isinstance(named, str) and named != "sha256:" + hashlib.sha256(data).hexdigest():
+        return None
+    return data
 
 
 def not_kept_notice(lost: int) -> dict[str, str]:
