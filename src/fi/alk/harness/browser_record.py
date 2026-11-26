@@ -66,20 +66,19 @@ SECRET_AUTOFILL = frozenset(
     }
 )
 
-# The page's listener runs in a world of its own and only that world can call the binding. Both names are new for
-# each recorder, so a world the agent makes cannot share them; these are only their beginnings.
-LISTENER_WORLD = "alk-browser-record"
-BINDING = "alkBrowserRecord"
+# The page's listener runs in a world of its own and only that world can call the binding. Both names are random and
+# new at each attach, so a world the agent makes cannot share them, and neither says what it is.
 
 # A field is a secret field for the rest of the page's life once it has been one: a password, or a field whose
 # autofill names a password, a card's number, code or expiry, or a one-time code. Nothing here reads a field's value
 # except to report typing into a field that is not one.
 LISTENER = r"""
 (() => {
-  if (globalThis.__%(binding)s) return;
-  globalThis.__%(binding)s = true;
+  // The binding is taken into this closure and gone from the world's globals before any page script runs, so a
+  // client that finds this world through DevTools finds nothing in it to call. Gone, it also says this ran.
   const send = globalThis.%(binding)s;
   if (typeof send !== 'function') return;
+  delete globalThis.%(binding)s;
   const say = (row) => { try { send(JSON.stringify(row)); } catch (e) {} };
   const secret = new WeakSet();
   const secretFill = new Set(%(fill)s);
@@ -386,10 +385,7 @@ class BrowserRecorder:
         self._shot_seconds = shot_seconds
         self.sites = tuple(sites)
         self._secrets = tuple(secret_values)
-        # Its own names, never the fixed ones a world the agent makes could take.
-        self.listener_world = f"{LISTENER_WORLD}-{secrets.token_hex(16)}"
-        self.binding = f"{BINDING}_{secrets.token_hex(16)}"
-        self.listener = listener_for(self.binding)
+        self._name()
         self.record_path = record_path
         self.shots_dir = shots_dir_for(record_path)
         self._shot_limits = {"shots": shots, "shot_bytes": shot_bytes}
@@ -414,9 +410,17 @@ class BrowserRecorder:
         self._closed = threading.Event()
         threading.Thread(target=self._watch_seals, daemon=True).start()
 
+    def _name(self) -> None:
+        """New names for the listener's world and binding: random, never fixed ones a world the agent makes could
+        take, and saying nothing of what they are."""
+        self.listener_world = secrets.token_hex(16)
+        self.binding = f"b{secrets.token_hex(16)}"
+        self.listener = listener_for(self.binding)
+
     def attach(self, port: int) -> None:
         """Start a new record and attach to the browser on ``port``: a browser that knows no client yet."""
         self.detach()
+        self._name()
         self.record = BrowserRecord(self.sites, clock=self._clock, secret_values=self._secrets)
         self._tabs = {}
         self._urls = {}
