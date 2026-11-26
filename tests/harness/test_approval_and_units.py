@@ -154,6 +154,45 @@ def test_submitting_reads_each_tool_s_effect_from_its_entrypoint(tmp_path):
     assert "only reads" not in said("ledger.lookup")
 
 
+def test_an_approval_on_a_read_written_as_its_route_s_path_is_refused_too(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, save_catalogue
+    from fi.alk.harness.contract import ToolEntry
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class Ledger(GeneratedWorld):
+        name = "ledger"
+        tools = [{"name": "lookup"}, {"name": "update"}]
+        handle = "def handle(args, db):\n    return {}\n"
+        handlers = {"lookup": handle, "update": handle}
+
+    world = Ledger(":memory:")
+    world.connection.executescript("CREATE TABLE entry(id TEXT);")
+    save(world, tmp_path, notes="test", sequences=[])
+    save_catalogue(Catalogue(sub_goals=[]), tmp_path)
+    save_actors(tmp_path, ActorList(actors=[Actor(id="approver", name="Ari", permitted_actions=["approvals.change"])]))
+    contract = AgentContract(
+        agent="ledger",
+        tools=[ToolSpec(name="lookup"), ToolSpec(name="update")],
+        tool_entrypoints=[
+            ToolEntry(tool="lookup", mode="service", method="GET", endpoint="/ledger/lookup"),
+            ToolEntry(tool="update", mode="service", method="POST", endpoint="/ledger/update"),
+        ],
+    )
+    (tmp_path / "contract.json").write_text(contract.model_dump_json())
+    server, _ = scenario_tools(contract, tmp_path, tmp_path, wanted=1, can_save=False, start_from=[])
+    submit = next(one.handler for one in server.tools if one.name == "submit_scenario")
+
+    def said(action):
+        hold = {**HOLD, "action": action}
+        args = {"name": "s", "instruction": "x", "actors": [{"id": "approver"}], "faults": [hold]}
+        return asyncio.run(submit(args))["content"][0]["text"]
+
+    assert "only reads" in said("ledger/lookup")
+    assert "only reads" not in said("ledger/update")
+
+
 def _dispatcher_brief(tmp_path, goal: str) -> str:
     from fi.alk.harness.actor_dispatch import build_dispatcher
 
@@ -295,33 +334,31 @@ def test_a_timed_out_approver_s_fallback_decline_commits_on_the_request_s_record
 
 
 @pytest.mark.parametrize(
-    ("decision", "timeout", "verdict"),
+    ("decision", "said", "timeout", "verdict"),
     [
-        ({"outcome": "committed", "arguments": {"status": "approved"}}, None, "approved"),
-        # A record that says no, committed, is a refusal, whether written or set on a change.
-        ({"outcome": "committed", "arguments": {"status": "denied"}}, None, "refused"),
-        ({"outcome": "committed", "arguments": {"where": {"id": 1}, "set": {"decision": "Declined"}}}, None, "refused"),
-        # A decline the world refused still said no.
-        ({"outcome": "refused", "arguments": {"status": "declined"}}, None, "refused"),
-        # A record that carries no decision says nothing.
-        ({"outcome": "committed", "arguments": {"note": "seen"}}, None, None),
-        # A field whose value is no decision gives way to one that is.
-        ({"outcome": "committed", "arguments": {"status": "submitted", "approved": True}}, None, "approved"),
-        (None, {"fallback": "decline", "outcome": "declined"}, "refused"),
-        # A fallback taken for a silent actor says what its record says.
+        # The verdict is the one the actor gave, whatever its record holds.
+        ({"outcome": "committed", "arguments": {"status": "approved"}}, "approved", None, "approved"),
+        ({"outcome": "committed", "arguments": {"note": "seen"}}, "refused", None, "refused"),
+        # A decline the world refused is still the actor's refusal.
+        ({"outcome": "refused", "arguments": {"status": "declined"}}, "refused", None, "refused"),
+        # Words in a record's fields are never a verdict: unsaid by the actor, nothing says.
+        ({"outcome": "committed", "arguments": {"status": "denied"}}, None, None, None),
+        ({"outcome": "committed", "arguments": {"where": {"id": 1}, "set": {"decision": "Declined"}}}, None, None, None),
+        ({"outcome": "committed", "arguments": {"status": "submitted", "approved": True}}, None, None, None),
+        # Something outside the actor's verdicts is no verdict.
+        ({"outcome": "committed", "arguments": {}}, "maybe", None, None),
+        # A declining timeout refuses.
+        (None, None, {"fallback": "decline", "outcome": "declined"}, "refused"),
+        # A fallback action taken for a silent actor gives no verdict of its own, whatever its record holds.
         (
             {"outcome": "committed", "arguments": {"status": "declined"}},
-            {"fallback": "approvals.put", "outcome": "fallback_action"},
-            "refused",
-        ),
-        (
-            {"outcome": "committed", "arguments": {"note": "timed out"}},
+            None,
             {"fallback": "approvals.put", "outcome": "fallback_action"},
             None,
         ),
     ],
 )
-def test_an_approval_s_verdict_is_the_decision_its_record_carries(decision, timeout, verdict):
+def test_an_approval_s_verdict_is_the_actor_s_own_or_a_declining_timeout_s(decision, said, timeout, verdict):
     from fi.alk.harness.call_runner import approvals
 
     log = [{"actor_id": AGENT, "name": "request_cancellation", "action_id": "a1", "at": 1.0, "outcome": "committed"}]
@@ -331,7 +368,7 @@ def test_an_approval_s_verdict_is_the_decision_its_record_carries(decision, time
                     "parent_event_id": "a1", **decision})
         if timeout is None:
             decisions.append({"actor": "supervisor", "play": "mocked", "action": "approvals.put", "parent": "a1",
-                              "outcome": decision["outcome"], "verdict": None})
+                              "outcome": decision["outcome"], "verdict": said})
     if timeout is not None:
         decisions.append({"actor": "supervisor", "play": "timeout", "parent": "a1", "at": 2.0, **timeout})
     lines = approvals(log, decisions)
@@ -378,7 +415,8 @@ def test_units_and_time_zones_reach_the_trial_records_as_written():
 
 
 def test_an_approver_acting_on_two_actions_with_the_same_last_part_gets_each_verdict_from_its_own_action():
-    from fi.alk.harness.call_runner import _same_action, approvals
+    from fi.alk.harness.call_runner import approvals
+    from fi.alk.harness.world_door import named_alike as _same_action
 
     log = [
         {"actor_id": AGENT, "name": "request_refund", "action_id": "a1", "at": 1.0, "outcome": "committed"},

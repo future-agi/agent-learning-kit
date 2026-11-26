@@ -387,6 +387,18 @@ def test_a_placeholder_outside_the_closed_vocabulary_is_rejected(
         )
 
 
+def test_the_door_s_database_address_is_refused_to_any_process_but_the_door(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["DOOR_DB"] = "{{WORLD_DOOR_DATABASE_URL}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="unknown_placeholder.*the world's door's alone"):
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
+
+
 def test_a_port_placeholder_naming_an_unknown_process_is_rejected(
     tmp_path: Path,
 ) -> None:
@@ -1340,6 +1352,9 @@ _INTERNAL_ONLY_RUNTIME_CODES = frozenset(
         # Per-user isolation: a postgres engine whose store is not `template_database` cannot be
         # reached through a world's own role. The hosted generator writes no such bundle.
         "internal_world_database_unscoped",
+        # Per-user isolation: the image has no `nobody` account to run a bundle's SQL as. Every harness image
+        # has one, so this marks a broken image, not a bundle defect.
+        "internal_no_unprivileged_account",
     }
 )
 
@@ -1659,3 +1674,26 @@ def test_config_file_alias_is_admitted_only_for_declared_target_secret(tmp_path,
             preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)
     else:
         preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)
+
+
+def test_a_worker_channel_placeholder_needs_the_bundle_s_tool_proxy(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["REFUND_API_URL"] = "{{WORKER_CHANNEL_refund}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="needs this bundle's tool proxy"):
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_a_worker_channel_placeholder_is_accepted_beside_a_tool_proxy(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        # Only the name matters to the vocabulary: the bundle has a process called tool-proxy.
+        body["processes"][0]["name"] = "tool-proxy"
+        body["processes"][1]["depends_on"] = ["tool-proxy"]
+        body["capabilities"]["database"]["service"] = "tool-proxy"
+        body["processes"][1]["environment"]["REFUND_API_URL"] = "{{DATABASE_URL}}/w/{{WORKER_CHANNEL_refund}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    assert preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS) is None

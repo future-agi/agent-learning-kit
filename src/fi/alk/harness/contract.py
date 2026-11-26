@@ -12,6 +12,7 @@ rather than a bad contract reaching disk.
 from __future__ import annotations
 
 import collections.abc
+import hashlib
 import json
 import logging
 import os
@@ -20,7 +21,7 @@ import shlex
 import threading
 import typing
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 from pydantic.json_schema import SkipJsonSchema
@@ -37,6 +38,22 @@ from .observations import HttpObservation
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+# What an agent needs from the environment it runs in, beside how it is reached. One word today: a
+# browser agent is reached by chat and needs a browser. A list, so a later need adds a word.
+ENVIRONMENT_NEEDS = ("browser",)
+
+
+class HowItRuns(NamedTuple):
+    """How a person reaches the agent, and what it needs from its environment."""
+
+    reached_by: str
+    needs: frozenset[str]
+
+
+def how_it_runs(contract: "AgentContract") -> HowItRuns:
+    """The one answer to both questions a run asks of a contract. A contract stored before needs
+    existed has none, and is reached by its modality as it always was."""
+    return HowItRuns(contract.modality, frozenset(contract.environment_needs))
 
 
 def known_modalities() -> tuple[str, ...]:
@@ -119,6 +136,22 @@ _ALIASES = {
 }
 
 
+class RecordRefusal(BaseModel):
+    """One refusal a tool makes because of what a record holds, read from the tool's code or the service behind it:
+    the tool answers HTTP `status` when the record of `table` whose `column` equals the call's `argument` has `field`
+    set to one of `values` (at least one). The world a scenario is proved on gives
+    the same answer, so a reference that expects such a record to go through is refused there as it is live."""
+
+    status: int
+    table: str
+    column: str
+    argument: str
+    field: str
+    values: list[Any] = Field(default_factory=list)
+    # What the tool says when it refuses, as its code words it.
+    message: str = ""
+
+
 class ToolSpec(BaseModel):
     """One tool the agent really has.
 
@@ -174,12 +207,18 @@ class ToolSpec(BaseModel):
     arg_values: dict[str, Any] = Field(default_factory=dict)
     # The unit or format a field is written in, where the name alone does not say: `timeout` -> "milliseconds".
     arg_units: dict[str, str] = Field(default_factory=dict)
+    arg_required: list[str] = Field(default_factory=list)
+    arg_bounds: dict[str, dict[str, int | float]] = Field(default_factory=dict)
     # What the tool hands back, by output field: its type and, where the name does not say it, its unit or format.
     returns: dict[str, str] = Field(default_factory=dict)
     # The world's tables the tool reads, and the ones it adds to, changes or deletes from, declared from its code.
     # Empty means not recorded.
     tables_read: list[str] = Field(default_factory=list)
     tables_changed: list[str] = Field(default_factory=list)
+    # True when the tool touches no table of the world and no service: it keeps the agent's own session memory or
+    # computes from its arguments. Declared from its code, false when unsure; a proof records such a tool's step it
+    # cannot run rather than assuming it.
+    world_free: bool = False
     description: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
@@ -188,8 +227,39 @@ class ToolSpec(BaseModel):
     # What a scenario writer cannot see from the signature: refusals by value or by something outside
     # the agent's control, what a call changes or clears, and arguments taken from an earlier output.
     refuses: str = ""
+    # The refusals in `refuses` that turn on a record's own field, each as structure the world answers by.
+    refusals: list[RecordRefusal] = Field(default_factory=list)
     effects: str = ""
     inputs_from: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("arg_bounds", mode="before")
+    @classmethod
+    def _numeric_bounds(cls, value: Any) -> dict[str, dict[str, int | float]]:
+        if not isinstance(value, dict):
+            return {}
+        bounds: dict[str, dict[str, int | float]] = {}
+        for argument, bound in value.items():
+            if not isinstance(bound, dict):
+                continue
+            kept = {
+                side: bound[side]
+                for side in ("min", "max")
+                if isinstance(bound.get(side), (int, float))
+                and not isinstance(bound.get(side), bool)
+            }
+            if kept:
+                bounds[str(argument)] = kept
+        return bounds
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_fields(self, handler: Any) -> dict[str, Any]:
+        # A tool with none of these fields set writes the same bytes as before those fields existed, so no
+        # contract's fingerprint changes for it.
+        data = handler(self)
+        for field in ("arg_required", "arg_bounds", "world_free", "refusals"):
+            if not data.get(field):
+                data.pop(field, None)
+        return data
 
 
 class ToolEntry(BaseModel):
@@ -227,6 +297,32 @@ class ToolEntry(BaseModel):
     notes: str = ""
 
 
+# What a separate worker's id may hold: it names the worker's channel placeholder (`WORKER_CHANNEL_<id>`).
+_CHANNEL_WORKER_ID = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def rule_id(rule: str) -> str:
+    """A rule's stable id: `rule-` and the first 12 hex digits of the SHA-256 of its saved text (UTF-8). The same words
+    keep the same id across saves and versions; a reworded rule is another rule, linked by `replaced_by`."""
+    return "rule-" + hashlib.sha256(str(rule).encode("utf-8")).hexdigest()[:12]
+
+
+class AmendmentRecord(BaseModel):
+    """One change an amendment made to the contract, beside its line in `amendments`, for a reader that must not
+    parse that line: what changed (`kind`: rule, tool, modality, worker), which one (`key`: a rule's `rule_id`, a
+    tool's or worker's name, a modality), and how (`action`: added, removed, changed). A removed rule rewritten as
+    another names the new rule's id in `replaced_by`; the rule that replaced it names the old id in `previous` (a
+    modality names the one it changed from there). A rule's words are in `text`, since a removed rule is no longer
+    among the rules."""
+
+    kind: str
+    key: str
+    action: str
+    previous: str = ""
+    replaced_by: str = ""
+    text: str = ""
+
+
 class DeclaredWorker(BaseModel):
     """An agent the app hands work to, as its source declares it.
 
@@ -238,6 +334,14 @@ class DeclaredWorker(BaseModel):
     name: str = ""
     # The contract tools this worker holds, by name.
     tools: list[str] = Field(default_factory=list)
+    # The ones it may use, when that is narrower than what its code holds; empty means all of `tools`.
+    allowed_tools: list[str] = Field(default_factory=list)
+    # separate: its calls reach the world on its own channel (attributed, not isolated); shared: told apart from none.
+    binding: Literal["separate", "shared"] = "shared"
+    # For a separate worker, the environment variable its tool client reads as the base address of its tools.
+    address_env: str = ""
+    # The process that serves this worker alone, which the harness ends past its deadline; empty inside the app's one.
+    process: str = ""
 
 
 class PromptSource(BaseModel):
@@ -246,6 +350,16 @@ class PromptSource(BaseModel):
     path: str
     start_line: int
     end_line: int
+
+
+class RuleSource(BaseModel):
+    """Where one of the agent's rules is written in its material: the rule as `hard_constraints` holds it, the file
+    (relative to the source root, or an attached file's path) and the line quoted exactly. A case citing that line
+    rests on the rule as much as one citing the rule."""
+
+    rule: str
+    file: str
+    quote: str = Field(max_length=500)
 
 
 class ModelSource(BaseModel):
@@ -822,6 +936,22 @@ def validate_runtime_resource_paths(config_files, directories):
             raise ValueError("runtime_resources_overlap")
 
 
+class RuntimeToolService(BaseModel):
+    """A separate HTTP server the source ships to answer the agent's tools, started beside a native runtime."""
+
+    command: list[str] = Field(
+        min_length=1,
+        max_length=64,
+        description="Source-declared argv that starts the tools server, run from workdir. Never invent a command.",
+    )
+    workdir: str = Field(default="", description="Repository-relative directory the command runs from.")
+    port: int = Field(ge=1, le=65535, description="The port the command listens on, as the source declares it.")
+    url_environment: str = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="The environment variable the agent reads the tools server's base URL from.",
+    )
+
+
 class Runtime(BaseModel):
     """What it takes to run the agent's code."""
 
@@ -890,6 +1020,11 @@ class Runtime(BaseModel):
     # prompt. Empty is valid for voice/browser agents and for contracts that are not backed by a
     # repository.
     interface: RuntimeInterface | None = None
+    tool_service: RuntimeToolService | None = Field(
+        default=None,
+        description="For native execution only: the separate HTTP server the source ships for the agent's tools, "
+        "when the agent's command does not start it. A Compose selection starts its own services instead.",
+    )
 
     # The folder of the repository this agent lives in. The harness records it when the
     # contract is saved, so it is kept out of the schema the model writes against and out of
@@ -913,6 +1048,9 @@ class Runtime(BaseModel):
         data = handler(self)
         if not data.get("source_subfolder"):
             data.pop("source_subfolder", None)
+        # A runtime with no tools server of its own writes the same bytes as before the field existed.
+        if data.get("tool_service") is None:
+            data.pop("tool_service", None)
         return data
 
     @model_validator(mode="after")
@@ -999,7 +1137,10 @@ class Runtime(BaseModel):
             )
         if self.service and not self.compose_file:
             raise ValueError("runtime_selection_incomplete: service needs compose_file")
-        for path in (self.compose_file, self.dockerfile, *self.compose_overrides):
+        if self.tool_service is not None and (self.execution == "compose" or self.compose_file or self.service):
+            raise ValueError("runtime_tool_service_requires_native: a Compose selection starts its own services")
+        tool_workdir = (self.tool_service.workdir,) if self.tool_service is not None else ()
+        for path in (self.compose_file, self.dockerfile, *self.compose_overrides, *tool_workdir):
             if path and (path.startswith("/") or ".." in path.split("/")):
                 raise ValueError(
                     "runtime_selection_path_invalid: use a repository-relative path"
@@ -1210,6 +1351,10 @@ class AgentContract(BaseModel):
     agent: str = ""
     one_liner: str = ""
     modality: str = "chat"
+    # Set by the save, never by the reading's own words: what the agent needs from its environment
+    # (`ENVIRONMENT_NEEDS`). The save sets `browser`, with modality chat, for an agent read as
+    # driving a web browser.
+    environment_needs: list[str] = Field(default_factory=list)
     # Voice only: whether this agent places calls or answers them. Chat is always started by the
     # person, so it stays inbound. It changes how the simulated person is briefed, not who speaks
     # first: an outbound agent still greets, it just has to say who it is and why it called.
@@ -1224,9 +1369,18 @@ class AgentContract(BaseModel):
     # the quote given for it. The quote went out instead, or, when the quote was too short to
     # stand for the prompt, the lines did, unconfirmed. Empty for nearly every contract.
     unconfirmed_prompt_from: list[PromptSource] = Field(default_factory=list)
+    # Set by the save, never by the reading: true only when the save replaced the excerpt by
+    # code, either with the lines in system_prompt_from, copied from the source as written, or,
+    # with system_prompt_from empty, with a provider's whole prompt from its own definition.
+    # Without it the excerpt is a quote that may leave text out, and the built-in suite evals do
+    # not grade on it. Copied lines are as written, not complete: they are the ones the reading
+    # named.
+    system_prompt_copied: bool = False
     # None is unknown. Kept only when its name was found on the line cited in the source.
     model: ModelSource | None = None
     hard_constraints: list[str] = Field(default_factory=list)
+    # For a rule read from a file of the agent's material, where it is written. Kept for a rule's earlier wordings too.
+    rule_sources: list[RuleSource] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     # Empty for an agent that hands no work to other agents.
     workers: list[DeclaredWorker] = Field(default_factory=list)
@@ -1260,6 +1414,8 @@ class AgentContract(BaseModel):
     # the agent verifiably is, so when the harness widens it the difference is recorded rather
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
+    # The same changes as records (`AmendmentRecord`), in order: what changed, which one, and how.
+    amendment_records: list[AmendmentRecord] = Field(default_factory=list)
     instrumentation: str = "none"
 
     @model_serializer(mode="wrap")
@@ -1272,7 +1428,21 @@ class AgentContract(BaseModel):
         # The same for the record of unconfirmed prompt lines, kept only when there are some.
         if not data.get("unconfirmed_prompt_from"):
             data.pop("unconfirmed_prompt_from", None)
+        # And for whether the prompt was copied, kept only when it was.
+        if not data.get("system_prompt_copied"):
+            data.pop("system_prompt_copied", None)
+        if not data.get("amendment_records"):
+            data.pop("amendment_records", None)
+        if not data.get("rule_sources"):
+            data.pop("rule_sources", None)
+        # And for what the agent needs from its environment: only a browser agent has any.
+        if not data.get("environment_needs"):
+            data.pop("environment_needs", None)
         return data
+
+    def rule_source(self, rule: str) -> RuleSource | None:
+        """Where `rule` is written in the agent's material, when that was recorded."""
+        return next((one for one in reversed(self.rule_sources) if one.rule == rule), None)
 
     @model_validator(mode="after")
     def _resolvable_workers(self) -> AgentContract:
@@ -1321,9 +1491,25 @@ class AgentContract(BaseModel):
                     f"\n      {label}: {text}"
                     for label, text in (
                         ("refuses", tool.refuses),
+                        (
+                            "refused by its record",
+                            "; ".join(
+                                f"{one.status} when the {one.table} record whose {one.column} is {one.argument} has "
+                                f"{one.field} in {json.dumps(one.values)}"
+                                for one in tool.refusals
+                            ),
+                        ),
                         ("effects", tool.effects),
                         ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
                         ("units", ", ".join(f"{arg} in {unit}" for arg, unit in sorted(tool.arg_units.items()))),
+                        ("required", ", ".join(tool.arg_required)),
+                        (
+                            "limits",
+                            ", ".join(
+                                f"{arg} " + " ".join(f"{side} {bound[side]}" for side in ("min", "max") if side in bound)
+                                for arg, bound in sorted(tool.arg_bounds.items())
+                            ),
+                        ),
                         ("returns", ", ".join(f"{field}: {kind}" for field, kind in tool.returns.items())),
                         ("reads tables (declared)", ", ".join(tool.tables_read)),
                         ("changes tables (declared)", ", ".join(tool.tables_changed)),
@@ -1395,9 +1581,18 @@ class AgentContract(BaseModel):
             )
         if self.workers:
             parts.append(
-                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                "WORKERS (agents this one hands work to, and the tools each holds). Each one whose work the world can "
+                "show gets its own checks: a sub-goal with `subject: worker:<id>` (see 'When the agent hands work to "
+                "workers'):\n  - "
                 + "\n  - ".join(
                     f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    + (
+                        f"; may use only {', '.join(one.allowed_tools)}"
+                        if one.allowed_tools and set(one.allowed_tools) != set(one.tools)
+                        else ""
+                    )
+                    + ("; its own channel to the world" if one.binding == "separate" else "")
+                    + f"; its checks take subject worker:{one.id}"
                     for one in self.workers
                 )
             )
@@ -1407,6 +1602,13 @@ class AgentContract(BaseModel):
             parts.append(
                 "REAL USE CASES (what this agent is actually for):\n  - "
                 + "\n  - ".join(self.real_use_cases)
+            )
+        if self.amendments:
+            parts.append(
+                "CHANGED SINCE THE AGENT WAS READ (these win over THE AGENT'S OWN PROMPT: a use "
+                "case or rule removed here is not tested, and a rule reworded here is tested as "
+                "reworded, even where the prompt still says otherwise):\n  - "
+                + "\n  - ".join(self.amendments)
             )
         if self.tool_entrypoints:
             parts.append(
@@ -1499,6 +1701,7 @@ FREE_TEXT = (
     "AgentContract.notes",
     "AgentContract.open_questions",
     "AgentContract.amendments",
+    "AmendmentRecord.text",
     "ToolSpec.description",
     "ToolSpec.refuses",
     "ToolSpec.effects",
@@ -1513,12 +1716,25 @@ FREE_TEXT = (
 # own right. A name without a dot is a whole technical model, every field of it kept.
 KEPT_AS_WRITTEN = (
     "AgentContract.agent",
+    "AgentContract.amendment_records",
+    "AmendmentRecord.kind",
+    "AmendmentRecord.key",
+    "AmendmentRecord.action",
+    "AmendmentRecord.previous",
+    "AmendmentRecord.replaced_by",
     "AgentContract.modality",
+    "AgentContract.environment_needs",
     "AgentContract.call_direction",
     "AgentContract.agent_languages",
     "AgentContract.conversational",
     "AgentContract.system_prompt_from",
     "AgentContract.unconfirmed_prompt_from",
+    "AgentContract.system_prompt_copied",
+    # Where a rule is written: the rule, the file and its line as quoted, matched against the cases' citations.
+    "AgentContract.rule_sources",
+    "RuleSource.rule",
+    "RuleSource.file",
+    "RuleSource.quote",
     # The model name the code cites, with its file and line: read as written, like the prompt lines.
     "AgentContract.model",
     "AgentContract.tools",
@@ -1540,6 +1756,11 @@ KEPT_AS_WRITTEN = (
     "DeclaredWorker.id",
     "DeclaredWorker.name",
     "DeclaredWorker.tools",
+    # Tool names, a binding kind, an environment variable's name and a process name: read as written.
+    "DeclaredWorker.allowed_tools",
+    "DeclaredWorker.binding",
+    "DeclaredWorker.address_env",
+    "DeclaredWorker.process",
     "ToolSpec.name",
     "ToolSpec.args",
     "ToolSpec.arg_types",
@@ -1548,12 +1769,26 @@ KEPT_AS_WRITTEN = (
     "ToolSpec.arg_units",
     # The world answers with these as written.
     "ToolSpec.arg_values",
+    "ToolSpec.arg_required",
+    "ToolSpec.arg_bounds",
     "ToolSpec.requires",
     "ToolSpec.inputs_from",
     # Names of the world's tables, matched against the tables a proof run changed
     # (tool_certification) and against the world's schema.
     "ToolSpec.tables_read",
     "ToolSpec.tables_changed",
+    # A flag a proof reads to record, not assume, a step it cannot run (`prove.recordable_tools`).
+    "ToolSpec.world_free",
+    # The world answers a call by these as written: a status, a record's table, columns and values, and the message
+    # the tool's code gives.
+    "ToolSpec.refusals",
+    "RecordRefusal.status",
+    "RecordRefusal.table",
+    "RecordRefusal.column",
+    "RecordRefusal.argument",
+    "RecordRefusal.field",
+    "RecordRefusal.values",
+    "RecordRefusal.message",
     "ToolEntry.tool",
     "ToolEntry.mode",
     "ToolEntry.module",
@@ -1592,6 +1827,9 @@ KEPT_AS_WRITTEN = (
     "LocalHttpAuth",
     "RuntimeHttpFailureRule",
     "RuntimeHttpSetupRequest",
+    # The source's own tools server: an argv, a directory, a port and an environment variable's name, all
+    # started and read as written.
+    "RuntimeToolService",
     # The live SSE endpoint's rules (fi.simulate): a JSON path, a mode and the values a frame is
     # matched against, all compared with the frames as written.
     "HTTPStreamSpec",
@@ -1872,6 +2110,12 @@ def validate_contract(contract: AgentContract) -> list[str]:
     problems: list[str] = []
     if not contract.agent.strip():
         problems.append("empty:agent")
+    for need in contract.environment_needs:
+        if need not in ENVIRONMENT_NEEDS:
+            problems.append(f"environment_needs:unknown:{need}")
+    if "browser" in contract.environment_needs and contract.modality != "chat":
+        # A browser agent is reached as a chat agent is.
+        problems.append(f"environment_needs:browser-needs-chat:{contract.modality}")
     for dependency in contract.dependencies:
         if dependency.reached.dsn_env in {"LIVEKIT_URL", "LIVEKIT_INFERENCE_URL"}:
             problems.append(
@@ -1897,11 +2141,44 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
+        if tool.world_free and (tool.tables_read or tool.tables_changed):
+            problems.append(
+                f"tool[{tool.name}]:world-free-but-touches-tables:{','.join([*tool.tables_read, *tool.tables_changed])}"
+                " - a tool that reads or changes a table of the world is not world_free"
+            )
         unknown_units = sorted(set(tool.arg_units) - set(tool.args))
         if unknown_units:
             problems.append(
                 f"tool[{tool.name}]:units-for-unknown-args:{','.join(unknown_units)}"
             )
+        unknown_required = sorted(set(tool.arg_required) - set(tool.args))
+        if unknown_required:
+            problems.append(
+                f"tool[{tool.name}]:required-unknown-args:{','.join(unknown_required)}"
+            )
+        unknown_bounds = sorted(set(tool.arg_bounds) - set(tool.args))
+        if unknown_bounds:
+            problems.append(
+                f"tool[{tool.name}]:bounds-for-unknown-args:{','.join(unknown_bounds)}"
+            )
+        inverted = sorted(
+            arg
+            for arg, bound in tool.arg_bounds.items()
+            if "min" in bound and "max" in bound and bound["min"] > bound["max"]
+        )
+        if inverted:
+            problems.append(
+                f"tool[{tool.name}]:bounds-min-above-max:{','.join(inverted)}"
+            )
+        for refusal in tool.refusals:
+            if refusal.argument not in tool.args:
+                problems.append(f"tool[{tool.name}]:refusal-on-unknown-arg:{refusal.argument}")
+            if not (refusal.table.strip() and refusal.column.strip() and refusal.field.strip()):
+                problems.append(f"tool[{tool.name}]:refusal-needs-table-column-and-field")
+            if not refusal.values:
+                problems.append(f"tool[{tool.name}]:refusal-needs-the-values-that-refuse")
+            if not 400 <= refusal.status < 600:
+                problems.append(f"tool[{tool.name}]:refusal-status-not-an-http-error:{refusal.status}")
     # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
     # cardinality alone is not evidence that authoring omitted something.
     if not contract.real_use_cases:
@@ -1932,6 +2209,35 @@ def validate_contract(contract: AgentContract) -> list[str]:
                 f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
                 "one that no other worker has."
             )
+        beyond = sorted(set(worker.allowed_tools) - set(worker.tools))
+        if beyond:
+            problems.append(
+                f"worker[{index}]:allowed-tools-it-does-not-hold:{','.join(beyond)}: a worker may be allowed "
+                "only tools it holds."
+            )
+        if worker.binding == "separate" and worker.id.strip():
+            # A separate worker reaches the world through its own channel, named from its id and its address variable.
+            if not _CHANNEL_WORKER_ID.fullmatch(worker.id):
+                problems.append(
+                    f"worker[{index}]:id-not-usable-for-a-channel:{worker.id}: a separate worker's id may hold only "
+                    "letters, digits, '_', '.' and '-'."
+                )
+            if not worker.address_env.strip():
+                problems.append(
+                    f"worker[{index}]:separate-without-address-env: name the environment variable its tool client "
+                    "reads as the base address of its tools, or record it as shared."
+                )
+    addresses = [
+        worker.address_env.strip()
+        for worker in contract.workers
+        if worker.binding == "separate" and worker.address_env.strip()
+    ]
+    shared_address = sorted({one for one in addresses if addresses.count(one) > 1})
+    if shared_address:
+        problems.append(
+            f"duplicate-worker-address-env:{','.join(shared_address)}: two separate workers cannot read one address "
+            "variable, or the world cannot tell them apart; record them as shared or give each its own variable."
+        )
     worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
     repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
     if repeated:

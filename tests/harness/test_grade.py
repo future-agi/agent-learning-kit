@@ -232,6 +232,28 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
         assert "2 of 2 written" in said["content"][0]["text"]
 
 
+def test_the_cap_counts_the_scenarios_already_on_disk(tmp_path):
+    """A session that starts from what is saved counts it towards the cap."""
+    import asyncio
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools, write_scenarios
+
+    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    (tmp_path / "manifest.json").write_text("{}")
+    write_scenarios(
+        [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(2)], tmp_path
+    )
+
+    server, kept = scenario_tools(contract, tmp_path, tmp_path, wanted=2)
+    submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+    said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
+
+    assert len(kept) == 2
+    assert said.get("is_error")
+    assert "2 of 2 written" in said["content"][0]["text"]
+
+
 def test_only_chat_can_grow_a_finished_suite(tmp_path):
     """Chat reopens a finished suite with its size as the target, and "add N" goes through aim_for.
 
@@ -424,6 +446,19 @@ def test_a_judged_reason_needs_its_labelled_criteria():
         ),
     )
     assert validate_sub_goal(about_words) == []
+    # A situation only the caller's path kept away has nothing to grade: not applicable, never a free pass.
+    nothing_declined = SubGoal(
+        name="refusal_explained",
+        what="the agent said why it could not do it",
+        judged=about_words.judged.replace("Pass, because nothing was declined", "Not applicable, nothing was declined"),
+    )
+    assert validate_sub_goal(nothing_declined) == []
+    unsaid = SubGoal(
+        name="refusal_explained",
+        what="the agent said why it could not do it",
+        judged=about_words.judged.replace("Pass, because nothing was declined", "nothing was declined"),
+    )
+    assert "Not applicable, Pass or Fail" in validate_sub_goal(unsaid)[0]
 
     settled = SubGoal(
         name="fare_not_zeroed",
@@ -542,3 +577,41 @@ def test_a_scenario_with_one_sub_goal_is_kept():
     catalogue = Catalogue(sub_goals=[SubGoal(name="change_made_as_asked", what="the change", judged="j")])
     one = Scenario(name="makes_a_change", instruction="Ask for a change.", sub_goals=["change_made_as_asked"])
     assert not any("sub-goal" in line for line in validate_scenario(one, catalogue, {}))
+
+
+def test_a_sub_goal_can_check_one_declared_worker_and_never_an_undeclared_one(tmp_path):
+    import asyncio
+
+    import fi.alk.harness.scenario_tools as st
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(
+        agent="returns", real_use_cases=["refund"], tools=[{"name": "issue_refund"}],
+        workers=[{"id": "refund", "tools": ["issue_refund"]}],
+    )
+    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=1)
+    add = next(spec for spec in server.tools if spec.name == "add_sub_goal")
+    check = (
+        "def check(world, calls):\n"
+        "    ok = [c for c in calls if c.name == 'issue_refund' and c.ok and c.arguments.get('order_id') == '1043']\n"
+        "    return None if ok else 'order 1043 was not refunded'\n"
+    )
+    said = asyncio.run(add.handler({"name": "refund_issued", "what": "the refund worker refunds", "check": check,
+                                    "subject": "worker:refund"}))
+    assert not said.get("is_error"), said
+    assert load_catalogue(tmp_path).sub_goals[0].subject == "worker:refund"
+    refused = asyncio.run(add.handler({"name": "audit", "what": "audits", "check": check, "subject": "worker:audit"}))
+    assert refused.get("is_error") and "subject_unknown_worker: audit" in refused["content"][0]["text"]
+
+
+def test_a_scenario_writer_and_an_editor_can_set_a_worker_budget(tmp_path):
+    import fi.alk.harness.scenario_tools as st
+    from fi.alk.harness.contract import AgentContract
+
+    server, _kept = st.scenario_tools(AgentContract(agent="returns", real_use_cases=["refund"]), tmp_path, tmp_path, wanted=1)
+    tools = {spec.name: spec for spec in server.tools}
+    for name in ("submit_scenario", "edit_scenario"):
+        shapes = tools[name].input_schema["properties"]["worker_budget_seconds"]["anyOf"]
+        # One number for all workers, or a number per named worker.
+        assert [shape["type"] for shape in shapes] == ["integer", "object"]

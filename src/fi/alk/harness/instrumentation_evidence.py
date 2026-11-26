@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 from typing import Iterable
 
-from .python_source import EscapeBudget, ParseBudget, parsed, read_module
+from .import_lines import import_lines
+from .python_source import EscapeBudget, ParseBudget, parsed_or_syntax_error, read_module
 from .source_folder import is_within
 
 _SKIPPED_DIRECTORIES = {
@@ -100,8 +101,15 @@ def _read_imports(
         return
     # An import and `python file.py` can read a crafted file two ways: each reading on its own.
     for reading in (text, *also):
-        if budget.spend(reading) and (tree := parsed(reading)) is not None:
+        if not budget.spend(reading):
+            continue
+        tree = parsed_or_syntax_error(reading)
+        if isinstance(tree, ast.Module):
             imported.update(_imports(tree))
+        elif isinstance(tree, SyntaxError):
+            # A file the kit's own Python can't parse still imports what it imports: the line
+            # search reads its absolute imports, so tracing there is not missed.
+            imported.update(name for level, name in import_lines(reading) if not level)
 
 
 def _imports(tree: ast.AST) -> set[str]:

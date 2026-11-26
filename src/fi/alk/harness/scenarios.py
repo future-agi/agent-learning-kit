@@ -62,7 +62,7 @@ TURNS_EACH = 9
 TURNS_FLOOR = 120
 # One writer's own ceiling, so a single slice cannot spend the whole stage budget.
 WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
-WRITER_TOOLS = ("inspect_world", "try_calls", "try_check", "add_sub_goal", "submit_scenario")
+WRITER_TOOLS = ("inspect_world", "try_calls", "try_check", "add_sub_goal", "names_taken", "submit_scenario")
 # Withheld from a loop that hands the suite out.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 # Above this, the loop hands the suite out instead of writing it. Zero: always.
@@ -107,9 +107,9 @@ def writer_worker(
     return {
         WRITER: WorkerSpec(
             description=(
-                "Writes and proves part of a scenario suite in its own session. Brief it with "
-                "which use cases and situations to cover, how many scenarios, and what makes "
-                "them different from what the other writers were given.\n\n"
+                "Writes and proves part of a scenario suite in its own session. Brief it with the "
+                "cells it writes, what each means and how many, and a short summary of the suite; "
+                "never the cases already written.\n\n"
                 "**Brief it fifteen to twenty scenarios, never two or three.** A writer reads the "
                 "world once and then writes its whole slice, so that reading is paid once per "
                 "writer whatever the slice is worth. Measured on a hundred-scenario run: 45 "
@@ -144,11 +144,11 @@ def writer_worker(
                     "say so in your report instead and it will be done for you."
                 )
                 + "\n\n## Your part of the suite\n\nYou are one writer among several working "
-                "on the same suite at the same time. Your brief names what the others were "
-                "given; that list is there so you can stay out of theirs, not so you can "
-                "cover it. Write only what your own brief names: a scenario that strays is "
-                "either a duplicate of somebody else's or a gap in yours. The names already "
-                "taken come back with every submission.\n\n"
+                "on the same suite at the same time. Your brief names the cells of the plan that are "
+                "yours and how many to write in each; write only those, and pass `deal` on "
+                "submit_scenario only if your brief names one. The summary in your brief is all you need of the "
+                "rest of the suite; submit_scenario refuses a caller name already taken, so check the names "
+                "you mean to give with names_taken before you write the cases.\n\n"
                 "Each scenario carries its use case verbatim and its own one-line `branch` "
                 "saying what makes it different from the others you write here. **Branches are "
                 "where the variety lives**: the branch that cannot be completed, the rule under "
@@ -197,8 +197,8 @@ def writer_worker(
                 "asking for, setting a condition on, confirming or deciding the person's request\n"
                 "  - a setup that makes true whatever the instruction presumes, and a ready "
                 "check that proves it\n"
-                "  - a solution worked out with try_calls first, so the gates are not where you "
-                "find out it cannot be passed\n"
+                "  - a solution worked out with try_calls first, and its checks run on it with try_check "
+                "before you submit, so the gates are not where you find out it cannot be passed\n"
                 "  - sub-goals named from the shared catalogue, and checks that assert the right "
                 "call with the right arguments or the right end state, never that something "
                 "merely happened\n"
@@ -319,7 +319,9 @@ def open_stage(
             f"{most_a_writer_can_write} scenarios: brief it more and it runs out mid-slice and "
             f"the rest of its cells come back empty. And at most {at_once} writers run at once; "
             f"a brief beyond that is refused and has written nothing.\n\n"
-            f"Brief a whole round in ONE message: sub-agents briefed in the same message run at "
+            f"Do not deal rounds with suite_progress `deal`: dealing is held until a deal's brief carries "
+            f"the records the agent's tools can read. Brief your writers yourself, with the records they "
+            f"may use. Brief a whole round in ONE message: sub-agents briefed in the same message run at "
             f"the same time, and briefing one, waiting for it, then briefing the next runs them "
             f"one at a time for no reason. That single choice is the difference between a large "
             f"suite taking one writer's time and taking {at_once} times as long. Each brief names "

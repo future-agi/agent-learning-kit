@@ -78,13 +78,75 @@ not exist, or — the one that mattered most in practice — *every* tool having
 means the arguments were read and then not recorded. Problems are returned **into the
 conversation**, so the model corrects and resubmits rather than a bad contract landing.
 
-A browser reading gets one second look first, naming any browser, crawling or
-computer-use tool the code check found in the source. So does a chat or voice reading of source
-where the check found one, or where the check stopped before reading all of it. The next
-submission stands: a browser answer is refused to
-`failure.json` and the build exits 78, and a chat or voice answer is saved. The look gives a value
-to send back, which only tells apart calls in one model message: those run before the model reads
-any result. The rule and its state are `SecondLook` in `agent_type_check.py`. A browser answer to a chat or voice look is refused at once, since that look said browser stops the build. When calls in one message run one after another, or together once the first scan is done, a later call is taken as the answer before the model has read the look. Once an answer with the value has come back, a later browser answer without it gets a look again, so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic job read unattended), never a refusal without a look.
+The reading answers one of three kinds where an agent's main job is work rather than a
+conversation: `browser` (it drives a web browser with a browser library), `computer_use` or `cua`
+(it acts through a screen) and `crawler` (it fetches pages by rule). A mixed answer is refused if
+any part of it is a refused kind. Any of the three gets one second look first, naming any browser,
+crawling or computer-use tool the code check found in the source, and which kind each belongs to
+where some differ from the answer. So does a chat or voice reading of source where the check found
+one, or where the check stopped before reading all of it. The next submission stands: a
+`computer_use` or `crawler` answer is refused to `failure.json` (`agent_type_unsupported`, its
+kind in `details.agent_type`) and the build exits 78; a `browser` answer is saved as modality
+`chat` with `environment_needs: ["browser"]`; a chat or voice answer is saved as it is. The gate
+alone sets `environment_needs`: a value the model writes itself is dropped. `how_it_runs` in
+`contract.py` answers how an agent is reached and what it needs.
+
+The look gives a value to send back, which only tells apart calls in one model message: those run
+before the model reads any result. The rule and its state are `SecondLook` in
+`agent_type_check.py`. An answer to a chat or voice look stands at once, since that look said what
+each kind leads to. When calls in one message run one after another, or together once the first
+scan is done, a later call is taken as the answer before the model has read the look. Once an
+answer with the value has come back, a later answer of another kind without it gets a look again,
+so answers that keep switching cost turns, up to the reading's turn limit (70, or 140 for a generic
+job read unattended), never a refusal without a look. Once a browser answer stands, in this
+reading or in the contract it starts over, a later chat or voice answer would quietly take the
+browser away, so it gets a look of its own even when nothing was found; only the value of a look
+given after the browser answer counts, and the need goes only with that look's answer.
+
+A reading never refuses a browser agent for want of a browser: a reading knows no job. A build
+does, with `browser_environment_required` (exit 78), when the contract needs a browser and the
+job's `metadata.browser_allowed_sites` is absent. It checks at the build command's start (a
+contract already on disk, else an accepted seed that matches the job), between the reading and the
+environment in the staged run, and when the hosted build first sees a saved contract
+(`browser_environment.py`). The list itself is read strictly: present, it must be a non-empty list
+of host names (`browser_allowed_sites_invalid`), each one the run's egress allows when the job
+controls egress (`browser_site_not_in_egress`).
+
+**A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
+it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the
+reminder's. The platform sets it in `ALK_READING_MAX_MODEL_CALLS`; a missing, unreadable or
+non-positive value means 60, never no limit. Its reader gets 12 turns of its own, and at most 4
+readers run at once. The Gemini backend checks the budget before each call and sends nothing past
+it. On both, the call that reaches the budget is inside it and finishes what it asked for, a save
+included. The Claude backend can only count calls as they arrive, one per provider message id, so
+the reading stops when it sees the first call past the budget, the same way it stops at its time
+limit, and refuses that call's tools. It ends up to 5 calls past the budget: that call, and one for
+each reader still running. Either way a contract or failure already saved stands; otherwise the
+reading ends as `agent_reading_call_limit` and is not retried.
+
+What is counted differs by backend. The Gemini count is of calls made. The Claude count is of
+replies seen in the session's stream, plus each reader's closing reply the stream did not show. The
+CLI may hand that reply back only as the result of the call that sent the reader out, so each such
+result counts one more call unless the stream shows there was none: the reader was refused or
+failed, its last call in the stream asked for no tool (that call was its answer), or its calls in
+the stream reached the turn limit the kit set for it. The result's own text and status are not
+read. Readers are followed by the call that sent each out, never by the worker's name, since several
+readers of one worker run at once. When a reader's turn limit is not known, the result counts one
+call and a warning is logged, so a change in the CLI can make the count high but never quietly low.
+
+Still not counted on Claude, because the CLI makes these calls without putting a reply in the
+stream or anywhere else the kit can read, and offers no hook before a call:
+- the one call per session it makes for a title of its own, so the gateway shows the kit's count
+  plus one;
+- its own retry after a failed request;
+- its second call when a sub-agent's answer comes back empty: it asks again, once, and neither
+  empty reply reaches the stream, so the sub-agent's result counts one call, not two;
+- its summary call when it compacts a long conversation.
+
+Each is bounded by the counted calls around it, and the time limit holds the rest.
+A request the provider client retries on its own is not counted on either backend. The spend
+record keeps the limit in force (`call_limit`) beside the calls counted, for every stage that had
+one.
 
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
@@ -95,6 +157,17 @@ agent and what came from us:
 - `fix_tool` — correct argument names, types, description, or remove a tool that does not exist
 
 Each demands a `why`. A contract that can be rewritten invisibly is no longer evidence.
+
+**Where the save's file checks run** (`save_checker.py`). Every `contract_tools(...)` call that
+has a `source_root` or a `scan_root` reads the customer's files in a child process, started
+through a fork server, so a hostile tree can be cut at the save's deadline and its memory
+capped. That child imports the parent's `__main__` module before it serves. A script that calls
+the kit at top level, without an `if __name__ == "__main__":` guard, is therefore run a second
+time inside the child (model calls included). Its own nested start fails and falls back, and it doesn't
+serve until the script's top level returns. After 15 s the parent kills it and runs that
+call's checks in its own process from then on, with no deadline cut and no memory cap. Put
+the kit's calls under the guard. A script that cannot take the guard sets
+`ALK_SAVE_CHECKS=thread`, which runs the checks in the parent's own process, as before.
 
 ---
 
@@ -269,6 +342,28 @@ always succeed, including removing an item that was never added"*, *"mock respon
 argument"*, *"world state does not change unless a scenario sets `state_updates`"* — are all the
 same defect, and a world that really holds rows and can really refuse answers all three.
 
+### Worker events
+
+Every row of a call's sealed tool trace carries `worker_events`: what the row means for the app's
+workers, in one shape whatever the framework (`world/runtime.py::worker_events`). A row gives one
+event, or two for a hand-off whose worker came back.
+
+| Field | Meaning |
+|---|---|
+| `type` | `tool_call`, `delegated` (work handed to a worker), `transferred` (control passed; nothing returns) or `returned` |
+| `id` | The event's id; a `returned` event shares its hand-off's id |
+| `worker_id` | The worker that made the tool call, or the worker handed the work: the contract's worker id when the name the framework gives it matches a declared worker's `name`, else that name; `null` when the runtime did not say |
+| `worker_name` | The name the runtime gave that worker, as it gave it |
+| `by`, `by_name` | Hand-offs and returns only: the worker that handed the work over, as `worker_id` and `worker_name` |
+| `parent_id` | The `id` of the hand-off this event ran in; empty at the top level or when unknown |
+| `relationship` | `observed` when the runtime's record links the event to `parent_id`, otherwise `unknown` |
+| `tool` | The tool call's name, or the name of the call that made the hand-off |
+| `at` | When it started (a `returned` event: when the worker came back), seconds since the epoch |
+| `ended_at`, `status` | Tool calls: when the call ended (`null` if unknown) and `ok`, `error` or `refused`; `returned` events carry `status` too |
+
+A hand-off still out when the call ended has no `returned` event. Runs sealed before this field
+existed do not have it.
+
 ---
 
 ## What is exact, and what is judgement
@@ -358,6 +453,13 @@ provider configuration and initialization requests from source and verify a real
 chat. Secret values, vault references, simulator credential names, and arbitrary
 connection settings are not included in this briefing. The backing model preference
 does not replace `runtime.interface.model`, which may identify an application profile.
+
+The model gateway routes a target model unless it is one of OpenAI's own model families
+(`gpt`, `chatgpt`, `o1` to `o9`, `text-embedding`, `codex`, `davinci`, `babbage`,
+`whisper`, `tts`, `dall-e`, `omni-moderation`, `computer-use`, or an `ft:` fine-tune).
+A routed model gets the Agents SDK's chat-completions mark and guidance.
+`agent.config.direct_model_names` lists other bare names that stay direct, such as an
+Azure OpenAI deployment name (`prod-gpt4o`) the agent sends to Azure itself.
 
 `runtime.extras` selects optional dependency groups declared in the selected Python
 project. For a uv workspace root, a group absent from the root must have exactly

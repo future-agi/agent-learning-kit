@@ -11,8 +11,11 @@ import asyncio
 import json
 import logging
 import secrets
-from pathlib import Path
-from typing import Any
+import sys
+import weakref
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any
 
 from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
@@ -21,6 +24,8 @@ from fi.simulate.agent.wrappers.http_events import (
 from fi.simulate.agent.wrappers.http_stream import HTTPStreamSpec
 
 from .agent_type_check import (
+    BROWSER,
+    REFUSED_KINDS,
     SECOND_LOOK_READ,
     SecondLook,
     agent_type_failure,
@@ -29,6 +34,7 @@ from .agent_type_check import (
     failure_message,
     is_browser,
     modality_text,
+    reading_kind,
 )
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
@@ -40,7 +46,9 @@ from .contract import (
     AgentContract,
     Runtime,
     RuntimeInterface,
+    ToolEntry,
     RuntimeSecretFile,
+    RuntimeToolService,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
@@ -54,11 +62,13 @@ from .contract import (
     CONTRACT_FILE,
 )
 from .failure_file import FAILURE_FILE, write_failure_file
+from .job import FailureDomain, HarnessFailure, HarnessStage
 from .instrumentation_evidence import detect_instrumentation
 from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
     RuntimeSelectionError,
+    charged_path,
     path_lookup_budget,
     select_runtime,
 )
@@ -72,7 +82,10 @@ from .model_citation import (
     source_lines,
 )
 from .python_source import utf8_size
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
+
+if TYPE_CHECKING:
+    from .save_checker import Mode
 
 _LOG = logging.getLogger(__name__)
 
@@ -210,23 +223,40 @@ def _checked_contract(
     reached: list[Path] | None = None,
     asked: set[str] | None = None,
     held: dict[str, str] | None = None,
+    instrumentation: str | None = None,
+    progress: Callable[[str, list[str]], None] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The contract to save, or the problems to send back. It reads the customer's files and
     writes nothing, so the tool runs it off the event loop. ``reached`` is the code outside the
-    folder the browser scan found the agent reaches, when it has run."""
+    folder the browser scan found the agent reaches, when it has run. ``instrumentation``, when
+    given, is the answer already found for this session, so it isn't read again. ``progress`` is
+    told each stage's new problems as the stage ends, so a save cut partway can still answer
+    with what was found."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
-    payload = _without_nulls(unwrapped(payload))
-    # The harness records the folder below; one the model wrote itself is dropped, never refused.
-    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
-        payload["runtime"].pop("source_subfolder", None)
+    payload = _contract_payload(payload)
     try:
         contract = AgentContract.model_validate(payload)
     except Exception as invalid:
-        return _problems([f"schema:{invalid}"[:600]], arrived)
-    # Only the save records lines it couldn't confirm.
+        schema_problems = [f"schema:{invalid}"[:600]]
+        if progress is not None:
+            progress("contract", list(schema_problems))
+        return _problems(schema_problems, arrived)
+    # Only the save records lines it couldn't confirm, or that it copied the prompt whole.
     contract.unconfirmed_prompt_from = []
+    contract.system_prompt_copied = False
 
     problems = validate_contract(contract)
+    for entry in contract.tool_entrypoints:
+        if (
+            entry.mode in _ROOTED_MODES
+            and entry.module
+            and not all(part.isidentifier() for part in entry.module.split("."))
+        ):
+            problems.append(
+                f"tool[{entry.tool}]:module-not-dotted-identifier: module {entry.module[:80]!r} "
+                "must be a dotted Python name such as `agent` or `pkg.tools`, each part an "
+                "identifier; it is not a file path."
+            )
     if (
         require_setup_contract
         and contract.modality != "voice"
@@ -239,12 +269,67 @@ def _checked_contract(
             "Omitting data_store does not declare a stateless agent."
         )
     if require_setup_contract and contract.modality == "chat":
-        if problem := generated_chat_interface_problem(contract.runtime):
+        problem = generated_chat_interface_problem(contract.runtime)
+        if problem and not _build_writes_the_interface(contract.runtime, source_root, subfolder):
             problems.append(problem)
+    if progress is not None:
+        progress("contract", list(problems))
     with path_lookup_budget():
         return _checked_against_source(
-            contract, problems, arrived, source_root, subfolder, reached, asked, held
+            contract,
+            problems,
+            arrived,
+            source_root,
+            subfolder,
+            reached,
+            asked,
+            held,
+            instrumentation=instrumentation,
+            progress=progress,
         )
+
+
+def _build_writes_the_interface(
+    runtime: Runtime | None, source_root: Path | None, subfolder: str | None
+) -> bool:
+    """Whether the build writes the chat interface this runtime leaves out, so the reading is
+    not asked for one. Today that is `adk web` serving the one app its folder holds: the
+    source holds no interface to find for it. The build decides, so the two can't disagree."""
+    if source_root is None or runtime is None or not runtime.command:
+        return False
+    if runtime.interface is not None and runtime.interface.kind:
+        return False
+    from .framework_servers import _adk_web_interface, _is_adk_web_command
+
+    # Asked of the command alone first, so no other command costs a lookup on disk.
+    if not _is_adk_web_command(list(runtime.command)):
+        return False
+    try:
+        with path_lookup_budget():
+            bound = bind_runtime(runtime.model_dump(), source_root, subfolder)
+            return _adk_web_interface(Path(source_root), dict(bound or {})) is not None
+    except (OSError, RuntimeError, ValueError, SubfolderNotFound, PathLookupsSpent):
+        # A folder or workdir that can't be bound is refused on its own line further on.
+        return False
+
+
+def _contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload as the contract is read from it, shared by the quick check and the full one so
+    neither refuses what the other accepts. The harness records the folder; one the model wrote
+    itself is dropped, never refused."""
+    payload = _without_nulls(unwrapped(payload))
+    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+        payload["runtime"].pop("source_subfolder", None)
+    return payload
+
+
+def _quick_schema(payload: dict[str, Any], arrived: list[str]) -> dict[str, Any] | None:
+    """The schema refusal, answered without waiting on the checks that read files."""
+    try:
+        AgentContract.model_validate(_contract_payload(payload))
+    except Exception as invalid:
+        return _problems([f"schema:{invalid}"[:600]], arrived)
+    return None
 
 
 def _checked_against_source(
@@ -256,6 +341,9 @@ def _checked_against_source(
     reached: list[Path] | None = None,
     asked: set[str] | None = None,
     held: dict[str, str] | None = None,
+    *,
+    instrumentation: str | None = None,
+    progress: Callable[[str, list[str]], None] | None = None,
 ) -> AgentContract | dict[str, Any]:
     """The checks that read the customer's files, under the save's one path lookup budget.
     ``asked`` is the reading's record of what it has been asked once. A model whose citation was
@@ -263,6 +351,16 @@ def _checked_against_source(
     for the quote, rather than refused again: both are optional, and neither may cost the
     reading its turns. ``held`` is the reading's latest quote (submit_contract keeps it), so
     lines named later without one are still checked against what was quoted."""
+    # Where the stage now running began in problems, so each report holds only its own.
+    stage, since = "tool_evidence", len(problems)
+
+    def stage_ended(name: str, then: str | None) -> None:
+        nonlocal stage, since
+        if progress is not None:
+            progress(name, problems[since:])
+        if then is not None:
+            stage, since = then, len(problems)
+
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
@@ -284,6 +382,7 @@ def _checked_against_source(
         set_aside: list[str] = []
         try:
             problems.extend(tool_evidence_problems(contract, source_root, subfolder))
+            stage_ended("tool_evidence", "prompt_copy")
             copy_problems = _copy_prompt(contract, source_root)
             problems.extend(copy_problems)
             if contract.system_prompt_from and not copy_problems:
@@ -339,6 +438,7 @@ def _checked_against_source(
                             # confirmed.
                             contract.system_prompt_excerpt = quote
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are left out and "
                                 "the quote is kept, since they don't hold it"
@@ -348,6 +448,7 @@ def _checked_against_source(
                             # lines nobody confirmed would be shown as it.
                             contract.system_prompt_excerpt = ""
                             contract.system_prompt_from = []
+                            contract.system_prompt_copied = False
                             set_aside.append(
                                 f"system_prompt_from: the lines named ({named}) are recorded as "
                                 "unconfirmed and no prompt is saved, since they don't hold the "
@@ -362,6 +463,7 @@ def _checked_against_source(
                             "unconfirmed and keeps the quote, or saves no prompt if the quote has "
                             "fewer than 16 letters"
                         )
+            stage_ended("prompt_copy", "model")
             if cited := model_problems(contract, source_root):
                 if asked is not None and "model" in asked:
                     contract.model = None
@@ -370,13 +472,22 @@ def _checked_against_source(
                     if asked is not None:
                         asked.add("model")
                         problems.append("model: if the model is refused again, it is left out")
+            stage_ended("model", None)
         except PathLookupsSpent as spent:
+            if progress is not None:
+                progress(stage, [*problems[since:], str(spent)])
             return _problems([*problems, str(spent)], arrived)
+        # After the model's report: a save cut later answers without the notes on lines set aside.
         if problems:
             problems.extend(set_aside)
     else:
         # With no source there is no line to find the name on, so the model is unknown.
         contract.model = None
+        # Every stage is reported on every save, so the one that reads no file says it found
+        # nothing rather than leaving a cut save to wonder whether it ran.
+        for name in ("tool_evidence", "prompt_copy", "model"):
+            stage_ended(name, None)
+    since = len(problems)
     runtime = contract.runtime
     if subfolder and source_root is not None:
         try:
@@ -398,6 +509,10 @@ def _checked_against_source(
                 )
             if refusal := _builds_a_sibling(source_root, runtime, subfolder):
                 problems.append(refusal)
+            if rooted := _modules_as_the_process_imports_them(
+                contract.tool_entrypoints, source_root, runtime.workdir, subfolder
+            ):
+                contract = contract.model_copy(update={"tool_entrypoints": rooted})
         except SubfolderNotFound:
             problems.append(
                 f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
@@ -432,18 +547,131 @@ def _checked_against_source(
                 "runtime: the command hands an interpreter its program as an argument "
                 "(-c, -e, -p, --eval, --print); name the source file it runs instead"
             )
+    stage_ended("runtime", None)
     if problems:
         return _problems(problems, arrived)
-    return contract.model_copy(
-        update={
-            # With a folder, what it imports from elsewhere is read too, as the other scans do.
-            "instrumentation": detect_instrumentation(
+    if instrumentation is None:
+        # With a folder, what it imports from elsewhere is read too, as the other scans do.
+        instrumentation = (
+            detect_instrumentation(
                 agent_folder(source_root, subfolder),
                 code_the_agent_reaches(source_root, subfolder) if reached is None else reached,
             )
             if source_root and subfolder
-            else detect_instrumentation(source_root),
-            "runtime": runtime,
+            else detect_instrumentation(source_root)
+        )
+    return contract.model_copy(update={"instrumentation": instrumentation, "runtime": runtime})
+
+
+def _modules_as_the_process_imports_them(
+    entries: list[ToolEntry], source_root: Path, workdir: str, subfolder: str = ""
+) -> list[ToolEntry] | None:
+    """The entries with each module written as the agent's own process imports it, or None when
+    none changes. Only with a subfolder, where the process starts in the bound ``workdir``: a
+    reading writes ``examples.harness.x.agent`` for the file the process knows as ``agent``,
+    and the tracer matches a frame's module name exactly.
+
+    A module is rewritten when all of these hold; each is a file check, never an import, and
+    each is charged to the save's lookup budget:
+    - it starts with the workdir's path written dotted, and the rest names a file under the
+      workdir (``<rest>.py`` or ``<rest>/__init__.py``);
+    - the name as written is not itself a file under the workdir (``svc/agent.py`` beside
+      ``svc/svc/agent.py``: with the process in ``svc``, ``svc.agent`` is the inner one);
+    - no folder from the repository root down to the workdir has an ``__init__.py``: one that
+      does is part of a regular package, whose code knows its modules by the qualified name
+      (``GeneratedWorld.reach`` puts the package root on the path for exactly that).
+
+    An ``import`` or ``construct`` entry is also compiled to a handler, which imports through
+    ``GeneratedWorld.reach(source_root, subfolder)``: the root and the subfolder are on its path,
+    never the workdir. So those entries are rewritten only when the workdir is the subfolder
+    itself; an ``unreachable`` entry has no handler and only the tracer reads it, so it keeps the
+    workdir as its root.
+    """
+    from .source_tool_evidence import _file_in
+
+    folders = [part for part in PurePosixPath(workdir or "").parts if part != "."]
+    if not folders or ".." in folders or not all(part.isidentifier() for part in folders):
+        return None
+    if not any(entry.module and entry.mode in _ROOTED_MODES for entry in entries):
+        return None
+    root = Path(source_root).resolve()
+    try:
+        start = charged_path(root / Path(*folders))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not is_within(start, root) or start == root:
+        return None
+    # The root and every folder down to the workdir, along the dotted path.
+    for depth in range(len(folders) + 1):
+        if _file_in(root.joinpath(*folders[:depth], "__init__.py"), root):
+            return None
+    prefix = ".".join(folders) + "."
+    subfolder_parts = [part for part in PurePosixPath(subfolder or "").parts if part != "."]
+    handler_root = subfolder_parts == folders
+
+    resolved: dict[str, bool] = {}
+
+    def names_a_file(dotted: str) -> bool:
+        # One resolution per name within a save: many entries can name one module.
+        if dotted not in resolved:
+            module = start.joinpath(*dotted.split("."))
+            resolved[dotted] = _file_in(module.with_suffix(".py"), start) or _file_in(
+                module / "__init__.py", start
+            )
+        return resolved[dotted]
+
+    rewritten, changed = [], False
+    for entry in entries:
+        module = entry.module
+        if (
+            entry.mode in _ROOTED_MODES
+            and (handler_root or entry.mode == "unreachable")
+            and module.startswith(prefix)
+            and all(part.isidentifier() for part in module.split("."))
+            and not names_a_file(module)
+            and names_a_file(rest := module[len(prefix) :])
+            # `calendar.py` in the folder is not what `import calendar` finds first.
+            and rest.split(".")[0] not in sys.stdlib_module_names
+        ):
+            entry = entry.model_copy(update={"module": rest})
+            changed = True
+        rewritten.append(entry)
+    return rewritten if changed else None
+
+
+_ROOTED_MODES = {"import", "construct", "unreachable"}
+
+
+def without_local_state(contract: AgentContract) -> AgentContract:
+    return contract.model_copy(
+        update={
+            "data_schema": {},
+            "base_environment": {},
+            "tools": [
+                tool.model_copy(update={"tables_read": [], "tables_changed": []})
+                for tool in contract.tools
+            ],
+        }
+    )
+
+
+def _provider_prompt_copied(
+    contract: AgentContract, profile: dict[str, Any] | None
+) -> AgentContract:
+    """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
+    profile is in force and code can take every text of it. Otherwise it is left as checked:
+    the reading's quote, nothing marked."""
+    from .provider_import import whole_prompt
+
+    whole = whole_prompt(profile) if profile is not None else None
+    if whole is None:
+        return contract
+    return contract.model_copy(
+        update={
+            "system_prompt_excerpt": whole,
+            "system_prompt_from": [],
+            "unconfirmed_prompt_from": [],
+            "system_prompt_copied": True,
         }
     )
 
@@ -554,6 +782,7 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
         parts.append(excerpt)
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
+        contract.system_prompt_copied = True
     return problems
 
 
@@ -642,6 +871,18 @@ def _tools_in_agent_folder(
         return [], frozenset()
 
 
+def _needs_a_browser(destination: Path) -> bool:
+    """Whether the contract this reading starts over is a browser agent's. One that can't be read
+    is for the steps that read it."""
+    from .understand import load
+
+    try:
+        contract = load(destination)
+    except (OSError, ValueError):
+        return False
+    return contract is not None and "browser" in contract.environment_needs
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
@@ -650,12 +891,28 @@ def contract_tools(
     scan_root: Path | None = None,
     require_setup_contract: bool = False,
     subfolder: str | None = None,
+    save_checks: Mode | None = None,
+    save_stand_in: str | None = None,
+    provider_owned_state: bool = False,
+    provider_profile: dict[str, Any] | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
+
+    ``save_checks`` picks where the checks that read the customer's files run (the default is the
+    kit's); ``save_stand_in`` names a module whose stages replace the real ones in the child, for
+    tests.
+
+    ``provider_profile`` is the provider definition the reading is shown, when there is one. It is
+    then the source of the agent's prompt: no repository lines are copied for it, and the save
+    copies its whole prompt where code can take every text of it.
     """
+    # Here rather than at the top: the checker's child imports this module.
+    from . import save_checker
+    from .save_checker import SAVE_DEADLINE, ChildKeepsEnding, NotInTime, Saved
+
     events_schema = CompletedToolEvents.model_json_schema()
     events_schema["properties"]["failure_events"]["items"] = (
         events_schema.pop("$defs")["CompletedToolFailureEvent"]
@@ -697,18 +954,22 @@ def contract_tools(
     # What was quoted for the prompt when the lines named for it were refused.
     held: dict[str, str] = {}
     refused = False
-    second_look = SecondLook()
+    second_look = SecondLook(browser_stood=_needs_a_browser(destination))
     found: list[str] | None = None
     # Set with found, from the same scan: a later call skips the scan and must still see its cut.
     cut: frozenset[str] = frozenset()
     # Calls in one message check side by side, so the one sent last can finish first; it's the
     # model's last word, and an earlier call that finishes later mustn't write over it.
     sent = saved = 0
-    # Calls in one message share one scan: each running its own takes that many times longer.
-    scan: asyncio.Future[tuple[list[str], frozenset[str]]] | None = None
-    # The code outside the folder the scan found the agent reaches, for the instrumentation
-    # check, so the save walks the imports once.
-    reach: list[Path] = []
+    # The customer's files are read where a crafted repository can't hold the conversation: the
+    # checker owns the scan, which calls in one message share, and each save's checks.
+    checker = save_checker.SaveChecker(
+        scan_root=scan_root,
+        source_root=source_root,
+        subfolder=subfolder,
+        mode=save_checks,
+        stand_in=save_stand_in,
+    )
 
     @tool(
         "submit_contract",
@@ -746,11 +1007,17 @@ def contract_tools(
                 },
                 "modality": {
                     "type": "string",
-                    "enum": list(known_modalities()),
+                    # The refused kinds are answers, never a contract's modality.
+                    "enum": [*known_modalities(), *REFUSED_KINDS],
                     "description": "How this agent is run, read from its runtime. A voice "
                     "session (LiveKit, telephony, TTS/STT) is voice; a text conversation is chat; "
-                    "an agent a person uses to carry out work on websites or a computer is "
-                    "browser. This decides how it is later run.",
+                    "an agent a person uses to carry out work by driving a web browser with a "
+                    "browser library is browser, and runs only in an environment that gives it a "
+                    "browser and a list of sites; it takes its task in words, so record how it is "
+                    "reached as for chat. One that acts through a screen (pixels, mouse "
+                    "and keyboard) is computer_use, and one that fetches pages by rule with no "
+                    "model choosing each step is crawler: both stop the build as not supported. "
+                    "This decides how it is later run.",
                 },
                 "call_direction": {
                     "type": "string",
@@ -820,6 +1087,18 @@ def contract_tools(
                     "description": "Rules it must obey, in the source's own words. The agent "
                     "under test is told these and graded against them.",
                 },
+                "rule_sources": {
+                    "type": "array",
+                    "description": "For each rule read from a file of the agent's material (a policy or knowledge "
+                    "document, a prompt file): the rule exactly as written in hard_constraints, the file relative "
+                    "to the source root, and the line it comes from quoted exactly. Leave a rule out when no one "
+                    "line states it.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"rule": {"type": "string"}, "file": {"type": "string"}, "quote": {"type": "string"}},
+                        "required": ["rule", "file", "quote"],
+                    },
+                },
                 "tools": {
                     "type": "array",
                     "description": "Every tool the agent really has. Everything downstream is "
@@ -855,6 +1134,15 @@ def contract_tools(
                                 "their words disagree, the code's: "
                                 '{"<an amount field>": "<its minor unit and currency>", "timeout": "milliseconds"}.',
                             },
+                            "arg_required": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": 'Arguments the tool cannot be called without, from the code (a parameter with no default) or the provider\'s schema (its `required` list): ["order_id"]. Leave out an argument that has a default.',
+                            },
+                            "arg_bounds": {
+                                "type": "object",
+                                "description": 'The lowest and highest value a number argument accepts, where the code or the provider\'s schema states one (a check, `ge`/`le`, `minimum`/`maximum`): {"quantity": {"min": 1, "max": 10}}. Only the sides that are stated.',
+                            },
                             "returns": {
                                 "type": "object",
                                 "description": "Every field the tool hands back, with its type and, where the "
@@ -873,6 +1161,12 @@ def contract_tools(
                                 "items": {"type": "string"},
                                 "description": "The world's tables the tool adds to, changes or deletes from, "
                                 "declared from its code.",
+                            },
+                            "world_free": {
+                                "type": "boolean",
+                                "description": "True only when the tool's code touches no table of the world and "
+                                "no service: it keeps the agent's own session memory or computes from its "
+                                "arguments alone. False when unsure.",
                             },
                             "description": {"type": "string"},
                             "requires": {
@@ -893,6 +1187,29 @@ def contract_tools(
                                 "every refusal the code returns as an ordinary value rather than an "
                                 "error. Read from the tool, the helpers it calls and the service "
                                 "behind it.",
+                            },
+                            "refusals": {
+                                "type": "array",
+                                "description": "Each refusal in `refuses` that turns on a field of a record the "
+                                "call names, as structure, when the tool's code or the service behind it shows it: "
+                                "the HTTP `status` it answers, the `table` and the `column` the call's `argument` is "
+                                "matched on, the record's `field` and the `values` that refuse (at least one), and "
+                                "the `message` the code gives. A record carrying a fault in the agent's "
+                                "own data (a payment that times out) is one. The world scenarios are proved on "
+                                "answers each the same way.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {"type": "integer"},
+                                        "table": {"type": "string"},
+                                        "column": {"type": "string"},
+                                        "argument": {"type": "string"},
+                                        "field": {"type": "string"},
+                                        "values": {"type": "array"},
+                                        "message": {"type": "string"},
+                                    },
+                                    "required": ["status", "table", "column", "argument", "field", "values"],
+                                },
                             },
                             "effects": {
                                 "type": "string",
@@ -921,12 +1238,19 @@ def contract_tools(
                             "id": {"type": "string"},
                             "name": {"type": "string"},
                             "tools": {"type": "array", "items": {"type": "string"}},
+                            "allowed_tools": {"type": "array", "items": {"type": "string"}},
+                            "binding": {"type": "string", "enum": ["separate", "shared"]},
+                            "address_env": {"type": "string"},
+                            "process": {"type": "string"},
                         },
                         "required": ["id"],
                     },
                     "description": "Agents this one hands work to, if any: an id no other worker has, the name the app "
-                    "gives the agent (its spans carry it), and the names of the tools above that it "
-                    "holds. Leave out for an agent that hands no work on.",
+                    "gives the agent (its spans carry it), the names of the tools above that it holds, "
+                    "separate when its tools run through code of their own, with address_env naming the "
+                    "environment variable that code reads for its tools' base address, allowed_tools when it "
+                    "may use fewer tools than its code holds, and process naming the environment process that runs "
+                    "it alone when the app serves it as its own service. Leave out for an agent that hands no work on.",
                 },
                 "data_schema": {
                     "type": "object",
@@ -1094,12 +1418,21 @@ def contract_tools(
                                 "that has to be built first. service: its effect is implemented "
                                 "by a shipped HTTP service. unreachable: no runnable seam exists, "
                                 "which blocks environment creation rather than generating a "
-                                "replacement.",
+                                "replacement. The kit can't call it, but traces it when `module` "
+                                "and `callable` say where it is. Use it for a tool whose module "
+                                "attribute is an object the kit can't call, such as the OpenAI "
+                                "Agents SDK's `@function_tool`: name the module and the def's own "
+                                "name. A LangChain `@tool` or a LiveKit `@function_tool` method "
+                                "stays `import` or `construct`.",
                             },
                             "module": {
                                 "type": "string",
-                                "description": "Importable path as the agent's own code would "
-                                "write it, e.g. package.module.file. Not a filesystem path.",
+                                "description": "The dotted name the agent's own process imports, "
+                                "from the folder it runs in: `agent` for the file agent.py "
+                                "there, not the name counted from the repository root. For "
+                                "`import` and `construct` the name is counted from the "
+                                "subfolder, and is rewritten only when the runtime's workdir "
+                                "is that subfolder. Not a filesystem path.",
                             },
                             "callable": {
                                 "type": "string",
@@ -1313,6 +1646,10 @@ def contract_tools(
                                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
                             },
                             "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
+                        },
+                        "tool_service": {
+                            **RuntimeToolService.model_json_schema(),
+                            "description": Runtime.model_fields["tool_service"].description,
                         },
                         "required_environment": {
                             "type": "object",
@@ -1570,6 +1907,9 @@ def contract_tools(
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = dict(unwrapped(args))
+        if provider_profile is not None:
+            # The provider's definition is what runs, so repository lines can't be the prompt.
+            payload.pop("system_prompt_from", None)
         # The quote as the contract will read it: under any alias, a list joined.
         excerpt = prompt_quote(_without_nulls(payload))
         if not excerpt.strip():
@@ -1587,27 +1927,42 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, cut, sent, saved, scan
+        nonlocal refused, found, cut, sent, saved
+
+        def _end_the_stage(worn: ChildKeepsEnding) -> dict[str, Any]:
+            nonlocal refused
+            # Set first, as for the agent-type refusal: no resubmission gets through.
+            refused = True
+            write_failure_file(
+                HarnessFailure(
+                    domain=FailureDomain.AGENT,
+                    stage=HarnessStage.UNDERSTANDING_AGENT,
+                    code="save_checks_child_keeps_ending",
+                    message=str(worn),
+                    retryable=False,
+                    details={"deaths": worn.deaths},
+                ),
+                destination,
+            )
+            return _ok(_stop_message(destination))
+
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = second_look.given
         sent += 1
         mine = sent
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
+        # One deadline for everything this call waits on, so waiting on the scan leaves the
+        # checks less time rather than starting the clock again.
+        deadline = asyncio.get_running_loop().time() + SAVE_DEADLINE
         if found is None:
-            # Run again only a scan that can't give its answer here: one that raised or was
-            # cancelled, or one on another loop, which this one can't wait on. One that finished
-            # after every call waiting on it was cancelled still holds its answer.
-            if (
-                scan is None
-                or scan.get_loop() is not asyncio.get_running_loop()
-                or (scan.done() and (scan.cancelled() or scan.exception() is not None))
-            ):
-                scan = asyncio.ensure_future(
-                    asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder, reach)
-                )
-            # Shielded: one call cancelled mustn't cancel the scan the others wait on.
-            found, cut = await asyncio.shield(scan)
+            try:
+                answer = await checker.scan(deadline=deadline)
+            except ChildKeepsEnding as worn:
+                return _end_the_stage(worn)
+            if isinstance(answer, NotInTime):
+                return answer.response
+            found, cut = answer.found, answer.cut
             # A call running alongside this one may have refused while this one waited.
             if refused or (destination / FAILURE_FILE).is_file():
                 return _ok(_stop_message(destination))
@@ -1615,8 +1970,9 @@ def contract_tools(
         if claimed and not is_browser(claimed) and claimed not in known_modalities():
             return _problems(
                 [
-                    f"{claimed!r} is not a modality. Use voice or chat, or browser if its main "
-                    "job is work on websites or a computer."
+                    f"{claimed!r} is not a modality. Use voice or chat; browser if its main job "
+                    "is work done by driving a web browser; computer_use if it acts through a "
+                    "screen; crawler if it fetches pages by rule."
                 ]
             )
         verdict = second_look.verdict(
@@ -1630,10 +1986,18 @@ def contract_tools(
             try:
                 (destination / "contract.json").unlink(missing_ok=True)
             finally:
-                write_failure_file(agent_type_failure(found), destination)
+                write_failure_file(
+                    agent_type_failure(found, reading_kind(claimed)), destination
+                )
             return _ok(_stop_message(destination))
         if verdict == "second_look":
             return _problems([second_look.issue(claimed, found, _new_receipt(), cut=cut)])
+        # What the agent needs from its environment is set here, after the look, and nowhere
+        # else. A browser agent is reached as a chat agent is, so every chat check below runs.
+        payload.pop("environment_needs", None)
+        if reading_kind(claimed) == BROWSER:
+            payload["modality"] = "chat"
+            payload["environment_needs"] = [BROWSER]
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}
@@ -1812,7 +2176,9 @@ def contract_tools(
                 and not payload.get("hard_constraints")
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
-                and not payload.get("system_prompt_from"),
+                and not payload.get("system_prompt_from")
+                # With a provider's definition in force, its prompt is the one; lines aren't.
+                and provider_profile is None,
                 "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
                 "Its prompt usually exists and often lives away from the main agent file — "
                 "search the whole source for a long instructions string before deciding there "
@@ -1861,6 +2227,8 @@ def contract_tools(
                 # since a prompt built at run time has no lines to name, and its quote is kept.
                 "prompt-lines",
                 source_root is not None
+                # With a provider's definition in force, repository lines are not its prompt.
+                and provider_profile is None
                 and bool(excerpt)
                 and not payload.get("system_prompt_from")
                 # Asked already, with the "prompt" nudge or a refusal of named lines: the lines
@@ -1879,23 +2247,30 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        # The checks read the customer's files, which can take a second on a crafted one, so
-        # they run off the loop. The write stays here, after a refusal that came meanwhile.
-        checked = await asyncio.to_thread(
-            _checked_contract,
-            payload,
-            source_root=source_root,
-            require_setup_contract=require_setup_contract,
-            subfolder=subfolder,
-            # The scan's answer is for scan_root; another root's code is found again.
-            reached=reach if scan_root == source_root else None,
-            asked=asked_before,
-            held=held,
-        )
+        # A malformed payload is answered here, without waiting on the checks that read files.
+        quick = _quick_schema(payload, sorted(payload))
+        if quick is not None:
+            nudged.update(asked_before)
+            return quick
+        # The checks read the customer's files, which can take seconds on a crafted one, so they
+        # run where the deadline can stop them. The write stays here, after a refusal that came
+        # meanwhile.
+        try:
+            checked = await checker.check(
+                payload,
+                require_setup_contract=require_setup_contract,
+                asked=asked_before,
+                held=held,
+                deadline=deadline,
+            )
+        except ChildKeepsEnding as worn:
+            nudged.update(asked_before)
+            return _end_the_stage(worn)
         # Whatever this call asked is asked for the calls sent after it.
         nudged.update(asked_before)
-        if isinstance(checked, dict):
-            return checked
+        if not isinstance(checked, Saved):
+            # Refused, or not checked in time: either way nothing is saved.
+            return checked.response
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if mine < saved:
@@ -1903,11 +2278,18 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        result = _save_contract(checked, destination)
+        kept = without_local_state(checked.contract) if provider_owned_state else checked.contract
+        result = _save_contract(_provider_prompt_copied(kept, provider_profile), destination)
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result
 
+    if scan_root is not None or source_root is not None:
+        checker.start()
+        # On the handler, not the server: every copy of the server the session makes keeps the
+        # handler, so the child ends only when the last of them is gone.
+        weakref.finalize(submit_contract.handler, checker.close)
+        save_checker._OPEN.add(checker)
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 
 

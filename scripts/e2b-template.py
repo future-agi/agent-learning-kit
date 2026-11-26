@@ -162,13 +162,32 @@ def _load_catalog(path: Path) -> dict[str, Any]:
     return catalog
 
 
-def _assert_clean_checkout(repo: Path, *, allow_dirty: bool) -> None:
+def _assert_clean_checkout(repo: Path, *, allow_dirty: bool) -> bool:
+    """Whether the checkout has changes (only possible with --allow-dirty)."""
     dirty = _git(repo, "status", "--porcelain")
     if dirty and not allow_dirty:
         raise SystemExit(
             "refusing to publish from a dirty tracked checkout; commit the release "
             "or pass --allow-dirty for an explicit local experiment"
         )
+    return bool(dirty)
+
+
+def _image_revision(source_revision: str, *, dirty: bool) -> str:
+    """The revision an image built here is labelled with, which Dockerfile.hosted also makes the
+    build id its readings record. A dirty checkout's code is not its HEAD: the suffix keeps the
+    label telling and fails the build id's hex rule, so its readings record no build."""
+    return f"{source_revision}-dirty" if dirty else source_revision
+
+
+def _template_envs(image_revision: str | None) -> dict[str, str]:
+    """The template's environment. The image carries ALK_BUILD_ID, but the template does not
+    count on the image's ENV reaching the process (HOSTED_RUNTIME_ENV repeats it), so the id is
+    set here too, only for an image this run built, with the value the image was built with. A
+    given --image-reference keeps whatever its own image says."""
+    if image_revision is None:
+        return dict(HOSTED_RUNTIME_ENV)
+    return {**HOSTED_RUNTIME_ENV, "ALK_BUILD_ID": image_revision}
 
 
 def _parse_image_digest(metadata_path: Path) -> str:
@@ -235,6 +254,7 @@ def publish_e2b_template(
     cpu_count: int,
     memory_mb: int,
     source_revision: str,
+    image_revision: str | None,
     api_key: str,
     skip_cache: bool,
 ):
@@ -255,7 +275,7 @@ def publish_e2b_template(
     template = (
         Template()
         .from_image(image_reference, **image_kwargs)
-        .set_envs(HOSTED_RUNTIME_ENV)
+        .set_envs(_template_envs(image_revision))
         .set_user("svc-control")
         .set_workdir("/work")
     )
@@ -314,12 +334,22 @@ def _base_checks(catalog: dict[str, Any], *, compose_profile: bool = False) -> l
             ),
         ),
         (
+            # The harness's own source, the grader among it, is root-owned with no write bit: the tested agent shares
+            # this user under fixed_user and must not be able to rewrite it.
+            "harness-source-read-only",
+            (
+                "python -c 'import sys; from fi.alk.harness.privilege import writable_harness_source as w; "
+                "found = w(); print(*found[:20], sep=chr(10)); sys.exit(1 if found else 0)'"
+            ),
+        ),
+        (
             "service-users",
             (
                 'test "$(id -u svc-control)" = 2000 && '
                 'test "$(id -u svc-agent)" = 2001 && '
                 'test "$(id -u svc-tools)" = 2002 && '
-                'test "$(id -u svc-data)" = 2003'
+                'test "$(id -u svc-data)" = 2003 && '
+                'test "$(id -u svc-door)" = 2004'
             ),
         ),
         (
@@ -360,6 +390,33 @@ if present:
 PY""",
         ),
     ]
+    checks.append(
+        (
+            # The kit's browser for browser agents (Dockerfile.hosted): any service user can run it,
+            # and it starts headless, runs a page's script and writes a screenshot with no network.
+            # The marker is one only the page's script writes, never text on the command line.
+            # Root owns the binary and its folder and neither is writable, so no service user can
+            # change the binary or move another file over it.
+            "browser-chromium",
+            (
+                "b=\"$(command -v alk-chromium)\" && "
+                "test \"$(stat -L -c '%a:%U' \"$b\")\" = 555:root && "
+                "test \"$(stat -c '%a:%U' \"$(dirname \"$(readlink -f \"$b\")\")\")\" = 555:root && "
+                "profile=\"$(mktemp -d)\" && "
+                "alk-chromium --headless=new --no-sandbox --disable-gpu --no-first-run "
+                "--user-data-dir=\"$profile\" --dump-dom "
+                "'data:text/html,<body><script>document.body.dataset.ready=6*7</script>' "
+                "| grep -q 'data-ready=\"42\"' && "
+                "alk-chromium --headless=new --no-sandbox --disable-gpu --no-first-run "
+                "--user-data-dir=\"$profile\" --window-size=800,600 "
+                "--screenshot=\"$profile/shot.png\" "
+                "'data:text/html,<p>alk-browser-ready</p>' && "
+                "test \"$(head -c 8 \"$profile/shot.png\" | od -An -tx1 | tr -d ' \\n')\" = "
+                "89504e470d0a1a0a && "
+                "rm -rf \"$profile\""
+            ),
+        )
+    )
     for version in catalog["runtimes"].get("python", []):
         token = re.sub(r"[^0-9.]", "", str(version))
         if not re.fullmatch(r"\d+\.\d+", token):
@@ -722,7 +779,9 @@ def main() -> int:
     if args.env_file:
         _load_selected_env(args.env_file.expanduser().resolve())
     source_revision = _git(repo, "rev-parse", "HEAD")
-    _assert_clean_checkout(repo, allow_dirty=args.allow_dirty)
+    dirty = _assert_clean_checkout(repo, allow_dirty=args.allow_dirty)
+    # Set only when this run builds the image: a given image or template keeps its own.
+    image_revision: str | None = None
     image_tag = args.image_tag or source_revision
 
     print(f"ALK_SOURCE_REVISION={source_revision}")
@@ -756,11 +815,12 @@ def main() -> int:
         image_tag_value = ""
         image_digest = ""
     else:
+        image_revision = _image_revision(source_revision, dirty=dirty)
         image = build_and_push_image(
             repo=repo,
             repository=args.image_repository,
             image_tag=image_tag,
-            source_revision=source_revision,
+            source_revision=image_revision,
             no_cache=args.no_cache,
         )
         image_reference = image.reference
@@ -789,6 +849,7 @@ def main() -> int:
             cpu_count=args.cpu_count,
             memory_mb=args.memory_mb,
             source_revision=source_revision,
+            image_revision=image_revision,
             api_key=api_key,
             skip_cache=args.no_cache,
         )

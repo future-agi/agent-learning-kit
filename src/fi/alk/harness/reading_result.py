@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from .agent_type_check import EXIT_REFUSED
-from .backends import StageDone
+from .backends import CALL_BUDGET_SPENT, StageDone
 from .contract import CONTRACT_FILE
 from .failure_file import FAILURE_FILE
 from .framework_detection import detect_framework, named_framework_folder
@@ -41,6 +41,7 @@ AGENT_FILE = "agent.json"
 
 AGENT_READING_MODEL_ERROR = "agent_reading_model_error"
 AGENT_READING_INCOMPLETE = "agent_reading_incomplete"
+AGENT_READING_CALL_LIMIT = "agent_reading_call_limit"
 AGENT_READING_TOO_LARGE = "agent_reading_too_large"
 AGENT_DOCUMENT_INVALID = "agent_document_invalid"
 
@@ -49,7 +50,7 @@ _DOCUMENT_LIMIT_BYTES = 1_048_576
 _CONTRACT_LIMIT_BYTES = 5 * 1_048_576
 
 # A model out of turns can't save, so a reminder after one only adds cost.
-_TURN_LIMITS = frozenset({"max_turns", "error_max_turns"})
+_TURN_LIMITS = frozenset({"max_turns", "error_max_turns", CALL_BUDGET_SPENT})
 # Matched only, never repeated in a message: these are ADK's words, not ours.
 _CALL_LIMIT = re.compile(r"Max number of llm calls limit of `\d+` exceeded")
 # Statuses a retry may get past; any other 4xx would only be refused again.
@@ -85,6 +86,23 @@ def _refusing(status: Any) -> bool:
     )
 
 
+def call_limit(output: Path, stage: _ReadingStage) -> int:
+    """The reading spent its budget of model calls with nothing saved."""
+    write_reading_failure(
+        reading_failure(
+            FailureDomain.INFRASTRUCTURE,
+            AGENT_READING_CALL_LIMIT,
+            "We stopped reading this agent because it was taking too many steps. "
+            "Nothing was saved.",
+            # Never retried: the inputs are the same, so a retry would spend the budget again.
+            retryable=False,
+            details={"calls": stage.calls_made(), "limit": int(stage.spec.call_budget)},
+        ),
+        output,
+    )
+    return EXIT_REFUSED
+
+
 def model_error(output: Path, message: str, status: Any = None, *, retryable: bool) -> int:
     write_reading_failure(
         reading_failure(
@@ -106,13 +124,15 @@ def classify(
     output: Path,
     stage: _ReadingStage,
     error: BaseException | None,
+    *,
+    profile: dict[str, Any] | None = None,
 ) -> int:
     saved = saved_file(output)
     if saved == FAILURE_FILE:
         return EXIT_REFUSED
     # Before any error: the gate accepted the reading, and refusing it now would pay for it twice.
     if saved == CONTRACT_FILE:
-        return document(job, source, output)
+        return document(job, source, output, profile=profile)
     forbidden = stage.forbidden_models()
     if forbidden:
         # A retry would bill the same model again.
@@ -123,6 +143,8 @@ def classify(
             + "), so the reading was stopped.",
             retryable=False,
         )
+    if any(done.outcome == CALL_BUDGET_SPENT for done in stage.done):
+        return call_limit(output, stage)
     # A last turn out of turns spent a whole budget, so a retry would likely spend another and
     # stop the same way, whatever failed before it.
     ran_out = bool(stage.done) and out_of_turns(stage.done[-1])
@@ -194,7 +216,13 @@ def _write_whole(path: Path, body: bytes) -> None:
         raise
 
 
-def document(job: HarnessJob, source: Path, output: Path) -> int:
+def document(
+    job: HarnessJob,
+    source: Path,
+    output: Path,
+    *,
+    profile: dict[str, Any] | None = None,
+) -> int:
     """The agent's description from the saved contract, as a build makes it."""
     # One catch over every step: a saved contract is paid for, so nothing after it is retryable.
     try:
@@ -210,7 +238,7 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
 
             # What the reading was made from, so a build can tell whether it may reuse it. Made
             # from these bytes and written only over them, so a later save is never lost.
-            recorded = with_record(job, raw)
+            recorded = with_record(job, raw, profile)
             if recorded is not None:
                 replace_if_unchanged(output / CONTRACT_FILE, raw, recorded)
         except Exception:
@@ -223,9 +251,11 @@ def document(job: HarnessJob, source: Path, output: Path) -> int:
             repo_root=source,
             package_dir=None,
         )
-        # The build's own document, made by the build's own code.
+        # The build's own document, made by the build's own code. A file the kit's own Python
+        # can't parse was not read: the document says which and why, so an agent is never read
+        # in part without a word.
         made = authored_agent_document(
-            contract_text, subfolder=job.source.subfolder, framework=framework
+            contract_text, subfolder=job.source.subfolder, framework=framework, source=source
         )
         body = json.dumps(made, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         stored = json.dumps(made["agent"], ensure_ascii=False).encode("utf-8")

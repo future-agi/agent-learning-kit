@@ -28,6 +28,7 @@ from typing import Any
 from fi.simulate.simulation.call_actors import CHANNELS, available_channels, described
 
 from ..backends import tool, tool_server
+from ..job import actors_on, current_actors_switch
 
 from ..actors import (
     Actor,
@@ -41,6 +42,7 @@ from ..actors import (
 )
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
+    worker_subjects_note,
     CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     CHECK_RULES,
@@ -52,6 +54,7 @@ from ..catalogue import (
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
+    settled_by,
     validate_sub_goal,
     judged_wording_advisory,
     weak_check_advisory,
@@ -639,6 +642,9 @@ def world_actor_tools(
 ) -> list[Any]:
     """The tools that keep the environment's actors: for the build and the builder chat. `collections` reads the
     world's collections while it is being built; without it they come from the saved source model."""
+    if not actors_on(current_actors_switch()):
+        # Actors are off for this environment: none is offered, so none is kept.
+        return []
 
     def world_actions() -> list[str]:
         # Read when called, so actions adopted later in the build count.
@@ -686,7 +692,8 @@ def world_actor_tools(
         "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
         "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
         "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does. An actor is the "
-        "same in every scenario, so `role` names people by their part (the caller, the caller's spouse), never by "
+        "same in every scenario, so `role` names people by their part (someone with the caller, the manager who "
+        "approves), never by "
         "one scenario's names."
         + (f" The world's actions: {', '.join(listed)}." if listed else "")
         + (f" Record changes: {', '.join(records)}." if records else ""),
@@ -914,6 +921,8 @@ def world_tools(
     ``catalogue`` shares one catalogue object with the session's other servers; without it the
     catalogue is read from disk.
     """
+    # drop_rule refusals, counted as the scenario stage counts its own.
+    drops_refused: dict[tuple[str, int], int] = {}
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
     # catalogue from scratch to add a single item to it.
@@ -1535,8 +1544,8 @@ def world_tools(
         "add_rule",
         "Give the agent a hard rule its source did not state, when the operator asks for one. "
         "The agent under test is told every rule and the judge grades against them, so this "
-        "changes what is being tested. Say why in one line; it is recorded on the contract.",
-        {"rule": str, "why": str},
+        "changes what is being tested. To reword a rule, add the new one with `replaces` naming the old one by its id or exact words: the two are linked and the cases citing the old one are listed. A rule written on a line of the agent's material (a policy or knowledge file) takes `source_file` and `source_quote`, that line quoted exactly; a reworded rule keeps the old one's line unless you give another. When the person changes a value that file states, change the file's line too. Say why in one line; it is recorded on the contract.",
+        {"rule": str, "why": str, "replaces": str, "source_file": str, "source_quote": str},
     )
     async def add_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
         done, said = add_rule(
@@ -1544,6 +1553,9 @@ def world_tools(
             destination,
             rule=str(args.get("rule") or ""),
             why=str(args.get("why") or ""),
+            replaces=str(args.get("replaces") or ""),
+            source_file=str(args.get("source_file") or ""),
+            source_quote=str(args.get("source_quote") or ""),
         )
         return _ok(said) if done else _err(said)
 
@@ -1627,17 +1639,21 @@ def world_tools(
         "drop_rule",
         "Take away a hard rule the agent does not really have. A rule nobody has is worse than "
         "a missing one: the agent is told to obey it and graded for not doing something it was "
-        "never supposed to do. Say why.",
-        {"rule": str, "why": str},
+        "never supposed to do. Say why. When scenarios still cite it, say in this call what becomes of it: `replaced_by` with the new rule's text when it is reworded (linked like add_rule with replaces), or `orphan: true` when the agent really no longer has it.",
+        schema({"rule": str, "why": str, "replaced_by": str, "orphan": bool}, ["rule", "why"]),
     )
     async def drop_rule_tool(args: dict[str, Any]) -> dict[str, Any]:
+        from ..scenario_tools import refused_drop
+
         done, said = drop_rule(
             contract,
             destination,
             rule=str(args.get("rule") or ""),
             why=str(args.get("why") or ""),
+            replaced_by=str(args.get("replaced_by") or ""),
+            orphan=args.get("orphan") is True,
         )
-        return _ok(said) if done else _err(said)
+        return _ok(said) if done else _err(refused_drop(drops_refused, str(args.get("rule") or ""), said))
 
     @tool(
         "fix_tool",
@@ -1645,7 +1661,9 @@ def world_tools(
         "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, a "
         "currency's minor or major unit, seconds or milliseconds) and `description` update those. Set "
         "`remove` to take the tool away entirely. Everything downstream is built from these, so "
-        "a wrong argument name produces a world that refuses everything. Say why.",
+        "a wrong argument name produces a world that refuses everything. "
+        "`refusals` replaces the refusals that turn on a record's field (each: `status`, `table`, `column`, "
+        "`argument`, `field`, `values`, `message`); the world answers each the way the tool does. Say why.",
         schema(
             {
                 "tool_name": str,
@@ -1654,6 +1672,7 @@ def world_tools(
                 "arg_units": dict,
                 "description": str,
                 "refuses": str,
+                "refusals": list,
                 "effects": str,
                 "inputs_from": dict,
                 "remove": bool,
@@ -1680,6 +1699,7 @@ def world_tools(
                 str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()
             },
             remove=bool(args.get("remove")),
+            refusals=list(args["refusals"]) if isinstance(args.get("refusals"), list) else None,
         )
         return _ok(said) if done else _err(said)
 
@@ -1726,7 +1746,10 @@ def world_tools(
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
         "overlay is refused until it names a sub-goal that fails when that overlay is "
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
-        "task sub-goal.",
+        "task sub-goal. "
+        "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
+        "given only that worker's calls, and is inconclusive when the worker made none."
+        + worker_subjects_note(contract),
         schema(
             {
                 "name": str,
@@ -1735,22 +1758,34 @@ def world_tools(
                 "judged": str,
                 "output": str,
                 "overlay": str,
+                "subject": str,
                 **CONTRACT_SCHEMA,
             },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        sub_goal = SubGoal(
-            name=str(args.get("name") or ""),
-            what=str(args.get("what") or ""),
-            check=str(args.get("check") or ""),
-            judged=str(args.get("judged") or ""),
-            output=str(args.get("output") or "pass_fail"),
-            overlay=str(args.get("overlay") or ""),
-            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
-        )
+        # Repairing a sub-goal keeps whose result it checks and the actor it depends on unless the repair says
+        # otherwise: a fix to its check never quietly turns a worker's check into the task's.
+        previous = next((one for one in catalogue.sub_goals if one.name == str(args.get("name") or "")), None)
+        try:
+            sub_goal = SubGoal(
+                name=str(args.get("name") or ""),
+                what=str(args.get("what") or ""),
+                check=str(args.get("check") or ""),
+                judged=str(args.get("judged") or ""),
+                output=str(args.get("output") or "pass_fail"),
+                overlay=str(args.get("overlay") or ""),
+                subject=str(args.get("subject") or (previous.subject if previous is not None else "task")),
+                actor=previous.actor if previous is not None else "",
+                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            )
+        except ValueError as invalid:
+            return _err(f"Not added: {invalid}")
+        sub_goal.verifier = settled_by(sub_goal)
         problems = validate_sub_goal(sub_goal)
+        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
+            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
         if native_runtime and sub_goal.deterministic():
             from ..prove import native_source_problem
 
@@ -1991,7 +2026,8 @@ def world_tools(
             )
         listed = ""
         if (
-            available_channels(str(contract.modality or ""))
+            actors_on(current_actors_switch())
+            and available_channels(str(contract.modality or ""))
             and not load_call_actors(destination).call_actors
         ):
             listed = (
@@ -1999,6 +2035,17 @@ def world_tools(
                 "them with add_actor and a `channel`."
             )
         return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{listed}{stuck}")
+
+    def json_refusal() -> dict[str, Any] | None:
+        if unreadable := _unreadable_json(world, source_root, contract):
+            return _err(
+                "Not saved. These JSON columns hold values that are not JSON: "
+                + ", ".join(unreadable)
+                + ". The runtime seed reads a JSON column as JSON text: an object such as "
+                '{"a": 1}, a list such as [], or a string in quotes such as "2026-06-03". '
+                "Set them with change_data."
+            )
+        return None
 
     @tool(
         "save_world",
@@ -2031,14 +2078,8 @@ def world_tools(
                 + '. The runtime seed reads an array as a JSON list, such as [] or ["a"]. '
                 "Set them with change_data."
             )
-        if unreadable := _unreadable_json(world, source_root, contract):
-            return _err(
-                "Not saved. These JSON columns hold values that are not JSON: "
-                + ", ".join(unreadable)
-                + ". The runtime seed reads a JSON column as JSON text: an object such as "
-                '{"a": 1}, a list such as [], or a string in quotes such as "2026-06-03". '
-                "Set them with change_data."
-            )
+        if refusal := json_refusal():
+            return refusal
         data_free = (
             (
                 is_data_free_conversation(contract)
@@ -2165,6 +2206,9 @@ def world_tools(
             }
             for spec in contract.tools
         ]
+        # World checks run against the live store; validate the rows actually saved.
+        if world_checks and (refusal := json_refusal()):
+            return refusal
         path = save(
             world,
             destination,

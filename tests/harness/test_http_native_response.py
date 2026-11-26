@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from fi.alk.harness.chat_call_runner import _HostedChatTarget
+from fi.alk.harness.chat_call_runner import HostedChatTarget
 from fi.alk.harness.chat_transport import create_chat_wrapper
 from fi.alk.harness.contract import RuntimeInterface, RuntimeHttpFailureRule
 from fi.simulate.agent.wrapper import AgentInput
@@ -152,7 +152,7 @@ def test_response_tools_recorded_once_and_never_reexecuted(native_app, paired):
     wrapper = create_chat_wrapper(config, base, secret_values={})
     world = SimpleNamespace(calls=[])
     contract = SimpleNamespace(runtime=SimpleNamespace(interface=config))
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -190,6 +190,9 @@ def test_cumulative_completed_rows_are_reported_once_per_thread(native_app):
     assert [row["result"] for row in second.metadata["native_completed_tools"]] == [
         "second fixture"
     ]
+    # Each row keeps the id the agent gave its call.
+    assert [row.get("id") for row in first.metadata["native_completed_tools"]] == ["tool-1"]
+    assert [row.get("id") for row in second.metadata["native_completed_tools"]] == ["tool-2"]
 
 
 @pytest.mark.parametrize(
@@ -480,7 +483,7 @@ def test_response_failure_events_preserve_status_and_dedup_guards(native_app, st
     if status == "completed":
         assert first.metadata["native_completed_tools"] == [{
             "name": "read_document", "arguments": {"path": "fixture.txt"},
-            "result": "invalid path", "ok": False,
+            "result": "invalid path", "ok": False, "id": "call-1",
         }]
         assert invoke(wrapper).metadata["native_completed_tools"] == []
     else:

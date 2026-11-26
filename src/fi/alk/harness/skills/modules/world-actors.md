@@ -15,7 +15,10 @@ caller is the actor with id `caller`, and the caller alone owns the scenario's t
 agent and the person it serves: someone the agent must wait for, ask, or must not act for; someone whose message the
 agent must read; someone nearby on a call. Actors are one axis of the generated set: within the share of scenarios
 that include actors, vary the cast (one background voice, two, a stranger who knows nothing about the call, a relative
-who knows the details, someone who takes the phone, a phone menu, a manager acting through the world). Something
+who knows the details, someone who takes the phone, a phone menu, a manager acting through the world). The share also
+counts faults on the agent's own calls (`faults`: a timeout, a service down, an error, or `approval_required`, which
+holds every write of an action until an actor permitted to approve has acted); spread it across the kinds `aim_for` lists, each where the scenario motivates it, and never put one kind on
+every actor scenario. Something
 already decided before the run starts is a record in the seed, not an actor.
 
 **What an actor may do is world data.** An actor's `permitted_actions` are chosen only from the world's own actions
@@ -42,10 +45,13 @@ decoration. Each actor scenario gives the actor one of these parts, and its sub-
 did about it, read from the world's final state:
 - **A decision the agent must wait for and act on.** The approver is brought in by the agent's own request
   (`contacted`, `on_tool` on the request, or `conditional` on the pending request record), never `always`
-  with the decision already made: a decision in place before the run is seed data and tests nothing. Across
+  with the decision already made: a decision in place before the run is seed data and tests nothing. The
+  decision is made by the actor during the run, never also placed in the starting records, and the actor's
+  action carries every field its record needs. Across
   scenarios: approves, refuses with a reason, approves only part or with a condition, answers after a
   delay, never answers (a timeout and its fallback). The check reads whether the agent acted only on what
-  was actually decided.
+  was actually decided. The agent learns the decision through one of its own tools or a channel its rules accept;
+  when neither can show it, the case is written as request-and-wait (write-scenarios step 1).
 - **A fact that conflicts.** Someone nearby or in the channel says something that contradicts the person or
   the record (a different date, amount or name). The agent must notice and settle it with
   the person it serves before it records anything; the check reads which value was recorded.
@@ -94,7 +100,8 @@ identities), at a set time (`after_seconds`), or once a record exists (`conditio
 `where`). `probability` makes any of them happen in only some calls. Someone who speaks can use `always`,
 `on_tool`, `on_keyword`, `mid_journey`, `conditional`; someone acting through the world can use `always`,
 `on_tool`, `contacted`, `after_seconds`, `conditional`. A trigger the actor's runtime cannot evaluate is refused when
-the scenario is kept. Two actors each brought in only by the other's action are a cycle and are refused. Tie a
+the scenario is kept. A proof has no clock: an actor on `after_seconds` never acts in it, so the answer key never
+waits on one. Two actors each brought in only by the other's action are a cycle and are refused. Tie a
 response to what the agent does rather than to a clock. An action that only works after another actor's action
 (posting once someone adds them to a channel, applying once an approval exists) is brought in by that record
 (`conditional` on it), never by `after_seconds`: a clock does not wait for the other actor, so the world refuses the
@@ -131,4 +138,5 @@ the instruction says what happened, and the sub-goals grade what the agent did i
 `actor`): it then reads not applicable when that actor never came in. A check can read the trial's action log with `world.events(actor_id=None, outcome=None)`: every
 action attempted in the world (never a request to a host outside it), whose it was (`agent` for the agent under test) and what came of it, so a check can assert the order
 of the agent's actions against an actor's, and the outcome of each of the agent's attempts. Never assert what an
-actor did as the thing tested.
+actor did as the thing tested. What an actor decides is read from what it left in the world, never from a value the
+answer key fixes (see the write-scenarios check rules).
