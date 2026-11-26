@@ -648,3 +648,92 @@ def test_a_package_json_that_is_a_link_or_too_large_is_not_read(tmp_path: Path) 
         _package({"@traceai/fi-core": "1.0.0"}) + padding, encoding="utf-8"
     )
     assert detect_instrumentation(large) == "none"
+
+
+def _saved_instrumentation(
+    tmp_path: Path, files: dict[str, str], runtime: dict, subfolder: str | None = None
+) -> str:
+    source = _repository(tmp_path / "source", files)
+    recorded = json.loads(RECORDED_CONTRACT.read_text(encoding="utf-8"))
+    payload = {
+        **recorded,
+        "runtime": {**recorded["runtime"], **runtime},
+        "instrumentation": "none",
+    }
+    result = accept_contract(payload, tmp_path / "out", source_root=source, subfolder=subfolder)
+    assert not result.get("is_error"), result
+    saved = json.loads((tmp_path / "out" / "contract.json").read_text(encoding="utf-8"))
+    return saved["instrumentation"]
+
+
+_NODE_RUNTIME = {"language": "node", "command": ["node", "index.js"]}
+_WORKSPACE_ROOT = json.dumps({"name": "repo", "private": True, "workspaces": ["agent"]})
+
+
+def test_a_node_agent_with_a_python_helper_is_read_from_its_package_json(tmp_path: Path) -> None:
+    """The selected runtime decides the reader: a build script in Python does not make it a Python agent."""
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "index.js": "require('http');\n",
+        "scripts/build.py": "import json\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _NODE_RUNTIME) == "traceai"
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ["member_declares", "hoisted_to_the_workspace_root"],
+)
+def test_a_node_agent_is_read_from_its_workdir_and_its_package_root(tmp_path: Path, layout: str) -> None:
+    """runtime.workdir's package.json, and the workspace root above it, where a tracing package may be hoisted."""
+    traced = {"@traceai/fi-core": "^1.4.1"}
+    member, root = (traced, {}) if layout == "member_declares" else ({}, traced)
+    files = {
+        "package.json": json.dumps({**json.loads(_WORKSPACE_ROOT), "dependencies": root}),
+        "agent/package.json": _package(member),
+        "agent/index.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, {**_NODE_RUNTIME, "workdir": "agent"}) == "traceai"
+
+
+def test_a_node_agent_in_a_subfolder_counts_the_workspace_roots_packages(tmp_path: Path) -> None:
+    files = {
+        "package.json": json.dumps(
+            {**json.loads(_WORKSPACE_ROOT), "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        "agent/package.json": _package({}),
+        "agent/index.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _NODE_RUNTIME, subfolder="agent") == "traceai"
+
+
+def test_a_python_runtime_keeps_the_answer_its_imports_give(tmp_path: Path) -> None:
+    files = {"agent.py": "import openai\n", "package.json": _package({"@traceai/fi-core": "^1.4.1"})}
+
+    assert _saved_instrumentation(tmp_path, files, {"language": "python"}) == "none"
+
+
+def test_a_node_agent_is_not_read_past_its_package_root(tmp_path: Path) -> None:
+    """A folder above the workspace root is another project: its packages are not the agent's."""
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "app/package.json": _WORKSPACE_ROOT,
+        "app/agent/package.json": _package({}),
+    }
+
+    assert instrumentation_evidence.detect_node_instrumentation(
+        _repository(tmp_path, files), "app/agent"
+    ) == "none"
+
+
+def test_a_manifest_with_both_sdks_is_traceai(tmp_path: Path) -> None:
+    both = {
+        "@traceai/fi-core": "^1.4.1",
+        "@opentelemetry/sdk-trace-node": "^1.0.0",
+        "@opentelemetry/exporter-trace-otlp-http": "^0.50.0",
+    }
+
+    assert detect_instrumentation(_repository(tmp_path, {"package.json": _package(both)})) == "traceai"

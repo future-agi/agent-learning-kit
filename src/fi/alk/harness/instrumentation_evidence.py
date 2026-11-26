@@ -5,7 +5,7 @@ import json
 import os
 import stat
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Sequence
 
 from .import_lines import import_lines
 from .python_source import EscapeBudget, ParseBudget, parsed_or_syntax_error, read_module
@@ -53,6 +53,8 @@ _NODE_OTEL_SDKS = frozenset(
 # gRPC exporters would send spans no call is stamped on, so they read as untraced, as gRPC does
 # for Python.
 _NODE_JSON_EXPORTER = "@opentelemetry/exporter-trace-otlp-http"
+_JAVASCRIPT_LANGUAGES = frozenset({"node", "nodejs", "bun"})
+_JAVASCRIPT_LAUNCHERS = frozenset({"node", "bun"})
 
 
 def detect_instrumentation(source_root: Path | None, reached: Iterable[Path] = ()) -> str:
@@ -86,9 +88,41 @@ def detect_instrumentation(source_root: Path | None, reached: Iterable[Path] = (
     return "opentelemetry"
 
 
+def detect_node_instrumentation(source_root: Path, workdir: str) -> str:
+    """How a Node or Bun agent is traced, whatever other files its folder holds: from the
+    package.json at ``runtime.workdir`` and those above it, up to its package root (the first that
+    names a ``packageManager`` or ``workspaces``), where a workspace hoists its packages. Nothing
+    above the repository is read.
+    """
+    root = source_root.resolve()
+    folder = (root / (workdir.strip() or ".")).resolve()
+    if not folder.is_relative_to(root):
+        return "none"
+    dependencies: set[str] = set()
+    for candidate in (folder, *folder.parents):
+        if not candidate.is_relative_to(root):
+            break
+        manifest = _package_manifest(candidate / _PACKAGE_JSON)
+        dependencies |= _dependencies(manifest)
+        if "packageManager" in manifest or "workspaces" in manifest:
+            break
+    return _node_answer(dependencies)
+
+
+def runs_javascript(language: str, command: Sequence[str]) -> bool:
+    """Whether the selected runtime is Node or Bun: by its language, or with none by its command."""
+    language = language.strip().lower()
+    if language:
+        return language in _JAVASCRIPT_LANGUAGES
+    return bool(command) and Path(str(command[0])).name.lower() in _JAVASCRIPT_LAUNCHERS
+
+
 def _node_instrumentation(root: Path) -> str:
     """How a Node agent is traced, from the packages its package.json depends on."""
-    dependencies = _package_dependencies(root / _PACKAGE_JSON)
+    return _node_answer(_dependencies(_package_manifest(root / _PACKAGE_JSON)))
+
+
+def _node_answer(dependencies: set[str]) -> str:
     if dependencies & _TRACEAI_PACKAGES or any(
         name.startswith(_TRACEAI_SCOPE) for name in dependencies
     ):
@@ -98,20 +132,23 @@ def _node_instrumentation(root: Path) -> str:
     return "none"
 
 
-def _package_dependencies(path: Path) -> set[str]:
-    """The package names a manifest depends on; none for a link, a non-file, or one too large to read."""
+def _package_manifest(path: Path) -> dict[str, Any]:
+    """A package.json's fields; none for a link, a non-file, or one too large to read."""
     try:
         if not stat.S_ISREG(path.lstat().st_mode):
-            return set()
+            return {}
         with path.open("rb") as handle:
             raw = handle.read(_LARGEST_PACKAGE_JSON + 1)
         if len(raw) > _LARGEST_PACKAGE_JSON:
-            return set()
+            return {}
         manifest = json.loads(raw)
     except (OSError, ValueError, RecursionError):
-        return set()
-    if not isinstance(manifest, dict):
-        return set()
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _dependencies(manifest: dict[str, Any]) -> set[str]:
+    """The package names a manifest depends on."""
     names: set[str] = set()
     for field in _DEPENDENCY_FIELDS:
         declared = manifest.get(field)

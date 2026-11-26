@@ -62,7 +62,11 @@ from .contract import (
 )
 from .failure_file import FAILURE_FILE, write_failure_file
 from .job import FailureDomain, HarnessFailure, HarnessStage
-from .instrumentation_evidence import detect_instrumentation
+from .instrumentation_evidence import (
+    detect_instrumentation,
+    detect_node_instrumentation,
+    runs_javascript,
+)
 from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
@@ -549,7 +553,15 @@ def _checked_against_source(
     stage_ended("runtime", None)
     if problems:
         return _problems(problems, arrived)
-    if instrumentation is None:
+    if (
+        runtime is not None
+        and source_root is not None
+        and runs_javascript(runtime.language, runtime.command)
+    ):
+        # The selected runtime decides the reader: a Node or Bun agent is read from its
+        # package.json, whatever Python helpers its folder holds.
+        instrumentation = detect_node_instrumentation(source_root, runtime.workdir)
+    elif instrumentation is None:
         # With a folder, what it imports from elsewhere is read too, as the other scans do.
         instrumentation = (
             detect_instrumentation(
