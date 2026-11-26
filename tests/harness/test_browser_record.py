@@ -510,6 +510,20 @@ def _recording(tmp_path, devtools_port, **kwargs):
     return fake, recorder
 
 
+def test_no_page_is_photographed_once_the_pages_screenshots_are_full(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port, shots=2)
+    try:
+        for index in range(4):
+            for message in _loaded(f"http://shop.test/{index}"):
+                fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [one["when"] for one in body["screenshots"]] == ["load", "end"]
+    # One place for a page's and one for the end's: the browser is asked for no screenshot that cannot be kept.
+    assert sum(1 for one in fake.sent if one["method"] == "Page.captureScreenshot") == 2
+
+
 def test_each_page_and_the_trial_s_end_are_photographed(tmp_path, devtools_port) -> None:
     fake, recorder = _recording(tmp_path, devtools_port)
     try:
