@@ -353,6 +353,8 @@ jobs:
           tests/harness/test_kit_browser.py
           tests/harness/test_kit_browser_runtime.py
           tests/harness/test_browser_record.py
+          tests/harness/test_devtools_socket.py
+          tests/harness/test_browser_blocked_log.py
           tests/harness/test_chat_worker.py
           tests/harness/test_world_snapshot.py
           tests/test_harness_secrets.py
