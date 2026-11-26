@@ -757,8 +757,10 @@ def world_actor_tools(
                 ).split()
             )
             if name and role and role.casefold() == name.casefold():
+                changed = "`role`" if "role" in given else "`name`"
                 return _err(
-                    f'Not added: {role!r} is their name; `role` is their part, such as "Teammate".'
+                    f"Not added: the {changed} sent makes the role {role!r} the same as the name; `role` is "
+                    'their part, such as "Teammate", and `name` the person.'
                 )
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
