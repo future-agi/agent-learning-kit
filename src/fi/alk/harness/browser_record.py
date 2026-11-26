@@ -1093,6 +1093,8 @@ def browser_shots_dir(runtime: Any) -> Path:
 
 
 BROWSER_STATE_SCHEMA = "futureagi.browser-world-state.v1"
+# Where the sealed record names a world_state file holding the browser's record but not the world's tables.
+BROWSER_STATE_KEY = "browser_state_artifact"
 NO_WORLD_DOOR = "no_world_door"
 WORLD_END_UNREADABLE = "world_end_unreadable"
 

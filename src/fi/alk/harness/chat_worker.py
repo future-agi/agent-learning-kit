@@ -229,21 +229,24 @@ class IsolatedChatCallRunner:
 
 
 def _with_stored_end_state(data: bytes, artifact_ids: dict[str, Any]) -> bytes:
-    """A transcript whose World changes name the end state by the worker's id, naming it by the id it was stored
-    under instead; any other transcript is returned as it was."""
+    """A transcript whose World changes name the end state, or the browser's own file, by the worker's id, naming each
+    by the id it was stored under instead; any other transcript is returned as it was."""
+    from .browser_record import BROWSER_STATE_KEY
+
     try:
         document = json.loads(data)
     except ValueError:
         return data
     world = document.get("world_actors") if isinstance(document, dict) else None
-    local = world.get("end_state_artifact") if isinstance(world, dict) else None
-    if local is None:
+    keys = [key for key in ("end_state_artifact", BROWSER_STATE_KEY) if isinstance(world, dict) and key in world]
+    if not keys:
         return data
-    stored = artifact_ids.get(str(local))
-    if stored:
-        world["end_state_artifact"] = stored
-    else:
-        world.pop("end_state_artifact", None)
+    for key in keys:
+        stored = artifact_ids.get(str(world[key]))
+        if stored:
+            world[key] = stored
+        else:
+            world.pop(key, None)
     return json.dumps(document, sort_keys=True, default=str).encode("utf-8")
 
 

@@ -36,6 +36,7 @@ from .contract import AgentContract
 from .privilege import IsolationMode, isolation_mode
 from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, Scenario, World
 from .browser_record import (
+    BROWSER_STATE_KEY,
     WORLD_END_UNREADABLE,
     browser_blocked,
     browser_blocked_from_runtime,
@@ -1416,9 +1417,11 @@ class HostedChatCallRunner:
                 self._adapter, scenario.scenario_key, sealed, door_log,
                 browser=browser_file_body(browser, refused, adapter=self._adapter) if browser is not None else None,
             )
+            browser_kept = None
             if browser is not None and not end_readable:
-                # The world's end could not be read: the browser's record is still kept, in a file saying so.
-                kept = await upload_browser_state(
+                # The world's end could not be read: the browser's record is still kept, in a file saying so, under a
+                # name of its own, so no reader of the world's end state takes a file without tables for it.
+                browser_kept = await upload_browser_state(
                     self._adapter, scenario.scenario_key, browser, refused, why=WORLD_END_UNREADABLE,
                     action_log=door_log,
                 )
@@ -1430,6 +1433,7 @@ class HostedChatCallRunner:
                 # The positive evidence a platform needs before it says a worker was held on its channel.
                 **({"worker_channels": True} if worker_channels_held(self._context.bundle_dir) else {}),
                 **({"end_state_artifact": kept} if kept else {}),
+                **({BROWSER_STATE_KEY: browser_kept} if browser_kept else {}),
                 # Counts only: the browser's rows are in the world_state file.
                 **({"browser": browser_counts(browser)} if browser is not None else {}),
             }
@@ -1448,7 +1452,7 @@ class HostedChatCallRunner:
                 blocked = await asyncio.to_thread(browser_blocked_from_runtime, runtime)
                 kept = await upload_browser_state(self._adapter, scenario.scenario_key, browser, blocked)
                 world_record.update(
-                    {**({"end_state_artifact": kept} if kept else {}), "browser": browser_counts(browser)}
+                    {**({BROWSER_STATE_KEY: kept} if kept else {}), "browser": browser_counts(browser)}
                 )
         unenforced: list[dict[str, str]] = []
         stopped_notices: list[dict[str, Any]] = []
