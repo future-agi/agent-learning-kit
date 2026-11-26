@@ -1059,11 +1059,20 @@ class ToolCaptureFailed(RuntimeError):
     """A capture surface the bundle declares could not be read for this call. Not the same as an
     empty capture: the agent may have acted through a tool that nothing recorded. Raised only by
     a collector asked to be ``strict``; the message never carries a DSN. ``calls`` holds what was
-    still captured that checks do not grade, such as hand-offs, so it stays visible."""
+    still captured, so it stays visible even when the capture is incomplete."""
 
     def __init__(self, message: str, *, calls: tuple[Call, ...] = ()) -> None:
         super().__init__(message)
         self.calls = calls
+
+
+class _TraceFileReadFailed(ToolCaptureFailed):
+    """A failed file read cannot be repaired by another surface returning calls."""
+
+    def __init__(self, message: str, written: list[Call], spans: list[Call]) -> None:
+        super().__init__(message, calls=tuple(written + spans))
+        self.written = written
+        self.spans = spans
 
 
 def _collect_http_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -1377,12 +1386,12 @@ def collect_seam_calls(
 ) -> tuple[Call, ...]:
     """One attempt's calls, from another source, the agent's in-process trace or the bundle's seam, joined with span
     lines; every runner reads them here. With ``strict``, raises `ToolCaptureFailed` when nothing graded was captured
-    and a declared surface could not be read."""
+    and a declared surface could not be read, or whenever the trace file was incomplete."""
     unread: ToolCaptureFailed | None = None
     try:
         written, from_spans = _read_file_tool_calls(runtime, strict=strict, routes=routes)
-    except ToolCaptureFailed as exc:
-        written, from_spans, unread = [], [], exc
+    except _TraceFileReadFailed as exc:
+        written, from_spans, unread = exc.written, exc.spans, exc
     # Each record names its source (tool_evidence.py): what another source saw and the seam's rows are the world's.
     calls = evidence.tagged(observed, evidence.WORLD)
     if not calls and graded_calls(written):
@@ -1408,6 +1417,9 @@ def collect_seam_calls(
         if call.worker_id and not call.worker_label and (worker_names or {}).get(call.worker_id):
             call.worker_label = (worker_names or {})[call.worker_id]
     merged = _join_spans(calls, from_spans, runtime)
+    if isinstance(unread, _TraceFileReadFailed):
+        unread.calls = merged
+        raise unread
     if unread is not None and not graded_calls(merged):
         raise ToolCaptureFailed(str(unread), calls=merged) from None
     return merged
@@ -3074,7 +3086,7 @@ def _read_file_tool_calls(
     """The attempt's tool-trace file: its written lines and its span lines. No file is no
     evidence either way: the file is removed before the call, and an agent that called no tool
     never writes it. ``strict`` raises `ToolCaptureFailed` when a file is there and cannot be
-    read, or when it holds records and none of them can be read as a call."""
+    read, or when any nonblank record is unreadable."""
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
         return [], []
@@ -3087,22 +3099,21 @@ def _read_file_tool_calls(
     # Hand-offs written when the worker started: kept only for a tool call that never wrote its own line.
     opened: list[Call] = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_bytes().splitlines()
     except OSError as exc:
         if strict:
-            raise ToolCaptureFailed(
-                f"tool_trace file unreadable: {type(exc).__name__}"
+            raise _TraceFileReadFailed(
+                f"tool_trace file unreadable: {type(exc).__name__}", [], []
             ) from None
         return [], []
     # Records that cannot be read as a call: a cut JSON line, a value that is not an object, a
-    # record with no name. One among good records is dropped; a file of nothing else is not a
-    # call that used no tool.
+    # record with no name. Lenient reads skip these; strict reads report partial evidence.
     unreadable = 0
     for line in lines:
         if not line.strip():
             continue
         try:
-            record = json.loads(line)
+            record = json.loads(line.decode("utf-8"))
         except ValueError:
             unreadable += 1
             continue
@@ -3217,9 +3228,9 @@ def _read_file_tool_calls(
         if event_id not in seen:
             seen.add(event_id)
             from_spans.append(call)
-    if strict and unreadable and not calls and not from_spans:
-        raise ToolCaptureFailed(
-            f"tool_trace file has no readable record ({unreadable} unreadable)"
+    if strict and unreadable:
+        raise _TraceFileReadFailed(
+            f"tool_trace file has {unreadable} unreadable record(s)", calls, from_spans
         )
     return calls, from_spans
 
@@ -3350,7 +3361,7 @@ def hand_off_notices(runtime: Any) -> list[dict[str, Any]]:
     if path is None or not path.is_file():
         return []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_bytes().splitlines()
     except OSError:
         return [
             {
@@ -3361,7 +3372,7 @@ def hand_off_notices(runtime: Any) -> list[dict[str, Any]]:
         ]
     for line in lines:
         try:
-            record = json.loads(line)
+            record = json.loads(line.decode("utf-8"))
         except ValueError:
             continue
         if isinstance(record, dict) and record.get("kind") == HAND_OFF_UNRECORDED:
@@ -4868,12 +4879,14 @@ class CallRunnerImpl:
         # tool activity in its partial receipt.  Previously the early CallAborted below discarded
         # every tool call from failed calls, making a real upstream tool error indistinguishable
         # from a proxy/transport failure.
+        file_read_failed = False
         capture_failed = False
         try:
             calls = self._collect_calls(runtime) if case is not None else ()
         except ToolCaptureFailed as exc:
             logger.warning("tool capture failed for %s: %s", scenario_key, exc)
             calls, capture_failed = exc.calls, True
+            file_read_failed = isinstance(exc, _TraceFileReadFailed)
         # Provider-hosted agents execute tools outside the guest process, so their
         # authoritative call evidence is returned by Vapi/Retell after the call.
         # Preserve provider-native controls such as ``end_call`` because scenario
@@ -4884,7 +4897,7 @@ class CallRunnerImpl:
         # in for the provider's stream nor count as a capture.
         if not graded_calls(calls) and case is not None:
             calls = (*calls, *_collect_provider_tool_calls(case))
-        capture_failed = capture_failed and not graded_calls(calls)
+        capture_failed = file_read_failed or (capture_failed and not graded_calls(calls))
         # Only when the world's door saw the agent's tools can the trial say what changed in the world.
         door_seen = (
             self._context.evidence_seam is EvidenceSeam.TOOL_TRACE or runtime.endpoints.get("world_door") is not None

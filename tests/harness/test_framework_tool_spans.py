@@ -2641,7 +2641,7 @@ def test_a_trace_that_cannot_be_read_marks_the_trial_s_hand_offs_incomplete(tmp_
     def unreadable(*_args, **_kwargs):
         raise PermissionError("denied")
 
-    monkeypatch.setattr(Path, "read_text", unreadable)
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
     [notice] = cr.hand_off_notices(runtime)
     assert notice["code"] == cr.HAND_OFFS_INCOMPLETE
 
