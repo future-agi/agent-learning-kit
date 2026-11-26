@@ -398,3 +398,23 @@ def test_every_authoring_stage_reads_each_worker_s_limits_and_the_subject_its_ch
     assert "its own channel to the world" in brief
     # With no workers, nothing about them.
     assert "WORKERS" not in AgentContract.model_validate({"agent": "solo"}).brief()
+
+
+def test_a_use_case_and_rule_removed_after_the_reading_reach_every_stage_over_the_agent_s_prompt() -> None:
+    approved = AgentContract.model_validate(
+        {
+            "agent": "bookings",
+            "system_prompt_excerpt": "You book tables and cancel bookings. Never quote a deposit.",
+            "real_use_cases": ["Book a table"],
+            "amendments": [
+                "use case removed - Cancel a booking: removed in the design review",
+                "rule removed - Never quote a deposit: removed in the design review",
+            ],
+        }
+    )
+    brief = approved.brief()
+    changed = brief.split("CHANGED SINCE THE AGENT WAS READ", 1)
+    assert len(changed) == 2 and "THE AGENT'S OWN PROMPT" in changed[1]
+    assert "  - use case removed - Cancel a booking: removed in the design review" in changed[1]
+    assert "  - rule removed - Never quote a deposit: removed in the design review" in changed[1]
+    assert "CHANGED SINCE" not in AgentContract.model_validate({"agent": "solo"}).brief()

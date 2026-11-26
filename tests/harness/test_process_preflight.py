@@ -1352,6 +1352,9 @@ _INTERNAL_ONLY_RUNTIME_CODES = frozenset(
         # Per-user isolation: a postgres engine whose store is not `template_database` cannot be
         # reached through a world's own role. The hosted generator writes no such bundle.
         "internal_world_database_unscoped",
+        # Per-user isolation: the image has no `nobody` account to run a bundle's SQL as. Every harness image
+        # has one, so this marks a broken image, not a bundle defect.
+        "internal_no_unprivileged_account",
     }
 )
 

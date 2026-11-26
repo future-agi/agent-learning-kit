@@ -22,7 +22,14 @@ from .agent_type_check import EXIT_REFUSED
 from .backends import CallBudgetSpent, StageDone
 from .cli import guidance_text
 from .failure_file import FAILURE_FILE
-from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind, provider_profile_source
+from .job import (
+    FailureDomain,
+    HarnessFailure,
+    HarnessJob,
+    ProviderExecutionMode,
+    SourceKind,
+    provider_profile_source,
+)
 from .reading_entry import (
     EXIT_RETRYABLE,
     READING_JOB_INVALID,
@@ -104,9 +111,35 @@ def call_limit_setting() -> int:
     return DEFAULT_CALL_LIMIT
 
 
+def _hosted(job: HarnessJob) -> bool:
+    return (
+        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and job.source.kind is SourceKind.PROVIDER
+        and provider_profile_source(job.agent) is not None
+    )
+
+
+def _profile(job: HarnessJob, profile_cache: Path | None) -> dict[str, object] | None:
+    if not _hosted(job):
+        return None
+    from .authoring_entrypoint import _load_provider_import_profile
+
+    try:
+        return _load_provider_import_profile(job, None, profile_cache)
+    except (RuntimeError, OSError, ValueError) as exc:
+        logger.warning(
+            "hosted agent profile could not be loaded: class=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return None
+
+
 def _check_job(job: HarnessJob) -> HarnessFailure | None:
+    if _hosted(job):
+        return None
     if provider_profile_source(job.agent) is not None:
-        # The build adds a profile to what it reads for these agents, which a reading never loads.
+        # The build adds a profile to what it reads in a repository, which a reading never loads.
         return reading_failure(
             FailureDomain.PLATFORM_SYNC,
             READING_JOB_INVALID,
@@ -267,11 +300,34 @@ def _timed_out(output: Path, soft_limit: float) -> int:
 
 
 async def _reading(
-    job: HarnessJob, source: Path, output: Path, started: float, soft_limit: float, wait: float
+    job: HarnessJob,
+    source: Path,
+    output: Path,
+    started: float,
+    soft_limit: float,
+    wait: float,
+    profile: dict[str, object] | None = None,
 ) -> tuple[int, bool]:
     """The exit code, and whether every turn's spend is known to be in the cost file."""
+    name = str(job.metadata.get("agent_name") or source.name)
+    if _hosted(job):
+        if profile is None:
+            write_reading_failure(
+                reading_failure(
+                    FailureDomain.PLATFORM_SYNC,
+                    READING_JOB_INVALID,
+                    "The platform sends the provider's definition with the reading, and this "
+                    "one came without it, or with one that could not be read.",
+                    retryable=False,
+                ),
+                output,
+            )
+            return EXIT_REFUSED, True
+        agent_source = resolve_source(
+            "provider", name=name, profile=profile, scratch=source
+        )
     # Before the folder check, so an upload that hasn't arrived isn't blamed on the folder.
-    if not _source_has_files(source):
+    elif not _source_has_files(source):
         write_reading_failure(
             reading_failure(
                 FailureDomain.PLATFORM_SYNC,
@@ -283,16 +339,14 @@ async def _reading(
             output,
         )
         return EXIT_RETRYABLE, True
-    if refuse_unusable_folder(source, job.source.subfolder, output):
+    elif refuse_unusable_folder(source, job.source.subfolder, output):
         return EXIT_REFUSED, True
+    else:
+        agent_source = resolve_source(
+            "repo", name=name, root=source, subfolder=job.source.subfolder
+        )
 
     backend = session.resolve()
-    agent_source = resolve_source(
-        "repo",
-        name=str(job.metadata.get("agent_name") or source.name),
-        root=source,
-        subfolder=job.source.subfolder,
-    )
     # Opened as the build opens its own reading, turns, thinking and setup rule included, so a
     # contract saved here is one the build's gate would have kept.
     opened, _ = open_stage(agent_source, out=output, **reading_settings(job))
@@ -332,7 +386,7 @@ async def _reading(
         if saved == FAILURE_FILE:
             return EXIT_REFUSED, False
         if saved == CONTRACT_FILE:
-            return document(job, source, output), False
+            return document(job, source, output, profile=profile), False
         if out_of_calls:
             return call_limit(output, stage), False
         return _timed_out(output, soft_limit), False
@@ -347,7 +401,7 @@ async def _reading(
         if saved == FAILURE_FILE:
             return EXIT_REFUSED, False
         if saved == CONTRACT_FILE:
-            return document(job, source, output), False
+            return document(job, source, output, profile=profile), False
         return (
             model_error(
                 output,
@@ -366,18 +420,33 @@ async def _reading(
             for done in stage.done
         )
     )
-    return classify(job, source, output, stage, error), complete
+    return classify(job, source, output, stage, error, profile=profile), complete
 
 
-async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: float) -> int:
+async def _read(
+    job: HarnessJob,
+    source: Path,
+    output: Path,
+    *,
+    interrupt_wait: float,
+    profile_cache: Path | None = None,
+) -> int:
     # The same instant the helper's hard limit counts from, give or take a few lines.
     started = time.monotonic()
     output = Path(output)
     code, complete = EXIT_RETRYABLE, False
+    profile = None
     try:
         try:
+            profile = _profile(job, profile_cache)
             code, complete = await _reading(
-                job, Path(source), output, started, _soft_limit(), interrupt_wait
+                job,
+                Path(source),
+                output,
+                started,
+                _soft_limit(),
+                interrupt_wait,
+                profile,
             )
         except (Exception, asyncio.CancelledError) as exc:
             # A contract the gate saved is paid for; a crash would have the platform pay again.
@@ -393,7 +462,7 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
             logger.warning(
                 "reading fault after a saved contract: class=%s", type(exc).__name__, exc_info=True
             )
-            code, complete = document(job, Path(source), output), False
+            code, complete = document(job, Path(source), output, profile=profile), False
     finally:
         _stop_the_rest()
         # The work owns the final cost file, on every way out.

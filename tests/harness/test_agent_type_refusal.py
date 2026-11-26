@@ -3516,9 +3516,8 @@ def test_hosted_authoring_main_passes_the_refusal_through(tmp_path, monkeypatch)
 
 
 def _runtime(workspace: Path, *, state=None, control_only=True) -> HostedChatRuntime:
-    runtime = object.__new__(HostedChatRuntime)
-    runtime.workspace = workspace
-    runtime.job = {"scenario_count": 2}
+    from fi.alk.harness import hosted_chat_entrypoint as entrypoint
+
     emitted: list[tuple[str, dict]] = []
 
     async def emit(kind, **fields):
@@ -3527,12 +3526,16 @@ def _runtime(workspace: Path, *, state=None, control_only=True) -> HostedChatRun
     context = {"capabilities": {"control_only": control_only}}
     if state is not None:
         context["status"] = {"state": state}
-    runtime.client = SimpleNamespace(turn_context=context, command_watermark=3, emit=emit)
+    client = SimpleNamespace(turn_context=context, command_watermark=3, emit=emit)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(entrypoint, "resolve", lambda: SimpleNamespace(name="test"))
+        patch.setattr(entrypoint, "publish_actors_switch", lambda *args, **kwargs: None)
+        runtime = HostedChatRuntime(
+            client=client, policy=SimpleNamespace(), workspace=workspace, source=workspace,
+            job={"scenario_count": 2},
+        )
     runtime.emitted = emitted
     runtime.conversation = SimpleNamespace(stage_name="understand", stage=None)
-    runtime._nudge = None
-    runtime._from_platform = False
-    runtime._last_progress, runtime._idle_turns, runtime._opened_with = None, 0, None
     runtime._what_exists = lambda: (False, False)
     runtime._after_saved = lambda: None
     runtime.handled = []

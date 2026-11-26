@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from fi.alk.harness.amend import CONTRACT, add_rule
+from fi.alk.harness.amend import CONTRACT, MAX_RULE_CHARS, add_rule
 from fi.alk.harness.contract import AgentContract
 
 
@@ -124,3 +124,30 @@ def test_the_edit_chat_offers_the_participant_tools_change_and_asks_before_it():
 
     assert "set_worker_tools" in TOOL_NAMES
     assert "set_worker_tools" in _NEEDS_CONFIRMATION & _ASKS_ALONE & _WRITING_TOOLS
+
+
+def test_a_rule_longer_than_the_limit_is_refused_and_nothing_is_saved(tmp_path):
+    contract = AgentContract.model_validate(
+        {
+            "agent_name": "deals",
+            "summary": "Applies discounts.",
+            "tools": [
+                {
+                    "name": "apply_discount",
+                    "description": "Apply a discount.",
+                    "args": ["deal_id"],
+                }
+            ],
+            "data_store": {"engine": "sqlite", "database": "deals.db"},
+            "real_use_cases": ["A customer asks for a discount on a deal."],
+        }
+    )
+    _stored(tmp_path, contract, [])
+    before = (tmp_path / CONTRACT).read_text(encoding="utf-8")
+
+    done, said = add_rule(contract, tmp_path, rule="x" * (MAX_RULE_CHARS + 1), why="asked")
+
+    assert not done
+    assert f"at most {MAX_RULE_CHARS} characters" in said
+    assert (tmp_path / CONTRACT).read_text(encoding="utf-8") == before
+    assert contract.hard_constraints == []
