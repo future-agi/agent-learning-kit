@@ -197,6 +197,10 @@ class BrowserRecord:
                 self._shots_capped = True
             return True, dropped
 
+    def shots_kept(self) -> int:
+        with self._lock:
+            return len(self._shots)
+
     def cap_shots(self) -> None:
         """A page not photographed because the screenshots are full."""
         with self._lock:
@@ -483,8 +487,9 @@ class BrowserRecorder:
         self.shots_dir = shots_dir_for(record_path)
         self._shot_limits = {"shots": shots, "shot_bytes": shot_bytes}
         self._shot_count = 0
-        # Pages' screenshots asked of the browser and not yet answered without a picture.
-        self._page_shots_asked = 0
+        # Pages' screenshots asked of the browser and not yet answered, each with its tab's session: each holds a
+        # place until it is answered, could not be asked for, or its tab closes.
+        self._shots_pending: dict[object, str] = {}
         self._urls: dict[str, str] = {}  # session -> its tab's page now
         self._last_session: str | None = None
         self._connect = connect
@@ -510,7 +515,7 @@ class BrowserRecorder:
         self._urls = {}
         self._last_session = None
         self._leaving = False
-        self._page_shots_asked = 0
+        self._shots_pending = {}
         try:
             if self.shots_dir.exists():
                 shutil.rmtree(self.shots_dir)
@@ -619,7 +624,13 @@ class BrowserRecorder:
                 self._waiting[self._ids] = then
         if session is not None:
             message["sessionId"] = session
-        current.send(message)
+        try:
+            current.send(message)
+        except BaseException:
+            # Not sent: no answer will come for it.
+            with self._ids_lock:
+                self._waiting.pop(message["id"], None)
+            raise
 
     def _read(self, connection: CdpSocket) -> None:
         try:
@@ -665,6 +676,8 @@ class BrowserRecorder:
             gone = str(params.get("sessionId") or "")
             self._tabs.pop(gone, None)
             self._urls.pop(gone, None)
+            for token in [token for token, one in self._shots_pending.items() if one == gone]:
+                del self._shots_pending[token]
             if self._last_session == gone:
                 self._last_session = next(
                     (one for one in reversed(list(self._urls)) if self._tabs.get(one, ("", ""))[1]), None
@@ -674,6 +687,8 @@ class BrowserRecorder:
             tab = self._tabs.get(session or "")
             if tab is not None and not frame.get("parentId") and frame.get("id") == tab[1]:
                 url = str(frame.get("url") or "")
+                # Last in the order: the end screenshot falls back to the page opened last.
+                self._urls.pop(session or "", None)
                 self._urls[session or ""] = url
                 self._last_session = session
                 self.record.navigated(tab[0], url)
@@ -682,14 +697,22 @@ class BrowserRecorder:
             if tab is not None and tab[1] and self.record.opened(self._urls.get(session or "", "")):
                 url = self._urls[session or ""]
                 # One place stays free for the end's: a page past the others' places is not photographed at all.
-                if self._page_shots_asked + 1 >= self._shot_limits["shots"]:
+                # A place is a page screenshot kept or one still being taken.
+                if self.record.shots_kept() + len(self._shots_pending) + 1 >= self._shot_limits["shots"]:
                     self.record.cap_shots()
                     return
-                self._page_shots_asked += 1
-                self._command(
-                    "Page.captureScreenshot", dict(_SHOT), session,
-                    then=lambda answer: self._photographed(answer, "load", session, url),
-                )
+                token = object()
+                self._shots_pending[token] = session or ""
+
+                def answered(answer: dict[str, Any]) -> None:
+                    self._shots_pending.pop(token, None)
+                    self._photographed(answer, "load", session, url)
+
+                try:
+                    self._command("Page.captureScreenshot", dict(_SHOT), session, then=answered)
+                except BaseException:
+                    self._shots_pending.pop(token, None)
+                    raise
         elif method == "Network.requestWillBeSent":
             tab = self._tabs.get(session or "")
             if tab is not None:
@@ -711,9 +734,6 @@ class BrowserRecorder:
         except ValueError:
             data = b""
         if not data:
-            # No picture: its place is free again for a later page.
-            if when == "load":
-                self._page_shots_asked -= 1
             return
         keep, dropped = self.record.keep_shot(when, len(data), **self._shot_limits)
         for name in dropped:
