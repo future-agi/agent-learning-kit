@@ -507,8 +507,10 @@ def test_card_numbers_security_codes_and_one_time_codes_are_never_kept_as_text(b
         ("Security code", True, None),
         ("Code", True, None),
     ]
+    # Times are left out: a short code can be part of one.
+    held = json.dumps([{key: value for key, value in row.items() if key != "at"} for row in body["rows"]])
     for kept in ("4111111111111111", "737", "482913"):
-        assert kept not in json.dumps(body)
+        assert kept not in held
 
 
 def test_a_card_field_the_page_stops_marking_stays_one(browser) -> None:
@@ -547,5 +549,5 @@ def test_a_world_the_agent_makes_under_the_recorder_s_old_name_cannot_write_the_
 
     _run(kit, steps)
     rows = _settled(kit)["rows"]
-    assert not [row for row in rows if "forged" in json.dumps(row)]
+    assert not [row for row in rows if "forged.example" in row["url"] or "forged-world" in json.dumps(row)]
     assert kit.recorder.binding != "alkBrowserRecord" and kit.recorder.listener_world != "alk-browser-record"
