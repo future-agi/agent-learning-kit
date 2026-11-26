@@ -132,8 +132,8 @@ test("marks fetch and http exports to the collector and leaves every other reque
     const collector = "http://127.0.0.1:${collector.port}";
     const other = "http://127.0.0.1:${other.port}";
     const auth = { "X-Api-Key": "customer-key", "X-Secret-Key": "customer-secret" };
-    // A runtime that posts OTLP JSON with fetch, to traceAI's path, with a fixed resource.
-    await fetch(collector + "/tracer/v1/traces", {
+    // A runtime that posts OTLP JSON with fetch, with a fixed resource.
+    await fetch(collector + "/v1/traces", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body,
@@ -891,4 +891,65 @@ test("a call file replaced while the hook reads it never gives one call's span t
   // A's span is A's or unstamped, never B's; B's span is B's.
   assert.notEqual(calls.a, "call-b");
   assert.equal(calls.b, "call-b");
+});
+
+test("only the configured scheme, host, port and path are the collector", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const base = `127.0.0.1:${collector.port}`;
+  const body = JSON.stringify(otlp([span("llm", 1n)]));
+  const script = `
+    import http from "node:http";
+    const body = ${JSON.stringify(body)};
+    const headers = { "content-type": "application/json", "x-api-key": "customer-key", "x-secret-key": "customer-secret" };
+    const post = (path) => new Promise((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port: ${collector.port}, path, method: "POST", headers },
+        (res) => { res.resume(); res.on("end", resolve); });
+      req.on("error", reject);
+      req.end(body);
+    });
+    for (const path of process.argv.slice(2)) {
+      await fetch("http://${base}" + path, { method: "POST", headers, body });
+      await post(path);
+    }
+  `;
+  const cases = [
+    // The configured route, and the same host's other routes.
+    { endpoint: `http://${base}/collector/v1/traces`, paths: ["/collector/v1/traces", "/collector/v1/traces/"], ours: true },
+    { endpoint: `http://${base}/collector/v1/traces`, paths: ["/v1/traces", "/tracer/v1/traces", "/other/v1/traces"], ours: false },
+    // Plain http to the port of an https collector.
+    { endpoint: `https://${base}/v1/traces`, paths: ["/v1/traces"], ours: false },
+  ];
+  for (const { endpoint, paths, ours } of cases) {
+    collector.seen.length = 0;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-mark-"));
+    const file = path.join(dir, "agent.mjs");
+    fs.writeFileSync(file, script);
+    const result = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [file, ...paths], {
+        env: {
+          PATH: process.env.PATH,
+          NODE_OPTIONS: `--require="${HOOK}"`,
+          ...envFor(collector),
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: endpoint,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("exit", (code) => resolve({ code, stderr }));
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(collector.seen.length, paths.length * 2);
+    for (const sent of collector.seen) {
+      const key = ours ? "ingest-key" : "customer-key";
+      assert.equal(sent.headers["x-api-key"], key, `${endpoint} ${sent.url}`);
+      const exported = JSON.parse(sent.body.toString());
+      assert.equal(
+        attributes(exported.resourceSpans[0].resource.attributes)["fi.simulation.job_id"],
+        ours ? "job-1" : undefined,
+        `${endpoint} ${sent.url}`,
+      );
+    }
+  }
 });

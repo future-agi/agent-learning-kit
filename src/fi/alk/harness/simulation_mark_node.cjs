@@ -7,9 +7,9 @@
  * runs inside the CUSTOMER's Node process before their code. It uses Node's own modules only.
  *
  * Node has no SDK constructor every exporter goes through, so this hook works on the request
- * instead: it wraps `fetch` and `http.request`/`https.request`, and acts only on a POST whose
- * host and port are the collector's (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) and whose path ends
- * in `/v1/traces`. On such a request it
+ * instead: it wraps `fetch` and `http.request`/`https.request`, and acts only on a POST to the
+ * collector's traces endpoint (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`): its scheme, host, port and
+ * path. On such a request it
  *   - replaces only the Future AGI authentication headers with the agent's ingest key, and
  *   - when the body is OTLP JSON (gzip or not): merges our `OTEL_RESOURCE_ATTRIBUTES` pairs
  *     (`project_name` and `fi.simulation.*`) over every resource, and stamps
@@ -52,7 +52,6 @@ const DEFAULT_PORTS = { "http:": 80, "https:": 443 };
 const MARK_PREFIX = "fi.simulation.";
 const ORIGIN_KEY = "fi.simulation.origin";
 const PROJECT_KEY = "project_name";
-const TRACES_PATH = "/v1/traces";
 const PATCHED = Symbol.for("alk.simulation_mark");
 // The call file is looked at this often, and on every export, so a window's edges are known to
 // within this many milliseconds.
@@ -97,19 +96,24 @@ function readPairs(raw) {
   return pairs.has(ORIGIN_KEY) ? pairs : null;
 }
 
-/** The host and port an endpoint names, as `_host_port` in the Python hook gives them. */
-function hostPort(endpoint) {
+/** A path as the collector compares it: without its query or trailing slashes. */
+function routeOf(path) {
+  return String(path || "/").split("?")[0].replace(/\/+$/, "") || "/";
+}
+
+/** The scheme, host, port and path of the collector's traces endpoint, as the platform writes it. */
+function destination(endpoint) {
   if (!endpoint) return null;
   let url;
   try {
-    url = new URL(endpoint.includes("://") ? endpoint : `unknown://${endpoint}`);
+    url = new URL(endpoint);
   } catch (_) {
     return null;
   }
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (!host) return null;
-  const port = url.port ? Number(url.port) : DEFAULT_PORTS[url.protocol] ?? null;
-  return `${host}:${port}`;
+  if (!host || !(url.protocol in DEFAULT_PORTS)) return null;
+  const port = url.port ? Number(url.port) : DEFAULT_PORTS[url.protocol];
+  return `${url.protocol}//${host}:${port}${routeOf(url.pathname)}`;
 }
 
 /**
@@ -263,7 +267,7 @@ function install() {
   if (env[MEASURE]) return;
   const apiKey = env[INGEST_API_KEY];
   const secretKey = env[INGEST_SECRET_KEY];
-  const collector = hostPort(env[TRACES_ENDPOINT]);
+  const collector = destination(env[TRACES_ENDPOINT]);
   if (!apiKey || !secretKey || collector === null) return;
   if (!HEADER_VALUE.test(apiKey) || !HEADER_VALUE.test(secretKey)) {
     // Not a key: as a header it would fail the request or add one.
@@ -287,12 +291,13 @@ function install() {
     }, POLL_MS).unref();
   }
 
+  // Only the configured endpoint itself: the same host's other routes, or another scheme on its
+  // port, are not the collector.
   function aimedAtUs(method, protocol, host, port, path) {
     if (String(method || "GET").toUpperCase() !== "POST") return false;
-    const pathname = String(path || "/").split("?")[0].replace(/\/+$/, "");
-    if (!pathname.endsWith(TRACES_PATH)) return false;
     const resolved = port ? Number(port) : DEFAULT_PORTS[protocol] ?? null;
-    return `${String(host || "").toLowerCase().replace(/^\[|\]$/g, "")}:${resolved}` === collector;
+    const name = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+    return `${protocol}//${name}:${resolved}${routeOf(path)}` === collector;
   }
 
   function mark(body, contentType, contentEncoding) {
