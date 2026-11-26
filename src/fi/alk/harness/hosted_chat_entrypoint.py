@@ -1097,10 +1097,17 @@ class HostedChatRuntime:
     async def _approve_design(self, question: str, options: list[dict[str, str]]) -> str:
         from .design.workspace import load_design
 
-        proposal = load_design(self.workspace).pending_proposal
+        from .design.reviewed_sources import load_evidence, proposal_rule_sources
+
+        design = load_design(self.workspace)
+        proposal = design.pending_proposal
         payload: dict[str, Any] = {"question": question, "options": options}
         if proposal:
             payload["design_proposal"] = proposal.model_dump()
+            if design.reviewed_source:
+                links = proposal_rule_sources(proposal.rules, load_evidence(self.workspace, design))
+                if links:
+                    payload["design_proposal"]["rule_sources"] = links
         answer = await self._ask("propose_design", payload, None)
         content = answer.get("content") if isinstance(answer, dict) else None
         return "\n".join(str(part.get("text") or "") for part in content or [])

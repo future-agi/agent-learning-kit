@@ -128,7 +128,7 @@ def settle_proposal(workspace: Path, answer: str) -> bool:
     design = load_design(workspace)
     proposal = design.pending_proposal
     approved = (
-        proposal is not None and chosen_option(answer, APPROVAL_OPTIONS) == APPROVE
+        proposal is not None and not proposal.dependencies and chosen_option(answer, APPROVAL_OPTIONS) == APPROVE
     )
     update: dict[str, Any] = {"pending_proposal": None}
     if approved:
@@ -987,7 +987,7 @@ class DesignTools:
                     "tool and what it changes, the rules, the data, what failure looks like) and "
                     "the use cases every scenario belongs to. List the proposed records (tables, not real personal data), "
                     "tools, rules and people (roles, not names), one readable line per item. Use empty lists "
-                    "where none are needed. List unsupported external integrations in dependencies so the person can choose to simulate or omit each. Waits for their answer.",
+                    "where none are needed. When directly proposing an approved public document rule, keep its wording so its source page can be linked. Never copy private content. List unsupported external integrations in dependencies so the person can choose to simulate or omit each. Waits for their answer.",
                     schema(
                         {
                             "one_liner": str,

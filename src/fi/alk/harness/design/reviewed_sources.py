@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Literal
@@ -276,6 +277,26 @@ def load_evidence(workspace: Path, design: Design) -> dict[str, Any]:
         "source_snapshot_invalid",
         "The approved source projection is missing or changed.",
     )
+
+
+def proposal_rule_sources(rules: list[str], evidence: dict[str, Any]) -> list[dict]:
+    """Link an unchanged approved clause to its document page, never a derived plan item."""
+    def wording(text: str) -> str:
+        text = re.sub(r"^\s*\[(?:agent_policy|system_invariant|configurable_environment_policy)\]\s*", "", text)
+        text = re.sub(r"^\s*\d+[.)]\s+", "", text)
+        return " ".join(text.casefold().split()).rstrip(".")
+
+    pages: dict[str, set[tuple[str, int]]] = {}
+    for case in evidence.get("cases", []):
+        clause = wording(case.get("policy_reference") or "")
+        for cite in case.get("citations", []):
+            if clause and cite.get("source_id") and isinstance(cite.get("page"), int):
+                pages.setdefault(clause, set()).add((cite["source_id"], cite["page"]))
+    return [
+        {"rule_index": index, "source_id": source, "page": page}
+        for index, rule in enumerate(rules)
+        for source, page in sorted(pages.get(wording(rule), ()))
+    ]
 
 
 def source_server(evidence: dict[str, Any]) -> ToolServer:

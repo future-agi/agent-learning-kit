@@ -779,3 +779,33 @@ def test_wrong_record_role_is_rejected_before_approval(tmp_path, monkeypatch):
         assert load_design(tmp_path).stage == "world"
     finally:
         tools.world.close()
+
+
+def test_proposal_only_attributes_a_matching_public_clause_to_its_page():
+    from fi.alk.harness.design.reviewed_sources import proposal_rule_sources
+
+    evidence = {"cases": [{
+        "policy_reference": "1. Damaged items qualify for prepaid return shipping.",
+        "citations": [{"source_id":"policy", "page":2}, {"source_id":"orders", "row":1}],
+    }]}
+    rules = ["[agent_policy] Damaged items qualify for prepaid return shipping.",
+             "Damaged items never qualify for prepaid return shipping."]
+    assert proposal_rule_sources(rules, evidence) == [{"rule_index":0, "source_id":"policy", "page":2}]
+
+
+def test_build_approval_requires_resolving_every_dependency(tmp_path):
+    from fi.alk.harness.design.tools import settle_proposal
+
+    open_design(tmp_path, name="returns")
+    proposal = Proposal(
+        one_liner="Handle returns",
+        summary="Answer return requests",
+        use_cases=["Damaged item"],
+        dependencies=["Inventory service access"],
+    )
+    for dependencies, expected in ((proposal.dependencies, False), ([], True)):
+        pending = proposal.model_copy(update={"dependencies": dependencies})
+        design = load_design(tmp_path).model_copy(update={"pending_proposal": pending})
+        save_design(tmp_path, design)
+        assert settle_proposal(tmp_path, "Build this") is expected
+        assert (load_design(tmp_path).proposal is not None) is expected
