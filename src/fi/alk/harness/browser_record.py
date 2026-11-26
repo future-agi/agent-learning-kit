@@ -496,6 +496,7 @@ class BrowserRecorder:
         self._clock = clock
         self.record = BrowserRecord(self.sites, clock=clock)
         self._socket: CdpSocket | None = None
+        self._socket_lock = threading.Lock()
         self._ids = 0
         self._ids_lock = threading.Lock()
         self._tabs: dict[str, tuple[str, str]] = {}  # session -> (tab, its main frame)
@@ -528,7 +529,9 @@ class BrowserRecorder:
             opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
             with opener.open(f"http://127.0.0.1:{port}/json/version", timeout=10) as answer:
                 address = json.loads(answer.read())["webSocketDebuggerUrl"]
-            self._socket = self._connect(address)
+            connected = self._connect(address)
+            with self._socket_lock:
+                self._socket = connected
             self._command(
                 "Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}
             )
@@ -538,7 +541,7 @@ class BrowserRecorder:
             self._drop()
             self.write()
             return
-        threading.Thread(target=self._read, args=(self._socket,), daemon=True).start()
+        threading.Thread(target=self._read, args=(connected,), daemon=True).start()
 
     def detach(self) -> None:
         self._leaving = True
@@ -601,10 +604,15 @@ class BrowserRecorder:
         except OSError:
             logger.warning("browser record: could not be written to %s", self.record_path)
 
-    def _drop(self) -> None:
-        current, self._socket = self._socket, None
-        if current is not None:
-            current.close()
+    def _drop(self, only: CdpSocket | None = None) -> bool:
+        """Close the current connection, or only ``only`` if it is still the current one; whether one was closed."""
+        with self._socket_lock:
+            current = self._socket
+            if current is None or (only is not None and current is not only):
+                return False
+            self._socket = None
+        current.close()
+        return True
 
     def _command(
         self,
@@ -648,9 +656,7 @@ class BrowserRecorder:
         finally:
             # A connection no longer read is closed: the browser holds each new tab for the recorder while it is
             # connected, and lets them go when it is not.
-            if connection is self._socket:
-                self._drop()
-            else:
+            if not self._drop(connection):
                 with contextlib.suppress(Exception):
                     connection.close()
             if connection is self._socket or self._socket is None:
