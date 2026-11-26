@@ -785,7 +785,7 @@ def test_proposal_only_attributes_a_matching_public_clause_to_its_page():
     from fi.alk.harness.design.reviewed_sources import proposal_rule_sources
 
     evidence = {"cases": [{
-        "policy_reference": "1. Damaged items qualify for prepaid return shipping.",
+        "policy_reference": "1. Damaged items qualify for prepaid return shippin\ng\n.",
         "citations": [{"source_id":"policy", "page":2}, {"source_id":"orders", "row":1}],
     }]}
     rules = ["[agent_policy] Damaged items qualify for prepaid return shipping.",

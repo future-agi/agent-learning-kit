@@ -291,19 +291,27 @@ def proposal_rule_sources(rules: list[str], evidence: dict[str, Any]) -> list[di
     """Link an unchanged approved clause to its document page, never a derived plan item."""
     def wording(text: str) -> str:
         text = re.sub(r"^\s*\[(?:agent_policy|system_invariant|configurable_environment_policy)\]\s*", "", text)
-        text = re.sub(r"^\s*\d+[.)]\s+", "", text)
-        return " ".join(text.casefold().split()).rstrip(".")
+        return re.sub(r"^\s*\d+[.)]\s+", "", text).strip().casefold().rstrip(".")
 
-    pages: dict[str, set[tuple[str, int]]] = {}
+    # PDF line wrapping can split a word or leave its final punctuation on a line alone.
+    # Only an actual line break in the approved source may disappear in a proposed rule.
+    normalized_rules = [" ".join(wording(rule).split()) for rule in rules]
+    links = set()
     for case in evidence.get("cases", []):
         clause = wording(case.get("policy_reference") or "")
-        for cite in case.get("citations", []):
-            if clause and cite.get("source_id") and isinstance(cite.get("page"), int):
-                pages.setdefault(clause, set()).add((cite["source_id"], cite["page"]))
+        if not clause:
+            continue
+        pattern = r" ?".join(
+            re.escape(" ".join(line.split())) for line in clause.splitlines() if line.strip()
+        )
+        for index, rule in enumerate(normalized_rules):
+            if re.fullmatch(pattern, rule):
+                for cite in case.get("citations", []):
+                    if cite.get("source_id") and type(cite.get("page")) is int and cite["page"] > 0:
+                        links.add((index, cite["source_id"], cite["page"]))
     return [
         {"rule_index": index, "source_id": source, "page": page}
-        for index, rule in enumerate(rules)
-        for source, page in sorted(pages.get(wording(rule), ()))
+        for index, source, page in sorted(links)
     ]
 
 
