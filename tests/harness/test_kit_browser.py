@@ -156,7 +156,7 @@ def test_a_site_whose_name_resolves_to_loopback_is_refused() -> None:
         ["shop.test"],
         MemoryLog(),
         attached=_Attached(True),
-        resolve=lambda host: "127.0.0.1",
+        resolve=lambda host: ["127.0.0.1"],
     )
     try:
         status, body = _through(proxy, "http://shop.test/")
@@ -166,16 +166,64 @@ def test_a_site_whose_name_resolves_to_loopback_is_refused() -> None:
     assert b"loopback" in body
 
 
-@pytest.mark.parametrize("address", ["127.0.0.1", "0.0.0.0", "::"])
-def test_a_site_whose_name_leads_back_to_this_machine_is_refused_and_logged(address) -> None:
+@pytest.mark.parametrize(
+    "addresses",
+    [
+        ["127.0.0.1"],
+        ["0.0.0.0"],
+        ["::"],
+        # An IPv4 loopback written as IPv6 is loopback whatever the Python release says of it.
+        ["::ffff:127.0.0.1"],
+        # A name with a public address and a loopback one leads back as surely as one with loopback alone.
+        ["203.0.113.7", "127.0.0.1"],
+    ],
+)
+def test_a_site_whose_name_leads_back_to_this_machine_is_refused_and_logged(addresses) -> None:
     # 0.0.0.0 connects to a listener on 127.0.0.1, so an unspecified address is loopback too.
     log = MemoryLog()
-    proxy = BrowserProxy(["shop.test"], log, attached=_Attached(True), resolve=lambda host: address)
+    proxy = BrowserProxy(["shop.test"], log, attached=_Attached(True), resolve=lambda host: addresses)
     try:
         assert _through(proxy, "http://shop.test/")[0] == 403
     finally:
         proxy.close()
     assert [row["arguments"] for row in log.rows()] == [{"host": "shop.test", "method": "GET", "via": "browser"}]
+
+
+def test_each_address_of_a_site_is_tried_in_turn_within_one_time_limit(monkeypatch) -> None:
+    # An address that cannot be reached (an IPv6 one where the sandbox has no IPv6 route) gives way to the next.
+    tried: list[tuple[str, int, float]] = []
+    reached = object()
+
+    def dial(address, timeout):
+        tried.append((*address, timeout))
+        if address[0] == "2001:db8::1":
+            raise OSError("no route")
+        return reached
+
+    monkeypatch.setattr(kit_browser.socket, "create_connection", dial)
+    proxy = BrowserProxy(
+        ["shop.test"], MemoryLog(), attached=_Attached(True), resolve=lambda host: ["2001:db8::1", "203.0.113.7"]
+    )
+    try:
+        assert proxy.open("shop.test", 443) is reached
+    finally:
+        proxy.close()
+    assert [(host, port) for host, port, _ in tried] == [("2001:db8::1", 443), ("203.0.113.7", 443)]
+    assert all(0 < timeout <= 30 for *_, timeout in tried)
+
+
+def test_a_site_none_of_whose_addresses_answers_fails_with_the_last_error(monkeypatch) -> None:
+    def dial(address, timeout):
+        raise OSError(f"{address[0]} refused")
+
+    monkeypatch.setattr(kit_browser.socket, "create_connection", dial)
+    for addresses, said in ((["203.0.113.7", "203.0.113.8"], "203.0.113.8 refused"), ([], "no address")):
+        proxy = BrowserProxy(["shop.test"], MemoryLog(), attached=_Attached(True), resolve=lambda host: addresses)
+        try:
+            with pytest.raises(OSError, match=said):
+                proxy.open("shop.test", 80)
+        finally:
+            proxy.close()
 
 
 def test_the_browser_s_own_housekeeping_is_never_the_agent_s_attempt() -> None:
