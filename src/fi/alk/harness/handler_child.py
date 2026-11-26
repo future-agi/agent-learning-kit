@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import signal
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +40,24 @@ from .world.runtime import Call, GeneratedWorld
 HANDLER_USER = ProcessUser.SVC_AGENT
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 CALL_TIMEOUT_SECONDS = 300.0
+INIT_WRITE_TIMEOUT_SECONDS = 30.0
+
+
+def _write_init(fd: int, payload: bytes) -> None:
+    deadline = time.monotonic() + INIT_WRITE_TIMEOUT_SECONDS
+    os.set_blocking(fd, False)
+    pending = memoryview(payload)
+    with selectors.PollSelector() as selector:
+        selector.register(fd, selectors.EVENT_WRITE)
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                raise TimeoutError("handler child initialization write timed out")
+            try:
+                written = os.write(fd, pending)
+            except BlockingIOError:
+                continue
+            pending = pending[written:]
 
 
 class HandlerChannel:
@@ -222,8 +242,8 @@ def start_handler_child(
         os.close(log)
     try:
         assert process.stdin is not None
-        process.stdin.write(
-            json.dumps(
+        with process.stdin:
+            payload = json.dumps(
                 {
                     "handlers": dict(handlers),
                     "tools": [dict(tool) for tool in tools],
@@ -236,8 +256,7 @@ def start_handler_child(
                     **({"import_subfolder": subfolder} if subfolder else {}),
                 }
             ).encode("utf-8")
-        )
-        process.stdin.close()
+            _write_init(process.stdin.fileno(), payload)
     except BaseException:
         HandlerChild(process, parent_end, leaf).close()
         raise

@@ -94,7 +94,7 @@ def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_p
     captured = []
 
     @contextmanager
-    def connect(_dsn, *, autocommit, cursor_factory=psycopg.Cursor):
+    def connect(_dsn, *, autocommit, cursor_factory=psycopg.Cursor, options=""):
         class Connection:
             description = None
             rowcount = 0
@@ -111,6 +111,10 @@ def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_p
         yield Connection()
 
     monkeypatch.setattr(psycopg, "connect", connect)
+    # A bundle sealed before the world's role: the door's path, found free of shadows.
+    from fi.alk.harness import mcp_toolbox_adapter
+
+    monkeypatch.setitem(mcp_toolbox_adapter._SHADOW_FREE, "unused", True)
     statement = (
         "SELECT '$1', $$ $2 $$, $tag$ $1 $tag$, '100%', $2, $1, $1 -- $99\n/* $98 */"
     )
@@ -121,7 +125,14 @@ def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_p
         database_url="unused",
         trace_path=tmp_path / "trace.jsonl",
     )
-    assert captured == [(statement.encode(), [b"one", b"two"])]
+    assert captured[0] == (statement.encode(), [b"one", b"two"])
+    # Then the call goes into the world's own call log, as the tool proxy logs its calls.
+    logged, values = captured[1]
+    assert logged.startswith(
+        b"INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at, outcome, actor_id)"
+    )
+    assert values[:2] == [b"example", b'{"first": "one", "second": "two"}']
+    assert values[-2:] == [b"committed", b"agent"]
 
 
 def test_source_sql_executes_without_rewriting_literals_or_comments(tmp_path):
@@ -153,3 +164,63 @@ def test_source_sql_executes_without_rewriting_literals_or_comments(tmp_path):
         }
     ]
     assert json.loads(trace.read_text())["is_error"] is False
+
+
+@pytest.mark.parametrize("accept", [b"*/*", None])
+def test_a_toolbox_client_that_does_not_name_json_is_answered(tmp_path, accept):
+    from starlette.testclient import TestClient
+
+    application = _application(
+        {
+            "tools": {
+                "lookup": {
+                    "kind": "postgres-sql",
+                    "description": "Look one thing up.",
+                    "parameters": [{"name": "key", "type": "string"}],
+                    "statement": "SELECT $1",
+                }
+            }
+        },
+        "unused",
+        tmp_path / "trace.jsonl",
+    )
+    headers = {"content-type": "application/json"}
+    if accept is not None:
+        headers["accept"] = accept.decode()
+
+    # The client runs the server's lifespan, as uvicorn does.
+    with TestClient(application, base_url="http://127.0.0.1:5000") as client:
+        response = client.post(
+            "/mcp/catalog",
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+
+    assert response.status_code == 200, response.text
+    assert [tool["name"] for tool in response.json()["result"]["tools"]] == ["lookup"]
+
+
+@pytest.mark.parametrize("accept", ["*/*", None, "application/json, text/event-stream"])
+def test_a_toolbox_client_accepting_any_type_is_answered(tmp_path, accept):
+    from starlette.testclient import TestClient
+
+    application = _application({"tools": {}}, "postgresql://unused", tmp_path / "trace.jsonl")
+    headers = {"content-type": "application/json", **({"accept": accept} if accept else {})}
+    with TestClient(application, base_url="http://127.0.0.1:15302") as client:
+        response = client.post(
+            "/mcp/catalog",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "toolbox-core", "version": "1.4.0"},
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["serverInfo"]["name"] == "source-mcp-toolbox"

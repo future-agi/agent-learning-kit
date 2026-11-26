@@ -1,0 +1,584 @@
+{
+ "_about": "Google ADK 2.13.0 /run_sse replies (streaming: true) for three turns of the kit's ADK reference agent on a stub model, recorded 19 Nov 2026 (TH-10449). Each holds two partial functionCall events with no args, the finished call, its functionResponse, then the reply text.",
+ "replies": [
+  [
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071135792",
+        "name": "look_up_order",
+        "willContinue": true
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-17589c06-1e63-49a7-bd41-3c96d5c2d979",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "4d67c21e-8b1e-45f5-a407-ff3df71a3999",
+    "timestamp": 1795071128.016196
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071135792",
+        "name": "look_up_order",
+        "partialArgs": [
+         {
+          "jsonPath": "$.order_id",
+          "stringValue": "A1001",
+          "willContinue": false
+         }
+        ],
+        "willContinue": true
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-17589c06-1e63-49a7-bd41-3c96d5c2d979",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "4d67c21e-8b1e-45f5-a407-ff3df71a3999",
+    "timestamp": 1795071136.2466218
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071135792",
+        "args": {
+         "order_id": "A1001"
+        },
+        "name": "look_up_order"
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": false,
+    "finishReason": "STOP",
+    "usageMetadata": {
+     "cachedContentTokenCount": 0,
+     "candidatesTokenCount": 5,
+     "promptTokenCount": 10,
+     "totalTokenCount": 15
+    },
+    "invocationId": "e-17589c06-1e63-49a7-bd41-3c96d5c2d979",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "4d67c21e-8b1e-45f5-a407-ff3df71a3999",
+    "timestamp": 1795071136.249226
+   },
+   {
+    "content": {
+     "parts": [
+      {
+       "functionResponse": {
+        "id": "call_1795071135792",
+        "name": "look_up_order",
+        "response": {
+         "result": "Order A1001: trail running shoes, status delivered, return: none."
+        }
+       }
+      }
+     ],
+     "role": "user"
+    },
+    "invocationId": "e-17589c06-1e63-49a7-bd41-3c96d5c2d979",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "fb7a49f5-3f1c-4510-8b63-e76398c78402",
+    "timestamp": 1795071136.277013
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "text": "Done. Tool said: {\"result\": \"Order A1001: trail running shoes, status delivered, return: none.\"}"
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-17589c06-1e63-49a7-bd41-3c96d5c2d979",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "a9c41b3c-1f26-432e-b8bc-54b4061c9f3f",
+    "timestamp": 1795071136.280452
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "text": "Done. Tool said: {\"result\": \"Order A1001: trail running shoes, status delivered, return: none.\"}"
+      }
+     ],
+     "role": "model"
+    },
+    "partial": false,
+    "finishReason": "STOP",
+    "usageMetadata": {
+     "cachedContentTokenCount": 0,
+     "candidatesTokenCount": 5,
+     "promptTokenCount": 10,
+     "totalTokenCount": 15
+    },
+    "invocationId": "e-17589c06-1e63-49a7-bd41-3c96d5c2d979",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "a9c41b3c-1f26-432e-b8bc-54b4061c9f3f",
+    "timestamp": 1795071136.290869
+   }
+  ],
+  [
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071136351",
+        "name": "start_return",
+        "willContinue": true
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-8e7ed536-e576-4a9a-ae55-69534ce75e79",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "4acc9acf-f353-4019-8325-05bbdaabb876",
+    "timestamp": 1795071136.340617
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071136351",
+        "name": "start_return",
+        "partialArgs": [
+         {
+          "jsonPath": "$.order_id",
+          "stringValue": "A1001",
+          "willContinue": false
+         },
+         {
+          "jsonPath": "$.reason",
+          "stringValue": "too small",
+          "willContinue": false
+         }
+        ],
+        "willContinue": true
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-8e7ed536-e576-4a9a-ae55-69534ce75e79",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "4acc9acf-f353-4019-8325-05bbdaabb876",
+    "timestamp": 1795071136.3556638
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071136351",
+        "args": {
+         "order_id": "A1001",
+         "reason": "too small"
+        },
+        "name": "start_return"
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": false,
+    "finishReason": "STOP",
+    "usageMetadata": {
+     "cachedContentTokenCount": 0,
+     "candidatesTokenCount": 5,
+     "promptTokenCount": 10,
+     "totalTokenCount": 15
+    },
+    "invocationId": "e-8e7ed536-e576-4a9a-ae55-69534ce75e79",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "4acc9acf-f353-4019-8325-05bbdaabb876",
+    "timestamp": 1795071136.3580291
+   },
+   {
+    "content": {
+     "parts": [
+      {
+       "functionResponse": {
+        "id": "call_1795071136351",
+        "name": "start_return",
+        "response": {
+         "result": "Return started for order A1001: too small."
+        }
+       }
+      }
+     ],
+     "role": "user"
+    },
+    "invocationId": "e-8e7ed536-e576-4a9a-ae55-69534ce75e79",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "0fd631ee-eb4f-44d9-b62a-c90c8a58ccf9",
+    "timestamp": 1795071136.3753102
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "text": "Done. Tool said: {\"result\": \"Return started for order A1001: too small.\"}"
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-8e7ed536-e576-4a9a-ae55-69534ce75e79",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "25f8fb5f-6e4a-4738-99ae-67d919c5beef",
+    "timestamp": 1795071136.3793302
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "text": "Done. Tool said: {\"result\": \"Return started for order A1001: too small.\"}"
+      }
+     ],
+     "role": "model"
+    },
+    "partial": false,
+    "finishReason": "STOP",
+    "usageMetadata": {
+     "cachedContentTokenCount": 0,
+     "candidatesTokenCount": 5,
+     "promptTokenCount": 10,
+     "totalTokenCount": 15
+    },
+    "invocationId": "e-8e7ed536-e576-4a9a-ae55-69534ce75e79",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "25f8fb5f-6e4a-4738-99ae-67d919c5beef",
+    "timestamp": 1795071136.396886
+   }
+  ],
+  [
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071136432",
+        "name": "return_policy",
+        "willContinue": true
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-844fbb84-1ca5-4734-8d1d-7c0c87d364b0",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "76406959-83cd-4740-a628-69da15176789",
+    "timestamp": 1795071136.422205
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071136432",
+        "name": "return_policy",
+        "willContinue": true
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-844fbb84-1ca5-4734-8d1d-7c0c87d364b0",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "76406959-83cd-4740-a628-69da15176789",
+    "timestamp": 1795071136.435198
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "id": "call_1795071136432",
+        "args": {},
+        "name": "return_policy"
+       }
+      }
+     ],
+     "role": "model"
+    },
+    "partial": false,
+    "finishReason": "STOP",
+    "usageMetadata": {
+     "cachedContentTokenCount": 0,
+     "candidatesTokenCount": 5,
+     "promptTokenCount": 10,
+     "totalTokenCount": 15
+    },
+    "invocationId": "e-844fbb84-1ca5-4734-8d1d-7c0c87d364b0",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "longRunningToolIds": [],
+    "id": "76406959-83cd-4740-a628-69da15176789",
+    "timestamp": 1795071136.4359941
+   },
+   {
+    "content": {
+     "parts": [
+      {
+       "functionResponse": {
+        "id": "call_1795071136432",
+        "name": "return_policy",
+        "response": {
+         "result": "Delivered items can be returned within 30 days for a full refund."
+        }
+       }
+      }
+     ],
+     "role": "user"
+    },
+    "invocationId": "e-844fbb84-1ca5-4734-8d1d-7c0c87d364b0",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "525e61a8-c626-4412-9592-4e02e165e6c3",
+    "timestamp": 1795071136.450165
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "text": "Done. Tool said: {\"result\": \"Delivered items can be returned within 30 days for a full refund.\"}"
+      }
+     ],
+     "role": "model"
+    },
+    "partial": true,
+    "invocationId": "e-844fbb84-1ca5-4734-8d1d-7c0c87d364b0",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "591535b6-5526-4a08-8276-5d270e920f13",
+    "timestamp": 1795071136.453723
+   },
+   {
+    "modelVersion": "vertex_ai/gemini-stub",
+    "content": {
+     "parts": [
+      {
+       "text": "Done. Tool said: {\"result\": \"Delivered items can be returned within 30 days for a full refund.\"}"
+      }
+     ],
+     "role": "model"
+    },
+    "partial": false,
+    "finishReason": "STOP",
+    "usageMetadata": {
+     "cachedContentTokenCount": 0,
+     "candidatesTokenCount": 5,
+     "promptTokenCount": 10,
+     "totalTokenCount": 15
+    },
+    "invocationId": "e-844fbb84-1ca5-4734-8d1d-7c0c87d364b0",
+    "author": "support_agent",
+    "actions": {
+     "stateDelta": {},
+     "artifactDelta": {},
+     "requestedAuthConfigs": {},
+     "requestedToolConfirmations": {}
+    },
+    "nodeInfo": {
+     "path": "support_agent@1"
+    },
+    "id": "591535b6-5526-4a08-8276-5d270e920f13",
+    "timestamp": 1795071136.466558
+   }
+  ]
+ ]
+}

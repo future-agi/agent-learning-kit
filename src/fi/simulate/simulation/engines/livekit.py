@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+import contextvars
 import json
 import math
 import logging
@@ -1969,7 +1970,7 @@ class LiveKitEngine(BaseEngine):
             if not _cleanup_started:
                 _cleanup_started.append(time.monotonic())
             spent = time.monotonic() - _cleanup_started[0]
-            remaining = max(0.1, cleanup_timeout - spent)
+            remaining = max(0.1, _cleanup_limit(cleanup_timeout) - spent)
             return min(cap, remaining)
 
         api_key = os.environ.get(runtime.api_key_env)
@@ -2533,15 +2534,7 @@ class LiveKitEngine(BaseEngine):
                             "transport": transport.kind,
                         },
                     )
-                    outcome = _failure_outcome(
-                        TestCaseStatus.FAILED,
-                        FailureStage.PREPARING,
-                        "web_bridge_start_failed",
-                        "Failed to start the provider web bridge",
-                        details=_safe_provider_error_details(
-                            exc, operation="web_bridge_start"
-                        ),
-                    )
+                    outcome = _web_bridge_start_failure(exc)
                     raise _PreparationFailed
             if profile.places_outbound_call and api_client is not None:
                 try:
@@ -2966,7 +2959,10 @@ class LiveKitEngine(BaseEngine):
                         extra={"run_id": run_id, "test_case_id": test_case_id},
                     )
             _loop = asyncio.get_running_loop()
-            _commit_deadline = _loop.time() + _FINAL_TURN_COMMIT_WAIT_SECONDS
+            # A person's Stop cuts the call where it is: no wait for the turn in flight or the target's last words.
+            _commit_deadline = _loop.time() + (
+                0.0 if stop_reason == "user_canceled" else _FINAL_TURN_COMMIT_WAIT_SECONDS
+            )
             while _loop.time() < _commit_deadline:
                 try:
                     if session.current_speech is None:
@@ -2975,7 +2971,7 @@ class LiveKitEngine(BaseEngine):
                     break
                 await asyncio.sleep(0.2)
             session_messages = _session_messages(session)
-            waited = await _await_target_last_words(
+            waited = 0.0 if stop_reason == "user_canceled" else await _await_target_last_words(
                 speaking=lambda: bool(target_transcription_tasks)
                 or getattr(session, "user_state", None) == "speaking",
                 present=lambda: any(
@@ -4044,6 +4040,61 @@ async def _await_target_last_words(
     return loop.time() - started
 
 
+# The hosting harness's Stop, read while a conversation runs: set by the voice environment for one run, so a person's
+# Stop ends the call at once and the call is sealed with what was said up to it.
+STOP_CHECK: contextvars.ContextVar[Callable[[], bool] | None] = contextvars.ContextVar(
+    "livekit_stop_check", default=None
+)
+_STOP_POLL_SECONDS = 0.25
+
+
+# After a person's Stop the call is sealed with what it has: teardown gets this much in all, so the transcript and the
+# recording reach the harness inside its seal bound (15 s from the stop) however long LiveKit takes to let go.
+_STOPPED_CLEANUP_SECONDS = 8.0
+
+
+# Until when the target is known to be working with nobody speaking (a tool call the harness's world is holding for
+# its timeout), as an epoch second; read while a conversation runs. Unset, the silence backstop is as it always was.
+TARGET_BUSY_UNTIL: contextvars.ContextVar[Callable[[], float | None] | None] = contextvars.ContextVar(
+    "livekit_target_busy_until", default=None
+)
+
+
+def _target_held() -> bool:
+    """Whether the hosting harness says the target is still working on a held tool call."""
+    check = TARGET_BUSY_UNTIL.get()
+    if check is None:
+        return False
+    try:
+        until = check()
+    except Exception:  # noqa: BLE001 - a failing check is no hold
+        return False
+    return until is not None and time.time() < until
+
+
+def _stop_requested() -> bool:
+    check = STOP_CHECK.get()
+    try:
+        return bool(check is not None and check())
+    except Exception:  # noqa: BLE001 - a failing check is no stop
+        return False
+
+
+def _cleanup_limit(cleanup_timeout: float) -> float:
+    """The whole teardown's budget: the run's own, cut short once the person stopped the call."""
+    return min(cleanup_timeout, _STOPPED_CLEANUP_SECONDS) if _stop_requested() else cleanup_timeout
+
+
+async def _wait_for_stop(check: Callable[[], bool]) -> None:
+    while True:
+        try:
+            if check():
+                return
+        except Exception:  # noqa: BLE001 - a failing check never ends the call
+            pass
+        await asyncio.sleep(_STOP_POLL_SECONDS)
+
+
 async def _wait_for_conversation_end(
     room: rtc.Room,
     session: AgentSession,
@@ -4115,6 +4166,9 @@ async def _wait_for_conversation_end(
         )
     if provider_task is not None:
         tasks["provider_disconnected"] = provider_task
+    stop_check = STOP_CHECK.get()
+    if stop_check is not None:
+        tasks["user_canceled"] = asyncio.create_task(_wait_for_stop(stop_check))
     try:
         done, pending = await asyncio.wait(
             set(tasks.values()),
@@ -4144,15 +4198,26 @@ async def _wait_for_conversation_end(
             else:
                 monitor_failures[name] = exc
         for name, exc in monitor_failures.items():
+            extra: dict[str, object] = {
+                "monitor": name,
+                "target_identity": target_identity,
+            }
+            if name == "provider_disconnected" and isinstance(exc, Exception):
+                # Only the sanitized code and status, never the message.
+                extra.update(
+                    _safe_provider_error_details(exc, operation="provider_audio")
+                )
             logger.warning(
                 "conversation end monitor failed",
                 exc_info=redacted_exc_info(exc),
-                extra={"monitor": name, "target_identity": target_identity},
+                extra=extra,
             )
         # A bridge task error is still a real provider-side disconnect.
         if "provider_disconnected" in monitor_failures:
-            completed.add("provider_disconnected")
+            completed.add("provider_bridge_failed")
         for reason in (
+            # The person's Stop outranks every other ending.
+            "user_canceled",
             "simulator_end_call",
             "target_disconnected",
             "room_disconnected",
@@ -4163,6 +4228,7 @@ async def _wait_for_conversation_end(
             "conversation_silence_timeout",
             "conversation_stalled",
             "provider_disconnected",
+            "provider_bridge_failed",
             "closed",
         ):
             if reason in completed:
@@ -4319,7 +4385,8 @@ async def _wait_for_conversation_silence(
             await asyncio.sleep(0.1)
             continue
         now = loop.time()
-        participant_busy = _either_side_busy(session)
+        # A tool call the world holds keeps the target working in silence: the wait starts again once it is answered.
+        participant_busy = _either_side_busy(session) or _target_held()
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
@@ -5044,6 +5111,20 @@ def _caller_never_spoke(messages: list[dict[str, Any]]) -> bool:
     )
 
 
+_AGENT_ENDED_REASONS = frozenset(
+    {
+        "assistant-ended-call",
+        "assistant-ended-call-after-message-spoken",
+        "assistant-ended-call-with-hangup-task",
+        "assistant-forwarded-call",
+        "assistant-said-end-call-phrase",
+        "agent_hangup",
+    }
+)
+_AGENT_ENDING_TOOLS = frozenset({"endcall", "transfercall"})
+_END_CALL_TOOLS = frozenset({"endcall"})
+
+
 def _recover_successful_provider_end_call(
     outcome: _CaseOutcome,
     provider_summary: EvidenceSourceSummary,
@@ -5065,20 +5146,43 @@ def _recover_successful_provider_end_call(
         return
     if not _has_role_alternation(outcome.messages):
         return
-    calls = provider_summary.metadata.get("tool_calls")
-    if not isinstance(calls, list):
-        return
-    ended_cleanly = any(
-        isinstance(call, dict)
-        and str(call.get("name") or "").strip().lower() == "end_call"
-        and call.get("ok") is not False
-        for call in calls
-    )
-    if not ended_cleanly:
+    if not _provider_reports_agent_ending(provider_summary.metadata):
         return
     outcome.status = TestCaseStatus.COMPLETED
     outcome.failure = None
     outcome.metadata["provider_end_call_recovered"] = True
+
+
+def _provider_reports_agent_ending(metadata: dict[str, Any]) -> bool:
+    reason = (
+        str(metadata.get("ended_reason") or metadata.get("end_reason") or "")
+        .strip()
+        .lower()
+    )
+    if reason in _AGENT_ENDED_REASONS:
+        return True
+    unfinished = _caller_or_unfinished_transfer(reason)
+    if "transfer" in reason and not unfinished:
+        return True
+    calls = metadata.get("tool_calls")
+    if not isinstance(calls, list):
+        return False
+    ending_tools = _END_CALL_TOOLS if unfinished else _AGENT_ENDING_TOOLS
+    return any(
+        isinstance(call, dict)
+        and call.get("ok") is not False
+        and any(
+            str(call.get(field) or "").strip().lower().replace("_", "") in ending_tools
+            for field in ("name", "type")
+        )
+        for call in calls
+    )
+
+
+def _caller_or_unfinished_transfer(reason: str) -> bool:
+    return reason.startswith(("customer", "user")) or any(
+        word in reason for word in ("cancel", "fail", "error")
+    )
 
 
 def _reconcile_provider_observation(
@@ -5195,6 +5299,11 @@ def _target_has_gone_quiet(messages: list[dict[str, Any]]) -> bool:
     return trailing >= _QUIET_AFTER_UNANSWERED_TURNS
 
 
+_TARGET_ENDED_STOP_REASONS = frozenset(
+    {"target_disconnected", "room_disconnected", "provider_disconnected"}
+)
+
+
 def _conversation_outcome(
     stop_reason: str,
     messages: list[dict[str, str]],
@@ -5204,10 +5313,18 @@ def _conversation_outcome(
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
     )
+    if stop_reason == "user_canceled":
+        # Stopped by the person: the call is kept as said up to the stop; the harness reports it as cancelled.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={"stop_reason": stop_reason},
+        )
     if (
-        stop_reason in {"target_disconnected", "room_disconnected"}
+        stop_reason in _TARGET_ENDED_STOP_REASONS
         and _has_role_alternation(messages)
-        and _has_natural_terminal_exchange(messages)
+        and _has_natural_terminal_exchange(messages, target_ended=True)
     ):
         # A provider target can deliberately end a short call before the generated
         # minimum-turn budget (for example, by accepting a caller's request to hang
@@ -5340,7 +5457,43 @@ def _conversation_outcome(
     )
 
 
-def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
+_TRANSFER_WORD = re.compile(r"\btransfer(?:r(?:ing|ed))?\b")
+_TRANSFER_DIRECT_PHRASE = re.compile(
+    r"\b(?:transfer|transferring|connect|connecting)\s+(?:you|your\s+call)\b"
+)
+_TRANSFER_HANDOFF_PHRASE = re.compile(
+    _TRANSFER_DIRECT_PHRASE.pattern
+    + r"|\btransfer(?:r(?:ing|ed))?\s+(?:(?:the|this)\s+call\s+)?(?:over\s+)?to\b"
+    r"|\btransfer(?:ring)?\s+(?:the|this)\s+call\b"
+    r"|\btransferring\s+now\b"
+    r"|\b(?:be|being|get\s+you|have\s+you)\s+transferred\b"
+)
+_TRANSFER_HANDOFF_MARKER = re.compile(r"\b(?:now|connect|connecting|please\s+wait)\b")
+_TRANSFER_REFUSAL = re.compile(
+    r"\b(?:can['\u2019]?t|cannot|can\s+not|unable|not\s+able|won['\u2019]?t)\b"
+)
+
+
+def _is_transfer_handoff(role: str, text: str) -> bool:
+    return (
+        role == "assistant"
+        and _TRANSFER_WORD.search(text) is not None
+        and _TRANSFER_HANDOFF_PHRASE.search(text) is not None
+        and _TRANSFER_HANDOFF_MARKER.search(text) is not None
+    )
+
+
+def _is_direct_transfer_handoff(role: str, text: str) -> bool:
+    return (
+        _is_transfer_handoff(role, text)
+        and _TRANSFER_DIRECT_PHRASE.search(text) is not None
+        and _TRANSFER_REFUSAL.search(text) is None
+    )
+
+
+def _has_natural_terminal_exchange(
+    messages: list[dict[str, str]], *, target_ended: bool = False
+) -> bool:
     """Recognize only explicit terminal language near the end of a call.
 
     This deliberately avoids broad sentiment or short-answer heuristics.  A
@@ -5380,10 +5533,10 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
     if any(marker in text for _role, text in tail for marker in farewell_markers):
         return True
 
+    if target_ended and _is_direct_transfer_handoff(*tail[-1]):
+        return True
     for index, (role, text) in enumerate(tail[:-1]):
-        if role != "assistant" or "transfer" not in text:
-            continue
-        if not any(marker in text for marker in ("now", "connect", "please wait")):
+        if not _is_transfer_handoff(role, text):
             continue
         next_role, acknowledgement = tail[index + 1]
         if next_role == "user" and acknowledgement.rstrip(".! ") in {
@@ -5396,6 +5549,19 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
         }:
             return True
     return False
+
+
+def _web_bridge_start_failure(exc: BaseException) -> _CaseOutcome:
+    """The case outcome when a provider's web bridge doesn't start. A cause the bridge marks
+    as passing (a rate limit, media servers at capacity, a timeout) can be retried."""
+    return _failure_outcome(
+        TestCaseStatus.FAILED,
+        FailureStage.PREPARING,
+        "web_bridge_start_failed",
+        "Failed to start the provider web bridge",
+        retryable=bool(getattr(exc, "retryable", False)),
+        details=_safe_provider_error_details(exc, operation="web_bridge_start"),
+    )
 
 
 def _failure_outcome(

@@ -1,0 +1,256 @@
+{"reading_inputs": {"version":1,"source":{"kind":"github","repository":"future-agi/agent-learning-kit","commit_sha":"d687a0db00000000000000000000000000000000"},"subfolder":"examples/harness/openai_agents_support","evals_sha256":null,"generic_harness_v1":true}, 
+  "agent": "openai_agents_support",
+  "one_liner": "A text chat customer-support agent for an online store (OpenAI Agents SDK) that looks up orders, starts returns on delivered orders, and states the return policy.",
+  "modality": "chat",
+  "call_direction": "inbound",
+  "agent_languages": [],
+  "conversational": true,
+  "system_prompt_excerpt": "    instructions=(\n        \"You are a customer support agent for an online store. Use the tools to look up \"\n        \"orders and start returns, and never guess an order's status. Answer briefly.\"\n    ),",
+  "system_prompt_from": [
+    {
+      "path": "examples/harness/openai_agents_support/agent.py",
+      "start_line": 58,
+      "end_line": 61
+    }
+  ],
+  "model": {
+    "provider": "openai",
+    "name": "vertex_ai/gemini-3.7-flash",
+    "path": "examples/harness/openai_agents_support/agent.py",
+    "line": 13
+  },
+  "hard_constraints": [
+    "Use the tools to look up orders and start returns",
+    "Never guess an order's status",
+    "Answer briefly"
+  ],
+  "tools": [
+    {
+      "name": "look_up_order",
+      "args": [
+        "order_id"
+      ],
+      "arg_types": {
+        "order_id": "str"
+      },
+      "arg_values": {},
+      "description": "Look up an order by its id and report its item, status and any return.",
+      "requires": [],
+      "refuses": "Unknown order id (lookup is exact and case-sensitive) returns the ordinary string 'No order <order_id> exists.' rather than raising.",
+      "effects": "Read-only. Returns 'Order <id>: <item>, status <status>, return: <reason or none>.' from the in-memory _ORDERS dict. The return field reflects any reason set earlier in the same process by start_return.",
+      "inputs_from": {}
+    },
+    {
+      "name": "start_return",
+      "args": [
+        "order_id",
+        "reason"
+      ],
+      "arg_types": {
+        "order_id": "str",
+        "reason": "str"
+      },
+      "arg_values": {},
+      "description": "Start a return for a delivered order, giving the customer's reason.",
+      "requires": [],
+      "refuses": "Returned as ordinary strings, not errors: unknown order id -> 'No order <id> exists.'; status other than 'delivered' (e.g. A1002 shipped) -> 'Order <id> is <status> and cannot be returned yet.'; return already set -> 'Order <id> already has a return started.' Checks run in that order. An empty reason is accepted.",
+      "effects": "On success sets the order's 'return' field to the reason string (mutates in-memory state, persists for the life of the process, visible to look_up_order) and returns 'Return started for order <id>: <reason>.' The reason is free text, composed by the model from what the customer said.",
+      "inputs_from": {}
+    },
+    {
+      "name": "return_policy",
+      "args": [],
+      "arg_types": {},
+      "arg_values": {},
+      "description": "State the store's return policy.",
+      "requires": [],
+      "refuses": "Never refuses. Note start_return does not enforce the 30-day window.",
+      "effects": "Read-only. Always returns the constant 'Delivered items can be returned within 30 days for a full refund.'",
+      "inputs_from": {}
+    }
+  ],
+  "data_schema": {
+    "orders": {
+      "key": "order_id (str)",
+      "fields": {
+        "item": "str",
+        "status": "str: 'delivered' or 'shipped' in the seed; only 'delivered' can be returned",
+        "return": "str or None; None means no return; set to the customer's reason by start_return"
+      }
+    }
+  },
+  "base_environment": {
+    "orders": {
+      "A1001": {
+        "item": "trail running shoes",
+        "status": "delivered"
+      },
+      "A1002": {
+        "item": "rain jacket",
+        "status": "shipped"
+      },
+      "A1003": {
+        "item": "water bottle",
+        "status": "delivered"
+      }
+    }
+  },
+  "dependencies": [
+    {
+      "name": "in-memory orders",
+      "kind": "datastore",
+      "what": "Module-level dict _ORDERS in agent.py, hardcoded, three orders; start_return mutates it for the life of the process. Not configurable via env or constructor; a restart resets it.",
+      "used_by": [
+        "look_up_order",
+        "start_return"
+      ],
+      "engine": "in_process",
+      "version": "",
+      "reached": {
+        "dsn_env": "",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "runtime_dependencies": [
+    {
+      "name": "chat-completions model endpoint",
+      "kind": "inference",
+      "what": "Model gateway or OpenAI API. Needs OPENAI_API_KEY (required for a turn), OPENAI_BASE_URL (unset means the OpenAI API), OPENAI_MODEL (default vertex_ai/gemini-3.7-flash). The endpoint must speak chat completions.",
+      "used_by": [],
+      "engine": "OpenAI-compatible chat completions via AsyncOpenAI",
+      "version": "",
+      "reached": {
+        "dsn_env": "OPENAI_BASE_URL",
+        "config_key": "",
+        "host": "",
+        "port": null,
+        "database": "",
+        "user": "",
+        "password_from": "",
+        "loader_module": "",
+        "loader_function": ""
+      }
+    }
+  ],
+  "implementation": "present",
+  "tool_entrypoints": [
+    {
+      "tool": "look_up_order",
+      "mode": "unreachable",
+      "module": "examples.harness.openai_agents_support.agent",
+      "callable": "look_up_order",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Decorated with @function_tool, so the module attribute is an SDK FunctionTool object, not a plain function; it is run by the SDK inside Runner.run. The agent is exercised through agent_callback instead; the kit's tool tracer records calls to the three tool functions (per README)."
+    },
+    {
+      "tool": "start_return",
+      "mode": "unreachable",
+      "module": "examples.harness.openai_agents_support.agent",
+      "callable": "start_return",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Same as look_up_order; mutates the module-level in-memory _ORDERS dict."
+    },
+    {
+      "tool": "return_policy",
+      "mode": "unreachable",
+      "module": "examples.harness.openai_agents_support.agent",
+      "callable": "return_policy",
+      "factory": "",
+      "first_arg": "",
+      "service": "",
+      "endpoint": "",
+      "method": "POST",
+      "notes": "Same as look_up_order; constant string, no state."
+    }
+  ],
+  "refusal_signature": "Refusals are ordinary returned strings, not exceptions: 'No order <id> exists.', 'Order <id> is <status> and cannot be returned yet.', 'Order <id> already has a return started.'",
+  "data_store": {
+    "kind": "in_process",
+    "version": "",
+    "configured_by": "hardcoded module-level dict _ORDERS in agent.py",
+    "config_key": "",
+    "host": "",
+    "port": null,
+    "database": "",
+    "user": "",
+    "password_from": "",
+    "schema_from": "",
+    "loaded_by": "",
+    "loader_module": ""
+  },
+  "runtime": {
+    "language": "python",
+    "version": "3.12",
+    "install": "pip install -r requirements.txt",
+    "extras": [],
+    "requirements_files": [],
+    "observations": {},
+    "workspaces": {},
+    "workdir": "examples/harness/openai_agents_support",
+    "execution": "auto",
+    "compose_file": "",
+    "compose_overrides": [],
+    "compose_image_services": [],
+    "service": "",
+    "additional_services": [],
+    "required_environment": {
+      "agent": [
+        "OPENAI_API_KEY"
+      ]
+    },
+    "secret_files": {},
+    "config_files": {},
+    "directories": [],
+    "dockerfile": "",
+    "command": [],
+    "context_excludes": [],
+    "platform": "",
+    "interface": {
+      "kind": "callable",
+      "protocol": "fi.alk",
+      "model": null,
+      "port": null,
+      "path": "",
+      "health_path": "",
+      "include_tools": false,
+      "request_template": null,
+      "response_path": "",
+      "headers_template": {},
+      "completed_tool_events": null,
+      "completed_tools": null,
+      "local_auth": null,
+      "setup_secrets": {},
+      "failure_rule": null,
+      "setup_requests": []
+    },
+    "source_subfolder": "examples/harness/openai_agents_support"
+  },
+  "real_use_cases": [
+    "Look up an order's item, status and any return by order id",
+    "Start a return for a delivered order with the customer's reason",
+    "Explain that an order which has not been delivered cannot be returned yet",
+    "State the store's return policy"
+  ],
+  "caller_identity": "The agent never identifies the caller. No login, number or account is loaded; the person supplies an order id in conversation and any caller can look up or start a return on any order id.",
+  "notes": "Single agent in examples/harness/openai_agents_support/agent.py. Ingress is the exported async agent_callback(agent_input) (module agent), called once per turn by the agent-simulate kit with agent_input.messages (the whole conversation, roles/contents). It returns {\"content\": str(result.final_output)} only; tool calls are not returned, since the SDK runs the tools internally and the kit's tool tracer records calls to the three tool functions. No HTTP server, so interface kind is callable. The folder has no Dockerfile or compose file; the only Dockerfile/compose nearby (examples/harness/generic_multi_store_chat) belongs to a different agent and was not used. The native Python 3.12 runtime is the deployment, which fits the available execution capabilities, and no replacement agent is invented; no runtime.command is declared because the agent has no process entrypoint, only the callable. The state is process-global: start_return mutations persist across conversations in the same process until restart. start_return does not enforce the 30-day policy (no dates exist). The model default is a gateway name 'vertex_ai/gemini-3.7-flash', overridable by OPENAI_MODEL; the provider is recorded as openai because the client is the OpenAI SDK against a chat-completions gateway. Dependencies: openai-agents==0.24.0 and agent-simulate==0.1.3. Tracing is disabled via set_tracing_disabled(True).",
+  "open_questions": [],
+  "chosen_evals": [],
+  "amendments": [],
+  "instrumentation": "none"
+}

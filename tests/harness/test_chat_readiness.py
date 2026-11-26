@@ -988,6 +988,8 @@ def workflow_probe(tmp_path, url, **changes):
         redaction_values={"key": "secret123"}, timeout=1,
     )
     args.update(changes)
+    if args["timeout"] is None:
+        del args["timeout"]
     return probe_chat_workflow(**args)
 
 
@@ -1023,6 +1025,53 @@ def test_private_tool_artifacts_preserve_json_lines_during_redaction(tmp_path, c
     if credential == "known-value":
         assert "known-value" not in text
     assert Path(path).stat().st_mode & 0o777 == 0o600
+
+
+def test_private_workflow_counts_a_returned_call_the_harness_ran_at_the_world(
+    tmp_path, profile_app, monkeypatch
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    url, state = profile_app
+    state.update(
+        profile=True,
+        body={"content": "", "tool_calls": [{"id": "t-1", "name": "lookup_account", "arguments": {}}]},
+    )
+
+    async def conversation(target, *_args):
+        async def answered(*_a, **_k):
+            response = await sent(*_a, **_k)
+            state["body"] = {"content": "Done"}  # once the harness has run the call
+            return response
+
+        sent = target._wrapper.call
+        target._wrapper.call = answered
+        reply = await target.say("Look up my account")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up my account"), Exchange("agent", reply)],
+            calls=list(target.world.calls), ended="finished",
+        )
+
+    class World:
+        calls: list = []
+
+        def handle_tool_call(self, call):
+            from fi.alk.harness.world.runtime import Call
+
+            self.calls.append(Call(name=call["name"], arguments={}))
+            return SimpleNamespace(content="{}")
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    monkeypatch.setattr(chat_call_runner, "tool_world", lambda *_a: World())
+    contract = AgentContract(
+        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+        tools=[{"name": "lookup_account", "args": []}],
+    )
+    asyncio.run(workflow_probe(tmp_path, url, contract=contract))
+
+    routing = json.loads((tmp_path / "generic-harness" / "tool-routing-observations.json").read_text())
+    assert [(one["tool"], one["routed"]) for one in routing["tools"]] == [("lookup_account", True)]
 
 
 @pytest.mark.parametrize("kind", ["trace", "transcript"])
@@ -1090,6 +1139,12 @@ def test_private_workflow_checks_executed_tools_after_clarification(
     assert receipt["status"] == ("passed" if completed else "failed")
     assert receipt["tool_call_count"] == int(completed)
     assert receipt["candidate_hash"] == "candidate"
+    routing = tmp_path / "generic-harness" / "tool-routing-observations.json"
+    if completed:
+        # The callback ran the tool itself and the world received nothing: never routed.
+        assert json.loads(routing.read_text())["tools"] == []
+    else:
+        assert not routing.exists()
     assert receipt["bundle_digest"] == "bundle"
     assert receipt["scenario_key"] == "private"
     assert receipt["turns"] == 4
@@ -1428,6 +1483,11 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
         ([dict(ok=False, refused=True, refusal_code="not_permitted")], False),
         # The world's own rule said no: the tool ran, so the binding works.
         ([dict(ok=False, refused=True, refusal_code="world_rule")], True),
+        # A worker's call refused at the door for that worker's limits came through its bound channel.
+        ([dict(ok=False, refused=True, refusal_code="not_permitted", worker_id="refund")], True),
+        ([dict(ok=False, refused=True, refusal_code="deadline_passed", worker_id="refund")], True),
+        # A channel no worker owns is a binding problem.
+        ([dict(ok=False, refused=True, refusal_code="identity_conflict", worker_id="refund")], False),
         # One call ran among failures.
         ([dict(ok=False, refused=True, refusal_code="unknown_tool"), dict(ok=True, result={"active": True})], True),
     ],
@@ -1502,3 +1562,138 @@ def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
         asyncio.run(workflow_probe(tmp_path, url))
     _, receipt = workflow_receipt(tmp_path)
     assert receipt["tool_call_count"] == 1
+
+
+def test_the_readiness_call_reads_calls_from_the_bundle_s_own_evidence_seam(tmp_path, monkeypatch):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+    from fi.alk.harness.world.runtime import Call
+
+    seen = {}
+
+    class Runner:
+        def __init__(self, _artifacts, context):
+            seen["seam"] = context.evidence_seam
+            self._contract = None
+            self.received = []
+
+        async def run(self, _scenario, _runtime):
+            return SimpleNamespace(calls=(Call(name="issue_refund", arguments={}),), turns=1)
+
+    monkeypatch.setattr(chat_call_runner, "HostedChatCallRunner", Runner)
+    asyncio.run(workflow_probe(tmp_path, "http://x", evidence_seam=EvidenceSeam.TOOL_TRACE))
+    assert seen["seam"] is EvidenceSeam.TOOL_TRACE
+    assert workflow_receipt(tmp_path)[1]["status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("config", "budget", "deadline"),
+    [
+        # No reply deadline of its own: the conversation keeps today's 300 s.
+        ({}, None, "300s"),
+        # One reply deadline per turn (the scenario's 10), within the build's budget.
+        ({"chat_call_timeout_seconds": 60}, None, "600s"),
+        ({"chat_call_timeout_seconds": 900}, None, "3300s"),
+        ({"chat_call_timeout_seconds": 900}, "1200", "1200s"),
+        # A short reply deadline never shortens the conversation below the default.
+        ({"chat_call_timeout_seconds": 20}, None, "300s"),
+    ],
+)
+def test_the_private_workflow_keeps_the_agent_s_chat_call_timeout_within_the_budget(
+    tmp_path, monkeypatch, config, budget, deadline
+):
+    from fi.alk.harness import chat_call_runner
+
+    if budget is not None:
+        monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", budget)
+    else:
+        monkeypatch.delenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", raising=False)
+
+    async def past_deadline(self, scenario, runtime):
+        raise TimeoutError
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", past_deadline)
+    job = SimpleNamespace(metadata={}, require_tool_workflow=True, agent=SimpleNamespace(config=config))
+    with pytest.raises(RuntimeValidationError) as failure:
+        # No timeout given: the probe's own default stands unless the agent sets one.
+        asyncio.run(workflow_probe(tmp_path, "http://127.0.0.1:1", job=job, timeout=None))
+    assert failure.value.diagnostics[0].code == "chat_ingress_timeout"
+    assert f"exceeded its {deadline} deadline" in failure.value.diagnostics[0].redacted_message
+    _path, receipt = workflow_receipt(tmp_path)
+    assert receipt["timeout_seconds"] == float(deadline[:-1])
+
+
+def _traced_unreachable_contract():
+    """An Agents SDK reading's shape: the tool is held by the framework, so `unreachable`, and it
+    names the module and the def where the kit watches it (TH-8800)."""
+    from fi.alk.harness.contract import ToolEntry, ToolSpec
+
+    return AgentContract(
+        tools=[ToolSpec(name="lookup_account")],
+        tool_entrypoints=[ToolEntry(
+            tool="lookup_account", mode="unreachable", module="agent", callable="lookup_account",
+        )],
+        # A callback contract, as the bundler binds `unreachable` entries only on that route: a
+        # command would wire the framework observer and bind nothing.
+        runtime=Runtime(
+            language="python", command=[], execution="auto",
+            interface=RuntimeInterface(kind="callable", protocol="fi.alk"),
+        ),
+    )
+
+
+def test_a_traced_unreachable_tool_never_makes_evidence_required(tmp_path, profile_app, monkeypatch):
+    """A binding that records nothing can't raise `chat_tool_evidence_unverified`: readiness passes
+    as `not_observed`, as it does today."""
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.contract import has_executable_tool_workflow
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    contract = _traced_unreachable_contract()
+    assert not has_executable_tool_workflow(contract, include_construct=False)
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[], ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    asyncio.run(workflow_probe(
+        tmp_path, url, contract=contract,
+        job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+    ))
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == "passed"
+    assert receipt["tool_evidence_status"] == "not_observed"
+    assert receipt["tool_call_count"] == 0
+
+
+def test_a_traced_unreachable_tool_that_is_called_is_graded_and_observed(tmp_path, profile_app, monkeypatch):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.world.runtime import Call
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[Call(name="lookup_account", arguments={"account_id": "A-1"}, result={"active": True})],
+            ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    asyncio.run(workflow_probe(
+        tmp_path, url, contract=_traced_unreachable_contract(),
+        job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+    ))
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == "passed"
+    assert receipt["tool_call_count"] == 1
+    assert "tool_evidence_status" not in receipt
