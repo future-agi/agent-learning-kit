@@ -108,7 +108,7 @@ def scan(scan_root, subfolder, reached=None):
     return answer
 
 
-def instrumentation(source_root, reached=()):
+def instrumentation(source_root, reached=(), *, manifests=True):
     said = _session_said(Path(source_root) if source_root else None, "instrumentation")
     if said == "raise":
         raise OSError("stand-in instrumentation raised")
@@ -124,7 +124,7 @@ def instrumentation(source_root, reached=()):
         time.sleep(float(said["hold"]))
     if isinstance(said, dict) and "value" in said:
         return str(said["value"])
-    return _real_instrumentation(source_root, reached)
+    return _real_instrumentation(source_root, reached, manifests=manifests)
 
 
 def validate(contract):
