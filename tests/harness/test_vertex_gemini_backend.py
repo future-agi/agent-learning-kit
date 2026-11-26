@@ -588,3 +588,52 @@ def test_the_call_budget_holds_across_messages_and_sends_nothing_once_spent(monk
         (CALL_BUDGET_SPENT, 0),
     ]
     assert ends[2].is_error
+
+
+def test_a_streamed_tool_call_starts_once(monkeypatch) -> None:
+    """ADK streams a call in a partial chunk, then again in the final message: one tool, one start."""
+    from types import SimpleNamespace
+
+    from google.adk.runners import Runner
+
+    from fi.alk.harness import spend
+    from fi.alk.harness.backends import SessionSpec
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiBackend
+    from fi.alk.harness.session import TOOL, Stage
+
+    monkeypatch.setattr(spend, "_stages", {})
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+
+    def call(call_id):
+        return SimpleNamespace(
+            function_call=SimpleNamespace(id=call_id, name="run_proof", args={})
+        )
+
+    async def events(self, **kwargs):
+        yield SimpleNamespace(
+            content=SimpleNamespace(parts=[call(None)]),
+            partial=True,
+            usage_metadata=None,
+            is_final_response=lambda: False,
+        )
+        yield SimpleNamespace(
+            content=SimpleNamespace(parts=[call("fc-1")]),
+            partial=False,
+            usage_metadata=None,
+            is_final_response=lambda: False,
+        )
+        yield SimpleNamespace(
+            content=SimpleNamespace(parts=[SimpleNamespace(text="Proved.")]),
+            usage_metadata=None,
+            is_final_response=lambda: True,
+        )
+
+    async def run():
+        async with Stage(SessionSpec(system_prompt="Reply", model="gemini-3.8-flash"),
+                         backend=VertexGeminiBackend(), name="builder") as stage:
+            return [event async for event in stage.stream("Prove it")]
+
+    monkeypatch.setattr(Runner, "run_async", events)
+    started = [event for event in asyncio.run(run()) if event.kind == TOOL]
+    assert [event.detail.get("call_id") for event in started] == ["fc-1"]

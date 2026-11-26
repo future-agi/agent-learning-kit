@@ -633,7 +633,11 @@ class VertexGeminiSession:
                                     author=str(getattr(event, "author", "") or ""),
                                 )
                             )
-                        if getattr(part, "function_call", None):
+                        # A streamed call comes again, with its id, in the final message; the
+                        # partial copy would start a tool that never returns.
+                        if getattr(part, "function_call", None) and not getattr(
+                            event, "partial", False
+                        ):
                             parts.append(
                                 Call(
                                     id=getattr(part.function_call, "id", None)
