@@ -914,9 +914,9 @@ test("only the configured scheme, host, port and path are the collector", async 
     }
   `;
   const cases = [
-    // The configured route, and the same host's other routes.
-    { endpoint: `http://${base}/collector/v1/traces`, paths: ["/collector/v1/traces", "/collector/v1/traces/"], ours: true },
-    { endpoint: `http://${base}/collector/v1/traces`, paths: ["/v1/traces", "/tracer/v1/traces", "/other/v1/traces"], ours: false },
+    // The configured route and traceAI's beside it, and the same host's other routes.
+    { endpoint: `http://${base}/collector/v1/traces`, paths: ["/collector/v1/traces", "/collector/v1/traces/", "/collector/tracer/v1/traces"], ours: true },
+    { endpoint: `http://${base}/collector/v1/traces`, paths: ["/v1/traces", "/tracer/v1/traces", "/other/v1/traces", "/collector/tracer/check"], ours: false },
     // Plain http to the port of an https collector.
     { endpoint: `https://${base}/v1/traces`, paths: ["/v1/traces"], ours: false },
   ];
@@ -991,4 +991,36 @@ test("an exporter's own call id on a span the hook cannot place is kept only whe
     ]),
   );
   assert.deepEqual(stamps, { labeled: "call-a", unseen: null, bare: null });
+});
+
+test("traceAI's own route on the collector is marked; its other routes are not", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
+  const callFile = path.join(dir, "simulation_call_execution_id");
+  fs.writeFileSync(callFile, "call-a");
+  const start = fs.statSync(callFile, { bigint: true }).mtimeNs + 1000n;
+  const body = JSON.stringify(otlp([span("llm", start, [{ key: "fi.span.kind", value: { stringValue: "LLM" } }])]));
+  // traceAI TS's register() posts OTLP JSON to <FI_BASE_URL>/tracer/v1/traces, and the platform
+  // sets FI_BASE_URL to the collector.
+  const script = `
+    const headers = { "content-type": "application/json", "X-Api-Key": "customer-key", "X-Secret-Key": "customer-secret" };
+    const body = ${JSON.stringify(body)};
+    await fetch("http://127.0.0.1:${collector.port}/tracer/v1/traces", { method: "POST", headers, body });
+    await fetch("http://127.0.0.1:${collector.port}/tracer/custom-eval-config/check_exists/", { method: "POST", headers, body });
+  `;
+  const result = await run(script, envFor(collector, callFile));
+  assert.equal(result.code, 0, result.stderr);
+  const [traces, other] = collector.seen;
+  assert.equal(traces.url, "/tracer/v1/traces");
+  assert.equal(traces.headers["x-api-key"], "ingest-key");
+  assert.equal(traces.headers["x-secret-key"], "ingest-secret");
+  const exported = JSON.parse(traces.body.toString());
+  assert.equal(attributes(exported.resourceSpans[0].resource.attributes)["fi.simulation.job_id"], "job-1");
+  assert.equal(
+    attributes(exported.resourceSpans[0].scopeSpans[0].spans[0].attributes)["fi.simulator.call_execution_id"],
+    "call-a",
+  );
+  assert.equal(other.headers["x-api-key"], "customer-key");
+  assert.equal(other.body.toString(), body);
 });

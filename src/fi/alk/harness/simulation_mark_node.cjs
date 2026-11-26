@@ -8,8 +8,10 @@
  *
  * Node has no SDK constructor every exporter goes through, so this hook works on the request
  * instead: it wraps `fetch` and `http.request`/`https.request`, and acts only on a POST to the
- * collector's traces endpoint (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`): its scheme, host, port and
- * path. On such a request it
+ * collector (the scheme, host and port of `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) on one of its two
+ * trace routes: that endpoint's path (`<base>/v1/traces`), or `<base>/tracer/v1/traces`, where
+ * traceAI's `register()` posts, since the platform sets `FI_BASE_URL` to the collector. The
+ * collector's other routes are untouched. On such a request it
  *   - replaces only the Future AGI authentication headers with the agent's ingest key, and
  *   - when the body is OTLP JSON (gzip or not): merges our `OTEL_RESOURCE_ATTRIBUTES` pairs
  *     (`project_name` and `fi.simulation.*`) over every resource, and stamps
@@ -102,8 +104,14 @@ function routeOf(path) {
   return String(path || "/").split("?")[0].replace(/\/+$/, "") || "/";
 }
 
-/** The scheme, host, port and path of the collector's traces endpoint, as the platform writes it. */
-function destination(endpoint) {
+const OTLP_ROUTE = "/v1/traces";
+const TRACEAI_ROUTE = "/tracer/v1/traces";
+
+/**
+ * The collector's two trace destinations, as `scheme//host:port/path`: the traces endpoint the
+ * platform writes (`<base>/v1/traces`) and traceAI's route beside it (`<base>/tracer/v1/traces`).
+ */
+function destinations(endpoint) {
   if (!endpoint) return null;
   let url;
   try {
@@ -114,7 +122,11 @@ function destination(endpoint) {
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (!host || !(url.protocol in DEFAULT_PORTS)) return null;
   const port = url.port ? Number(url.port) : DEFAULT_PORTS[url.protocol];
-  return `${url.protocol}//${host}:${port}${routeOf(url.pathname)}`;
+  const route = routeOf(url.pathname);
+  const origin = `${url.protocol}//${host}:${port}`;
+  const routes = [route];
+  if (route.endsWith(OTLP_ROUTE)) routes.push(route.slice(0, -OTLP_ROUTE.length) + TRACEAI_ROUTE);
+  return new Set(routes.map((one) => origin + one));
 }
 
 /**
@@ -281,7 +293,7 @@ function install() {
   if (env[MEASURE]) return;
   const apiKey = env[INGEST_API_KEY];
   const secretKey = env[INGEST_SECRET_KEY];
-  const collector = destination(env[TRACES_ENDPOINT]);
+  const collector = destinations(env[TRACES_ENDPOINT]);
   if (!apiKey || !secretKey || collector === null) return;
   if (!HEADER_VALUE.test(apiKey) || !HEADER_VALUE.test(secretKey)) {
     // Not a key: as a header it would fail the request or add one.
@@ -305,13 +317,13 @@ function install() {
     }, POLL_MS).unref();
   }
 
-  // Only the configured endpoint itself: the same host's other routes, or another scheme on its
-  // port, are not the collector.
+  // Only the collector's two trace routes: its other routes, the same host's other paths, or
+  // another scheme on its port, are not the collector.
   function aimedAtUs(method, protocol, host, port, path) {
     if (String(method || "GET").toUpperCase() !== "POST") return false;
     const resolved = port ? Number(port) : DEFAULT_PORTS[protocol] ?? null;
     const name = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
-    return `${protocol}//${name}:${resolved}${routeOf(path)}` === collector;
+    return collector.has(`${protocol}//${name}:${resolved}${routeOf(path)}`);
   }
 
   function mark(body, contentType, contentEncoding) {
