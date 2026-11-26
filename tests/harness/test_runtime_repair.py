@@ -3589,6 +3589,36 @@ def test_a_repair_that_moves_a_node_agent_recomputes_its_instrumentation(
     assert repaired.instrumentation == expected
 
 
+def test_a_repair_that_changes_only_the_command_recomputes_its_instrumentation(tmp_path):
+    """Same language (none) and workdir: the command alone moves the agent from Python to Node."""
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "package.json").write_text(
+        json.dumps({"name": "chat", "dependencies": {"@traceai/fi-core": "^1.4.1"}})
+    )
+    (service / "server.js").write_text("require('http');\n")
+    (service / "helper.py").write_text("import json\n")
+    interface = RuntimeInterface(kind="http", port=8080, path="/chat")
+    contract = AgentContract(
+        agent="chat",
+        runtime=Runtime(workdir="service", command=["python", "helper.py"], interface=interface),
+        instrumentation="none",
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(workdir="service", command=["node", "server.js"], interface=interface),
+        evidence_paths=("service/package.json",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the chat server.",
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+
+    assert repaired.instrumentation == "traceai"
+
+
 def test_a_repair_that_keeps_the_runtimes_reader_keeps_the_saved_instrumentation(tmp_path):
     service = tmp_path / "service"
     service.mkdir()

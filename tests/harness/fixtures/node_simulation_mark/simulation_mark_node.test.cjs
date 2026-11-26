@@ -219,6 +219,55 @@ test("marks fetch and http exports to the collector and leaves every other reque
   assert.equal(get.headers["x-api-key"], "customer-key");
 });
 
+test("one batch with two resources and several scopes is marked in every group", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
+  const callFile = path.join(dir, "simulation_call_execution_id");
+  fs.writeFileSync(callFile, "call-a");
+  const start = fs.statSync(callFile, { bigint: true }).mtimeNs + 1000n;
+  const group = (service) => ({
+    resource: {
+      attributes: [
+        { key: "service.name", value: { stringValue: service } },
+        { key: "fi.simulation.job_id", value: { stringValue: "stale-job" } },
+      ],
+    },
+    scopeSpans: ["agent", "llm"].map((scope) => ({
+      scope: { name: scope },
+      spans: [span(`${service}-${scope}-1`, start), span(`${service}-${scope}-2`, start + 10n)],
+    })),
+  });
+  const body = JSON.stringify({ resourceSpans: [group("first"), group("second")] });
+  const script = `
+    await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: ${JSON.stringify(body)},
+    });
+  `;
+
+  const result = await run(script, envFor(collector, callFile));
+
+  assert.equal(result.code, 0, result.stderr);
+  const exported = JSON.parse(collector.seen[0].body.toString());
+  assert.equal(exported.resourceSpans.length, 2);
+  const names = [];
+  for (const resourceSpan of exported.resourceSpans) {
+    const resource = attributes(resourceSpan.resource.attributes);
+    assert.equal(resource["fi.simulation.job_id"], "job-1");
+    assert.equal(resource["project_name"], "Our Agent");
+    assert.equal(resourceSpan.scopeSpans.length, 2);
+    for (const scopeSpan of resourceSpan.scopeSpans) {
+      for (const one of scopeSpan.spans) {
+        names.push(one.name);
+        assert.equal(attributes(one.attributes)["fi.simulator.call_execution_id"], "call-a", one.name);
+      }
+    }
+  }
+  assert.equal(names.length, 8);
+});
+
 test("a span is stamped with the call that ran when it started, or with none", async (t) => {
   const collector = await stub();
   t.after(() => collector.server.close());
