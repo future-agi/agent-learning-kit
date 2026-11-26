@@ -197,6 +197,11 @@ class BrowserRecord:
                 self._shots_capped = True
             return True, dropped
 
+    def cap_shots(self) -> None:
+        """A page not photographed because the screenshots are full."""
+        with self._lock:
+            self._shots_capped = True
+
     def seal_shots(self) -> None:
         """The record is sealed: the screenshots it names are the trial's, and none is kept or displaced after."""
         with self._lock:
@@ -471,6 +476,8 @@ class BrowserRecorder:
         self.shots_dir = shots_dir_for(record_path)
         self._shot_limits = {"shots": shots, "shot_bytes": shot_bytes}
         self._shot_count = 0
+        # Pages' screenshots asked of the browser and not yet answered without a picture.
+        self._page_shots_asked = 0
         self._urls: dict[str, str] = {}  # session -> its tab's page now
         self._last_session: str | None = None
         self._connect = connect
@@ -496,6 +503,7 @@ class BrowserRecorder:
         self._urls = {}
         self._last_session = None
         self._leaving = False
+        self._page_shots_asked = 0
         try:
             if self.shots_dir.exists():
                 shutil.rmtree(self.shots_dir)
@@ -656,6 +664,11 @@ class BrowserRecorder:
             tab = self._tabs.get(session or "")
             if tab is not None and tab[1] and self._urls.get(session or "", "") not in ("", "about:blank"):
                 url = self._urls[session or ""]
+                # One place stays free for the end's: a page past the others' places is not photographed at all.
+                if self._page_shots_asked + 1 >= self._shot_limits["shots"]:
+                    self.record.cap_shots()
+                    return
+                self._page_shots_asked += 1
                 self._command(
                     "Page.captureScreenshot", dict(_SHOT), session,
                     then=lambda answer: self._photographed(answer, "load", session, url),
@@ -679,8 +692,11 @@ class BrowserRecorder:
         try:
             data = base64.b64decode(str((answer.get("result") or {}).get("data") or ""), validate=True)
         except ValueError:
-            return
+            data = b""
         if not data:
+            # No picture: its place is free again for a later page.
+            if when == "load":
+                self._page_shots_asked -= 1
             return
         keep, dropped = self.record.keep_shot(when, len(data), **self._shot_limits)
         for name in dropped:
