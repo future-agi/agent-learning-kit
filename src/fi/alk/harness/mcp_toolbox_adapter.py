@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 import keyword
+import logging
 import os
 import time
 import unicodedata
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 
 def _signature(parameters: list[dict[str, Any]]) -> str:
     names: list[str] = []
-    reserved = {"_execute", "_spec", "_name", "_database_url", "_trace_path", "locals"}
+    reserved = {"_execute", "_spec", "_name", "_database_url", "_records_url", "_trace_path", "locals"}
     python_types = {
         "string": "str",
         "integer": "int",
@@ -34,6 +37,27 @@ def _signature(parameters: list[dict[str, Any]]) -> str:
     return ", ".join(names)
 
 
+# A bundle sealed before the world's role ran the tools runs them as the door, with `public` on its path: a function or
+# operator of the world's named like a system one could then run with the door's rights. Checked once per database.
+_SHADOWS = (
+    "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+    "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%' "
+    "AND EXISTS (SELECT 1 FROM pg_proc s WHERE s.pronamespace = 11::oid AND s.proname = p.proname) "
+    "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 1255::oid AND d.objid = p.oid "
+    "AND d.deptype = 'e'::\"char\")"
+)
+_SHADOW_FREE: dict[str, bool] = {}
+
+
+def _door_path_is_shadow_free(database_url: str) -> bool:
+    import psycopg
+
+    if database_url not in _SHADOW_FREE:
+        with psycopg.connect(database_url, autocommit=True, options="-c search_path=pg_catalog,pg_temp") as check:
+            _SHADOW_FREE[database_url] = check.execute(_SHADOWS).fetchone()[0] == 0
+    return _SHADOW_FREE[database_url]
+
+
 def _execute(
     tool_name: str,
     spec: dict[str, Any],
@@ -41,7 +65,10 @@ def _execute(
     *,
     database_url: str,
     trace_path: Path,
+    records_url: str = "",
 ) -> str:
+    """Run a tool's statement with the world's own role (`records_url`; a bundle sealed before it has only the door's)
+    and log it with the door's: a trigger or a statement of the customer's never runs with the door's rights."""
     import psycopg
 
     ordered = [
@@ -51,8 +78,18 @@ def _execute(
     result: Any = None
     error: str | None = None
     try:
+        if not records_url and not _door_path_is_shadow_free(database_url):
+            raise RuntimeError(
+                "door_path_refused: this environment was sealed before its tools ran with the world's own role, and "
+                "the world defines a function named like a system one; rebuild the environment"
+            )
+        # A bundle sealed before the world's role was given here runs the statement as the door: the system's own
+        # functions come first, and the statement still finds the world's tables.
         with psycopg.connect(
-            database_url, autocommit=True, cursor_factory=psycopg.RawCursor
+            records_url or database_url,
+            autocommit=True,
+            cursor_factory=psycopg.RawCursor,
+            **({} if records_url else {"options": "-c search_path=pg_catalog,public,pg_temp"}),
         ) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(str(spec["statement"]), ordered)
@@ -69,6 +106,35 @@ def _execute(
         error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        try:
+            # The world's own call log, as the tool proxy keeps it: what reached the world.
+            # The door's role, on the system's own search path (`world_door.PINNED_SEARCH_PATH`; this file ships alone).
+            # Whose call it was and what came of it are written, never left to a column's default: a failed call
+            # is faulted. A log made before those columns were kept takes the basic row.
+            basic = (
+                tool_name,
+                json.dumps(arguments, default=str),
+                json.dumps(result, default=str),
+                error is None,
+                error or "",
+                started,
+            )
+            with psycopg.connect(database_url, autocommit=True, options="-c search_path=pg_catalog,pg_temp") as log:
+                try:
+                    log.execute(
+                        "INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at, outcome, actor_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        (*basic, "committed" if error is None else "faulted", "agent"),
+                    )
+                except psycopg.errors.UndefinedColumn:
+                    log.execute(
+                        "INSERT INTO public._alk_tool_trace(name, arguments, result, ok, error, at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        basic,
+                    )
+        except Exception as unlogged:  # noqa: BLE001 - the log must never change the tool's response
+            logger.warning("call log not written: %s", type(unlogged).__name__)
+            logger.debug("the failure in full", exc_info=True)
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         with trace_path.open("a", encoding="utf-8") as trace:
             trace.write(
@@ -88,7 +154,23 @@ def _execute(
             )
 
 
-def _application(definitions: dict[str, Any], database_url: str, trace_path: Path):
+def _json_accepted(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+    """Request headers that ask for JSON by name when the client takes any type.
+
+    The server only answers in JSON, and the MCP SDK sends JSON only to a request that names it;
+    a Toolbox client accepts anything (``*/*``) and would be refused with 406.
+    """
+    accept = b",".join(value for name, value in headers if name.lower() == b"accept")
+    types = {part.split(b";")[0].strip().lower() for part in accept.split(b",") if part.strip()}
+    if types and not types & {b"*/*", b"application/*"}:
+        return headers
+    kept = [(name, value) for name, value in headers if name.lower() != b"accept"]
+    return [*kept, (b"accept", b"application/json")]
+
+
+def _application(
+    definitions: dict[str, Any], database_url: str, trace_path: Path, *, records_url: str = ""
+):
     try:
         from mcp.server.mcpserver import MCPServer
     except ImportError:
@@ -118,12 +200,13 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
             "_spec": spec,
             "_name": tool_name,
             "_database_url": database_url,
+            "_records_url": records_url,
             "_trace_path": trace_path,
         }
         exec(  # noqa: S102 - compiled only from validated declarative parameter names
             f"def generated_{position}({_signature(spec.get('parameters') or [])}):\n"
             "    return _execute(_name, _spec, locals(), "
-            "database_url=_database_url, trace_path=_trace_path)\n",
+            "database_url=_database_url, trace_path=_trace_path, records_url=_records_url)\n",
             namespace,
         )
         server.tool(name=tool_name, description=str(spec.get("description") or ""))(
@@ -135,7 +218,7 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
     async def toolset_compatible(
         scope: dict[str, Any], receive: Any, send: Any
     ) -> None:
-        """Toolbox clients append a toolset name to ``/mcp/``; MCP itself does not."""
+        """Toolbox clients append a toolset name to ``/mcp/`` and accept any type; MCP itself does not."""
 
         if scope.get("type") == "http" and scope.get("path") == "/health":
             await send(
@@ -150,7 +233,12 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
         if scope.get("type") == "http" and str(scope.get("path") or "").startswith(
             "/mcp/"
         ):
-            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+            scope = {
+                **scope,
+                "path": "/mcp/",
+                "raw_path": b"/mcp/",
+                "headers": _json_accepted(list(scope.get("headers") or [])),
+            }
         await application(scope, receive, send)
 
     return toolset_compatible
@@ -165,6 +253,7 @@ if __name__ == "__main__":
             definitions,
             os.environ["DATABASE_URL"],
             Path(os.environ["HARNESS_TOOL_TRACE"]),
+            records_url=os.environ.get("WORLD_RECORDS_DATABASE_URL", ""),
         ),
         host="0.0.0.0",
         port=int(os.environ["PORT"]),

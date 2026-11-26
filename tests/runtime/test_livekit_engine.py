@@ -3977,6 +3977,63 @@ def test_room_disconnect_ends_conversation() -> None:
     assert failed.failure.retryable is True
 
 
+def test_a_person_s_stop_ends_the_live_conversation_and_keeps_what_was_said() -> None:
+    # Nothing else ends this call: without the stop it would run to its 5 s deadline.
+    room = _FakeEventRoom(participants={"t": SimpleNamespace(identity="target-agent")})
+    stopped = {"now": False}
+
+    class FakeSession:
+        history = SimpleNamespace(items=[])
+
+        def on(self, _event, _callback):
+            return None
+
+    async def run() -> tuple[str, float]:
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.1, stopped.update, {"now": True})
+        token = livekit.STOP_CHECK.set(lambda: stopped["now"])
+        started = loop.time()
+        try:
+            reason = await livekit._wait_for_conversation_end(
+                room,
+                FakeSession(),
+                customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+                target_identity="target-agent",
+                timeout=5,
+                conversation_direction="simulator_first",
+                agent_first_silence_timeout_seconds=30,
+            )
+        finally:
+            livekit.STOP_CHECK.reset(token)
+        return reason, loop.time() - started
+
+    reason, took = asyncio.run(run())
+
+    assert (reason, took < 2) == ("user_canceled", True)
+    messages = [
+        {"role": "user", "content": "I need my atorvastatin refill."},
+        {"role": "assistant", "content": "Can I have your date of birth?"},
+    ]
+    outcome = livekit._conversation_outcome(reason, messages, min_turn_messages=8)
+    # A short stopped call is kept as said, never failed for its few turns.
+    assert (outcome.status, outcome.failure, outcome.messages) == (CaseStatus.COMPLETED, None, messages)
+    assert outcome.metadata == {"stop_reason": "user_canceled"}
+
+
+def test_a_stopped_call_s_teardown_is_cut_short_so_it_seals_inside_the_stop_bound() -> None:
+    stopped = {"now": False}
+    token = livekit.STOP_CHECK.set(lambda: stopped["now"])
+    try:
+        assert livekit._cleanup_limit(30.0) == 30.0
+        stopped["now"] = True
+        # A LiveKit teardown that hangs takes at most this bound once the person stopped the call.
+        assert livekit._cleanup_limit(30.0) == livekit._STOPPED_CLEANUP_SECONDS < 15
+        assert livekit._cleanup_limit(3.0) == 3.0
+    finally:
+        livekit.STOP_CHECK.reset(token)
+    assert livekit._cleanup_limit(30.0) == 30.0
+
+
 def test_short_explicit_farewell_disconnect_is_completed_for_eval() -> None:
     messages = [
         {"role": "assistant", "content": "Hello, what can I help with?"},
@@ -4057,6 +4114,235 @@ def test_provider_end_call_does_not_hide_a_no_conversation_failure() -> None:
         adapter="retell",
         evidence_class="provider_reported",
         metadata={"tool_calls": [{"name": "end_call", "ok": True}]},
+    )
+
+    livekit._recover_successful_provider_end_call(outcome, summary)
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+
+
+_TRANSFER_HANDOFF_CALL = [
+    {"role": "assistant", "content": "Harbor Hotels reservations, Good day."},
+    {"role": "assistant", "content": "Are you booking a new stay or changing one?"},
+    {
+        "role": "user",
+        "content": "Hello, I need to speak with a manager right away about a corporate "
+        "reservation dispute.",
+    },
+    {"role": "assistant", "content": "Transferring you to the front desk now."},
+]
+
+
+@pytest.mark.parametrize(
+    "stop_reason", ["provider_disconnected", "target_disconnected", "room_disconnected"]
+)
+def test_agent_transfer_that_ends_the_call_is_completed_for_grading(
+    stop_reason: str,
+) -> None:
+    outcome = livekit._conversation_outcome(
+        stop_reason, _TRANSFER_HANDOFF_CALL, min_turn_messages=6
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata == {
+        "stop_reason": stop_reason,
+        "short_terminal_exchange": True,
+    }
+
+
+def test_transfer_line_does_not_complete_a_call_the_caller_ended() -> None:
+    outcome = livekit._conversation_outcome(
+        "simulator_end_call", _TRANSFER_HANDOFF_CALL, min_turn_messages=6
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "insufficient_conversation"
+
+
+def test_transfer_line_alone_is_not_a_terminal_exchange_after_silence() -> None:
+    assert not livekit._has_natural_terminal_exchange(_TRANSFER_HANDOFF_CALL)
+
+
+def test_a_crashed_provider_bridge_is_not_the_target_ending_the_call() -> None:
+    class FakeSession:
+        history = SimpleNamespace(items=[])
+
+        def on(self, _event, _callback):
+            return None
+
+    class FakeRoom:
+        def on(self, _event, _callback):
+            return None
+
+        def off(self, _event, _callback):
+            return None
+
+    async def provider_crashed() -> None:
+        await asyncio.sleep(0.01)
+        raise RuntimeError("bridge socket reset")
+
+    async def run() -> str:
+        return await livekit._wait_for_conversation_end(
+            FakeRoom(),
+            FakeSession(),
+            customer_agent=SimpleNamespace(end_requested=asyncio.Event()),
+            target_identity="target-agent",
+            timeout=1,
+            conversation_direction="simulator_first",
+            agent_first_silence_timeout_seconds=30,
+            provider_task=asyncio.create_task(provider_crashed()),
+        )
+
+    reason = asyncio.run(run())
+
+    assert reason == "provider_bridge_failed"
+    farewell = [
+        {"role": "assistant", "content": "Your booking is confirmed."},
+        {"role": "user", "content": "Thanks, bye."},
+    ]
+    outcome = livekit._conversation_outcome(reason, farewell, min_turn_messages=6)
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "insufficient_conversation"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "i know you asked about a transfer of points.",
+        "please don't disconnect, the transfer fee is ten dollars.",
+        "a transfer is possible, but not right now.",
+        "you can transfer funds once you connect your bank.",
+        "our transfer desk can connect with you now.",
+        "the money was transferred yesterday, it should show now.",
+    ],
+)
+def test_transfer_words_inside_other_words_are_not_a_handoff(line: str) -> None:
+    assert not livekit._is_transfer_handoff("assistant", line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "transferring you to the front desk now.",
+        "i'll transfer you, please wait.",
+        "please wait while i transfer your call.",
+        "transferring to billing now.",
+        "let me transfer the call to a specialist now.",
+        "transferring now, please hold.",
+        "you'll be transferred to a specialist now.",
+        "you're being transferred now.",
+    ],
+)
+def test_a_real_transfer_handoff_is_recognised(line: str) -> None:
+    assert livekit._is_transfer_handoff("assistant", line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "I can't transfer you right now.",
+        "I cannot transfer your call now.",
+        "I'm unable to transfer you now.",
+        "I'm not able to connect you now.",
+        "I won't transfer you now.",
+        "I'll transfer to savings now.",
+        "Transferring now, please hold.",
+    ],
+)
+def test_an_unanswered_transfer_line_ends_a_call_only_as_a_direct_handoff(
+    line: str,
+) -> None:
+    messages = [*_TRANSFER_HANDOFF_CALL[:-1], {"role": "assistant", "content": line}]
+
+    assert not livekit._has_natural_terminal_exchange(messages, target_ended=True)
+
+
+def _short_call_failure() -> livekit._CaseOutcome:
+    return livekit._failure_outcome(
+        CaseStatus.FAILED,
+        livekit.FailureStage.RUNNING,
+        "insufficient_conversation",
+        "Conversation ended before the required alternating turns completed",
+        messages=_TRANSFER_HANDOFF_CALL,
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"ended_reason": "assistant-forwarded-call"},
+        {"ended_reason": "assistant-ended-call"},
+        {"tool_calls": [{"name": "transferCall"}]},
+        {"tool_calls": [{"name": "endCall"}]},
+        {"end_reason": "call_transfer"},
+        {"end_reason": "agent_hangup"},
+        {
+            "tool_calls": [
+                {"name": "to_front_desk", "type": "transfer_call", "ok": True}
+            ]
+        },
+        {"ended_reason": "customer-ended-call", "tool_calls": [{"name": "endCall"}]},
+    ],
+)
+def test_provider_reported_agent_ending_recovers_short_call_for_eval(
+    metadata: dict[str, object],
+) -> None:
+    outcome = _short_call_failure()
+    summary = livekit.EvidenceSourceSummary(
+        source_id="provider-call",
+        adapter="vapi",
+        evidence_class="provider_reported",
+        metadata=metadata,
+    )
+
+    livekit._recover_successful_provider_end_call(outcome, summary)
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata["provider_end_call_recovered"] is True
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"ended_reason": "customer-ended-call"},
+        {"ended_reason": "assistant-error"},
+        {"end_reason": "user_hangup"},
+        {"ended_reason": "customer-ended-call-during-warm-transfer"},
+        {"end_reason": "user_hangup_during_transfer"},
+        {"ended_reason": "call.in-progress.transfer-cancelled-by-assistant"},
+        {"ended_reason": "call.in-progress.error-transfer-failed"},
+        {
+            "tool_calls": [
+                {"name": "to_front_desk", "type": "transfer_call", "ok": False}
+            ]
+        },
+        *(
+            {"ended_reason": reason, "tool_calls": [{"name": "transferCall"}]}
+            for reason in (
+                "customer-ended-call",
+                "customer-ended-call-during-warm-transfer",
+                "assistant-error",
+                "call.in-progress.transfer-cancelled-by-assistant",
+                "call.in-progress.error-transfer-failed",
+            )
+        ),
+        {"end_reason": "user_hangup", "tool_calls": [{"type": "transfer_call"}]},
+    ],
+)
+def test_provider_ending_by_someone_else_keeps_the_short_call_failed(
+    metadata: dict[str, object],
+) -> None:
+    outcome = _short_call_failure()
+    summary = livekit.EvidenceSourceSummary(
+        source_id="provider-call",
+        adapter="vapi",
+        evidence_class="provider_reported",
+        metadata=metadata,
     )
 
     livekit._recover_successful_provider_end_call(outcome, summary)
@@ -4930,3 +5216,44 @@ def test_a_call_actor_line_cut_short_stops_its_audio(monkeypatch) -> None:
     asyncio.run(cut(call.say(frames(), "a line", "Near")))
     asyncio.run(cut(call.play(frames(), 1.0, "a line", "Near")))
     assert spoken.stopped and played.stopped
+
+
+def test_a_tool_call_the_world_holds_is_not_silence_and_the_wait_restarts_once_it_is_answered() -> None:
+    """As in the payment-timeout trials: the caller asked for the refund, then the target went quiet while the world
+    held its refund call. The backstop waits through the hold, and counts its quiet from the hold's end."""
+    import time as clock
+
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="assistant", text_content="Yes, go ahead and submit it.")]
+        )
+    )
+    held_until = clock.time() + 0.3
+
+    async def run() -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(lambda: held_until)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.1), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    waited = asyncio.run(run())
+    assert waited >= 0.3 + 0.1
+
+    # A check that fails, or none at all, leaves the backstop as it always was.
+    def failing() -> float:
+        raise RuntimeError("log unreadable")
+
+    async def unchanged(check) -> float:
+        token = livekit.TARGET_BUSY_UNTIL.set(check)
+        try:
+            started = clock.time()
+            await asyncio.wait_for(livekit._wait_for_conversation_silence(session, quiet_seconds=0.05), timeout=3)
+            return clock.time() - started
+        finally:
+            livekit.TARGET_BUSY_UNTIL.reset(token)
+
+    assert asyncio.run(unchanged(failing)) < 0.3
+    assert asyncio.run(unchanged(None)) < 0.3

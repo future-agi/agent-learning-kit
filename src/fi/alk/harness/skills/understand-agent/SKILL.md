@@ -60,8 +60,16 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
-   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
-   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+   If the agent hands work to other agents (a sub-agent called as a tool, a hand-off, graph nodes,
+   a crew), record each one in `workers`: an `id`, the `name` the app gives it, the contract tools
+   it holds, and `binding: separate` when its tools are reached through code of their own rather
+   than code the agents share, with `address_env` naming the environment variable that code reads
+   for its tools' base address. When the repository says a separate worker may use fewer tools than
+   its code holds, list those in `allowed_tools`; a shared worker gets none, because the world cannot
+   tell its calls apart. Every worker tool is also in `tools`. When the app runs a worker as a
+   service of its own (its own process, which the coordinator reaches over the network), set
+   `process` to the name of that process in the environment; leave it empty for a worker that runs
+   inside the app's one process.
 
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
@@ -105,7 +113,12 @@ Find, in roughly this order:
    produced); which stored field and value decide what it returns, where a result appears only
    when a record says so; and each argument whose text the agent writes itself rather than takes
    from the person or a record. `refuses`: every refusal by value or by something outside the
-   call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
+   call, and every refusal returned as an ordinary value rather than an error. Where a refusal turns on
+   a field of the record the call names (an order whose own fault field makes the payment service time out, an
+   account whose status is closed), record it in `refusals` too, as the code shows it: the HTTP `status`, the
+   `table` and `column` the call's `argument` is matched on, the record's `field` and the `values` that refuse, and
+   the `message`. The world scenarios are proved on answers each one the same way, so a scenario that expects
+   such a record to go through is refused before it is ever run. `inputs_from`: an
    argument whose value must come from an earlier tool's output, and that tool. `arg_units`: the
    unit or format of every amount, duration, date or time argument whose name does not say it
    (a currency's minor or major unit, seconds or milliseconds, an ISO date or a timestamp), from the
@@ -118,7 +131,9 @@ Find, in roughly this order:
    "integer, <its minor unit and currency>"}`), read from the code that builds the result or the
    record it returns. `tables_read` and `tables_changed`: the world's tables the tool reads, and
    the ones it adds to, changes or deletes from, read from its code. Fill these for every
-   tool that has them; a writer sees nothing else.
+   tool that has them; a writer sees nothing else. `world_free`: true only for a tool whose code
+   touches no table of the world and no service (it keeps the agent's own session memory, or
+   computes from its arguments alone); false when you are not sure.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is
@@ -136,8 +151,8 @@ Find, in roughly this order:
    lines are recorded as unconfirmed).
 
 7. **The modality.** How this agent is run: a voice session, a text conversation, or work it
-   carries out on websites or a computer. This decides how it is later run, so getting it wrong
-   reroutes every test.
+   carries out in a browser, through a screen or by crawling. This decides how it is later run,
+   so getting it wrong reroutes every test.
    **Decide it from the source and always record it.** A run is unattended, so there is nobody to
    ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
    whole run tests nothing. Read it off what the agent depends on:
@@ -146,12 +161,21 @@ Find, in roughly this order:
      name, an STT or TTS provider, an audio session it enters on connect.
    - **chat** if a person reaches it as text: an HTTP endpoint taking messages, a completions-shaped
      API, a socket carrying turns.
-   - **browser** if a person uses it to carry out work on websites or a computer rather than for
-     a conversation: driving a browser, operating a computer or crawling sites is its main job.
-     Ask: does a person come to this agent for a conversation, or to have it carry out that work?
-     An agent that looks things up on the web to answer a person (research, comparison, support)
-     is chat, or voice if it takes calls, even if it can't work without that tool. So is one with a
-     web page in front of it. A coding agent is chat.
+   - **browser** if a person uses it to carry out work rather than for a conversation, and it does
+     that work by driving a web browser with a browser library (Playwright, Selenium,
+     Puppeteer, browser-use and the like). It is run only in an environment that gives it a
+     browser and a list of sites. It takes its task in words and answers in words, so it is run as
+     a chat agent is: record how it is reached (its endpoint, its runtime) exactly as for chat.
+   - **computer_use** if it carries out that work through a screen instead: it reads pixels and
+     moves a mouse and keyboard, through a computer-use tool or a desktop library. This stops the
+     build as not supported.
+   - **crawler** if it fetches pages by rule with no model choosing each step (Scrapy, Crawlee,
+     Firecrawl and the like). This stops the build as not supported.
+
+   Ask: does a person come to this agent for a conversation, or to have it carry out that work? An
+   agent that looks things up on the web to answer a person (research, comparison, support) is
+   chat, or voice if it takes calls, even if it can't work without that tool. So is one with a
+   web page in front of it. A coding agent is chat.
 
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
@@ -272,7 +296,9 @@ Find, in roughly this order:
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
-   startable but the simulator cannot honestly claim to have exercised it.
+   startable but the simulator cannot honestly claim to have exercised it. When the ingress is
+   HTTP, the runtime command must start the long-running web or API server the source documents
+   for it, never a terminal REPL that reads a console.
 
    **A LangGraph app comes first.** Before choosing a command or an HTTP interface, look for a
    `langgraph.json` that names a graph. When the requirements the app installs have no

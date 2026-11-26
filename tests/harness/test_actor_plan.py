@@ -1554,7 +1554,7 @@ def test_a_proof_starts_from_the_world_after_the_pre_run_threads_and_credits_the
             self.calls = []
 
         def call(self, name, arguments):
-            self.calls.append(SimpleNamespace(name=name, arguments=arguments, ok=True,
+            self.calls.append(SimpleNamespace(name=name, arguments=arguments, ok=True, error="",
                                               result={"ts": f"ts{len(self.calls) + 1}"}))
 
     world, by_actors = World(), {}
@@ -2250,7 +2250,7 @@ def test_a_proof_follows_the_actors_switch_as_a_run_does(monkeypatch, tmp_path, 
         seen.append(played)
         raise Stop
 
-    monkeypatch.setattr(prove_module, "_checks_for", checks_for)
+    monkeypatch.setattr(prove_module, "checks_for", checks_for)
     monkeypatch.setattr(prove_module, "current_actors_switch", lambda: ActorsSwitch(enabled=enabled, share=[0.0, 1.0]))
     with pytest.raises(Stop):
         prove_module.prove(scenario, Catalogue(sub_goals=[]), tmp_path)
@@ -2259,3 +2259,20 @@ def test_a_proof_follows_the_actors_switch_as_a_run_does(monkeypatch, tmp_path, 
     assert bool(played.pre_run) is enabled and bool(played.faults) is enabled
     # The scenario itself is never changed.
     assert scenario.pre_run and scenario.faults
+@pytest.mark.parametrize("written", [{"decision": "approved"}, {"set": {"status": "denied"}}, {"approved": True}])
+def test_an_approver_s_record_never_says_its_verdict_by_the_words_in_its_fields(written):
+    """The verdict is the one the actor gave or a declining timeout's; words a record happens to hold are not one."""
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"actor_id": "agent", "name": "ask", "action_id": "a1", "at": 1.0, "outcome": "committed"},
+        {"actor_id": "approver", "name": "approvals.change", "action_id": "m1", "at": 2.0, "outcome": "committed",
+         "parent_event_id": "a1", "arguments": written},
+    ]
+    [line] = approvals(log)
+    assert line["verdict"] is None and line["decision"]["verdict"] is None
+    # A fallback action taken on a timeout gives no verdict of its own either.
+    decisions = [{"actor": "approver", "play": "timeout", "fallback": "approvals.change", "parent": "a1",
+                  "outcome": "fallback_action"}]
+    timed_out = [one for one in approvals(log, decisions) if one["decision"]["action"].startswith("timeout")]
+    assert [one["verdict"] for one in timed_out] == [None]

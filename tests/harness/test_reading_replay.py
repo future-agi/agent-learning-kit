@@ -27,6 +27,7 @@ from test_bundle_author_v2 import (
     _repo,
     author_bundle_v2,
 )
+from fi.alk.harness.bundle_author_v2 import _CALLBACK_SPAN_ENVIRONMENT
 from fi.alk.harness.tools import accept_contract
 
 HERE = Path(__file__).parent
@@ -228,6 +229,18 @@ TRACED = (
     "unreachable_inside_a_regular_package",
     "workdir_deeper_than_the_subfolder",
 )
+# A `langgraph dev` command route is served as the kit serves a framework's server (TH-8887): without its file
+# watcher, a native one on the sandbox's port and with each conversation on its own thread.
+SERVED = {
+    "two_graphs_with_the_cli_installed": (["langgraph", "dev", "--no-reload"], "/runs/wait"),
+    "langgraph_json_with_http": (
+        ["sh", "-c", "langgraph dev --port $PORT --no-reload"], "/threads/{{langgraph_thread_id}}/runs/wait"
+    ),
+    "uv_run_langgraph_dev": (
+        ["sh", "-c", "uv run --with 'langgraph-cli[inmem]' langgraph dev --port $PORT --no-reload"],
+        "/threads/{{langgraph_thread_id}}/runs/wait",
+    ),
+}
 
 
 def _sha(text: str) -> str:
@@ -313,6 +326,21 @@ def _golden() -> dict:
     return json.loads(GOLDEN.read_text())
 
 
+def _callback_cases() -> list[str]:
+    """The cases served by the callback adapter. None declares a runtime command, so the build now switches their
+    framework spans on."""
+    golden = json.loads(GOLDEN.read_text())
+    return sorted(name for name, one in golden.items() if "ALK_CALLBACK_ENTRYPOINT" in (one.get("control_environment") or {}))
+
+
+def _without_the_span_switch(after: dict) -> dict:
+    environment = {k: v for k, v in after["control_environment"].items() if k not in _CALLBACK_SPAN_ENVIRONMENT}
+    if "ALK_TOOL_TRACE_BINDINGS" in environment:
+        # The tracer writes to the same file whether or not the spans are on.
+        environment["HARNESS_TOOL_TRACE"] = _CALLBACK_SPAN_ENVIRONMENT["HARNESS_TOOL_TRACE"]
+    return {**after, "control_environment": environment}
+
+
 def test_the_goldens_cover_every_case():
     assert sorted(_golden()) == sorted(cases())
 
@@ -323,9 +351,54 @@ def test_a_replay_is_the_same_in_another_folder(tmp_path):
     assert first == run_case(case, tmp_path / "two")
 
 
-@pytest.mark.parametrize("name", sorted(set(cases()) - set(CHANGED) - set(TRACED)))
+# A voice agent's framework spans are read for its hand-offs (TH-8887): its tool trace is versioned and the
+# framework observer is on; nothing else moves.
+OBSERVED = ("livekit_voice_with_unreachable",)
+
+
+@pytest.mark.parametrize(
+    "name", sorted(set(cases()) - set(CHANGED) - set(TRACED) - set(SERVED) - set(OBSERVED) - set(_callback_cases()))
+)
 def test_a_contract_that_works_today_replays_byte_for_byte(tmp_path, name):
     assert run_case(cases()[name], tmp_path) == _golden()[name]
+
+
+@pytest.mark.parametrize("name", sorted(SERVED))
+def test_a_langgraph_dev_command_route_changes_only_as_served(tmp_path, name):
+    before, after = _golden()[name], run_case(cases()[name], tmp_path)
+    command, path = SERVED[name]
+    assert after["run_command"] == command
+    assert json.loads((tmp_path / "bundle" / "contract.json").read_text())["runtime"]["interface"]["path"] == path
+    for key in ("saved_sha", "saved_entries", "control_environment", "handlers", "trace_version"):
+        assert after[key] == before[key], key
+
+
+@pytest.mark.parametrize("name", OBSERVED)
+def test_a_voice_agent_s_framework_spans_are_now_observed(tmp_path, name):
+    before, after = _golden()[name], run_case(cases()[name], tmp_path)
+    assert after["control_environment"] == {**before["control_environment"], "ALK_OBSERVE_FRAMEWORKS": "1"}
+    assert (before["trace_version"], after["trace_version"]) == (None, 1)
+    for key in ("sealed_sha", "run_command", "handlers"):
+        assert after[key] == before[key], key
+
+
+def test_the_callback_cases_are_the_ones_the_span_switch_reaches():
+    assert len(_callback_cases()) == 9
+    assert set(CHANGED) & set(_callback_cases()) == {"agents_sdk_12_nov_reading"}
+    assert set(TRACED) <= set(_callback_cases())
+
+
+@pytest.mark.parametrize("name", sorted(set(_callback_cases()) - set(CHANGED) - set(TRACED)))
+def test_a_callback_bundle_differs_only_by_the_span_switch(tmp_path, name):
+    """Its environment is the one it had plus the switch, with the same tracer bindings; nothing else moves but the
+    trace version, which a bundle whose spans are on carries."""
+    before, after = _golden()[name], run_case(cases()[name], tmp_path)
+    assert {k: after["control_environment"][k] for k in _CALLBACK_SPAN_ENVIRONMENT} == _CALLBACK_SPAN_ENVIRONMENT
+    assert after["control_environment"].get("ALK_TOOL_TRACE_BINDINGS") == before["control_environment"].get(
+        "ALK_TOOL_TRACE_BINDINGS"
+    )
+    assert after["trace_version"] == 1
+    assert {**_without_the_span_switch(after), "trace_version": before["trace_version"]} == before
 
 
 def test_the_agents_sdk_reading_changes_as_designed(tmp_path):
@@ -337,6 +410,7 @@ def test_the_agents_sdk_reading_changes_as_designed(tmp_path):
         {"name": n, "module": "agent", "callable": n, "qualname": n} for n in TOOLS
     ]
     assert after["trace_version"] == 1 and before["trace_version"] is None
+    assert {k: after["control_environment"][k] for k in _CALLBACK_SPAN_ENVIRONMENT} == _CALLBACK_SPAN_ENVIRONMENT
     assert after["handlers"] == before["handlers"] == []
     assert after["run_command"] == before["run_command"]
 
@@ -366,8 +440,9 @@ def test_an_unreachable_entry_that_names_its_module_saves_as_it_did_and_is_now_t
         (callable_, module) for _, module, callable_ in after["saved_entries"]
     ]
     assert after["control_environment"]["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
-    # Nothing else about the bundle moves.
-    keep = {"ALK_TOOL_TRACE_BINDINGS", "HARNESS_TOOL_TRACE"}
+    # Nothing else about the bundle moves but the span switch, which keeps the tracer's `unreachable` bindings.
+    assert {k: after["control_environment"][k] for k in _CALLBACK_SPAN_ENVIRONMENT} == _CALLBACK_SPAN_ENVIRONMENT
+    keep = {"ALK_TOOL_TRACE_BINDINGS", *_CALLBACK_SPAN_ENVIRONMENT}
     strip = {k: v for k, v in after["control_environment"].items() if k not in keep}
     assert strip == before["control_environment"]
     assert after["run_command"] == before["run_command"] and after["handlers"] == before["handlers"]

@@ -24,7 +24,7 @@ from typing import Any
 
 from ..backends import tool, tool_server
 
-from ..catalogue import CHECK_RULES, CONTRACT_FIELDS, CONTRACT_SCHEMA, CRITERIA_RULES
+from ..catalogue import CHECK_RULES, CONTRACT_FIELDS, CONTRACT_SCHEMA, CRITERIA_RULES, settled_by
 from ..actors import load_actors
 from ..contract import AgentContract
 from ..environment import (
@@ -353,6 +353,7 @@ def provision_tools(
             actor=str(args.get("actor") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
+        one.verifier = settled_by(one)
         problems = validate_sub_goal(one)
         if one.actor and one.actor not in load_actors(destination).by_id():
             problems.append(f"actor: {one.actor!r} is not an actor of this environment; add it with add_actor first")

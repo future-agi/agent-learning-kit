@@ -3,17 +3,33 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_chat_call_runner import _Adapter, _ToolWorld, _context, _single_exchange
+import json
+import time
+from dataclasses import replace
+from typing import Any
+
+from test_chat_call_runner import (
+    _Adapter,
+    _ToolWorld,
+    _a_full_exchange,
+    _blocked_on_the_second_turn,
+    _context,
+    _single_exchange,
+    _stop_runtime,
+)
 
 from fi.alk.harness import retell_chat_call_runner as retell
-from fi.alk.harness.chat_call_runner import _HostedChatTarget
+from fi.alk.harness import chat_call_runner as chat
+from fi.alk.harness.chat_call_runner import HostedChatTarget
+from fi.alk.harness.hosted_scheduler import CallCancelled
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.retell_chat_call_runner import (
     RetellChatEnded,
     RetellChatWrapper,
     _completion_messages,
 )
-from fi.alk.harness.run.conversation import TargetConversationEnded
+from fi.alk.harness import judge
+from fi.alk.harness.run.conversation import TargetConversationEnded, Transcript
 from fi.simulate.agent.wrapper import AgentInput, AgentResponse
 
 
@@ -41,6 +57,96 @@ def test_completion_messages_preserve_agent_and_completed_tool_evidence() -> Non
     ]
     assert responses[0]["tool_call_id"] == "tool-1"
     assert responses[0]["success"] is True
+
+
+_RETELL_405 = (
+    "HTTP 405: Axios Error: error code: ERR_BAD_REQUEST, error message: Request failed with status code 405\n"
+    "response status: 405\n"
+    'response data: ["<!doctype html><html><head><title>Example Domain</title></head></html>"]'
+)
+
+
+def _tool_turn(content: str, **extra: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "tool_call_invocation",
+            "tool_call_id": "tool-1",
+            "name": "track_parcel",
+            "arguments": '{"tracking_number":"TRK123456"}',
+        },
+        {"role": "tool_call_result", "tool_call_id": "tool-1", "content": content, **extra},
+        {"role": "agent", "content": "Sorry, I hit a technical issue."},
+    ]
+
+
+def test_completion_messages_mark_an_http_error_result_as_failed() -> None:
+    _answer, _calls, responses = _completion_messages(_tool_turn(_RETELL_405))
+
+    assert responses[0]["success"] is False
+    assert responses[0]["status"] == 405
+    assert responses[0]["error"].startswith("HTTP 405: Axios Error")
+    assert len(responses[0]["error"]) <= 200
+    assert responses[0]["content"] == _RETELL_405
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["HTTP 500: Internal Server Error", "Axios Error\nresponse status: 503\nresponse data: []"],
+)
+def test_completion_messages_mark_server_errors_as_failed(content: str) -> None:
+    _answer, _calls, responses = _completion_messages(_tool_turn(content))
+
+    assert responses[0]["success"] is False
+    assert responses[0]["error"].startswith("HTTP 5")
+
+
+def test_completion_messages_honor_a_provider_reported_tool_failure() -> None:
+    _answer, _calls, responses = _completion_messages(
+        _tool_turn("could not reach the function", successful=False)
+    )
+
+    assert responses[0]["success"] is False
+    assert responses[0]["error"] == "tool call failed"
+    assert "status" not in responses[0]
+
+
+def test_completion_messages_keep_a_result_mentioning_http_as_a_success() -> None:
+    _answer, _calls, responses = _completion_messages(
+        _tool_turn('{"note": "HTTP 404 pages are handled", "status": "delivered"}')
+    )
+
+    assert responses[0]["success"] is True
+    assert responses[0]["error"] is None
+
+
+def test_a_retell_tool_that_returned_http_405_is_recorded_as_failed_for_grading(monkeypatch) -> None:
+    wrapper = RetellChatWrapper(api_key="secret", agent_id="agent-1")
+
+    def request(method, path, payload=None):
+        del method, payload
+        if path == "/create-chat":
+            return {"chat_id": "chat-1"}
+        return {"messages": _tool_turn(_RETELL_405)}
+
+    monkeypatch.setattr(wrapper, "_request", request)
+    world = SimpleNamespace(calls=[])
+    target = HostedChatTarget(
+        wrapper=wrapper,
+        contract=SimpleNamespace(runtime=None, tool_entrypoints=[]),
+        world=world,
+        scenario_key="damaged-parcel",
+        scenario_id="scenario-1",
+    )
+
+    asyncio.run(target.say("Where is TRK123456?"))
+
+    (call,) = world.calls
+    assert call.name == "track_parcel"
+    assert call.ok is False
+    assert call.refused is False
+    assert call.error.startswith("HTTP 405")
+    assert judge._call(call)["ok"] is False
+    assert "-> crashed: HTTP 405" in Transcript(calls=[call]).actions()
 
 
 def test_retell_chat_wrapper_creates_one_chat_and_completes_multiple_turns(
@@ -171,7 +277,7 @@ def test_retell_chat_uses_authored_scenario_document_for_selected_trial(
 
     monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
     monkeypatch.setattr(retell, "_scenario_document", load_document)
-    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(retell, "_drive_conversation", _single_exchange)
     adapter = _Adapter()
     runner = retell.RetellChatCallRunner(adapter, context)
@@ -209,7 +315,7 @@ def test_hosted_chat_target_stops_normally_on_provider_terminal_response() -> No
                 },
             )
 
-    target = _HostedChatTarget(
+    target = HostedChatTarget(
         wrapper=Wrapper(),
         contract=SimpleNamespace(runtime=None),
         world=SimpleNamespace(calls=[]),
@@ -219,3 +325,122 @@ def test_hosted_chat_target_stops_normally_on_provider_terminal_response() -> No
 
     with pytest.raises(TargetConversationEnded):
         asyncio.run(target.say("Goodbye"))
+
+
+class _ClosingWrapper:
+    """A Retell chat that ends on close; `close` is awaited when the call closes it."""
+
+    def __init__(self, close=None) -> None:
+        self._close = close
+
+    async def call(self, _input):
+        return AgentResponse(content="unused")
+
+    async def aclose(self) -> None:
+        if self._close is not None:
+            await self._close()
+
+
+def _stoppable_runner(tmp_path, monkeypatch, *, drive, close=None):
+    stopped = {"value": False}
+    monkeypatch.setattr(retell, "RetellChatWrapper", lambda **_kwargs: _ClosingWrapper(close))
+    monkeypatch.setattr(retell, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "_drive_conversation", drive)
+    adapter = _Adapter()
+    runner = retell.RetellChatCallRunner(adapter, replace(_context(tmp_path), stop_requested=lambda: stopped["value"]))
+    return adapter, runner, stopped
+
+
+def _cancelled_once(runner, stopped, reached: asyncio.Event, *, stop: bool):
+    async def scenario():
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await reached.wait()
+        stopped["value"] = stop
+        task.cancel()
+        return await task
+
+    return scenario
+
+
+def _messages(adapter) -> list[str]:
+    (transcript,) = [json.loads(data) for data in adapter.uploads]
+    return [one["content"] for one in transcript["messages"]]
+
+
+def test_a_stop_during_a_retell_turn_seals_the_partial_transcript(tmp_path, monkeypatch) -> None:
+    seen: dict[str, Any] = {"blocked": None}
+
+    async def scenario():
+        seen["blocked"] = asyncio.Event()
+        return await _cancelled_once(runner, stopped, seen["blocked"], stop=True)()
+
+    adapter, runner, stopped = _stoppable_runner(tmp_path, monkeypatch, drive=_blocked_on_the_second_turn(seen))
+    with pytest.raises(CallCancelled) as caught:
+        asyncio.run(scenario())
+    partial = caught.value.partial
+    assert partial is not None and partial.stop_reason == "user_canceled"
+    assert partial.transcript_artifact == "transcript-1" and partial.turns == 3
+    assert _messages(adapter) == ["Refund order 1043", "Looking it up", "Is it done?"]
+
+
+def _closing_after_the_exchange(tmp_path, monkeypatch, *, stop: bool):
+    """The Retell chat ended on its own; the cancel reaches the call while it closes the remote chat."""
+    closing: dict[str, Any] = {}
+
+    async def drive(*_args, **_kwargs):
+        return _a_full_exchange()
+
+    async def close() -> None:
+        closing["event"].set()
+        await asyncio.sleep(0.2)
+
+    adapter, runner, stopped = _stoppable_runner(tmp_path, monkeypatch, drive=drive, close=close)
+
+    async def scenario():
+        closing["event"] = asyncio.Event()
+        return await _cancelled_once(runner, stopped, closing["event"], stop=stop)()
+
+    return adapter, scenario
+
+
+def test_a_stop_after_the_retell_exchange_still_seals_its_transcript(tmp_path, monkeypatch) -> None:
+    adapter, scenario = _closing_after_the_exchange(tmp_path, monkeypatch, stop=True)
+    with pytest.raises(CallCancelled) as caught:
+        asyncio.run(scenario())
+    partial = caught.value.partial
+    assert partial is not None and partial.stop_reason == "user_canceled" and partial.turns == 4
+    assert _messages(adapter) == ["Refund order 1043", "Done, the refund is on its way", "Thanks", "Anything else?"]
+
+
+def test_a_retell_cancel_that_is_not_a_stop_still_cuts_the_call(tmp_path, monkeypatch) -> None:
+    adapter, scenario = _closing_after_the_exchange(tmp_path, monkeypatch, stop=False)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(scenario())
+    assert adapter.uploads == []
+
+
+def test_a_stopped_retell_call_s_close_is_cut_short_so_it_seals_inside_the_stop_bound(tmp_path, monkeypatch) -> None:
+    closing: dict[str, Any] = {}
+
+    async def drive(*_args, **_kwargs):
+        return _a_full_exchange()
+
+    async def close() -> None:
+        closing["event"].set()
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(chat, "_STOPPED_WIND_DOWN_SECONDS", 0.3)
+    adapter, runner, stopped = _stoppable_runner(tmp_path, monkeypatch, drive=drive, close=close)
+
+    async def scenario() -> float:
+        closing["event"] = asyncio.Event()
+        started = time.monotonic()
+        with pytest.raises(CallCancelled) as caught:
+            await _cancelled_once(runner, stopped, closing["event"], stop=True)()
+        assert caught.value.partial is not None and caught.value.partial.turns == 4
+        return time.monotonic() - started
+
+    assert asyncio.run(scenario()) < 3
+    assert len(adapter.uploads) == 1

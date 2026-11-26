@@ -33,7 +33,7 @@ google-adk 2.13.0. The reading gave `adk web`; the kit replaced its interface wi
 added to the example's requirements), but the transcript recorded 5 tool calls for 3: two extra
 with empty arguments. The trace file had the clean 3.
 
-- Reading: pass. No expectation was written before this reading. A correction on 17 Nov found that the kit replaces an `adk web` reading's interface with its own `/run_sse` route and the port with `$PORT` per world, so ADK needs no reading fix.
+- Reading: pass. No expectation was written before this reading. A correction on 17 Nov found that the kit replaces an `adk web` reading's interface with its own `/run_sse` route and the port with `$PORT` per world, so ADK needs no reading fix. A correction on 22 Nov: it did need one. The reading's save refused an `adk web` command that named no interface, and this reading passed only because its model wrote one. The save now leaves that interface to the build.
 - Run: miss. Two extra tool calls with empty arguments were recorded, and stopping wasn't recorded.
 
 ## OpenAI Agents SDK

@@ -17,7 +17,7 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
    repo today (see `_collect_http_tool_calls`'s docstring — a verified finding, not an assumption)
    and is intentionally left returning zero calls rather than inventing a capture proxy.
    `tool_trace` is read from the world's own postgres database against an unpinned, isolated
-   convention (see `_collect_tool_trace_calls`'s docstring). Either way, zero calls captured is
+   convention (see `collect_tool_trace_calls`'s docstring). Either way, zero calls captured is
    never fabricated into something else — the scheduler's own `evidence_missing` retry-once policy
    is the contract-correct handling for "no evidence."
 3. **Uploading artifacts.** The transcript and any produced recordings are uploaded through the
@@ -34,9 +34,10 @@ import asyncio
 import contextlib
 import dataclasses
 import gc
+import inspect
 import json
 import random
-import re
+import time
 import logging
 import os
 import stat
@@ -45,7 +46,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Iterable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.agent.definition import retell_web_call_url as _retell_web_call_url
@@ -70,21 +71,34 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, with_acts, world_summary
 from .actor_meter import ActorMeter
 from .world_door import (
+    logged_ok,
+    logged_outcome,
+    pinned_options,
+    NOT_STOPPED,
+    door_failure,
+    world_failed,
     APPROVAL_REQUIRED,
     APPROVAL_UNKNOWN,
+    DOOR_FILE,
     FAULTS_UNKNOWN,
     calls_in,
-    DOOR_OUT_OF_REACH,
     EGRESS_BLOCKED,
     EVIDENCE_INCOMPLETE,
+    _on_trial_tables,
     action_matches,
+    chosen_fields,
+    fixed_fields,
     is_attempt,
+    is_committed,
     is_read,
     logged_as,
+    named_alike,
     route_action,
     routed_faults,
+    row_arguments,
     same_action,
     same_json,
+    same_write,
 )
 from .actors import (
     AGENT,
@@ -99,12 +113,13 @@ from .actors import (
 )
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
+from .catalogue import CATALOGUE
 from .call_actor import (
     load_call_actors,
     speaking_entries,
     logged_action,
 )
-from .hosted_scheduler import CallAborted, CallOutcome
+from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, call_sealed
 from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode, job_actors_switch
 from .isolated_process import run_json_worker
@@ -133,6 +148,7 @@ from .simulator_voice import (
     simulator_definition,
     voice_providers,
 )
+from . import tool_evidence as evidence
 from .world.errors import WorldUnavailable
 from .world.runtime import (
     Call,
@@ -222,7 +238,7 @@ _RUN_SECONDS_PAD_SECONDS = 60.0
 _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 
 # Unpinned by any contract and no producer exists yet. Isolated as one
-# constant + two functions (`_clear_tool_trace_calls`, `_collect_tool_trace_calls`) so a real
+# constant + two functions (`_clear_tool_trace_calls`, `collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
 
@@ -243,16 +259,11 @@ _CONVERSATION_STALL_FAILURE_CODES = frozenset(
 )
 
 
-def _attributed_stall(case: Any) -> tuple[str, str] | None:
-    """Attribute a speech stall from committed transcript turns, without guessing."""
-    if (
-        case.failure is None
-        or case.failure.code not in _CONVERSATION_STALL_FAILURE_CODES
-    ):
+def _stall_attribution(messages: Sequence[Any]) -> tuple[str, str] | None:
+    """Who stalled, from the committed transcript's last turn, without guessing."""
+    if not messages:
         return None
-    if case.result is None or not case.result.messages:
-        return None
-    last = case.result.messages[-1]
+    last = messages[-1]
     if not isinstance(last, dict):
         return None
     role = str(last.get("role") or "").strip().lower()
@@ -273,6 +284,39 @@ def _attributed_stall(case: Any) -> tuple[str, str] | None:
             "Simulated caller produced no response after the target agent's final turn",
         )
     return None
+
+
+def _attributed_stall(case: Any) -> tuple[str, str] | None:
+    """Attribute a speech stall from committed transcript turns, without guessing."""
+    if (
+        case.failure is None
+        or case.failure.code not in _CONVERSATION_STALL_FAILURE_CODES
+    ):
+        return None
+    if case.result is None or not case.result.messages:
+        return None
+    return _stall_attribution(case.result.messages)
+
+
+def _call_ending_facts(case: Any) -> list[str]:
+    """What else the engine recorded about how the call ended, kept beside the verdict it does not change: a stall
+    under a failure that took precedence (a transcript that could not be fully captured), and each teardown step that
+    failed."""
+    metadata = (case.result.metadata if case.result is not None else None) or {}
+    facts: list[str] = []
+    stop = str(metadata.get("stop_reason") or "")
+    if (
+        case.failure is not None
+        and case.failure.code not in _CONVERSATION_STALL_FAILURE_CODES
+        and stop in _CONVERSATION_STALL_FAILURE_CODES
+    ):
+        stalled = _stall_attribution(case.result.messages if case.result is not None else [])
+        facts.append(f"the conversation had also stalled ({stalled[0]}: {stalled[1]})" if stalled else
+                     "the conversation had also stalled")
+    if metadata.get("cleanup_status") == "failed":
+        steps = [str(one) for one in metadata.get("cleanup_errors") or [] if one]
+        facts.append("call teardown failed at " + (", ".join(steps[:5]) if steps else "an unrecorded step"))
+    return facts
 
 
 # C3 §4.5: the engine's dispatch-ack ladder marks +60s exhaustion with this structured
@@ -303,8 +347,107 @@ class ArtifactUploader(Protocol):
 PlaceCall = Callable[[SimulationSpec], Awaitable[SimulationReport]]
 
 
-async def _default_place_call(spec: SimulationSpec) -> SimulationReport:
-    return await SimulationRunner().run(spec)
+# Given to the call's process when the scenario holds a tool call for its timeout: the world's database, whose action
+# log says which of the agent's calls the door is holding and for how long.
+TOOL_HOLD_DSN = "ALK_TOOL_HOLD_DSN"
+# How often the hold is read again; the engine asks every tenth of a second.
+_HOLD_READ_SECONDS = 1.0
+
+
+def held_until(rows: Sequence[Mapping[str, Any]]) -> float | None:
+    """When the latest of the agent's calls the door is holding for a timeout fault is answered, as an epoch second;
+    None when it holds none. The door logs the call before it holds it, for the fault's `delay_seconds`."""
+    from .world_door import MAX_FAULT_SECONDS, is_timeout
+
+    ends: list[float] = []
+    for row in rows:
+        fault = row.get("fault")
+        if isinstance(fault, str):
+            with contextlib.suppress(ValueError):
+                fault = json.loads(fault)
+        at = row.get("at")
+        if not isinstance(fault, Mapping) or not is_timeout(fault) or not isinstance(at, (int, float)):
+            continue
+        try:
+            delay = min(max(float(fault.get("delay_seconds", MAX_FAULT_SECONDS)), 0.0), MAX_FAULT_SECONDS)
+        except (TypeError, ValueError):
+            delay = MAX_FAULT_SECONDS
+        ends.append(float(at) + delay)
+    return max(ends) if ends else None
+
+
+# The most recent of the door's held calls a read looks at; a trial makes only a few.
+_HOLD_ROWS = 20
+
+
+def _held_rows(dsn: str) -> list[dict[str, Any]]:
+    """The door's latest rows that carry a fault: only what the hold is read from, bounded in rows and time."""
+    with _read_only(dsn, timeout_ms=500) as connection:
+        cursor = connection.execute(
+            f'SELECT at, fault FROM public."{_TOOL_TRACE_TABLE}" WHERE fault IS NOT NULL '  # noqa: S608 - fixed identifier
+            f"ORDER BY at DESC LIMIT {_HOLD_ROWS}"
+        )
+        return [{"at": at, "fault": fault} for at, fault in cursor.fetchall()]
+
+
+def _hold_reader(dsn: str) -> Callable[[], float | None]:
+    """The engine's check of a held tool call. The engine asks from its event loop, so the answer is the last one read
+    and never waits: a read runs in its own thread at most once a second, and a failed one is no hold."""
+    lock = threading.Lock()
+    state: dict[str, Any] = {"until": None, "read_at": float("-inf"), "reading": False}
+
+    def refresh() -> None:
+        try:
+            until = held_until(_held_rows(dsn))
+        except Exception:  # noqa: BLE001 - the backstop then waits as it always has
+            until = None
+        with lock:
+            state["until"], state["reading"] = until, False
+
+    def read() -> float | None:
+        now = time.monotonic()
+        with lock:
+            if not state["reading"] and now - state["read_at"] >= _HOLD_READ_SECONDS:
+                state["reading"], state["read_at"] = True, now
+                try:
+                    threading.Thread(target=refresh, name="alk-tool-hold", daemon=True).start()
+                except RuntimeError:
+                    # No thread to read in: the next check tries again rather than waiting on a read never started.
+                    state["reading"] = False
+            return state["until"]
+
+    return read
+
+
+async def _default_place_call(
+    spec: SimulationSpec, stop_when: Callable[[list[dict[str, Any]], Any], bool] | None = None
+) -> SimulationReport:
+    dsn = os.environ.get(TOOL_HOLD_DSN, "").strip()
+    busy, token = None, None
+    if dsn:
+        # Only a scenario that holds a tool call loads the engine's switch; every other call runs as it always has.
+        from fi.simulate.simulation.engines.livekit import TARGET_BUSY_UNTIL as busy
+
+        token = busy.set(_hold_reader(dsn))
+    try:
+        if stop_when is None:
+            return await SimulationRunner().run(spec)
+        # Checked by the engine between turns: a user stop hangs up at the next turn boundary with the engine's own
+        # report.
+        return await SimulationRunner().run(spec, stop_when=stop_when)
+    finally:
+        if busy is not None and token is not None:
+            busy.reset(token)
+
+
+def _takes_stop_when(place_call: Any) -> bool:
+    try:
+        parameters = inspect.signature(place_call).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "stop_when" or parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+    )
 
 
 @dataclass(frozen=True)
@@ -325,6 +468,9 @@ class CallRunnerContext:
     usage_reporter: UsageReporter | None = None
     # A readiness probe checks how the agent's tools reach the world, not the scenario's own trial rules.
     readiness_probe: bool = False
+    # Whether the person stopped the run: a cancel of a call's task is a user stop only while this reads true. Read
+    # per call, never kept on the runner, which serves every concurrent call.
+    stop_requested: Callable[[], bool] = lambda: False
     # Under per-user isolation, where the conversation's tool calls run: a handler child's
     # socket. None runs them in this process, as with one fixed user.
     handler_channel: "HandlerChannel | None" = None
@@ -754,15 +900,26 @@ def _build_spec(
     )
 
 
+def _world_reader(endpoint: Any) -> Any:
+    """The world's store for the harness's reads (`attached_world_store`): with world roles its store role, and none
+    for a world without one, never the superuser's address."""
+    from .world.stores import StoreError
+    from .world.stores.postgres import attached_world_store
+
+    try:
+        return attached_world_store(endpoint)
+    except StoreError:
+        logger.warning("world records unread: this world has no role of its own to read them with")
+        return None
+
+
 def _world_records(runtime: Any) -> Callable[[str], list[dict[str, Any]]] | None:
     """The trial's world records, one collection at a time, for an actor's knowledge; None where none can be read."""
     endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
     if endpoint is None:
         return None
-    from .world.stores.postgres import AttachedPostgresStore
-
-    store = AttachedPostgresStore(endpoint.address)
-    return store.table
+    store = _world_reader(endpoint)
+    return store.table if store is not None else None
 
 
 def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
@@ -770,9 +927,8 @@ def _world_columns(runtime: Any) -> Callable[[str], list[str]] | None:
     endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
     if endpoint is None:
         return None
-    from .world.stores.postgres import AttachedPostgresStore
-
-    return AttachedPostgresStore(endpoint.address).columns
+    store = _world_reader(endpoint)
+    return store.columns if store is not None else None
 
 
 def _resolved_call_actors(
@@ -936,11 +1092,11 @@ def _clear_tool_trace_calls(dsn: str) -> None:
     try:
         import psycopg
 
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
-            connection.execute(f'DELETE FROM "{_TOOL_TRACE_TABLE}"')  # noqa: S608 - fixed identifier, no interpolated user input
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            connection.execute(f'DELETE FROM public."{_TOOL_TRACE_TABLE}"')  # noqa: S608 - fixed identifier, no interpolated user input
             # The keys actors' actions claimed go with the rows they guard.
             connection.execute(
-                "DO $$ BEGIN IF to_regclass('_alk_action_keys') IS NOT NULL THEN DELETE FROM _alk_action_keys; END IF; END $$"
+                "DO $$ BEGIN IF to_regclass('public._alk_action_keys') IS NOT NULL THEN DELETE FROM public._alk_action_keys; END IF; END $$"
             )
     except Exception as exc:  # noqa: BLE001 - best-effort housekeeping only, never a call-blocking failure
         # WHY: never log exc_info / str(exc) here -- a psycopg connection failure embeds the raw
@@ -1055,7 +1211,7 @@ def one_call_per_lost_answer(calls: Sequence[Call], log: Sequence[Mapping[str, A
             or row.get("outcome") != "committed"
         ):
             continue
-        wanted = _loose_arguments(_arguments(row.get("arguments")))
+        wanted = _loose_arguments(row_arguments(row.get("arguments")))
         same = [
             call
             for call in kept
@@ -1070,6 +1226,9 @@ def one_call_per_lost_answer(calls: Sequence[Call], log: Sequence[Mapping[str, A
             continue
         if ran is not None and heard is not None:
             kept = [call for call in kept if call is not heard]
+            # The record folded away saw the same call.
+            for source in (heard.source, *heard.seen_by):
+                evidence.seen(ran, source)
         one.ok, one.error, one.answer_lost = True, "", True
     return kept
 
@@ -1084,18 +1243,18 @@ def _read_only(dsn: str, timeout_ms: int | None = None) -> Any:
     options = "-c default_transaction_read_only=on"
     if timeout_ms is not None:
         options += f" -c statement_timeout={timeout_ms}"
-    return psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=options)
+    return psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=pinned_options(options))
 
 
 def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
     cursor = connection.execute(
-        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
+        f'SELECT * FROM public."{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608 - fixed identifier, no user input
     )
     columns = [description[0] for description in cursor.description or []]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
-def _collect_tool_trace_calls(
+def collect_tool_trace_calls(
     runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
@@ -1128,13 +1287,14 @@ def _collect_tool_trace_calls(
 
     calls: list[Call] = []
     for record in records:
-        name = record.get("name")
+        # The agent's own tool name when the world recorded it beside the route the call took.
+        name = record.get("agent_tool") or record.get("name")
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")
         if not isinstance(arguments, dict):
             arguments = {}
-        ok = bool(record.get("ok", True))
+        ok = logged_ok(record.get("ok", True))
         result = _structured(record.get("result"))
         error = _truncate(str(record.get("error") or ""))
         raw_at = record.get("at")
@@ -1151,10 +1311,106 @@ def _collect_tool_trace_calls(
                 error=error,
                 refused=refused,
                 at=at,
+                endpoint=str(record.get("endpoint") or ""),
+                # The worker the world saw make it, by the channel it came through.
+                worker_id=str(record.get("worker_id") or ""),
                 refusal_code=str(record.get("refusal_code") or "") if refused else "",
+                channel=str(record["worker_id"] or "") if "worker_id" in record else None,
             )
         )
     return tuple(calls)
+
+
+def _contract_workers(bundle_dir: Any) -> list[Mapping[str, Any]]:
+    """The workers the sealed contract declares, each with its id."""
+    if bundle_dir is None:
+        return []
+    workers = _bundle_contract(Path(bundle_dir)).get("workers")
+    return [one for one in workers if isinstance(one, Mapping) and one.get("id")] if isinstance(workers, list) else []
+
+
+def contract_worker_ids(bundle_dir: Any) -> list[str]:
+    """Every worker id the sealed contract declares, whatever name its framework gives the worker."""
+    return sorted({str(one["id"]) for one in _contract_workers(bundle_dir)})
+
+
+def _unique_worker_names(workers: Sequence[Any]) -> dict[str, str]:
+    """Each worker's id and the name its framework gives it, where that name is the worker's alone: a name two workers
+    share, or one that is another worker's id, names neither, so their calls are matched by id, never guessed."""
+    named = {
+        str(one["id"]): str(one.get("name") or "").strip()
+        for one in workers
+        if isinstance(one, Mapping) and one.get("id") and str(one.get("name") or "").strip()
+    }
+    shared = _shared_names(named.values())
+    ids = {str(one["id"]) for one in workers if isinstance(one, Mapping) and one.get("id")}
+    return {
+        worker: name
+        for worker, name in named.items()
+        if _tool_key(name) not in shared and _tool_key(name) not in {_tool_key(other) for other in ids - {worker}}
+    }
+
+
+def contract_worker_names(bundle_dir: Any) -> dict[str, str]:
+    """Each contract worker's id and the name its framework gives it, from the sealed contract, where the name is the
+    worker's alone (`_unique_worker_names`)."""
+    return _unique_worker_names(_contract_workers(bundle_dir))
+
+
+def _shared_names(names: Iterable[str]) -> set[str]:
+    """The worker names, as calls spell them, that more than one worker has."""
+    seen: dict[str, int] = {}
+    for one in names:
+        key = _tool_key(one)
+        seen[key] = seen.get(key, 0) + 1
+    return {key for key, count in seen.items() if key and count > 1}
+
+
+def collect_seam_calls(
+    runtime: EnvironmentRuntime,
+    seam: EvidenceSeam | None,
+    observed: Sequence[Call] = (),
+    worker_names: Mapping[str, str] | None = None,
+    *,
+    strict: bool = False,
+    routes: Mapping[str, str] | None = None,
+) -> tuple[Call, ...]:
+    """One attempt's calls, from another source, the agent's in-process trace or the bundle's seam, joined with span
+    lines; every runner reads them here. With ``strict``, raises `ToolCaptureFailed` when nothing graded was captured
+    and a declared surface could not be read."""
+    unread: ToolCaptureFailed | None = None
+    try:
+        written, from_spans = _read_file_tool_calls(runtime, strict=strict, routes=routes)
+    except ToolCaptureFailed as exc:
+        written, from_spans, unread = [], [], exc
+    # Each record names its source (tool_evidence.py): what another source saw and the seam's rows are the world's.
+    calls = evidence.tagged(observed, evidence.WORLD)
+    if not calls and graded_calls(written):
+        calls = written
+    elif not calls:
+        # Hand-offs alone are not a capture: the seam's own record still decides.
+        found: list[Call] = []
+        if seam is EvidenceSeam.HTTP_TOOL:
+            found = list(_collect_http_tool_calls(runtime))
+        elif seam is EvidenceSeam.TOOL_TRACE:
+            # The bundle's seed creates the table, so a missing one is a failed capture too. The file's span lines
+            # still count when the database cannot be read.
+            try:
+                found = list(collect_tool_trace_calls(runtime, strict=strict))
+            except ToolCaptureFailed as exc:
+                unread = unread or exc
+        # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span
+        # lines alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
+        calls = [*written, *evidence.tagged(found, evidence.WORLD)]
+    for call in calls:
+        # The door names a worker by its contract id, its spans by the framework's name: give the call both, so the
+        # span and the door row of one call are read as one worker's call, not two calls.
+        if call.worker_id and not call.worker_label and (worker_names or {}).get(call.worker_id):
+            call.worker_label = (worker_names or {})[call.worker_id]
+    merged = _join_spans(calls, from_spans, runtime)
+    if unread is not None and not graded_calls(merged):
+        raise ToolCaptureFailed(str(unread), calls=merged) from None
+    return merged
 
 
 def _read_action_log(
@@ -1225,9 +1481,9 @@ class _ChosenActions:
 def trial_state_changes(
     log: list[dict[str, Any]], listed: Mapping[str, Any], decisions: Sequence[dict[str, Any]] = ()
 ) -> list[dict[str, Any]]:
-    """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
-    per actor that acted. A row from before outcomes were recorded counts as committed when it succeeded, else
-    refused; a read counts in `read`, never in `committed`."""
+    """What each participant (the agent, each actor that acted, each worker the world told apart as `worker:<id>`)
+    attempted and what the world made of it: counts, committed and refused actions with why, reads apart from commits,
+    and `answer_lost_actions`, committed actions whose answer a `timeout_after_commit` fault replaced."""
     entries: dict[str, dict[str, Any]] = {}
     chosen = _ChosenActions(decisions)
     for row in log:
@@ -1238,22 +1494,29 @@ def trial_state_changes(
             # A mark that a call ran unrecorded, never an attempt or a change: the trial's notices carry it.
             continue
         who = str(row.get("actor_id") or AGENT)
+        if who == AGENT and row.get("worker_id"):
+            who = f"worker:{row['worker_id']}"
         actor = listed.get(who)
         entry = entries.setdefault(
             who,
             {
                 "who": who,
-                "name": "the agent" if who == AGENT else (actor.name if actor is not None else who),
+                "name": "the agent"
+                if who == AGENT
+                else actor.name
+                if actor is not None
+                else str(row.get("worker_id") or who),
                 "attempted": 0,
                 **{outcome: 0 for outcome in _OUTCOMES},
                 "committed_actions": [],
+                "refused_actions": [],
                 "read": 0,
                 "read_actions": [],
             },
         )
         if _egress_blocked(row):
             # A call to a host outside the test world, stopped before it left: never a tool call or a change.
-            asked = _arguments(row.get("arguments"))
+            asked = row_arguments(row.get("arguments"))
             asked = asked if isinstance(asked, dict) else {}
             seen = {key: str(asked[key]) for key in ("host", "method", "tool") if asked.get(key)}
             blocked = entry.setdefault("blocked", [])
@@ -1265,28 +1528,184 @@ def trial_state_changes(
                 same["count"] += 1
             continue
         entry["attempted"] += 1
-        outcome = row.get("outcome") or (
-            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+        outcome = logged_outcome(row) if row.get("outcome") else (
+            "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
+        # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
+        name = str(row.get("agent_tool") or row.get("name") or "")
         if outcome == "committed" and is_read(row):
             entry["read"] += 1
-            entry["read_actions"].append(str(row.get("name") or "") if who == AGENT else logged_as(row))
+            entry["read_actions"].append(name if who == AGENT or who.startswith("worker:") else logged_as(row))
             continue
         if outcome in _OUTCOMES:
             entry[outcome] += 1
         if outcome == "committed":
-            shown = str(row.get("name") or "") if who == AGENT else chosen.name(who, logged_as(row), actor)
+            shown = name if who == AGENT or who.startswith("worker:") else chosen.name(who, logged_as(row), actor)
             entry["committed_actions"].append(shown)
             if row.get("error") == "response_lost":
                 # Committed, yet the one who acted was told it timed out: a retry after it commits twice.
                 entry.setdefault("answer_lost_actions", []).append(shown)
-    # The agent always has a line: "no change" is a result, since doing nothing can be correct.
+        elif outcome == "refused":
+            # An attempted violation stays visible: what was tried and why the world said no.
+            entry["refused_actions"].append(
+                {
+                    "action": name,
+                    "code": str(row.get("refusal_code") or ""),
+                    "reason": str(row.get("refusal") or row.get("error") or ""),
+                }
+            )
+    # The agent always has a line: "no change" is a result, since doing nothing can be correct. Its workers are the
+    # agent too, so a change one of them committed is not "no change".
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
-        "committed_actions": [], "read": 0, "read_actions": [],
+        "committed_actions": [], "refused_actions": [], "read": 0, "read_actions": [],
     }
-    agent["no_change"] = not agent["committed_actions"]
+    agent["no_change"] = not agent["committed_actions"] and not any(
+        entry["committed_actions"] for who, entry in entries.items() if who.startswith("worker:")
+    )
     return [agent] + list(entries.values())
+
+
+_SHARED_RECORD_KEYS = 20
+_SHARED_RECORD_ACTIONS = 50
+
+
+def _tool_effects(contract: Any) -> dict[str, bool | None]:
+    """Whether each contract tool writes: its entrypoint's declared `effect` (`read` / `write`) first, then a written
+    `effects` description, which only a tool that changes something carries. None when the contract says neither."""
+    def field(item: Any, key: str) -> Any:
+        return item.get(key) if isinstance(item, Mapping) else getattr(item, key, None)
+
+    writes: dict[str, bool | None] = {}
+    for tool in field(contract, "tools") or ():
+        name = field(tool, "name")
+        written = field(tool, "effects")
+        if isinstance(name, str) and name:
+            writes[name] = True if isinstance(written, str) and written.strip() else None
+    for entry in field(contract, "tool_entrypoints") or ():
+        name, effect = field(entry, "tool"), field(entry, "effect")
+        if isinstance(name, str) and name and effect in ("read", "write"):
+            writes[name] = effect == "write"
+    return writes
+
+
+def _row_writes(row: Mapping[str, Any], declared: bool | None) -> bool | None:
+    """Whether a logged call was a write: the effect the door logged for it first (a read changed nothing, whatever
+    the tool's description says), then the contract's word for its tool; None when neither says."""
+    if row.get("effect") in ("read", "write"):
+        return row["effect"] == "write"
+    return declared
+
+
+def record_key_columns(bundle_dir: Path | None) -> frozenset[str]:
+    """The columns the world declares as a record's key: each table's single-column primary key and unique keys, read
+    from the sealed world's seed (`seed/world.sqlite`, else `world.sqlite`). Empty when the bundle holds no such world:
+    then no argument is taken for a record's key."""
+    import sqlite3
+
+    for path in (Path(bundle_dir) / "seed" / "world.sqlite", Path(bundle_dir) / "world.sqlite") if bundle_dir else ():
+        if not path.is_file():
+            continue
+        try:
+            connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        except sqlite3.Error:
+            continue
+        try:
+            keys: set[str] = set()
+            tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+            for table in tables:
+                quoted = '"' + table.replace('"', '""') + '"'
+                primary = [row[1] for row in connection.execute(f"PRAGMA table_info({quoted})") if row[5]]
+                if len(primary) == 1:
+                    keys.add(primary[0])
+                for index in connection.execute(f"PRAGMA index_list({quoted})"):
+                    if index[2]:
+                        columns = [row[2] for row in connection.execute(f"PRAGMA index_info(\"{index[1]}\")")]
+                        if len(columns) == 1:
+                            keys.add(columns[0])
+            return frozenset(keys)
+        except sqlite3.Error:
+            return frozenset()
+        finally:
+            connection.close()
+    return frozenset()
+
+
+def trial_shared_records(
+    log: list[dict[str, Any]], contract: Any, keys: Collection[str] = frozenset()
+) -> list[dict[str, Any]]:
+    """Each record (`<argument>=<value>`, the argument named as a key column the world declares, `record_key_columns`)
+    two or more participants named in this trial, and what the world made of each call. `write` is the door's logged
+    effect, else the contract's declared one, else true when the tool describes effects; null when nothing says."""
+    return trial_shared_record_fields(log, contract, keys).get("shared_records", [])
+
+
+def trial_shared_record_fields(
+    log: list[dict[str, Any]], contract: Any, keys: Collection[str] = frozenset()
+) -> dict[str, Any]:
+    """The trial's sealed `shared_records` and `shared_records_truncated` (more records than the cap), empty when no
+    record is shared. A record is named by an argument the world declares as a key column (`keys`); nothing is read
+    from an argument's name, so with no declared key no record is shared. Each record says `actions_truncated` (more
+    actions than the cap); `truncated` is either one, for older readers."""
+    effects = _tool_effects(contract)
+    key_columns = set(keys)
+    named: dict[str, dict[str, Any]] = {}
+    for row in log:
+        if is_pre_run(row.get("idempotency_key")):
+            continue
+        # As in `trial_state_changes`: the door writes actor_id "agent" for every agent-side row, workers included.
+        who = str(row.get("actor_id") or AGENT)
+        if who == AGENT and row.get("worker_id"):
+            who = f"worker:{row['worker_id']}"
+        arguments = row.get("arguments")
+        if not isinstance(arguments, Mapping):
+            continue
+        tool = str(row.get("agent_tool") or row.get("name") or "")
+        outcome = logged_outcome(row) if row.get("outcome") else (
+            "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
+        )
+        for argument, value in arguments.items():
+            if argument not in key_columns:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                continue
+            key = f"{argument}={value}"
+            entry = named.setdefault(key, {"key": key, "argument": str(argument), "value": str(value), "actions": []})
+            entry["actions"].append(
+                {"who": who, "tool": tool, "outcome": str(outcome), "write": _row_writes(row, effects.get(tool))}
+            )
+    shared = [entry for entry in named.values() if len({one["who"] for one in entry["actions"]}) >= 2]
+    if not shared:
+        return {}
+    truncated = len(shared) > _SHARED_RECORD_KEYS
+    records = []
+    for entry in shared[:_SHARED_RECORD_KEYS]:
+        actions = entry["actions"]
+        actions_truncated = len(actions) > _SHARED_RECORD_ACTIONS
+        records.append(
+            {
+                **entry,
+                "actions": actions[:_SHARED_RECORD_ACTIONS],
+                "committed_writes": sum(
+                    1 for one in actions if one["write"] is True and one["outcome"] == "committed"
+                ),
+                "actions_truncated": actions_truncated,
+                "truncated": truncated or actions_truncated,
+            }
+        )
+    return {"shared_records": records, "shared_records_truncated": truncated}
+
+
+def _shared_records(runtime: EnvironmentRuntime, bundle_dir: Path) -> dict[str, Any]:
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return {}
+    try:
+        log = _read_action_log(database.address)
+    except Exception as exc:  # noqa: BLE001 - no shared records, never a failed call
+        logger.debug("shared records unreadable: %s", type(exc).__name__)
+        return {}
+    return trial_shared_record_fields(log, _bundle_contract(Path(bundle_dir)), record_key_columns(Path(bundle_dir)))
 
 
 def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] = ()) -> list[dict[str, Any]]:
@@ -1299,7 +1718,7 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] 
         if (row.get("actor_id") or AGENT) == AGENT
         and not is_pre_run(row.get("idempotency_key"))
         and not is_read(row)
-        and (row.get("outcome") or ("committed" if row.get("ok", True) else "")) == "committed"
+        and is_committed(row)
     ]
     found: list[dict[str, Any]] = []
     repeated: set[int] = set()
@@ -1311,14 +1730,14 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] 
             later = rows[later_index]
             if later_index in repeated or logged_as(later) != action:
                 continue
-            if not _same_write(first, later, _fixed_fields(solution, action)):
+            if not same_write(first, later, fixed_fields(solution, action), chosen_fields(solution, action)):
                 continue
             repeated.add(later_index)
             found.append(
                 {
                     "action": action,
                     "name": str(first.get("name") or action),
-                    "arguments": _arguments(first.get("arguments")),
+                    "arguments": row_arguments(first.get("arguments")),
                     "first_action_id": first.get("action_id"),
                     "repeat_action_id": later.get("action_id"),
                 }
@@ -1326,59 +1745,10 @@ def duplicate_commits(log: Sequence[Mapping[str, Any]], solution: Sequence[Any] 
     return found
 
 
-def _fixed_fields(solution: Sequence[Any], action: str) -> set[str]:
-    """The arguments the reference solution fixes for this action, over every step that takes it."""
-    fields: set[str] = set()
-    for step in solution or ():
-        step = step.model_dump() if hasattr(step, "model_dump") else step
-        if isinstance(step, Mapping) and _same_action(action, str(step.get("tool") or "")):
-            fields |= set(step.get("fixed") or {})
-    return fields
 
 
-# The last word of an argument that holds the agent's own words (`note`, `customer_note`, `reasonText`), never which
-# record is written. Any other argument, `order`, `orderId`, `reference`, `account`, says which record it is.
-_FREE_TEXT_WORDS = frozenset(
-    {"note", "notes", "reason", "message", "comment", "comments", "description", "text", "body", "summary", "content",
-     "subject", "details", "memo", "explanation", "remarks"}
-)
 
 
-def _free_text(field: str) -> bool:
-    """Whether an argument is the agent's own words, by its last word: `customer_note`, `reasonText`."""
-    words = [one for one in re.split(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])", field) if one]
-    return bool(words) and words[-1].lower() in _FREE_TEXT_WORDS
-
-
-def _same_write(first: Mapping[str, Any], later: Mapping[str, Any], fixed: set[str]) -> bool:
-    """Whether two committed writes of one action are the same write: equal arguments, or equal on every fixed
-    argument either carries and on every other argument but the agent's own words. Free text the solution does not fix
-    is the agent's own words, so a retry that rewords it is still the same write; any other argument may name the
-    record, so a different value (order-A, order-B, or 7, 8) is another write."""
-    one, two = _arguments(first.get("arguments")), _arguments(later.get("arguments"))
-    if same_json(one, two):
-        return True
-    if not isinstance(one, dict) or not isinstance(two, dict):
-        return False
-    carried = [field for field in fixed if field in one or field in two]
-    if not carried:
-        return False
-    others = (set(one) | set(two)) - set(fixed)
-    return all(same_json(one.get(field), two.get(field)) for field in carried) and all(
-        same_json(one.get(field), two.get(field))
-        for field in others
-        if not (_free_text(field) and isinstance(one.get(field), str) and isinstance(two.get(field), str))
-    )
-
-
-def _arguments(value: Any) -> Any:
-    """A row's arguments as data: a log read back from the database can hold them as JSON text."""
-    if isinstance(value, (str, bytes)):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    return value
 
 
 def _duplicates(runtime: EnvironmentRuntime, solution: Sequence[Any] = ()) -> list[dict[str, Any]] | None:
@@ -1405,42 +1775,18 @@ def trial_faults_readable(dsn: str) -> bool:
     """Whether the faults this runner wrote for the trial read back as the door reads them: a list of faults."""
     try:
         with _read_only(dsn) as connection:
-            row = connection.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
+            row = connection.execute("SELECT faults FROM public._alk_trial_faults WHERE id = 1").fetchone()
     except Exception as exc:  # noqa: BLE001 - whatever broke, the door could not have read them either
         logger.warning("trial faults unreadable: %s", type(exc).__name__)
         return False
-    faults = _arguments(row[0]) if row else None
+    faults = row_arguments(row[0]) if row else None
     return isinstance(faults, list) and all(isinstance(one, dict) for one in faults)
-
-
-# The values a record's decision field takes, as the verdict each is.
-_DECIDED = {
-    **dict.fromkeys(("approved", "approve", "accepted", "accept", "granted", "allowed", "yes", "true"), "approved"),
-    **dict.fromkeys(
-        ("denied", "deny", "declined", "decline", "rejected", "reject", "refused", "refuse", "no", "false"), "refused"
-    ),
-}
-_DECISION_FIELDS = ("decision", "verdict", "status", "approval", "approved")
-
-
-def _decision_of(row: Mapping[str, Any]) -> str | None:
-    """The decision an approver's record carries, in its own decision field: what it wrote, or set on a change."""
-    arguments = _arguments(row.get("arguments"))
-    if isinstance(arguments, dict) and isinstance(arguments.get("set"), dict):
-        arguments = arguments["set"]
-    if not isinstance(arguments, dict):
-        return None
-    for field in _DECISION_FIELDS:
-        decided = _DECIDED.get(str(arguments.get(field)).strip().lower()) if field in arguments else None
-        if decided is not None:
-            return decided
-    return None
 
 
 def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One line per approval, read from the action log only: the agent's request, the decision, and the agent's
-    writes before and after it. `verdict` is the one the actor gave, else the decision the record it wrote carries, a
-    fallback's included (`refused` too for a declining timeout); None when nothing says."""
+    writes before and after it. `verdict` is the one the actor gave (`VERDICTS`), `refused` for a declining timeout,
+    and None when nothing structured says: a record's own fields are never read for words that sound like one."""
     rows = [
         row
         for row in log
@@ -1465,7 +1811,7 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
             (
                 one
                 for one in said
-                if _same_action(str(one.get("action") or ""), action)
+                if named_alike(str(one.get("action") or ""), action)
                 and one.get("parent") in (None, "", parent.get("action_id"))
             ),
             None,
@@ -1474,23 +1820,13 @@ def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = (
             said.remove(sent)
         verdict = sent.get("verdict") if sent is not None else None
         if verdict not in VERDICTS:
-            # Unsaid, the record the actor wrote says it, a fallback's too: the decision it carries.
-            verdict = _decision_of(row)
+            verdict = None
         found.append((parent, {"by": row.get("actor_id"), "action": action, "outcome": row.get("outcome"),
                                "at": row.get("at"), "verdict": verdict}))
     for one in decisions:
         if one.get("play") == "timeout" and one.get("parent") in by_id:
-            # A timeout's verdict is its fallback's: a decline refuses, a fallback action says what its record says.
-            taken = next(
-                (
-                    row
-                    for row in rows
-                    if str(row.get("actor_id")) == str(one.get("actor"))
-                    and str(row.get("parent_event_id") or "") == str(one.get("parent"))
-                ),
-                None,
-            )
-            verdict = "refused" if one.get("fallback") == "decline" else _decision_of(taken) if taken else None
+            # A timeout's verdict is its fallback's: a decline refuses; a fallback action gives none of its own.
+            verdict = "refused" if one.get("fallback") == "decline" else None
             found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
                                                  "outcome": one.get("outcome"), "at": one.get("at"),
                                                  "verdict": verdict}))
@@ -1564,7 +1900,7 @@ def actor_rows(
                 "name": chosen.name(who, logged_as(row), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
-                "ok": bool(row.get("ok")),
+                "ok": logged_ok(row.get("ok")),
                 "error": _truncate(str(row.get("error") or "")),
                 "refused": row.get("outcome") == "refused",
                 "at": row.get("at"),
@@ -1610,38 +1946,171 @@ def _agent_marks(
     return marks
 
 
-# Kept in the world's database, never in a file the agent's process could read or rewrite.
-# Known limit: a connection with the world's role can write it until per-user database isolation is on.
-TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
+def read_trial_deadlines(address: str) -> tuple[float | None, dict[str, float]]:
+    """This trial's deadline for all workers and each named worker's own, as the runner wrote them; nothing when the
+    trial set none or has not started."""
+    import psycopg
+
+    try:
+        with psycopg.connect(address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            row = connection.execute(
+                "SELECT worker_deadline_at, worker_deadlines FROM public._alk_trial_faults WHERE id = 1"
+            ).fetchone()
+    except psycopg.Error:
+        return None, {}
+    if row is None:
+        return None, {}
+    deadline_at, deadlines = row
+    named = deadlines if isinstance(deadlines, dict) else {}
+    return (
+        float(deadline_at) if isinstance(deadline_at, (int, float)) else None,
+        {str(key): float(value) for key, value in named.items() if isinstance(value, (int, float))},
+    )
 
 
-def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults, in the world's database where the door in the tool proxy reads them; written by the runner
-    only, over its own connection."""
+# How long the seal waits for a worker's stop under way (a process that ignores SIGTERM is killed within the
+# provider's own bound) before reading without it.
+_SEAL_LOCK_TIMEOUT = "60s"
+
+
+def read_worker_stops(runtime: EnvironmentRuntime, since: float | None = None) -> list[dict[str, Any]] | None:
+    """The stops the harness claimed in this trial (each `reason`: `deadline_passed`, or `not_stopped` for a run that
+    went on past its cancel), in order; empty when it claimed none. Read once, at the seal: it first marks the trial
+    sealed, after any stop under way, so no worker is stopped later. A stop from before `since` (an earlier trial's,
+    left by a clear that failed) is never this trial's. None when the seal or the read did not complete: whether a
+    worker was stopped is then not known, never "none"."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
+        return []
+    try:
+        import psycopg
+        from psycopg import errors
+
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            connection.execute(f"SET lock_timeout = '{_SEAL_LOCK_TIMEOUT}'")
+            try:
+                # No DDL here: an ALTER would lock the table, and the row lock is what orders a stop and the seal.
+                connection.execute("UPDATE public._alk_trial_faults SET sealed_at = %s WHERE id = 1", (time.time(),))
+            except (errors.UndefinedTable, errors.UndefinedColumn):
+                # No trial row this harness wrote (it adds the column with the row): no stop can be claimed either.
+                pass
+            rows = connection.execute(
+                "SELECT worker, process, at, reason FROM public._alk_worker_stops ORDER BY at ASC"
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 - a seal that timed out on a stop under way, or a world out of reach
+        logger.warning("worker stops could not be sealed: %s", type(exc).__name__)
+        return None
+    return [
+        {"worker": worker, "process": process, "at": at, "reason": reason}
+        for worker, process, at, reason in rows
+        if since is None or not isinstance(at, (int, float)) or at >= since
+    ]
+
+
+WORKER_STOPPED_AT_DEADLINE = "worker_stopped_at_deadline"
+
+
+def worker_stop_outcomes(
+    stops: list[dict[str, Any]] | None, document: Mapping[str, Any], bundle_dir: Path | str | None
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """What the seal's stops mean for grading: a notice naming each worker the harness stopped at its deadline (its
+    own checks read partial), and each worker whose deadline did not hold (`unenforced_deadline_notices`): one that
+    ran on past its cancel, or, when the stops could not be read, every worker this trial gave a deadline."""
+    if stops is None:
+        named = sorted(worker_deadlines(document))
+        # Every declared worker by its id: a name two workers share, or none, never hides one the deadline fell on.
+        due = (contract_worker_ids(bundle_dir) if worker_deadline(document) is not None else []) or named
+        return [], [
+            {"worker": one, "reason": "whether the harness stopped it at its deadline could not be read"} for one in due
+        ]
+    stopped = sorted({str(one["worker"]) for one in stops if one.get("reason") == "deadline_passed"})
+    ran_on = sorted({str(one["worker"]) for one in stops if one.get("reason") == NOT_STOPPED})
+    notices = (
+        [{
+            "code": WORKER_STOPPED_AT_DEADLINE,
+            "message": "Stopped at their time limit: " + ", ".join(stopped) + ". Their own checks show partial results.",
+            "workers": stopped,
+        }]
+        if stopped
+        else []
+    )
+    return notices, [{"worker": one, "reason": "it kept running after its cancel"} for one in ran_on]
+
+def read_worker_runs(runtime: EnvironmentRuntime, since: float | None = None) -> set[str] | None:
+    """The workers the in-process door saw run as a task of their own in this trial (a run marked before `since`, an
+    earlier trial's left by a clear that failed, is not this trial's); None when they could not be read."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return None
+
+    def read() -> set[str]:
+        import psycopg
+
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            rows = connection.execute("SELECT worker, at FROM public._alk_worker_runs").fetchall()
+        return {
+            str(worker)
+            for worker, at in rows
+            if since is None or not isinstance(at, (int, float)) or at >= since
+        }
+
+    try:
+        return _on_trial_tables(database.address, read)
+    except Exception:  # noqa: BLE001 - unread runs leave every deadline not enforced, never a failed call
+        return None
+
+
+def _clear_worker_stops(runtime: EnvironmentRuntime) -> None:
+    """A new trial: no worker of it has been stopped yet, nor seen run, whatever an earlier trial on this world left."""
+    database = _find_postgres_endpoint(runtime) if runtime is not None else None
+    if database is None:
+        return
+    try:
+        def clear() -> None:
+            import psycopg
+
+            with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+                connection.execute("DELETE FROM public._alk_worker_stops")
+                connection.execute("DELETE FROM public._alk_worker_runs")
+
+        _on_trial_tables(database.address, clear)
+    except Exception as exc:  # noqa: BLE001 - a world database out of reach never fails a trial that stops no one
+        # Only the type: the text of a database error can carry the world's password.
+        logger.warning("worker stops could not be cleared before a trial: %s", type(exc).__name__)
+
+
+def _write_trial_state(
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+    worker_deadlines: Mapping[str, float] | None = None,
+) -> None:
+    """This trial's faults and its workers' deadline, in the world's database where the door in the tool proxy reads
+    them; written by the runner only, over its own connection. Past the deadline the world refuses every worker's
+    call (`deadline_passed`)."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        if worker_deadline_at or worker_deadlines:
+            # Workers would act with no deadline at all: the trial fails rather than grade them as if one held.
+            raise RuntimeError("the workers' deadline cannot be set: this world has no database the tool proxy reads")
         if faults:
-            logger.warning("faults cannot be set: this world has no database the tool proxy reads trial state from")
+            logger.warning("trial state cannot be set: this world has no database the tool proxy reads it from")
         return
     import psycopg
 
-    with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
-        connection.execute(TRIAL_FAULTS_DDL)
-        connection.execute(
-            "INSERT INTO _alk_trial_faults (id, faults) VALUES (1, %s::jsonb) "
-            "ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults",
-            (json.dumps(list(faults)),),
-        )
+    def write() -> None:
+        with psycopg.connect(database.address, autocommit=True, connect_timeout=5, options=pinned_options()) as connection:
+            connection.execute(
+                "INSERT INTO public._alk_trial_faults (id, faults, worker_deadline_at, worker_deadlines, sealed_at, "
+                "started_at) VALUES (1, %s::jsonb, %s, %s::jsonb, NULL, %s) ON CONFLICT (id) DO UPDATE SET "
+                "faults = EXCLUDED.faults, worker_deadline_at = EXCLUDED.worker_deadline_at, "
+                "worker_deadlines = EXCLUDED.worker_deadlines, sealed_at = NULL, started_at = EXCLUDED.started_at",
+                (json.dumps(list(faults)), worker_deadline_at, json.dumps(dict(worker_deadlines or {})), time.time()),
+            )
+
+    _on_trial_tables(database.address, write)
 
 
-def _same_action(action: str, name: str) -> bool:
-    """A fault names the world action (`service_a.update`); a call may carry the tool's own name (`update`). Two full
-    names match only when equal, so `crm.update` is never `ticket.update`."""
-    if not action or not name:
-        return False
-    if "." in action and "." in name:
-        return action == name
-    return action.rsplit(".", 1)[-1] == name.rsplit(".", 1)[-1]
 
 
 def fault_notices(
@@ -1682,7 +2151,11 @@ def fault_notices(
                                            f"world's door cannot hold that tool ({named[0].get('door_unreached')})."})
                 continue
         agent_rows = [row for row in log or [] if (row.get("actor_id") or AGENT) == AGENT]
-        rows = [row for row in agent_rows if same_action(row, action)]
+        # A call through the tool proxy also carries the agent's own tool name, which a fault may name instead.
+        rows = [
+            row for row in agent_rows
+            if same_action(row, action) or named_alike(action, str(row.get("agent_tool") or ""))
+        ]
         # A fault that names its method holds only calls made with it: a GET of the route is not a call of its DELETE.
         # A row from a log that kept no method still counts, as before methods were logged.
         method = str(fault.get("method") or "").upper()
@@ -1716,9 +2189,9 @@ def fault_notices(
         others = sum(
             1
             for row in agent_rows
-            if row.get("action") and row.get("action") != action and _same_action(action, str(row.get("name") or ""))
+            if row.get("action") and row.get("action") != action and named_alike(action, str(row.get("name") or ""))
         )
-        made = max(len(rows), sum(1 for call in calls if _same_action(action, call.name)) - others)
+        made = max(len(rows), sum(1 for call in calls if named_alike(action, call.name)) - others)
         if made >= on_call:
             notices.append({**base, "code": "fault_not_applied",
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: the agent "
@@ -1767,13 +2240,31 @@ def _names_action(entry: Mapping[str, Any], action: str) -> bool:
     route read as a world action."""
     tool = str(entry.get("tool") or "")
     route = str(entry.get("endpoint") or "").split("?", 1)[0].strip("/").replace("/", ".")
-    return _same_action(action, tool) or (
+    return named_alike(action, tool) or (
         bool(route) and (action_matches(action, route) or action_matches(route, action))
     )
 
 
 # Notices that make a trial unmeasured, never passed or failed on what it lacked.
 UNMEASURED_NOTICES = ("fault_not_applied", "fault_unknown_action", "fault_unreadable")
+
+
+def world_failure_reasons(notices: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Why the door failed on the agent's calls by its own fault, one reason per `world_failed` notice."""
+    return tuple(str(one.get("message")) for one in notices if one.get("code") == "world_failed")
+
+
+def world_failure_notices(log: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
+    """One notice for each of the agent's calls the action log shows the world or its door failed on with no test
+    condition holding it: the trial cannot say what the agent would have done with an answer, so it is unmeasured,
+    never the agent's. Read from the log, so every runner and every route sees it."""
+    return [
+        {"code": "world_failed",
+         "message": f"The world failed on the agent's {row.get('name') or row.get('action')} call, so this trial "
+                    "cannot be graded."}
+        for row in log or ()
+        if isinstance(row, Mapping) and world_failed(row)
+    ]
 
 
 def missing_evidence(notices: Sequence[Mapping[str, Any]], records: Mapping[str, Any] | None) -> dict[str, str]:
@@ -1819,9 +2310,361 @@ def _int_or(value: Any, default: int) -> int:
         return default
 
 
-def _set_trial_faults(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults at its start. A trial with faults to set fails when they cannot be set; one with none only
-    clears what an earlier trial may have left, so a world database out of reach never fails it."""
+def worker_deadline(document: Mapping[str, Any]) -> float | None:
+    """When all of this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if it
+    gives one number for all of them."""
+    budget = document.get("worker_budget_seconds")
+    if isinstance(budget, bool) or not isinstance(budget, (int, float)) or budget <= 0:
+        return None
+    return time.time() + budget
+
+
+def worker_deadlines(document: Mapping[str, Any]) -> dict[str, float]:
+    """When each named worker stops being allowed to act, where the scenario gives a budget per worker."""
+    budgets = document.get("worker_budget_seconds")
+    if not isinstance(budgets, Mapping):
+        return {}
+    start = time.time()
+    return {
+        str(worker): start + budget
+        for worker, budget in budgets.items()
+        if str(worker).strip() and not isinstance(budget, bool) and isinstance(budget, (int, float)) and budget > 0
+    }
+
+
+def trial_worker_deadlines(
+    document: Mapping[str, Any], bundle_dir: Path | str | None
+) -> tuple[float | None, dict[str, float], list[dict[str, Any]]]:
+    """This trial's worker-action deadline for all workers, each named worker's own, and what the person should be
+    told. A tool proxy sealed before this release has no worker limits at all, so neither a budget nor a worker's
+    permitted actions are held there: a scenario that relies on either says so, and is held rather than graded."""
+    deadline, deadlines = worker_deadline(document), worker_deadlines(document)
+    limit, cause, _ = _limits_not_held_cause(document, bundle_dir)
+    if not cause:
+        return deadline, deadlines, []
+    if cause == "in_process":
+        message = (
+            f"{limit} can't be enforced for this agent's participants: they run inside the app, so their calls can't "
+            "be told apart. This trial's checks were not graded."
+        )
+    elif cause == "shared_worker":
+        message = (
+            f"{limit} can't be enforced for a participant that shares the app's connection, because its calls can't "
+            "be told apart. This trial's checks were not graded. Give the participant its own connection and rebuild "
+            "the environment."
+        )
+    elif cause == "tool_service_not_fronted":
+        message = (
+            "This agent's tool service doesn't run through the test environment here, so no participant's limits "
+            "were enforced in this trial, and its checks were not graded."
+        )
+    elif cause == "sealed_before_worker_limits":
+        message = (
+            "This environment was built before participant limits existed, so none were enforced in this trial, "
+            "and its checks were not graded. Rebuild the environment to enforce them."
+        )
+    else:
+        message = (
+            "This agent's tools aren't called through the test environment, so no participant's limits were "
+            "enforced in this trial, and its checks were not graded. Limits can be enforced only for tools the agent "
+            "calls over HTTP."
+        )
+    return deadline, deadlines, [{"code": WORKER_LIMITS_NOT_ENFORCED, "message": message}]
+
+
+def _limits_not_held_cause(
+    document: Mapping[str, Any], bundle_dir: Path | str | None
+) -> tuple[str, str, list[str]]:
+    """Which of this trial's worker limits this environment cannot hold, why, and the workers they fall on, as (limit,
+    cause, workers); ("", "", []) when every limit holds, and an empty limit with a cause when none holds. The one
+    rule the run (`trial_worker_deadlines`) and the seal (`write_worker_limits`) both read."""
+    if not trial_relies_on_worker_limits(document, bundle_dir):
+        return "", "", []
+    relied = _workers_relied_on(document, bundle_dir)
+    if _door_holds_worker_limits(bundle_dir):
+        unheld, workers = _limits_on_shared_workers(document, bundle_dir)
+        if not unheld:
+            return "", "", []
+        cause = "in_process" if _door_record(bundle_dir).get("surface") == "in_process" else "shared_worker"
+        return unheld, cause, sorted(workers & relied)
+    if _door_record(bundle_dir).get("reason") == "tool_service_not_fronted":
+        # Sealed with the reason: the agent's tool service runs, but not behind the world's door.
+        return "", "tool_service_not_fronted", sorted(relied)
+    if _sealed_tool_proxy(bundle_dir):
+        return "", "sealed_before_worker_limits", sorted(relied)
+    # No tool proxy fronts this agent's tools, and a rebuild alone would not add one.
+    return "", "no_tool_proxy", sorted(relied)
+
+
+def _workers_relied_on(document: Mapping[str, Any], bundle_dir: Path | str | None) -> set[str]:
+    """The declared workers whose own limits this scenario relies on: each one it gives a deadline, and each one held
+    to its own permitted tools that one of its sub-goals is about. A worker with neither never appears."""
+    if bundle_dir is None:
+        return set()
+    workers = _bundle_contract(Path(bundle_dir)).get("workers") or []
+    declared = {str(one.get("id")) for one in workers if isinstance(one, dict)}
+    budgeted = set(worker_deadlines(document)) | (declared if worker_deadline(document) is not None else set())
+    return ((scenario_worker_subjects(document, bundle_dir) & limited_workers(bundle_dir)) | budgeted) & declared
+
+
+def limits_not_held(document: Mapping[str, Any], bundle_dir: Path | str | None) -> list[dict[str, Any]]:
+    """The notices that hold this trial before its call is placed: it relies on worker limits this environment cannot
+    hold. Empty when they hold, or the trial relies on none."""
+    notices = trial_worker_deadlines(document, bundle_dir)[2]
+    return [one for one in notices if one.get("code") == WORKER_LIMITS_NOT_ENFORCED]
+
+
+WORKER_DEADLINE_NOT_ENFORCED = "worker_deadline_not_enforced"
+# Why the door inside the agent could not hold a listed worker's deadline: the worker never ran as a task of its own.
+_NOT_ITS_OWN_TASK = (
+    "it didn't run on its own in this trial (it ran as a hand-off, run_streamed or run_sync, a LangGraph invoke, a "
+    "swarm subgraph node, or an unnamed graph), so it couldn't be stopped at its time limit"
+)
+
+
+def deadlines_not_enforced(
+    runtime: EnvironmentRuntime,
+    document: Mapping[str, Any],
+    bundle_dir: Path | str | None,
+    since: float | None = None,
+) -> list[dict[str, str]]:
+    """Each worker the door inside the agent was told it runs whose deadline in this trial it could not hold, with why;
+    empty on any other door, or when no deadline names such a worker. Decided at run time from the door's hook, since
+    only the run shows whether the framework ran the worker as a task of its own."""
+    due = _in_process_deadline_workers(document, bundle_dir)
+    if not due:
+        return []
+    ran = read_worker_runs(runtime, since)
+    reason = _NOT_ITS_OWN_TASK if ran is not None else "whether it ran on its own couldn't be read"
+    return [{"worker": one, "reason": reason} for one in due if one not in (ran or set())]
+
+
+def _in_process_deadline_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> list[str]:
+    """The workers the door inside the agent was told it runs that a deadline of this trial names; whether each one's
+    deadline is held is known only once the trial runs (`deadlines_not_enforced`)."""
+    record = _door_record(bundle_dir)
+    if record.get("surface") != "in_process":
+        return []
+    everyone, named = worker_deadline(document) is not None, set(worker_deadlines(document))
+    return [str(one) for one in record.get("workers") or [] if everyone or str(one) in named]
+
+
+def unenforced_deadline_notices(unenforced: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
+    """One notice naming every worker whose deadline was not enforced, so their own checks read unmeasured while the
+    rest of the trial is graded; none when every deadline was."""
+    if not unenforced:
+        return []
+    return [{
+        "code": WORKER_DEADLINE_NOT_ENFORCED,
+        "message": "; ".join(f"{one['worker']}'s time limit wasn't enforced: {one['reason']}" for one in unenforced)
+        + ". Their own checks were not graded.",
+        "workers": [one["worker"] for one in unenforced],
+    }]
+
+
+def faults_not_held(faults: Sequence[Any], calls: Sequence[Call], bundle_dir: Path | str | None) -> list[dict[str, Any]]:
+    """A notice for each of the scenario's faults on a build whose tool service runs but not behind the world's door:
+    nothing there applies a fault, so the trial is not graded, as one relying on worker limits is held."""
+    if not faults or _door_record(bundle_dir).get("reason") != "tool_service_not_fronted":
+        return []
+    return fault_notices(
+        faults, None, calls, unreachable="this agent's tool service doesn't run through the test environment"
+    )
+
+
+def _door_record(bundle_dir: Path | str | None) -> dict[str, Any]:
+    """Whether this bundle's world has a door in front of the agent's tools, and why not, as it was sealed; empty for a
+    bundle sealed before it was recorded."""
+    if bundle_dir is None:
+        return {}
+    try:
+        record = json.loads((Path(bundle_dir) / DOOR_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def _sealed_tool_proxy(bundle_dir: Path | str | None) -> bool:
+    """Whether this bundle sealed a tool proxy at all, of any release."""
+    return bundle_dir is not None and (Path(bundle_dir) / "generated" / "tool-proxy" / "proxy.py").is_file()
+
+
+def _limits_on_shared_workers(document: Mapping[str, Any], bundle_dir: Path | str | None) -> tuple[str, set[str]]:
+    """Which limit, if any, this trial puts on a worker the world cannot tell apart, and every worker with a limit that
+    cannot be held: a deadline on a shared worker it relies on, one deadline for all with no separate worker, or
+    permitted tools on a shared worker a sub-goal is about."""
+    if bundle_dir is None:
+        return "", set()
+    workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, dict)]
+    ids = {str(one.get("id")) for one in workers}
+    budgets = document.get("worker_budget_seconds")
+    named = {str(one) for one in budgets} if isinstance(budgets, Mapping) else set()
+    everyone = worker_deadline(document) is not None
+    record = _door_record(bundle_dir)
+    if record.get("surface") == "in_process":
+        # The door inside the agent holds a deadline by stopping the workers it runs, and no worker's permitted tools.
+        # A worker it never saw run as its own task is recorded at the seal (`deadlines_not_enforced`).
+        stopped = {str(one) for one in record.get("workers") or []}
+        late = {one for one in named if one not in stopped}
+        deadline = bool(late) or (everyone and (not stopped or bool(ids - stopped)))
+        if everyone:
+            late |= ids - stopped
+        tools = scenario_worker_subjects(document, bundle_dir) & limited_workers(bundle_dir)
+        if deadline:
+            return "A participant's time limit", late | tools
+        if relies_on_worker_limits(document, bundle_dir):
+            return "A participant's allowed tools", tools
+        return "", set()
+    if not workers:
+        # A contract that declares no workers: the budget's worker names were checked at authoring.
+        return "", set()
+    # Decided per scenario: only a limit on a worker this scenario relies on holds its trial.
+    relied = _workers_relied_on(document, bundle_dir)
+    separate = {str(one.get("id")) for one in workers if one.get("binding") == "separate"}
+    # Every budgeted worker the world cannot tell apart: one deadline for all reaches the shared workers beside any
+    # separate one, whose calls the world cannot stop at it.
+    late = ({one for one in named if one not in separate} | ((ids - separate) if everyone else set())) & relied
+    tools = {
+        str(one.get("id")) for one in workers if one.get("binding") != "separate" and one.get("allowed_tools")
+    } & scenario_worker_subjects(document, bundle_dir)
+    if late:
+        return "A participant's time limit", late | tools
+    if tools:
+        return "A participant's allowed tools", tools
+    return "", set()
+
+
+def limited_workers(bundle_dir: Path | str | None) -> set[str]:
+    """The workers this environment's agent declares held to their own permitted tools: each one wired separately,
+    or allowed fewer tools than it holds."""
+    if bundle_dir is None:
+        return set()
+    return {
+        str(one.get("id"))
+        for one in _bundle_contract(Path(bundle_dir)).get("workers") or []
+        if isinstance(one, dict) and (one.get("binding") == "separate" or bool(one.get("allowed_tools")))
+    }
+
+
+def declares_worker_limits(bundle_dir: Path | str | None) -> bool:
+    """Whether this environment's agent declares a worker held to its own permitted tools."""
+    return bool(limited_workers(bundle_dir))
+
+
+def scenario_worker_subjects(document: Mapping[str, Any], bundle_dir: Path | str | None) -> set[str]:
+    """The workers this scenario's own sub-goals are about (``subject: worker:<id>``), read from the bundle's
+    catalogue; none when it cannot be read."""
+    named = {
+        str(one.get("name") if isinstance(one, Mapping) else one)
+        for one in document.get("sub_goals") or []
+        if one
+    }
+    if not named or bundle_dir is None:
+        return set()
+    try:
+        catalogue = json.loads((Path(bundle_dir) / CATALOGUE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {
+        str(goal.get("subject"))[len("worker:") :]
+        for goal in (catalogue.get("sub_goals") if isinstance(catalogue, dict) else None) or []
+        if isinstance(goal, dict) and goal.get("name") in named and str(goal.get("subject") or "").startswith("worker:")
+    }
+
+
+def relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path | str | None) -> bool:
+    """Whether this scenario relies on a worker's own limits: one of its sub-goals is about a worker the agent
+    declares held to its own tools. A scenario about the task alone relies on none, so it is graded whatever the
+    door holds."""
+    limited = limited_workers(bundle_dir)
+    return bool(limited and scenario_worker_subjects(document, bundle_dir) & limited)
+
+
+def trial_relies_on_worker_limits(document: Mapping[str, Any], bundle_dir: Path | str | None) -> bool:
+    """Whether a scenario's trial needs the door to hold worker limits: it gives a worker budget, or relies on a
+    worker's own limits."""
+    return bool(worker_deadline(document) or worker_deadlines(document)) or relies_on_worker_limits(
+        document, bundle_dir
+    )
+
+
+# Each declared worker's `limited` flag and, per scenario, whether the run holds its trial as not graded, sealed for
+# the platform so it reads the run's own answer rather than deciding it again.
+WORKER_LIMITS_FILE = "worker-limits.json"
+_SEALED_LIMIT = {"A participant's time limit": "deadline", "A participant's allowed tools": "permitted_tools", "": "all"}
+
+
+def write_worker_limits(bundle_dir: Path) -> None:
+    """Seal, per scenario, the hold the run decides for it (`_limits_not_held_cause`), after `door.json` and the tool
+    proxy's seal it depends on; none without declared workers. A deadline on the in-process door is decided at run
+    time, so such a scenario seals `held: false` with `deadline: "decided_at_run"`."""
+    workers = [one for one in _bundle_contract(bundle_dir).get("workers") or [] if isinstance(one, dict)]
+    if not workers:
+        return
+    limited = limited_workers(bundle_dir)
+    scenarios = {}
+    for path in sorted((bundle_dir / "scenarios").glob("*/scenario.json")):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(document, dict):
+            continue
+        limit, cause, unheld = _limits_not_held_cause(document, bundle_dir)
+        budgeted = set(worker_deadlines(document)) | (
+            {str(one.get("id")) for one in workers} if worker_deadline(document) is not None else set()
+        )
+        scenarios[str(document.get("scenario_key") or path.parent.name)] = {
+            "workers": sorted(scenario_worker_subjects(document, bundle_dir) | budgeted),
+            "relies_on_worker_limits": trial_relies_on_worker_limits(document, bundle_dir),
+            "held": bool(cause),
+            "reason": WORKER_LIMITS_NOT_ENFORCED if cause else None,
+            "cause": cause or None,
+            "limit": _SEALED_LIMIT.get(limit, limit) if cause else None,
+            "deadline": "decided_at_run" if not cause and _in_process_deadline_workers(document, bundle_dir) else None,
+            "unheld_workers": unheld,
+        }
+    sealed = {
+        "workers": {str(one.get("id")): {"limited": str(one.get("id")) in limited} for one in workers},
+        "scenarios": scenarios,
+    }
+    (bundle_dir / WORKER_LIMITS_FILE).write_text(json.dumps(sealed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def worker_channels_held(bundle_dir: Path | str | None) -> bool:
+    """Whether this bundle's door holds each separate worker on its own channel: a tool proxy sealed with per-worker
+    limits. The door inside the agent stops the workers it runs, but gives none a channel of its own."""
+    return _door_record(bundle_dir).get("surface") == "tool_proxy" and _door_holds_worker_limits(bundle_dir)
+
+
+def _door_holds_worker_limits(bundle_dir: Path | str | None) -> bool:
+    """Whether this bundle's door enforces workers' limits: a tool proxy sealed with its capabilities file, or the
+    door inside the agent, which stops the workers it runs at their deadline."""
+    if bundle_dir is None:
+        # No sealed bundle: the proxy is this harness's own, which holds every limit.
+        return True
+    if _door_record(bundle_dir).get("surface") == "in_process":
+        return True
+    try:
+        sealed = json.loads((Path(bundle_dir) / "generated" / "tool-proxy" / DOOR_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(sealed, dict) and sealed.get("worker_deadlines") == "per_worker"
+
+
+def _set_trial_faults(
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+    worker_deadlines: Mapping[str, float] | None = None,
+) -> None:
+    """This trial's faults and worker deadline at its start. A trial with either to set fails when they cannot be
+    set; one with neither only clears what an earlier trial may have left, so a world database out of reach never
+    fails it."""
+    _clear_worker_stops(runtime)
+    if worker_deadline_at or worker_deadlines:
+        _write_trial_state(runtime, faults, worker_deadline_at, worker_deadlines)
+        return
     if faults:
         try:
             _write_trial_state(runtime, faults)
@@ -1835,9 +2678,38 @@ def _set_trial_faults(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
         logger.warning("trial faults could not be cleared before a trial with none: %s", type(exc).__name__)
 
 
-def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
+def sealed_routes(bundle_dir: Any) -> Callable[[], dict[str, Any]]:
+    """The world's own routes as the bundle sealed them (the tool proxy's `actions.json`), for the door to check an
+    actor's templated permission against; none when nothing was sealed, and raises when the file cannot be read."""
+
+    def read() -> dict[str, Any]:
+        path = Path(bundle_dir) / "generated" / "tool-proxy" / "actions.json" if bundle_dir is not None else None
+        if path is None or not path.is_file():
+            return {"routes": []}
+        actions = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(actions, dict):
+            raise ValueError("the sealed routes are not a JSON object")
+        return {"routes": list(actions)}
+
+    return read
+
+
+def _records_address(dsn: str, records_dsn: str | None) -> str:
+    """Where an actor's record change runs: the world's own role. Only without world roles (one fixed user, where the
+    agent's own processes have the same address) is it the given one; with them and no role's address, refused."""
+    from .privilege import IsolationMode, isolation_mode
+
+    if records_dsn:
+        return records_dsn
+    if isolation_mode() is IsolationMode.PER_USER:
+        raise RuntimeError("no_world_role: a world's rows are changed only with its own role, and none was given")
+    return dsn
+
+
+def runner_door(tools_url: str, dsn: str, timeout: float, bundle_dir: Any = None, records_dsn: str | None = None) -> Any:
     """The world's door in the runner's process: the agent's tools service behind it, the world's own action log, actor
-    list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy."""
+    list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy. Record
+    changes run as `records_dsn`, the world's own role, so the log's superuser never writes a customer's rows."""
     from .world_door import (
         HttpExecutor,
         PostgresLog,
@@ -1849,23 +2721,25 @@ def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
     )
 
     return WorldDoor(
-        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(dsn))),
+        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(_records_address(dsn, records_dsn)))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
+        workers=sealed_routes(bundle_dir),
     )
 
 
-def record_door(dsn: str) -> Any:
+def record_door(dsn: str, bundle_dir: Any = None, records_dsn: str | None = None) -> Any:
     """The world's door in the runner's process for an agent whose tools run in its own process: an actor's record
     change runs on the world's database; an action on one of the agent's own tools is refused, since only the agent's
-    process can run it."""
+    process can run it. Record changes run as `records_dsn`, the world's own role."""
     from .in_process_door import _NotHere
     from .world_door import PostgresLog, PostgresRecords, PostgresRoster, RecordExecutor, Routed, WorldDoor
 
     return WorldDoor(
-        Routed(_NotHere(), RecordExecutor(PostgresRecords(dsn))),
+        Routed(_NotHere(), RecordExecutor(PostgresRecords(_records_address(dsn, records_dsn)))),
         PostgresLog(dsn),
         PostgresRoster(dsn),
+        workers=sealed_routes(bundle_dir),
     )
 
 
@@ -1896,12 +2770,22 @@ def _actor_dispatcher(
         return None
     tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
+    from .privilege import IsolationMode, isolation_mode
+
+    if database is not None and not database.tool_address and isolation_mode() is IsolationMode.PER_USER:
+        logger.warning("actors cannot act: this world has no role of its own to change its rows with")
+        if why_not is not None:
+            why_not.append(("no_world_role", "no world role: an actor's record change would run as the harness"))
+        return None
     if database is not None and runtime.endpoints.get("world_door") is not None and tools is None:
         # An actor acts through record changes there; one of the agent's own tools is refused with why.
         return build_dispatcher(
             dict(doc),
             bundle_dir,
-            act=DoorActs(record_door(database.address), _bundle_contract(bundle_dir)),
+            act=DoorActs(
+                record_door(database.address, bundle_dir, records_dsn=database.tool_address),
+                _bundle_contract(bundle_dir),
+            ),
             read_log=_ActionLog(database.address),
             records=_world_records(runtime),
             columns=_world_columns(runtime),
@@ -1917,7 +2801,10 @@ def _actor_dispatcher(
     return build_dispatcher(
         dict(doc),
         bundle_dir,
-        act=DoorActs(runner_door(tools.address, database.address, budget), _bundle_contract(bundle_dir)),
+        act=DoorActs(
+            runner_door(tools.address, database.address, budget, bundle_dir, records_dsn=database.tool_address),
+            _bundle_contract(bundle_dir),
+        ),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
         columns=_world_columns(runtime),
@@ -1934,6 +2821,97 @@ def _bundle_contract(bundle_dir: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return body if isinstance(body, dict) else {}
+
+
+WORKER_CHANNEL_BYPASSED = "worker_channel_bypassed"
+
+
+# How far apart the door's row of a call and the app's own record of it may be, in seconds.
+_BYPASS_PAIR_SECONDS = 5.0
+
+
+def channel_bypasses(calls: Sequence[Call], contract_workers: Sequence[Any]) -> list[dict[str, Any]]:
+    """The calls a separately wired worker made on the shared address: the door row says the call came in on no
+    channel, and the app's own spans name that worker. Matched by the contract id exactly, or by its name as the
+    framework spells it when no other worker has that name (`call_worker`): spans carry the framework's agent name,
+    not the contract id."""
+    separate = {
+        str(one["id"])
+        for one in contract_workers
+        if isinstance(one, Mapping) and one.get("binding") == "separate" and str(one.get("id") or "")
+    }
+    found: list[dict[str, Any]] = []
+    # The app's own record of a worker's call (its span or its tool trace) that the door's row was not joined to:
+    # the two answers can differ, so the row and the record are paired by the tool, its arguments and the time.
+    traced = [one for one in calls if one.channel is None and not one.handoff]
+    used: set[int] = set()
+    for call in calls:
+        if call.channel != "":
+            continue
+        worker = call_worker(call, contract_workers)
+        if worker not in separate:
+            record = next(
+                (
+                    one
+                    for index, one in enumerate(traced)
+                    if index not in used
+                    and _tool_key(one.name) == _tool_key(call.name)
+                    and same_json(one.arguments, call.arguments)
+                    # A row or record with no time cannot be placed beside the other, so it is never paired.
+                    and bool(one.at and call.at)
+                    and abs(one.at - call.at) <= _BYPASS_PAIR_SECONDS
+                    and call_worker(one, contract_workers) in separate
+                ),
+                None,
+            )
+            worker = ""
+            if record is not None:
+                used.add(traced.index(record))
+                worker = call_worker(record, contract_workers)
+        if worker:
+            found.append({"worker": worker, "tool": call.name, "at": call.at})
+    return found
+
+
+def call_worker(call: Any, workers: Sequence[Any]) -> str:
+    """The declared worker that made a call: the one whose id it carries exactly, else the one whose name it carries
+    when that name is the worker's alone (`_unique_worker_names`); "" when it names no one worker."""
+    spelled = [one for one in (getattr(call, "worker_id", ""), getattr(call, "worker_label", "")) if one]
+    ids = {str(one["id"]) for one in workers if isinstance(one, Mapping) and one.get("id")}
+    exact = next((one for one in spelled if one in ids), "")
+    if exact:
+        return exact
+    keys = {_tool_key(one) for one in spelled}
+    return next((worker for worker, name in _unique_worker_names(workers).items() if _tool_key(name) in keys), "")
+
+
+def is_worker_call(call: Any, worker_id: str, name: str) -> bool:
+    """Whether a call is this worker's: by its contract id, or by its name as the framework spells it in spans."""
+    key = _tool_key(name)
+    spelled = {_tool_key(one) for one in (getattr(call, "worker_id", ""), getattr(call, "worker_label", "")) if one}
+    return getattr(call, "worker_id", "") == worker_id or bool(key and key in spelled)
+
+
+def channel_bypass_notices(calls: Sequence[Call], bundle_dir: Any) -> list[dict[str, Any]]:
+    """One notice naming every separate worker that reached the world without its own channel, or none."""
+    if bundle_dir is None:
+        return []
+    workers = [one for one in _bundle_contract(Path(bundle_dir)).get("workers") or [] if isinstance(one, Mapping)]
+    found = channel_bypasses(calls, workers)
+    if not found:
+        return []
+    ids = list(dict.fromkeys(one["worker"] for one in found))
+    names = {str(one.get("id")): str(one.get("name") or one.get("id")) for one in workers}
+    return [
+        {
+            "code": WORKER_CHANNEL_BYPASSED,
+            "message": (
+                f"{', '.join(names.get(one, one) for one in ids)} used the app's connection instead of their own, so "
+                "their limits weren't enforced for those calls; their own checks were not graded."
+            ),
+            "workers": ids,
+        }
+    ]
 
 
 def _private_actions_file(path: Path) -> Path:
@@ -2020,18 +2998,65 @@ _SPAN_SOURCE = "otel"
 _MISSING = object()
 
 
-def _collect_file_tool_calls(
+def collect_file_tool_calls(
     runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
     return _with_span_calls((), runtime, strict=strict)
 
 
+# A runtime's ``tool_spans_join`` when the build switched its spans on where kit dev had them off (a callback agent with
+# no runtime command): a span is a call only in an empty list. No value means kit dev's reading.
+SPANS_INTO_AN_EMPTY_LIST = "empty_list_only"
+
+
 def _with_span_calls(
     observed: Sequence[Call], runtime: EnvironmentRuntime, *, strict: bool = False
 ) -> tuple[Call, ...]:
-    """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
+    """Calls another source saw, else the trace file's own lines, joined with the file's span lines. Each record names
+    its source (tool_evidence.py): the agent's own account is tagged where it is recorded, and the rest of ``observed``
+    is the world's."""
     written, from_spans = _read_file_tool_calls(runtime, strict=strict)
-    return _merge_span_calls(list(observed) or written, from_spans)
+    return _merge_span_calls(evidence.tagged(observed, evidence.WORLD) or written, from_spans)
+
+
+def _join_spans(calls: list[Call], from_spans: list[Call], runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    """The one place span lines join the calls, for every runner (`collect_seam_calls`). Where the build switched
+    spans on with ``SPANS_INTO_AN_EMPTY_LIST``, a span is a call only when no other source recorded a graded call."""
+    join = (getattr(runtime, "metadata", None) or {}).get("tool_spans_join")
+    if join == SPANS_INTO_AN_EMPTY_LIST and from_spans and graded_calls(calls):
+        return _lend_only(calls, from_spans)
+    return _merge_span_calls(calls, from_spans)
+
+
+def _lend_only(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
+    """The calls with what their spans lend, and no call that only a span saw. A lend never takes a call out of the
+    graded list."""
+    graded = {id(call) for call in graded_calls(calls)}
+    before = {
+        id(call): (call.delegated_to, call.runtime_ids.get("parent_event_id"), call.parent_span_id, call.relationship)
+        for call in calls
+    }
+    merged = _merge_span_calls(calls, from_spans)
+    kept = [call for call in merged if id(call) in before]
+    left_out = {call.runtime_ids.get("event_id") for call in merged if id(call) not in before} - {None}
+    for call in kept:
+        _delegated, _parent, parent_span_id, relationship = before[id(call)]
+        if call.parent_span_id != parent_span_id and call.parent_span_id in left_out:
+            # The place a span lent points at a span that is no call here.
+            call.parent_span_id, call.relationship = parent_span_id, relationship
+    while True:
+        still = {id(call) for call in graded_calls(kept)}
+        lost = [call for call in kept if id(call) in graded and id(call) not in still]
+        if not lost:
+            break
+        # A lent hand-off mark and parent would read the call as a job repeating the call that launched it.
+        for call in lost:
+            delegated, parent, _place, _relationship = before[id(call)]
+            call.delegated_to = delegated
+            call.runtime_ids = {key: value for key, value in call.runtime_ids.items() if key != "parent_event_id"}
+            if parent:
+                call.runtime_ids["parent_event_id"] = parent
+    return tuple(kept)
 
 
 def tool_routes(contract: Mapping[str, Any]) -> dict[str, str]:
@@ -2059,6 +3084,8 @@ def _read_file_tool_calls(
     # The hook's lines, paired once every line is read: either may be written first.
     hooked: list[Call] = []
     from_spans: list[Call] = []
+    # Hand-offs written when the worker started: kept only for a tool call that never wrote its own line.
+    opened: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
@@ -2082,6 +3109,9 @@ def _read_file_tool_calls(
         if not isinstance(record, dict):
             unreadable += 1
             continue
+        if record.get("kind") == HAND_OFF_UNRECORDED:
+            # Not a call: the agent's observer could not write a hand-off (`hand_off_notices`).
+            continue
         name = record.get("name")
         if not isinstance(name, str) or not name:
             unreadable += 1
@@ -2097,15 +3127,22 @@ def _read_file_tool_calls(
                 arguments = {"raw": arguments}
         if not isinstance(arguments, dict):
             arguments = {}
-        is_error = bool(record.get("is_error", False))
         output = record.get("output")
+        # The proxy's failure answer the agent's tool handed back as its value is a failed call, never a result.
+        failed = door_failure(_structured(output))
+        is_error = bool(record.get("is_error", False)) or failed is not None
         raw_at = record.get("at")
+        result = None if is_error else _structured(output)
+        if record.get("source") == _SPAN_SOURCE:
+            if _langchain_arguments(arguments):
+                result = _unwrapped_result(result)
+            arguments = _unwrapped_arguments(arguments)
         call = Call(
             name=name,
             arguments=arguments,
-            result=None if is_error else _structured(output),
+            result=result,
             ok=not is_error,
-            error=str(output) if is_error and output is not None else None,
+            error=failed or (str(output) if is_error and output is not None else None),
             **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
             handoff=record.get("kind") == "handoff",
@@ -2113,11 +3150,15 @@ def _read_file_tool_calls(
         )
         ended = record.get("ended_at")
         call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
+        mark = record.get("source")
+        call.source = evidence.SPAN if mark == _SPAN_SOURCE else evidence.TRACER
+        if call.source == evidence.TRACER and isinstance(mark, str):
+            call.trace_mark = mark
         if record.get("source") == _SPAN_SOURCE:
             if _framework_message(call.result):
                 # Only the framework's message object around the answer: nothing to hold against the call's own.
                 call.output_omitted = True
-            from_spans.append(call)
+            (opened if record.get("opened") else from_spans).append(call)
             continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
             # Two lines with one call id are one call written twice: kept once, with the time either carries.
@@ -2169,11 +3210,25 @@ def _read_file_tool_calls(
             for one, as_written in timed
         ):
             calls.remove(extra)
+    # A worker still out when the process stopped: its hand-off has no end and no answer, never an invented return.
+    seen = {span.runtime_ids.get("event_id") for span in from_spans} - {None}
+    for call in opened:
+        event_id = call.runtime_ids.get("event_id")
+        if event_id not in seen:
+            seen.add(event_id)
+            from_spans.append(call)
     if strict and unreadable and not calls and not from_spans:
         raise ToolCaptureFailed(
             f"tool_trace file has no readable record ({unreadable} unreadable)"
         )
     return calls, from_spans
+
+
+def declared_worker_ids(bundle_dir: Path | str | None) -> dict[str, str]:
+    """Each worker the bundle's contract declares, by the name its framework gives it: `{name: worker id}`. A name that
+    is not the worker's alone (`_unique_worker_names`) is left out: an event under it stays as it was, never guessed
+    and never rewriting another worker's id."""
+    return {name: worker for worker, name in contract_worker_names(bundle_dir).items()}
 
 
 def _call_id(call: Call) -> str:
@@ -2183,6 +3238,141 @@ def _call_id(call: Call) -> str:
 
 # Said when the agent's trace holds identical untimed lines with no call id: one call written twice or two calls.
 CALLS_MAYBE_REPEATED = "calls_maybe_repeated"
+# Said when the agent's process turned framework span sources on, when it could not because an instrumentor was not
+# installed, and when a source that was on wrote no tool span for a call the agent's own process ran. None is a call,
+# and none is missing evidence: the calls are what the other sources recorded.
+TOOL_SPANS_ON = "tool_spans_on"
+TOOL_SPANS_NOT_INSTALLED = "tool_spans_not_installed"
+TOOL_SPANS_SILENT = "tool_spans_silent"
+# What the mark hook can note: the frameworks it instruments (`simulation_mark_bootstrap._INSTRUMENTORS`, which can't
+# be imported here, as importing it installs the hook) and its three states. The note is written by the agent's own
+# process, so a pair outside these is dropped rather than repeated in a notice, and only its first lines are read.
+# A test holds these equal to the hook's.
+_OBSERVED_FRAMEWORKS = frozenset(
+    {
+        "agents",
+        "langchain_core",
+        "crewai",
+        "google.adk",
+        "autogen_agentchat",
+        "smolagents",
+        "claude_agent_sdk",
+        "llama_index.core",
+        "pydantic_ai",
+        "strands",
+    }
+)
+_OBSERVED_STATES = frozenset({"on", "process_own", "not_installed"})
+_LARGEST_OBSERVING_NOTE = 65_536
+
+
+def _observing(runtime: EnvironmentRuntime) -> set[tuple[str, str]] | None:
+    """The framework span sources the agent's process noted (the mark hook's ``.observing`` file beside the trace), as
+    a set of framework and state; None when the note is missing or any of it cannot be read."""
+    path = _tool_trace_file(runtime)
+    if path is None:
+        return None
+    note = Path(str(path) + ".observing")
+    try:
+        # The agent's process can write this folder: only a plain file is read, never a pipe or device it left.
+        if not note.is_file():
+            return None
+        with open(note, "rb") as handle:
+            raw = handle.read(_LARGEST_OBSERVING_NOTE + 1)
+        if len(raw) > _LARGEST_OBSERVING_NOTE:
+            # Each process that imports a framework appends its line, so a process started on every turn writes the
+            # same lines again: the whole lines that fit say what the rest repeats.
+            raw = raw[: raw.rfind(b"\n", 0, _LARGEST_OBSERVING_NOTE) + 1]
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    noted: set[tuple[str, str]] = set()
+    for line in text.splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            return None
+        if not (isinstance(record, dict) and isinstance(record.get("framework"), str)
+                and isinstance(record.get("state"), str)):
+            return None
+        if record["framework"] in _OBSERVED_FRAMEWORKS and record["state"] in _OBSERVED_STATES:
+            noted.add((record["framework"], record["state"]))
+    return noted or None
+
+
+def tool_span_notices(
+    runtime: EnvironmentRuntime, calls: Sequence[Call], *, silent: bool = True
+) -> list[dict[str, Any]]:
+    """What the trial's framework span sources were: on, not installed, and silent (on, no tool span in the trace,
+    while the agent's own process ran a call: a tracer line or a completed call in the agent's account).
+
+    A voice trial says nothing of silence (``silent=False``): its LiveKit worker writes a tracer line for every tool it
+    runs, while its framework's spans are read for hand-offs, so a framework with no tool span is no sign of a fault."""
+    noted = _observing(runtime)
+    if noted is None:
+        return []
+    on = sorted({framework for framework, state in noted if state in ("on", "process_own")})
+    live = sorted({framework for framework, state in noted if state == "on"})
+    missing = sorted({framework for framework, state in noted if state == "not_installed"})
+    notices = []
+    if on:
+        notices.append({"code": TOOL_SPANS_ON, "message": f"Framework span sources were on for {', '.join(on)}."})
+    if missing:
+        notices.append(
+            {
+                "code": TOOL_SPANS_NOT_INSTALLED,
+                "message": f"No span source for {', '.join(missing)}: its instrumentor was not installed.",
+            }
+        )
+    ran = [call for call in graded_calls(calls) if call.source in (evidence.TRACER, evidence.AGENT)]
+    # Tool spans only: a hand-off span says nothing of whether the source recorded the tools.
+    tool_spans = [span for span in _read_file_tool_calls(runtime)[1] if not span.handoff]
+    if silent and live and ran and not tool_spans:
+        notices.append(
+            {
+                "code": TOOL_SPANS_SILENT,
+                "message": f"Spans were on for {', '.join(live)}, but the trace holds no tool span for the calls the "
+                "agent ran; the calls are the other sources' records.",
+            }
+        )
+    return notices
+
+
+# Written by the agent's observer (`simulation_worker_events.HAND_OFF_UNRECORDED`) when a hand-off could not be kept.
+HAND_OFF_UNRECORDED = "handoff_unrecorded"
+HAND_OFFS_INCOMPLETE = "hand_offs_incomplete"
+
+
+def hand_off_notices(runtime: Any) -> list[dict[str, Any]]:
+    """A notice when the agent's observer could not record a hand-off: the trial's hand-offs are then incomplete, never
+    read as none."""
+    path = _tool_trace_file(runtime) if runtime is not None else None
+    if path is None or not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return [
+            {
+                "code": HAND_OFFS_INCOMPLETE,
+                "message": "This trial's record of hand-offs between the app's agents could not be read, so its "
+                "participants may be missing steps.",
+            }
+        ]
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("kind") == HAND_OFF_UNRECORDED:
+            return [
+                {
+                    "code": HAND_OFFS_INCOMPLETE,
+                    "message": "Some hand-offs between the app's agents could not be recorded, so this trial's "
+                    "participants may be missing steps.",
+                }
+            ]
+    return []
 
 
 def repeated_untimed_notices(calls: Sequence[Call]) -> list[dict[str, Any]]:
@@ -2332,6 +3522,10 @@ def _pair_tool(
         if _recorded_differently(span, call):
             return None
         mine, theirs = values[id(span)], values[id(call)]
+        if mine is None and theirs and span.delegated_to and _loose(span.delegated_to) in theirs.values():
+            # A hand-off's span may keep no arguments (ADK's own transfer span does not): a call whose arguments name
+            # the agent it handed to is the strongest claim it has.
+            return True, call.ok == span.ok
         shared = (
             mine.keys() & theirs.keys()
             if mine is not None and theirs is not None
@@ -2426,6 +3620,17 @@ def _compatible(span: Call, call: Call, fit: Callable[[Call, Call], Any]) -> boo
     return strength is not None and (
         strength[1]
         or (_kept_result(span) and _kept_result(call) and _same_result(span, call))
+        or _span_kept_the_refusal(span, call)
+    )
+
+
+def _span_kept_the_refusal(span: Call, call: Call) -> bool:
+    """The world refused the call and the framework's span recorded the refusal's own words as the tool's output."""
+    return bool(
+        call.refused
+        and call.error
+        and _kept_result(span)
+        and call.error in json.dumps(span.result, ensure_ascii=False)
     )
 
 
@@ -2439,11 +3644,13 @@ def _same_result(span: Call, call: Call) -> bool:
 
 
 def _recorded_differently(span: Call, call: Call) -> bool:
-    """Whether a span and a call each recorded something about the call that the other contradicts: its result, the
-    worker that made it, the worker it handed work to, or whether it was a worker's run. Event ids are not compared
-    here: each tracer may number events in its own way, and a shared id is matched before any of this."""
+    """Whether a span and a call each recorded something about the call that the other contradicts: its result (not for
+    a door row), the worker that made it, the worker it handed work to, or whether it was a worker's run. Event ids are
+    not compared here: each tracer may number events in its own way, and a shared id is matched before any of this."""
     return (
-        (_kept_result(span) and _kept_result(call) and not _same_result(span, call))
+        # A door row keeps the world's answer, the span the tool's own output: a tool may reshape what the world said,
+        # so a door row is never told apart from its span by the answer alone.
+        (_kept_result(span) and _kept_result(call) and call.channel is None and not _same_result(span, call))
         or _other_worker(span, call)
         or bool(
             span.delegated_to
@@ -2533,10 +3740,18 @@ def _loose(value: Any) -> Any:
 
 
 def _digest(call: Call) -> str:
-    """Everything a call carries but its times."""
+    """Everything a call carries but its times and the names of the sources that saw it."""
     fields = {
-        key: value for key, value in vars(call).items() if key not in ("at", "ended_at")
+        key: value
+        for key, value in vars(call).items()
+        if key not in ("at", "ended_at", *evidence.FIELDS)
     }
+    if call.source == evidence.AGENT:
+        # The agent's own account carries the agent's call ids, and two of its calls alike in all else are as
+        # interchangeable as they were when it carried none.
+        fields["runtime_ids"] = {
+            key: value for key, value in call.runtime_ids.items() if key not in ("call_id", "tool_call_id")
+        }
     return json.dumps(fields, sort_keys=True, default=repr)
 
 
@@ -2583,22 +3798,32 @@ def _other_worker(span: Call, call: Call) -> bool:
     return bool(mine and theirs and not (mine & theirs))
 
 
+_EVENT_IDS = ("event_id", "parent_event_id", "started_event_id")
+
+
 def _lend_span(span: Call, other: Call) -> None:
-    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself."""
+    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself. The span is
+    listed as having seen the call; it never takes the call's graded facts (tool_evidence.py)."""
     if not (other.worker_id or other.worker_label):
         other.worker_id, other.worker_label = span.worker_id, span.worker_label
     other.delegated_to = other.delegated_to or span.delegated_to
     other.transferred = other.transferred or span.transferred
     other.ended_at = other.ended_at or span.ended_at
-    if not other.runtime_ids:
-        # The span's place among the agents goes with its ids: a parent is an id in the same record.
-        other.runtime_ids = span.runtime_ids
+    if not other.runtime_ids or (
+        other.source == evidence.AGENT and not any(other.runtime_ids.get(key) for key in _EVENT_IDS)
+    ):
+        # The span's place among the agents goes with its event ids: a parent is an id in the same record. The record's
+        # own ids stay; the span supplies only those it lacks. The agent's own account carries the call id the agent
+        # gave, and still takes the span's event ids; any other record with an id of its own keeps what it has.
+        other.runtime_ids = {**span.runtime_ids, **other.runtime_ids}
         other.parent_span_id, other.relationship = (
             span.parent_span_id,
             span.relationship,
         )
-    # A span starts when the call does; another tracer may stamp a call only once it reads its result.
+    # The call's time is not a graded fact: it comes from the source that measured it. A span starts when the call
+    # does; another tracer may stamp a call only once it reads its result.
     other.at = span.at or other.at
+    evidence.seen(other, span.source or evidence.SPAN)
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:
@@ -2664,7 +3889,7 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                     arguments = {"raw": arguments}
             if not isinstance(arguments, dict):
                 arguments = {}
-            ok = bool(raw.get("ok", True))
+            ok = logged_ok(raw.get("ok", True))
             raw_at = raw.get("at")
             at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
             calls.append(
@@ -2679,6 +3904,23 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 )
             )
     return tuple(calls)
+
+
+def _langchain_arguments(arguments: dict[str, Any]) -> bool:
+    return set(arguments) == {"input"} and isinstance(arguments["input"], str)
+
+
+def _unwrapped_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    if not _langchain_arguments(arguments):
+        return arguments
+    inner = _structured(arguments["input"])
+    return inner if isinstance(inner, dict) else arguments
+
+
+def _unwrapped_result(result: Any) -> Any:
+    if isinstance(result, dict) and set(result) == {"output"} and not _framework_message(result):
+        return _structured(result["output"])
+    return result
 
 
 def _framework_message(result: Any) -> bool:
@@ -2946,6 +4188,9 @@ class CallRunnerImpl:
         self._adapter = adapter
         self._context = context
         self._place_call = place_call
+        # A place-call that takes `stop_when`, and the call worker, which gets the stop as a signal, hang up at the
+        # next turn boundary on a user stop; the scheduler gives them the seal bound to do so before it cuts the task.
+        self.stops_at_turn_boundary = place_call is None or _takes_stop_when(place_call)
         self._records = TrialRecords(sealed_seed(context.work_directory))
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
@@ -3179,6 +4424,9 @@ class CallRunnerImpl:
             doc, getattr(self._context.job, "metadata", None), source_key
         )
         doc = as_played(doc, self._context.bundle_dir, job_actors_switch(self._context.job))
+        if held := limits_not_held(doc, self._context.bundle_dir):
+            # Known before the call: a trial relying on limits nobody can hold is held without placing it.
+            return replace(self._timing_only_outcome(datetime.now(timezone.utc)), notices=tuple(held))
 
         room_count = self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         self._scenario_room_counts[scenario.scenario_key] = room_count
@@ -3391,9 +4639,15 @@ class CallRunnerImpl:
         no_door = actor_problems(doc, self._context.bundle_dir, why, problem) if actors is None else []
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
+        # What the person is told about how this trial's worker deadlines were held, set when the trial starts.
+        deadline_notices: list[dict[str, Any]] = []
 
         async def place() -> SimulationReport:
             if self._place_call is not None:
+                if self.stops_at_turn_boundary:
+                    return await self._place_call(
+                        spec, stop_when=lambda _messages, _persona: self._context.stop_requested()
+                    )
                 return await self._place_call(spec)
             logger.info(
                 "voice worker dispatch scenario=%s voice_run=%s",
@@ -3405,24 +4659,34 @@ class CallRunnerImpl:
                 spec.model_dump(mode="json"),
                 environ=call_environ,
                 work_directory=self._context.work_directory / "call-workers",
+                stop_requested=self._context.stop_requested,
             )
             return SimulationReport.model_validate(result)
 
         async def place_with_actors() -> SimulationReport:
             faults = routed_faults(doc.get("faults") or [], _bundle_contract(self._context.bundle_dir))
+            deadline, deadlines, deadline_notices[:] = trial_worker_deadlines(doc, self._context.bundle_dir)
             proxied = runtime.endpoints.get("tool_proxy") is not None or runtime.endpoints.get("world_door") is not None
-            if faults or proxied:
-                # Written every trial, none included, so nothing an earlier trial left can apply.
-                _set_trial_faults(runtime, faults)
+            if faults or deadline or deadlines or proxied:
+                # Every trial behind a tool proxy or the world's door writes its own faults and deadline, none
+                # included, so nothing an earlier trial left can apply to this one.
+                await asyncio.to_thread(_set_trial_faults, runtime, faults, deadline, deadlines)
             try:
                 return await place_with_world_actors()
             finally:
-                if faults:
+                if faults or deadline or deadlines:
                     with contextlib.suppress(Exception):
-                        _write_trial_state(runtime, [])
+                        await asyncio.to_thread(_write_trial_state, runtime, [])
 
         world_database = _find_postgres_endpoint(runtime)
         records_dsn = world_database.address if world_database is not None else None
+        from .world_door import is_timeout
+
+        if records_dsn and any(isinstance(one, Mapping) and is_timeout(one) for one in doc.get("faults") or []):
+            # The engine's silence backstop waits while the world holds one of the agent's calls for its timeout.
+            call_environ[TOOL_HOLD_DSN] = records_dsn
+        else:
+            call_environ.pop(TOOL_HOLD_DSN, None)
 
         async def place_with_world_actors() -> SimulationReport:
             # The trial's starting records, after its reset: whether it started from the seed.
@@ -3452,7 +4716,15 @@ class CallRunnerImpl:
         try:
             report = await asyncio.wait_for(place_with_actors(), timeout=outer_timeout)
         except asyncio.CancelledError:
-            raise
+            if not self._context.stop_requested():
+                raise
+            # The person stopped the run: the in-flight audio turn is cut; the call keeps the timing it measured.
+            task = asyncio.current_task()
+            if task is not None and hasattr(task, "uncancel"):
+                task.uncancel()
+            raise CallCancelled(
+                partial=replace(self._timing_only_outcome(started_at), stop_reason="user_canceled")
+            ) from None
         except asyncio.TimeoutError as exc:
             raise CallAborted(
                 "voice_call_runner_timeout: place_call exceeded its outer budget "
@@ -3465,8 +4737,10 @@ class CallRunnerImpl:
                 partial=self._timing_only_outcome(started_at),
             ) from exc
 
+        # The call ended with the engine's report: what follows reads and delivers it, and a stop no longer cuts that.
+        call_sealed()
         try:
-            return await self._translate_report(
+            outcome = await self._translate_report(
                 report,
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
@@ -3477,7 +4751,9 @@ class CallRunnerImpl:
                 limits=actor_limits(doc, self._context.bundle_dir, "voice"),
                 actor_briefs=actors.briefs if actors is not None else None,
                 faults=routed_faults(doc.get("faults") or [], _bundle_contract(self._context.bundle_dir)),
+                notices=deadline_notices,
                 solution=list(doc.get("solution") or []),
+                document=doc,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -3490,6 +4766,10 @@ class CallRunnerImpl:
                 f"voice_call_translate_crashed: {type(exc).__name__}: {exc}",
                 partial=self._timing_only_outcome(started_at),
             ) from exc
+        if self.stops_at_turn_boundary and self._context.stop_requested():
+            # The engine hung up at the turn boundary on the person's stop: sealed like any call, then said as a stop.
+            raise CallCancelled(partial=replace(outcome, stop_reason="user_canceled"))
+        return outcome
 
     def _fault_notices(
         self, runtime: EnvironmentRuntime, faults: Sequence[Any], calls: Sequence[Call]
@@ -3497,6 +4777,8 @@ class CallRunnerImpl:
         """The scenario's faults that did not take effect on this call, each with why."""
         if not faults:
             return []
+        if unfronted := faults_not_held(faults, calls, self._context.bundle_dir):
+            return unfronted
         database = _find_postgres_endpoint(runtime)
         if database is None:
             return fault_notices(
@@ -3547,7 +4829,9 @@ class CallRunnerImpl:
         limits: Mapping[str, Any] | None = None,
         actor_briefs: Mapping[str, str] | None = None,
         faults: Sequence[Any] = (),
+        notices: Sequence[dict[str, Any]] = (),
         solution: Sequence[Any] = (),
+        document: Mapping[str, Any] | None = None,
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -3619,6 +4903,8 @@ class CallRunnerImpl:
             if case is not None and door_seen
             else {}
         )
+        # A worker the world told apart is kept beside the actors, so its refused attempts are never lost.
+        workers_acted = any(str(entry.get("who") or "").startswith("worker:") for entry in changes or ())
         if records:
             log_rows: list[dict[str, Any]] | None = None
             if world_database is not None:
@@ -3648,14 +4934,32 @@ class CallRunnerImpl:
                 trial_notices += evidence_notices(
                     action_log, calls, in_process_tools(_bundle_contract(self._context.bundle_dir), runtime.endpoints)
                 )
-        trial_notices += repeated_untimed_notices(calls)
+        trial_notices += (
+            repeated_untimed_notices(calls)
+            + hand_off_notices(runtime)
+            + tool_span_notices(runtime, calls, silent=False)
+            + world_failure_notices(action_log)
+        )
         # Hand-off records are not the world's actions: marks pair the graded calls with the action log.
         graded = graded_calls(calls)
         marks = _agent_marks(runtime, self._context.bundle_dir, graded) if acted else []
         mark_of = {id(call): mark for call, mark in zip(graded, marks)}
+        # A separate worker that reached the world on the shared address: said, and held from its own checks.
+        bypassed = channel_bypass_notices(calls, self._context.bundle_dir)
+        # A listed worker the door inside the agent could not stop at its deadline: recorded, and held from its checks.
+        unenforced = await asyncio.to_thread(
+            deadlines_not_enforced, runtime, document or {}, self._context.bundle_dir, started_at.timestamp()
+        )
+        # Off the loop: the seal may wait on a worker's stop under way, and other calls share this loop.
+        stops = await asyncio.to_thread(read_worker_stops, runtime, started_at.timestamp())
+        stopped_notices, ran_on = worker_stop_outcomes(stops, document or {}, self._context.bundle_dir)
+        held = {one["worker"] for one in unenforced}
+        unenforced = [*unenforced, *(one for one in ran_on if one["worker"] not in held)]
+        bypassed += unenforced_deadline_notices(unenforced) + stopped_notices
         if calls:
+            workers = declared_worker_ids(self._context.bundle_dir)
             tool_trace = "\n".join(
-                json.dumps({**trace_row(call), **mark_of.get(id(call), {})}, sort_keys=True, default=str)
+                json.dumps({**trace_row(call, workers), **mark_of.get(id(call), {})}, sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
@@ -3667,10 +4971,19 @@ class CallRunnerImpl:
             result = case.result
             combined = result.audio_combined_path
             recording = combined if combined and Path(combined).is_file() else None
-            notices = self._fault_notices(runtime, faults, calls) + trial_notices
-            trial_notices = notices
-            # A call with no words still says what did not take effect and what actors did in the world.
-            if result.transcript or notices or acted or actor_decisions or duplicates or took_part.get("call_actors"):
+            trial_notices = [*self._fault_notices(runtime, faults, calls), *trial_notices]
+            said = [*notices, *trial_notices, *bypassed]
+            # A call that ended with no words still says what did not take effect, and what actors and workers did in
+            # the world, never only logging it; a call with words carries World changes, or why they were not recorded.
+            if (
+                result.transcript
+                or said
+                or acted
+                or actor_decisions
+                or workers_acted
+                or duplicates
+                or took_part.get("call_actors")
+            ):
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
                     "transcript": result.transcript,
@@ -3688,6 +5001,7 @@ class CallRunnerImpl:
                         "summary": summary,
                         "events": took_part.get("call_actor_events") or [],
                     }
+                stopped = [one for one in stops or [] if one.get("reason") == "deadline_passed"]
                 if door_seen and sealed_without_door(runtime.endpoints, calls, action_log):
                     # Sealed with no world door, the agent's calls reached none: what it changed is unknown.
                     transcript_document["world_actors"] = dict(SEALED_WITHOUT_DOOR)
@@ -3696,6 +5010,8 @@ class CallRunnerImpl:
                     # door stood for these counts, so a reader never takes a record from before it for one.
                     transcript_document["world_actors"] = {
                         "door": True,
+                        # The positive evidence a platform needs before it says a worker was held on its channel.
+                        **({"worker_channels": True} if worker_channels_held(self._context.bundle_dir) else {}),
                         "actions": acted,
                         "decisions": list(actor_decisions),
                         "state_changes": changes or [],
@@ -3705,15 +5021,25 @@ class CallRunnerImpl:
                         **records,
                         **({"unreadable": True} if changes is None else {}),
                     }
+                    transcript_document["world_actors"].update(_shared_records(runtime, self._context.bundle_dir))
                 else:
                     # The agent's tools run where the world's door cannot see them: said, never shown as no change.
                     transcript_document["world_actors"] = dict(NOT_RECORDED)
+                if stopped:
+                    # Workers whose own process the harness ended past their deadline.
+                    transcript_document["world_actors"]["stopped_workers"] = stopped
+                if stops is None:
+                    # Whether any worker was stopped is not known: never read as "none was".
+                    transcript_document["world_actors"]["stopped_workers_unreadable"] = True
+                if unenforced:
+                    # Workers whose deadline the door could not stop them at, each with why.
+                    transcript_document["world_actors"]["unenforced_deadlines"] = unenforced
                 if duplicates:
                     # The world applied one of the agent's writes twice after its answer was lost: the scenario fails.
-                    transcript_document.setdefault("world_actors", {})["duplicates"] = duplicates
-                if notices:
+                    transcript_document["world_actors"]["duplicates"] = duplicates
+                if said:
                     # A fault that did not take effect is said, never only logged: the trial ran without it.
-                    transcript_document["notices"] = notices
+                    transcript_document["notices"] = said
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(
@@ -3752,6 +5078,7 @@ class CallRunnerImpl:
             calls=calls,
             tool_capture_failed=capture_failed,
             turns=turns,
+            notices=(*notices, *bypassed),
             started_at=format_rfc3339_millis(case_started_at),
             ended_at=format_rfc3339_millis(ended_at),
             duration_ms=_duration_ms(case_started_at, ended_at),
@@ -3774,6 +5101,7 @@ class CallRunnerImpl:
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
             unmeasured=unmeasured_reasons(trial_notices),
+            world_failures=world_failure_reasons(trial_notices),
             missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
                 **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
@@ -3882,9 +5210,15 @@ class CallRunnerImpl:
                 and case.failure.code == _VOICE_DISPATCH_UNACKNOWLEDGED
                 else None
             )
+            facts = _call_ending_facts(case)
+            if facts:
+                # Both facts reach the receipt; the precedence that chose the code is unchanged.
+                reason = f"{reason}; " + "; ".join(facts)
             attributed = _attributed_stall(case)
             if attributed is not None:
                 code, reason = attributed
+                if facts:
+                    reason = f"{reason}; " + "; ".join(facts)
                 await record_voice_usage(
                     outcome="failed",
                     failure_domain=failure_domain_for_code(code),
@@ -3930,36 +5264,10 @@ class CallRunnerImpl:
         return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
-        """Raises `ToolCaptureFailed` when nothing was captured and a declared surface could not
-        be read. `http_tool` has no surface to fail, so an empty one stays an ordinary empty
-        capture."""
-        seam = self._context.evidence_seam
-        unread: ToolCaptureFailed | None = None
-        try:
-            written, from_spans = _read_file_tool_calls(
-                runtime, strict=True, routes=tool_routes(_bundle_contract(self._context.bundle_dir))
-            )
-        except ToolCaptureFailed as exc:
-            written, from_spans, unread = [], [], exc
-        if graded_calls(written):
-            return _merge_span_calls(written, from_spans)
-        # Hand-offs alone are not a capture: the seam's own record still decides.
-        if seam is EvidenceSeam.HTTP_TOOL:
-            observed = list(_collect_http_tool_calls(runtime))
-        elif seam is EvidenceSeam.TOOL_TRACE:
-            # The bundle's seed creates the table, so a missing one is a failed capture too. The
-            # file's span lines still count when the database cannot be read.
-            try:
-                observed = list(_collect_tool_trace_calls(runtime, strict=True))
-            except ToolCaptureFailed as exc:
-                observed, unread = [], unread or exc
-        else:
-            # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
-            # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading
-            # rather than crashing keeps this on the scheduler's own evidence_missing path, never
-            # a raw exception).
-            observed = []
-        calls = _merge_span_calls([*written, *observed], from_spans)
-        if unread is not None and not graded_calls(calls):
-            raise ToolCaptureFailed(str(unread), calls=calls) from None
-        return calls
+        return collect_seam_calls(
+            runtime,
+            self._context.evidence_seam,
+            worker_names=contract_worker_names(self._context.bundle_dir),
+            strict=True,
+            routes=tool_routes(_bundle_contract(self._context.bundle_dir)),
+        )

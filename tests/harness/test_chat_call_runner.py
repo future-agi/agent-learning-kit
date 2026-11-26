@@ -5,6 +5,7 @@ import importlib
 import json
 from dataclasses import replace
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -346,7 +347,7 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -400,6 +401,49 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
     assert b'"name": "lookup_account"' in adapter.uploads[1]
 
 
+@pytest.mark.parametrize("proxy", [True, False])
+def test_a_chat_trial_says_its_workers_were_held_on_their_channels_only_behind_a_sealed_tool_proxy(
+    tmp_path: Path, monkeypatch: Any, proxy: bool
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _seal_tool_proxy
+    from fi.alk.harness.world_door import DOOR_FILE
+
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    context = _context(tmp_path)
+    if proxy:
+        (context.bundle_dir / DOOR_FILE).write_text(json.dumps({"present": True, "surface": "tool_proxy"}))
+        _seal_tool_proxy(context.bundle_dir / "generated" / "tool-proxy", {"tools": [{"name": "lookup_account"}]})
+    adapter = _Adapter()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080")
+        },
+    )
+    asyncio.run(
+        chat.HostedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+
+    world = json.loads(adapter.uploads[0])["world_actors"]
+    assert world["door"] is True
+    assert world.get("worker_channels") is (True if proxy else None)
+
+
 @pytest.mark.parametrize(
     "written,readable,failed",
     [
@@ -411,7 +455,7 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
 def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
     tmp_path: Path, monkeypatch: Any, written: bool, readable: bool, failed: bool
 ) -> None:
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     trace = tmp_path / "agent-tool-calls.jsonl"
 
@@ -468,7 +512,7 @@ def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     trace = tmp_path / "agent-tool-calls.jsonl"
 
@@ -528,6 +572,75 @@ def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
         ("lookup_account", {"account_id": "ACC-2048"}, "Accounts worker")
     ]
     assert json.loads(adapter.uploads[1])["worker_label"] == "Accounts worker"
+
+
+@pytest.mark.parametrize("join", ["", "empty_list_only"])
+def test_hosted_chat_reads_spans_switched_on_for_a_callback_agent_only_into_an_empty_list(
+    tmp_path: Path, monkeypatch: Any, join: str
+) -> None:
+    """Through the chat runner's own read: the agent's process traced one call, and its framework wrote a span of it
+    that does not pair (another argument). Where the build switched the spans on with the empty-list rule, the span
+    adds no call; without the marker it reads as before, and the span is a second call."""
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            # A callback agent: its reply reports no calls; its process wrote the tracer's line and the span.
+            line = {"name": "lookup_account", "arguments": {"account_id": "ACC-2048"}, "output": "active", "at": 1.0}
+            span = {
+                "name": "lookup_account",
+                "arguments": '{"account_id": "ACC-9999"}',
+                "output": "closed",
+                "is_error": False,
+                "source": "otel",
+                "agent_key": "Accounts worker",
+                "at": 1.1,
+            }
+            trace.write_text(json.dumps(line) + "\n" + json.dumps(span) + "\n", encoding="utf-8")
+            # The mark hook's note: the framework's spans were on in the agent's process.
+            Path(str(trace) + ".observing").write_text(
+                json.dumps({"framework": "agents", "state": "on"}) + "\n", encoding="utf-8"
+            )
+            return AgentResponse(content="The account is active.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+        metadata={"tool_trace_path": str(trace), **({"tool_spans_join": join} if join else {})},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), _context(tmp_path)).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+
+    if join:
+        assert [(c.name, c.arguments) for c in outcome.calls] == [("lookup_account", {"account_id": "ACC-2048"})]
+    else:
+        assert sorted(c.arguments["account_id"] for c in outcome.calls) == ["ACC-2048", "ACC-9999"]
+    from fi.alk.harness import call_runner
+
+    # The source wrote a tool span, so it was on and not silent.
+    spans_said = [
+        one["code"] for one in outcome.notices if one["code"].startswith("tool_spans_")
+    ]
+    assert spans_said == [call_runner.TOOL_SPANS_ON]
 
 
 @pytest.mark.parametrize(
@@ -598,7 +711,7 @@ def test_hosted_chat_does_not_execute_response_metadata(
 
     wrapper._request_json = request_json  # type: ignore[method-assign]
     world = _ToolWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -654,7 +767,7 @@ def test_hosted_chat_executes_nested_message_call_despite_metadata_response(
 
     wrapper._request_json = request_json  # type: ignore[method-assign]
     world = _ToolWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -670,9 +783,12 @@ def test_hosted_chat_executes_nested_message_call_despite_metadata_response(
     assert world.calls[0].result == {"ok": True}
 
 
+@pytest.mark.parametrize(("given", "kept"), [("tool-1", {"call_id": "tool-1"}), ("", {})], ids=["agent-id", "no-id"])
 def test_hosted_callable_accepts_completed_tool_response_without_second_call(
-    tmp_path: Path, monkeypatch: Any
+    tmp_path: Path, monkeypatch: Any, given: str, kept: dict[str, str]
 ) -> None:
+    """An id the agent gave the call is kept with it. A call with no id is paired with its response by the kit's own
+    stand-in, `call_1`, which is never kept as the agent's id."""
     context = _context(tmp_path)
     contract = json.loads(
         (context.bundle_dir / "contract.json").read_text(encoding="utf-8")
@@ -686,7 +802,7 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
         json.dumps(contract), encoding="utf-8"
     )
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -702,7 +818,7 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
                 content="The account is active.",
                 tool_calls=[
                     {
-                        "id": "tool-1",
+                        **({"id": given} if given else {}),
                         "function": {
                             "name": "lookup_account",
                             "arguments": '{"account_id":"ACC-2048"}',
@@ -712,7 +828,7 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
                 tool_responses=[
                     {
                         "role": "tool",
-                        "tool_call_id": "tool-1",
+                        "tool_call_id": given or "call_1",
                         "content": '{"status":"active"}',
                     }
                 ],
@@ -747,13 +863,48 @@ def test_hosted_callable_accepts_completed_tool_response_without_second_call(
     assert [call.name for call in outcome.calls] == ["lookup_account"]
     assert outcome.calls[0].ok is True
     assert outcome.calls[0].result == {"status": "active"}
+    assert outcome.calls[0].runtime_ids == kept
     assert b"The account is active" in adapter.uploads[0]
+
+
+@pytest.mark.parametrize(
+    ("config", "budget", "expected"),
+    [
+        ({}, None, 90.0),
+        ({"chat_call_timeout_seconds": 900}, None, 900.0),
+        ({"chat_call_timeout_seconds": "900"}, None, 900.0),
+        ({"chat_call_timeout_seconds": 900}, "600", 600.0),
+        ({"chat_call_timeout_seconds": 0}, None, 90.0),
+        ({"chat_call_timeout_seconds": True}, None, 90.0),
+        ({"chat_call_timeout_seconds": "slow"}, None, 90.0),
+    ],
+)
+def test_an_agent_s_chat_call_timeout_sets_each_reply_s_deadline_within_the_budget(
+    tmp_path: Path, monkeypatch: Any, config: dict[str, Any], budget: str | None, expected: float
+) -> None:
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
+    if budget is not None:
+        monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", budget)
+    else:
+        monkeypatch.delenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", raising=False)
+    observed = _observed_target_timeouts(tmp_path, monkeypatch, config)
+    assert observed == {"timeout": expected, "total_timeout": expected}
 
 
 def test_hosted_chat_target_timeout_is_configurable(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
+    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
+    observed = _observed_target_timeouts(tmp_path, monkeypatch, {})
+    assert observed["timeout"] == 90.0
+    assert observed["total_timeout"] == 90.0
+
+
+def _observed_target_timeouts(tmp_path: Path, monkeypatch: Any, config: dict[str, Any]) -> dict[str, float]:
     context = _context(tmp_path)
+    context = replace(
+        context, job=context.job.model_copy(update={"agent": context.job.agent.model_copy(update={"config": config})})
+    )
     contract_path = context.bundle_dir / "contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     contract["runtime"]["interface"]["protocol"] = "json_template"
@@ -767,8 +918,7 @@ def test_hosted_chat_target_timeout_is_configurable(
     }
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     observed: dict[str, float] = {}
-    monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "90")
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -800,9 +950,7 @@ def test_hosted_chat_target_timeout_is_configurable(
             runtime,
         )
     )
-
-    assert observed["timeout"] == 90.0
-    assert observed["total_timeout"] == 90.0
+    return observed
 
 
 def test_hosted_chat_target_timeout_rejects_invalid_values(monkeypatch: Any) -> None:
@@ -814,7 +962,7 @@ def test_hosted_chat_attributes_target_runtime_failure_to_agent(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     context = _context(tmp_path)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
 
     async def failed(*_args: Any, **_kwargs: Any) -> Transcript:
         raise RuntimeError("provider rejected the target model")
@@ -856,7 +1004,7 @@ def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(
     scenario.update({"name": "one", "max_turns": 4})
     scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
 
     conversation = importlib.import_module("fi.alk.harness.run.conversation")
 
@@ -1008,6 +1156,9 @@ def test_only_with_one_fixed_user_a_tool_world_imports_customer_code_from_the_up
                 capability="world_db",
                 protocol="postgres",
                 address="postgresql://unused",
+                tool_address="postgresql://world-role@unused",
+                store_address="postgresql://store-role@unused",
+                log_address="postgresql://log-reader@unused",
             )
         },
     )
@@ -1016,10 +1167,10 @@ def test_only_with_one_fixed_user_a_tool_world_imports_customer_code_from_the_up
         # This process holds the harness's capabilities: the agent's code runs only in its
         # handler child (tests/harness/test_handler_child.py).
         with pytest.raises(CallAborted, match="handler_child_required"):
-            chat._tool_world(context.bundle_dir, contract, runtime, source)
+            chat.tool_world(context.bundle_dir, contract, runtime, source)
         assert str(source) not in sys.path
         return
-    world = chat._tool_world(context.bundle_dir, contract, runtime, source)
+    world = chat.tool_world(context.bundle_dir, contract, runtime, source)
     result = world.handle_tool_call(
         {
             "id": "tool-1",
@@ -1052,7 +1203,7 @@ def test_http_failure_classification_retains_partial_evidence(
 
     context = _context(tmp_path)
     adapter = _Adapter()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
 
     async def failed(*_args, **_kwargs):
         failure = HTTPCallFailure(
@@ -1137,7 +1288,7 @@ def test_contract_endpoint_model_reaches_openai_wire_payload(
     monkeypatch.setattr(HTTPAgentWrapper, "_post_json", post)
     world = _ToolWorld()
     if lane == "hosted":
-        monkeypatch.setattr(chat, "_tool_world", lambda *_args: world)
+        monkeypatch.setattr(chat, "tool_world", lambda *_args: world)
         monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
         runner = chat.HostedChatCallRunner(_Adapter(), context)
         runtime = EnvironmentRuntime(
@@ -1274,7 +1425,7 @@ def test_hosted_chat_native_tool_message_completion(
         return original(call)
 
     world.handle_tool_call = execute
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -1334,7 +1485,7 @@ def test_hosted_chat_records_a_cumulative_native_tool_call_only_once(
             )
 
     world = _ToolWorld()
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=Wrapper(),
         contract=contract,
         world=world,
@@ -1391,7 +1542,7 @@ def test_hosted_chat_function_response_payload_cannot_request_tools(
         return original(call)
 
     world.handle_tool_call = execute
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -1476,7 +1627,7 @@ def test_hosted_chat_prefers_canonical_calls_within_assistant_message(
         return original(call)
 
     world.handle_tool_call = execute
-    target = chat._HostedChatTarget(
+    target = chat.HostedChatTarget(
         wrapper=wrapper,
         contract=contract,
         world=world,
@@ -1540,7 +1691,7 @@ def test_generated_command_bridge_handles_readiness_and_hosted_chat(tmp_path, mo
     )
     provider = SimpleNamespace(reset=AsyncMock())
     factory = SimpleNamespace(create=AsyncMock(return_value=None))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     adapter = _Adapter()
     try:
@@ -1587,7 +1738,7 @@ def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_pa
                                                           "arguments": {"account_id": "ACC-1"}}]}]
     path.write_text(json.dumps(document), encoding="utf-8")
     tool_world = _ToolWorld()
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1640,7 +1791,7 @@ def test_a_chat_trial_writes_a_fault_named_by_its_tool_as_that_tool_s_route_and_
     path.write_text(json.dumps(document), encoding="utf-8")
     written: list[list] = []
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1676,7 +1827,7 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     written: list[list] = []
     during: list[list] = []
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1714,6 +1865,91 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     assert written == []
 
 
+def test_a_chat_trial_relying_on_limits_its_door_cannot_hold_is_held_before_any_turn(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["worker_budget_seconds"] = 2
+    path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    turns: list[Any] = []
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, request: Any) -> AgentResponse:
+            turns.append(request)
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    scenario = SimpleNamespace(scenario_key="one", scenario_id="scenario-1")
+    # The door was sealed before worker limits: whatever the agent did, the trial is held, so nothing is asked of it.
+    outcome = asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    assert turns == [] and outcome.calls == ()
+    assert [one["code"] for one in outcome.notices] == [call_runner.WORKER_LIMITS_NOT_ENFORCED]
+
+
+def test_a_readiness_probe_sets_no_worker_deadline_while_a_graded_trial_does(tmp_path: Path, monkeypatch: Any) -> None:
+    """A scenario's worker-action deadline is a rule of its graded trials. The readiness probe checks how the agent's
+    tools reach the world, so a short budget must not refuse every probe call and fail certification."""
+    import dataclasses
+
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["worker_budget_seconds"] = 2
+    path.write_text(json.dumps(document), encoding="utf-8")
+    # A door that holds worker deadlines, so the graded trial is placed rather than held.
+    (context.bundle_dir / "generated" / "tool-proxy").mkdir(parents=True, exist_ok=True)
+    (context.bundle_dir / "generated" / "tool-proxy" / "door.json").write_text('{"worker_deadlines": "per_worker"}')
+    written: list[tuple] = []
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, *rest: written.append(rest))
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    scenario = SimpleNamespace(scenario_key="one", scenario_id="scenario-1")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    # A graded trial holds its workers to the budget.
+    assert written[0][1] is not None
+    written.clear()
+    probe = dataclasses.replace(context, readiness_probe=True)
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), probe).run(scenario, runtime))
+    assert all(len(row) < 2 or (row[1] is None and not row[2]) for row in written)
+
+
 def test_a_proxied_chat_trial_whose_faults_cannot_be_read_back_reaches_the_scheduler_unmeasured(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -1724,9 +1960,9 @@ def test_a_proxied_chat_trial_whose_faults_cannot_be_read_back_reaches_the_sched
     document = json.loads(path.read_text(encoding="utf-8"))
     document["faults"] = [{"action": "crm.apply_discount", "mode": "unavailable"}]
     path.write_text(json.dumps(document), encoding="utf-8")
-    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, _faults: None)
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, *_rest: None)
     monkeypatch.setattr(call_runner, "trial_faults_readable", lambda _dsn: False)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1786,8 +2022,8 @@ def test_a_readiness_probe_applies_none_of_the_scenario_s_faults(tmp_path: Path,
         doors.append(list(faults))
         return real_door(world, None, permissions, faults, **kwargs)
 
-    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults, *_rest: written.append(list(faults)))
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     monkeypatch.setattr(chat, "chat_door", _door)
 
@@ -1820,7 +2056,7 @@ def test_a_proxied_chat_trial_without_actors_still_reads_the_world_s_table(tmp_p
 
     context = _context(tmp_path)
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, _faults: None)
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
     mirrors: list = []
     real_door = chat.chat_door
@@ -1888,6 +2124,45 @@ def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_log
     assert {one["who"]: one["committed"] for one in record["state_changes"]}["manager"] == 1
 
 
+@pytest.mark.parametrize("seam", [None, "tool_trace"])
+def test_a_chat_call_reads_the_world_s_action_log_when_its_bundle_says_evidence_lands_there(
+    tmp_path: Path, monkeypatch: Any, seam: str | None
+) -> None:
+    from dataclasses import replace
+
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+
+    logged = Call(name="issue_refund", arguments={"order_id": "1043"}, worker_id="refund")
+    monkeypatch.setattr(call_runner, "collect_tool_trace_calls", lambda _runtime, **_: (logged,))
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Refund RF-8 is issued.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    context = replace(_context(tmp_path), evidence_seam=EvidenceSeam(seam) if seam else None)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://x")},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+    # The agent's tools ran against the world's services, so only the world's own log saw them.
+    assert [(call.name, call.worker_id) for call in outcome.calls] == ([("issue_refund", "refund")] if seam else [])
+
+
 def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_path: Path) -> None:
     """The agent's own tools service is reached through the tool proxy, which writes to the world's table, never to
     this process's memory: what actors watch (an on_tool trigger) must read the world's table, from the trial's start."""
@@ -1913,6 +2188,30 @@ def test_a_chat_trial_s_actors_see_the_agent_s_calls_through_its_tool_proxy(tmp_
     assert [one["name"] for one in chat._trial_log(alone, since=10.0)] == ["approve"]
 
 
+def test_a_chat_trial_keeps_a_worker_s_refused_attempt_in_its_world_record_without_any_actor() -> None:
+    from fi.alk.harness.world_door import MemoryLog, TeeLog
+
+    class _Mirror:
+        def rows(self):
+            return [
+                {"actor_id": "agent", "worker_id": "refund", "name": "issue", "outcome": "refused",
+                 "refusal_code": "deadline_passed", "refusal": "the deadline for refund has passed", "at": 12.0},
+            ]
+
+        def write(self, row):
+            pass
+
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), _Mirror()))
+    listing = SimpleNamespace(by_id=lambda: {})
+    meter = SimpleNamespace(rows=lambda: [])
+    record = chat._world_actors_record(door, listing, None, None, meter, {}, since=10.0)
+    assert record is not None
+    assert [(one["who"], [r["code"] for r in one["refused_actions"]]) for one in record["state_changes"]] == [
+        ("agent", []),
+        ("worker:refund", ["deadline_passed"]),
+    ]
+
+
 def test_an_actor_the_agent_s_last_call_wakes_still_acts_when_the_conversation_ends_at_once(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -1929,7 +2228,7 @@ def test_an_actor_the_agent_s_last_call_wakes_still_acts_when_the_conversation_e
         "trigger": {"kind": "on_tool", "tool": "lookup_account"},
     }]}]
     path.write_text(json.dumps(document), encoding="utf-8")
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:
@@ -1990,6 +2289,268 @@ def test_a_chat_actor_s_wait_still_open_at_the_end_is_recorded_with_its_timeout(
     assert record["decisions"] == [
         {"actor": "manager", "play": "timeout", "fallback": None, "outcome": "unresolved_at_end", "timeout_seconds": 30}
     ]
+
+
+def test_a_chat_agent_without_a_tool_proxy_says_its_workers_budgets_were_not_held() -> None:
+    [notice] = chat._unproxied_worker_notices({"worker_budget_seconds": {"refund": 2}})
+    assert notice["code"] == "worker_limits_not_enforced"
+    assert chat._unproxied_worker_notices({"worker_budget_seconds": 30})
+    assert chat._unproxied_worker_notices({}) == []
+
+
+def test_a_chat_agent_without_a_tool_proxy_says_its_workers_permissions_were_not_held(tmp_path) -> None:
+    (tmp_path / "contract.json").write_text(json.dumps({"workers": [{"id": "refund", "allowed_tools": ["get"]}]}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [
+        {"name": "refund_refused", "subject": "worker:refund"}, {"name": "task_done", "subject": "task"}]}))
+    [notice] = chat._unproxied_worker_notices({"sub_goals": ["refund_refused"]}, tmp_path)
+    assert notice["code"] == "worker_limits_not_enforced"
+    assert "participant's limits" in notice["message"]
+    # A scenario that checks only the task is graded: it relies on no worker's limits.
+    assert chat._unproxied_worker_notices({"sub_goals": ["task_done"]}, tmp_path) == []
+
+
+def _stop_runtime() -> EnvironmentRuntime:
+    return EnvironmentRuntime(
+        runtime_id="runtime",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080")
+        },
+    )
+
+
+def _blocked_on_the_second_turn(seen: dict[str, Any]):
+    """Like `converse`: the second agent turn never returns, and a cancel attaches the transcript so far."""
+
+    async def drive(*_args, **_kwargs):
+        partial = Transcript(
+            exchanges=[
+                Exchange("customer", "Refund order 1043"),
+                Exchange("agent", "Looking it up"),
+                Exchange("customer", "Is it done?"),
+            ]
+        )
+        try:
+            seen["blocked"].set()
+            await asyncio.sleep(30)
+        except asyncio.CancelledError as exc:
+            exc.partial_transcript = partial
+            raise
+        return partial
+
+    return drive
+
+
+def _run_and_stop(context, adapter, monkeypatch):
+    from dataclasses import replace as replaced
+
+    seen: dict[str, Any] = {}
+    stopped = {"value": False}
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _blocked_on_the_second_turn(seen))
+    runner = chat.HostedChatCallRunner(adapter, replaced(context, stop_requested=lambda: stopped["value"]))
+
+    async def scenario(stop: bool):
+        seen["blocked"] = asyncio.Event()
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await seen["blocked"].wait()
+        stopped["value"] = stop
+        task.cancel()
+        return await task
+
+    return scenario
+
+
+def test_a_stop_during_a_blocked_agent_turn_uploads_the_partial_transcript(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness.hosted_scheduler import CallCancelled
+
+    adapter = _Adapter()
+    scenario = _run_and_stop(_context(tmp_path), adapter, monkeypatch)
+    with pytest.raises(CallCancelled) as caught:
+        asyncio.run(scenario(True))
+    partial = caught.value.partial
+    assert caught.value.code == "user_canceled"
+    assert partial is not None
+    assert partial.transcript_artifact == "transcript-1"
+    assert partial.stop_reason == "user_canceled"
+    (transcript,) = [json.loads(data) for data in adapter.uploads]
+    contents = [one["content"] for one in transcript["messages"]]
+    # Turn 1's reply and the second customer line are kept; the second reply never arrived.
+    assert contents == ["Refund order 1043", "Looking it up", "Is it done?"]
+
+
+def test_a_cancel_that_is_not_a_stop_still_propagates(tmp_path, monkeypatch) -> None:
+    adapter = _Adapter()
+    scenario = _run_and_stop(_context(tmp_path), adapter, monkeypatch)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(scenario(False))
+    assert adapter.uploads == []
+
+
+def test_a_stopped_call_abandons_the_agent_reply_it_was_waiting_on(tmp_path, monkeypatch) -> None:
+    """The agent's in-flight reply is drained on a cancel so a reused world is not changed under the next trial; a
+    stopped run's world is never reused, so its call must not wait out that reply (a worker blocked on a slow
+    upstream held the seal past its bound)."""
+    import time
+
+    from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+
+    seen: dict[str, Any] = {}
+    stopped = {"value": False}
+
+    async def drive(target, *_args, **_kwargs):
+        wrapper = target._wrapper
+        seen["blocked"].set()
+        try:
+            await wrapper._run_request(time.sleep, 5)
+        except asyncio.CancelledError as exc:
+            exc.partial_transcript = Transcript(exchanges=[Exchange("customer", "Refund order 1043")])
+            raise
+
+    from dataclasses import replace as replaced
+
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", drive)
+    runner = chat.HostedChatCallRunner(_Adapter(), replaced(_context(tmp_path), stop_requested=lambda: stopped["value"]))
+
+    async def scenario():
+        seen["blocked"] = asyncio.Event()
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await seen["blocked"].wait()
+        stopped["value"] = True
+        started = time.monotonic()
+        task.cancel()
+        with pytest.raises(chat.CallCancelled):
+            await task
+        return time.monotonic() - started
+
+    assert asyncio.run(scenario()) < 2
+    assert HTTPAgentWrapper(endpoint="http://x").abandon_on_cancel() is False
+
+
+def _a_full_exchange() -> Transcript:
+    return Transcript(
+        exchanges=[
+            Exchange("customer", "Refund order 1043"),
+            Exchange("agent", "Done, the refund is on its way"),
+            Exchange("customer", "Thanks"),
+            Exchange("agent", "Anything else?"),
+        ],
+        ended=FINISHED,
+    )
+
+
+def _stopped_while_sealing(context, monkeypatch, *, stop: bool):
+    """The conversation ended on its own; the stop's cancel reaches the call while it records what it used."""
+    from dataclasses import replace as replaced
+
+    stopped = {"value": False}
+    sealing = asyncio.Event()
+
+    async def drive(*_args, **_kwargs):
+        return _a_full_exchange()
+
+    async def record_usage(*_args, **_kwargs):
+        sealing.set()
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", drive)
+    monkeypatch.setattr(chat, "_record_text_usage", record_usage)
+    adapter = _Adapter()
+    runner = chat.HostedChatCallRunner(adapter, replaced(context, stop_requested=lambda: stopped["value"]))
+
+    async def scenario():
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await sealing.wait()
+        stopped["value"] = stop
+        task.cancel()
+        return await task
+
+    return adapter, scenario
+
+
+def test_a_stop_after_the_conversation_ended_still_seals_its_transcript(tmp_path, monkeypatch) -> None:
+    adapter, scenario = _stopped_while_sealing(_context(tmp_path), monkeypatch, stop=True)
+    with pytest.raises(chat.CallCancelled) as caught:
+        asyncio.run(scenario())
+    partial = caught.value.partial
+    assert partial is not None
+    assert partial.stop_reason == "user_canceled"
+    assert partial.turns == 4
+    (transcript,) = [json.loads(data) for data in adapter.uploads]
+    assert [one["content"] for one in transcript["messages"]] == [
+        "Refund order 1043", "Done, the refund is on its way", "Thanks", "Anything else?"
+    ]
+
+
+def test_a_cancel_that_is_not_a_stop_still_cuts_the_sealing(tmp_path, monkeypatch) -> None:
+    adapter, scenario = _stopped_while_sealing(_context(tmp_path), monkeypatch, stop=False)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(scenario())
+    assert adapter.uploads == []
+
+
+def test_a_stopped_call_s_wind_down_is_cut_short_so_it_seals_inside_the_stop_bound(tmp_path, monkeypatch) -> None:
+    """Actors' last turns after the conversation get at most the stopped wind-down bound, then the call seals."""
+    import time
+    from dataclasses import replace as replaced
+
+    from fi.alk.harness import actor_dispatch
+
+    stopped = {"value": False}
+    settling = asyncio.Event()
+
+    class _Dispatcher:
+        briefs: dict[str, str] = {}
+        pre_run: list[Any] = []
+
+        async def replay(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            await asyncio.sleep(60)
+
+        async def settle(self, *_args) -> None:
+            settling.set()
+            await asyncio.sleep(60)
+
+        def record(self) -> list[dict[str, Any]]:
+            return []
+
+    async def drive(*_args, **_kwargs):
+        return _a_full_exchange()
+
+    monkeypatch.setattr(chat, "_STOPPED_WIND_DOWN_SECONDS", 0.3)
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", drive)
+    monkeypatch.setattr(actor_dispatch, "build_dispatcher", lambda *_args, **_kwargs: _Dispatcher())
+    adapter = _Adapter()
+    runner = chat.HostedChatCallRunner(adapter, replaced(_context(tmp_path), stop_requested=lambda: stopped["value"]))
+
+    async def scenario() -> float:
+        task = asyncio.create_task(
+            runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), _stop_runtime())
+        )
+        await settling.wait()
+        stopped["value"] = True
+        started = time.monotonic()
+        task.cancel()
+        with pytest.raises(chat.CallCancelled) as caught:
+            await task
+        assert caught.value.partial is not None and caught.value.partial.turns == 4
+        return time.monotonic() - started
+
+    assert asyncio.run(scenario()) < 3
+    assert len(adapter.uploads) == 1
 
 
 def test_a_trial_without_actors_still_seals_world_changes() -> None:
@@ -2053,7 +2614,7 @@ def test_a_hosted_job_that_does_not_turn_actors_on_plays_no_actor_and_no_fault(t
     path.write_text(json.dumps(document), encoding="utf-8")
     written: list[list] = []
     monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, faults: written.append(list(faults)))
-    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
     monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
 
     class Wrapper:

@@ -10,7 +10,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit, urlencode
 
 import httpx
@@ -202,6 +202,9 @@ class HTTPAgentWrapper(AgentWrapper):
         self.failure_rule = dict(failure_rule) if failure_rule else None
         self.secret_values = dict(secret_values) if secret_values is not None else None
         self._private_response_values = dict(private_response_values or {})
+        # Whether a cancelled request may be left running instead of drained: true once nothing reuses this world,
+        # as after the person stopped the run, where draining would wait out the agent's own reply.
+        self.abandon_on_cancel: Callable[[], bool] = lambda: False
         self.completed_tool_events = (
             CompletedToolEvents.model_validate(completed_tool_events)
             if completed_tool_events is not None
@@ -513,6 +516,8 @@ class HTTPAgentWrapper(AgentWrapper):
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
+            if self.abandon_on_cancel():
+                raise
             # A cancelled thread can still mutate the target. Drain before world reset.
             while not task.done():
                 try:
@@ -1065,6 +1070,8 @@ class HTTPAgentWrapper(AgentWrapper):
                     "arguments": arguments,
                     "result": result,
                     "ok": not (error or result_error),
+                    # The id the agent gave the call, kept on the kit's record of it; nothing pairs records by it yet.
+                    **({"id": key} if key else {}),
                 }
             )
         if spec.id_path:
@@ -1243,6 +1250,8 @@ class HTTPAgentWrapper(AgentWrapper):
                     "arguments": arguments,
                     "result": result,
                     "ok": not (error or result_error),
+                    # The id the agent gave the call: the one its action and its completion share.
+                    **({"id": str(key)} if key not in (None, "") else {}),
                 }
             )
             if correlation is not None:
@@ -1558,6 +1567,20 @@ def _select_response_value(payload: Any, path: str, *, text: bool = False) -> An
     return select(payload, 0)
 
 
+# How a stream marks a tool call as an unfinished copy of a call it is still sending. These are
+# Google ADK's words: `partial` on an event, `willContinue` (`will_continue` unaliased) on its
+# function call. A call read under either is not a call; only the finished copy is (TH-10449).
+# An event's marker covers only that event's own calls, the ones in its `content` and `parts`;
+# a history or any other field the event carries keeps its own markers.
+_UNFINISHED_EVENT_MARKERS = frozenset({"partial"})
+_UNFINISHED_CALL_MARKERS = frozenset({"willContinue", "will_continue"})
+_EVENT_BODY_KEYS = frozenset({"content", "parts"})
+
+
+def _marked_unfinished(value: Mapping[str, Any], markers: frozenset[str]) -> bool:
+    return any(value.get(marker) is True for marker in markers)
+
+
 def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
     """Find semantic values in an arbitrary JSON/SSE envelope.
 
@@ -1567,10 +1590,20 @@ def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
     neutral while preserving tool evidence that would otherwise be thrown away.
     """
 
-    found: list[Any] = []
+    return [found for found, _unfinished in _nested_named_entries(value, names)]
+
+
+def _nested_named_entries(
+    value: Any, names: set[str], unfinished: bool = False
+) -> list[tuple[Any, bool]]:
+    """`_nested_named_values`, each value paired with whether it is one of the own calls of an
+    event the stream marks unfinished: on that event, or in its `content` and `parts`."""
+
+    found: list[tuple[Any, bool]] = []
     if isinstance(value, Mapping):
         if value.get("role") == "tool" or value.get("type") == "tool":
             return found
+        unfinished = unfinished or _marked_unfinished(value, _UNFINISHED_EVENT_MARKERS)
         if (
             "tool_calls" in names
             and (
@@ -1581,13 +1614,13 @@ def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
             and value["tool_calls"]
         ):
             # Canonical calls own IDs; provider aliases in this message are not new requests.
-            return [value["tool_calls"]]
+            return [(value["tool_calls"], unfinished)]
         for key, item in value.items():
             # Descriptions and tool payloads cannot request harness tools.
             if key in {"metadata", "args", "arguments"}:
                 continue
             if str(key) in names:
-                found.append(item)
+                found.append((item, unfinished))
             if key in {
                 "function_call",
                 "functionCall",
@@ -1597,11 +1630,63 @@ def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
                 "tool_responses",
             }:
                 continue
-            found.extend(_nested_named_values(item, names))
+            found.extend(
+                _nested_named_entries(
+                    item, names, unfinished and str(key) in _EVENT_BODY_KEYS
+                )
+            )
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for item in value:
-            found.extend(_nested_named_values(item, names))
+            found.extend(_nested_named_entries(item, names, unfinished))
     return found
+
+
+def _finished_call_items(payload: Any) -> list[dict[str, Any]]:
+    """The tool calls in one reply, without the unfinished copies of a call the stream also
+    sent finished.
+
+    A call the stream marks unfinished is dropped when a finished call with its id and its
+    tool's name is in the same reply. A call never disappears: an id and name seen only
+    unfinished keep their last copy, and an unfinished call with no id is read as before.
+    Unmarked calls are read as before, so two finished calls that share an id stay two.
+    """
+
+    items: list[tuple[dict[str, Any], bool]] = []
+    for value, unfinished in _nested_named_entries(
+        payload, {"function_call", "functionCall", "tool_calls"}
+    ):
+        for item in _mapping_items([value]):
+            items.append(
+                (item, unfinished or _marked_unfinished(item, _UNFINISHED_CALL_MARKERS))
+            )
+    finished = {
+        _call_key(item)
+        for item, unfinished in items
+        if not unfinished and item.get("id")
+    }
+    last_unfinished = {
+        _call_key(item): index
+        for index, (item, unfinished) in enumerate(items)
+        if unfinished and item.get("id")
+    }
+    kept: list[dict[str, Any]] = []
+    for index, (item, unfinished) in enumerate(items):
+        if unfinished and item.get("id"):
+            key = _call_key(item)
+            if key in finished or last_unfinished[key] != index:
+                continue
+        kept.append(item)
+    return kept
+
+
+def _call_key(item: Mapping[str, Any]) -> tuple[str, str]:
+    """A call's id and its tool's name, in the ADK (`name`) or OpenAI (`function.name`) shape."""
+
+    function = item.get("function")
+    name = item.get("name")
+    if name is None and isinstance(function, Mapping):
+        name = function.get("name")
+    return str(item["id"]), str(name or "")
 
 
 def _mapping_items(values: Sequence[Any]) -> list[dict[str, Any]]:
@@ -1629,10 +1714,7 @@ def _without_payload_node(value, excluded):
 def _nested_tool_evidence(
     payload: Any,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    raw_calls = _mapping_items(
-        _nested_named_values(payload, {"function_call", "functionCall", "tool_calls"})
-    )
-    calls = _openai_tool_calls(raw_calls)
+    calls = _openai_tool_calls(_finished_call_items(payload))
 
     raw_responses = _mapping_items(
         _nested_named_values(

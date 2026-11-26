@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -19,17 +21,20 @@ from fi.simulate.agent.wrapper import (
 
 from .call_runner import ArtifactUploader, CallRunnerContext, RETELL_API_KEY_ALIAS
 from .chat_call_runner import (
-    _HostedChatTarget,
+    HostedChatTarget,
     _check_text_usage,
     _conversation_scenario,
     _drive_conversation,
     _duration_ms,
     _record_text_usage,
     _scenario_document,
-    _tool_world,
+    _sealed_through_stop,
+    _stopped_call,
+    tool_world,
+    _within_stop_bound,
 )
 from .contract import AgentContract
-from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
+from .hosted_scheduler import CallAborted, CallCancelled, CallOutcome, Scenario, World
 from .run.conversation import Transcript
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
@@ -81,15 +86,46 @@ def _completion_messages(
                 }
             )
         elif role == "tool_call_result":
-            responses.append(
-                {
-                    "tool_call_id": str(item.get("tool_call_id") or ""),
-                    "content": item.get("content"),
-                    "success": not bool(item.get("error")),
-                    "error": item.get("error"),
-                }
-            )
+            responses.append(_tool_result(item))
     return answer, calls, responses
+
+
+_HTTP_STATUS = re.compile(
+    r"^\s*(?:HTTP|response status:)\s*(\d{3})\b", re.IGNORECASE | re.MULTILINE
+)
+_ERROR_LIMIT = 200
+
+
+def _failed_status(content: Any) -> int | None:
+    if not isinstance(content, str):
+        return None
+    for match in _HTTP_STATUS.finditer(content):
+        status = int(match.group(1))
+        if status >= 400:
+            return status
+    return None
+
+
+def _tool_result(item: Mapping[str, Any]) -> dict[str, Any]:
+    content = item.get("content")
+    reported = item.get("error")
+    status = _failed_status(content)
+    failed = bool(reported) or item.get("successful") is False or status is not None
+    error = ""
+    if reported:
+        error = str(reported)
+    elif status is not None:
+        first = str(content).strip().splitlines()[0]
+        error = first if first.upper().startswith("HTTP") else f"HTTP {status}"
+    elif failed:
+        error = "tool call failed"
+    return {
+        "tool_call_id": str(item.get("tool_call_id") or ""),
+        "content": content,
+        "success": not failed,
+        "error": " ".join(error.split())[:_ERROR_LIMIT] if failed else None,
+        **({"status": status} if status is not None else {}),
+    }
 
 
 class RetellChatWrapper(AgentWrapper):
@@ -280,6 +316,11 @@ class RetellChatCallRunner:
         world: World | None = None,
     ) -> CallOutcome:
         del world
+        return await _sealed_through_stop(
+            self._context.stop_requested, lambda sealing: self._run(scenario, runtime, sealing)
+        )
+
+    async def _run(self, scenario: Scenario, runtime: EnvironmentRuntime, sealing: asyncio.Event) -> CallOutcome:
         if self._contract is None:
             raise CallAborted(
                 "chat_contract_unavailable: bundle/contract.json is absent"
@@ -311,14 +352,14 @@ class RetellChatCallRunner:
             getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
         )
         conversation_scenario = _conversation_scenario(document)
-        target_world = _tool_world(
+        target_world = tool_world(
             self._context.bundle_dir,
             self._contract,
             runtime,
             self._context.source_directory,
             self._context.handler_channel,
         )
-        target = _HostedChatTarget(
+        target = HostedChatTarget(
             wrapper=wrapper,
             contract=self._contract,
             world=target_world,
@@ -337,6 +378,11 @@ class RetellChatCallRunner:
         except CallAborted as exc:
             failure = exc
             raise
+        except asyncio.CancelledError as exc:
+            if not self._context.stop_requested():
+                raise
+            # The person stopped the run: seal what the call kept below, then raise.
+            failure, transcript = _stopped_call(exc)
         except Exception as exc:
             wrapped = CallAborted(
                 f"retell_chat_target_failed: {type(exc).__name__}: {exc}"
@@ -347,8 +393,9 @@ class RetellChatCallRunner:
             failure = wrapped
             raise wrapped from exc
         finally:
+            sealing.set()
             try:
-                await wrapper.aclose()
+                await _within_stop_bound(self._context.stop_requested, wrapper.aclose())
             finally:
                 await _record_text_usage(
                     self._context.usage_reporter,
@@ -385,7 +432,7 @@ class RetellChatCallRunner:
             await self._adapter.upload_artifact(
                 trace, kind=ArtifactKind.TOOL_TRACE, scenario_key=scenario.scenario_key
             )
-        return CallOutcome(
+        outcome = CallOutcome(
             calls=calls,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
@@ -394,6 +441,10 @@ class RetellChatCallRunner:
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
         )
+        if isinstance(failure, CallCancelled):
+            failure.partial = replace(outcome, stop_reason="user_canceled")
+            raise failure
+        return outcome
 
 
 __all__ = [

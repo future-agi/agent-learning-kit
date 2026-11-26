@@ -789,6 +789,11 @@ class TerminalPayload(BaseModel):
     reason: TerminalReason | None
     failure: TerminalEventFailure | None
     scenario_counts: ScenarioCounts
+    # Campaign provenance echo: when the submitted job's `metadata` carries a
+    # `certification` block (production certification campaigns), the terminal
+    # event returns it verbatim so the platform can bind the terminal attempt
+    # to the campaign/case that ordered it. Optional — absent on ordinary runs.
+    certification: dict[str, JsonValue] | None = None
 
     @model_validator(mode="after")
     def _terminal_stage(self) -> "TerminalPayload":
@@ -2485,6 +2490,8 @@ class SubGoalResult(BaseModel):
     verdict: Literal["pass", "fail", "not_applicable", "inconclusive", "unmeasured"] | None = None
     # What the sub-goal was decided from: `world_state`, `transcript`, `recording`, `tool_calls`.
     evidence: list[str] | None = None
+    # Whose result: `worker:<id>`, or absent for the task.
+    subject: str | None = None
 
 
 class MetricEvaluation(BaseModel):
@@ -2551,6 +2558,8 @@ class CallSummary(BaseModel):
     # The agent under test's own provider-reported figures (`provider`, `usage`, `cost_cents`,
     # `latency`), never the simulator's.
     target_metrics: dict[str, Any] | None = None
+    # Writes the world applied twice after the agent's answer was lost; sent only when there were some.
+    duplicate_commits: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":
@@ -2596,7 +2605,7 @@ def _unset_default_fields(model: BaseModel, prefix: str = "") -> list[str]:
     return names
 
 
-_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
+_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics", "duplicate_commits"})
 
 
 def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") -> None:
@@ -2606,7 +2615,7 @@ def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") ->
         for name in _LATER_CALL_FIELDS - draft.call.model_fields_set:
             body["call"].pop(name, None)
     for goal, model in zip(body["sub_goals"], draft.sub_goals):
-        for name in ("verdict", "evidence"):
+        for name in ("verdict", "evidence", "subject"):
             if name not in model.model_fields_set:
                 goal.pop(name, None)
     if "reason" not in draft.model_fields_set:

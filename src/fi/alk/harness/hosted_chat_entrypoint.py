@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
-import traceback
 import json
 import os
 import re
@@ -11,26 +10,39 @@ import signal
 import sys
 import threading
 import time
+import traceback
 import uuid
-from collections.abc import Awaitable
+from collections import Counter
+from collections.abc import Awaitable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from ..providers.agent import (
+    _LETTER,
+    _QUERY_OR_FRAGMENT,
+    _REDACTED,
+    _START,
+    _URL_BREAKS,
+    _redact,
+)
+from . import bundle_author_v2
+from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
 from .backends import (
     ASK_TOOL,
+    DELEGATE_TOOL,
     ConversationSession,
     SessionSpec,
     resolve,
     tool,
     tool_server,
 )
-from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
-from .failure_file import FAILURE_FILE
+from .catalogue import load_catalogue
 from .job import publish_actors_switch
-from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
+from .dropped import restore_note
+from .failure_file import FAILURE_FILE
 from .hosted_conversation import (
     _UNAVAILABLE_BUDGET_SECONDS,
     ConversationClient,
@@ -38,7 +50,7 @@ from .hosted_conversation import (
     PlatformSessionStore,
     load_conversation_capabilities,
 )
-from .tools import schema
+from .proofs import load_proofs, proof_counts, proof_key
 from .session import (
     ARTIFACT,
     DONE,
@@ -50,15 +62,10 @@ from .session import (
     Stage,
     asking_a_person,
 )
+from .tools import schema
+from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
+from .understand import load as load_contract
 from ..providers.secret_shapes import ChatHold
-from ..providers.agent import (
-    _LETTER,
-    _QUERY_OR_FRAGMENT,
-    _REDACTED,
-    _START,
-    _URL_BREAKS,
-    _redact,
-)
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
 _RANGES = {
@@ -73,11 +80,143 @@ _RANGES = {
 _NOT_MESSAGES = {"interrupt", "cancel_operation", "user_response", "approval"}
 _PENDING_QUESTION = ".futureagi-pending-question.json"
 _BUILD_FINISHED = ".futureagi-build-finished.json"
+
+
+def _proof_summary(proofs: dict[str, dict[str, Any]], keys: list[str], counts: dict[str, int]) -> str:
+    """The proof counts the closing summary must repeat, with the tools and reasons behind them."""
+    tools = sorted(
+        {
+            tool
+            for key in keys
+            if (proofs.get(key) or {}).get("kept_as_written") is True
+            for tool in (proofs.get(key) or {}).get("assumed") or []
+        }
+    )
+    reasons = sorted(
+        {
+            str((proofs.get(key) or {}).get("blocked_reason") or "not_validated")
+            for key in keys
+            if (proofs.get(key) or {}).get("proved") is not True
+            and (proofs.get(key) or {}).get("kept_as_written") is not True
+        }
+    )
+    kept = f"{counts['kept_as_written']} kept as written" + (f" ({', '.join(tools)})" if tools else "")
+    unproved = f"{counts['not_proved']} not proved" + (f" ({', '.join(reasons)})" if reasons else "")
+    return (
+        f"{counts['proved']} proved, {kept}, {unproved}. Report exactly these counts; call only the "
+        f"{counts['proved']} proved scenarios proved."
+    )
+
+
+def _with_proof_counts(text: str, counts: dict[str, int]) -> str:
+    """The closing reply with the proof counts written by code: whatever the reply says, these are the counts."""
+    line = (
+        f"Proof counts: {int(counts.get('proved') or 0)} proved, {int(counts.get('kept_as_written') or 0)} kept as "
+        f"written, {int(counts.get('not_proved') or 0)} not proved."
+    )
+    return "\n\n".join(part for part in (text, line) if part)
+
+
+# Where a change this chat publishes lands, in the words of the environment's own page.
+UNDER_UNSAVED = "Changes from this chat are under Unsaved changes; Validate, then Save to keep them as a new version"
+
+
+def _changes_said(saved: str, unapplied: int = 0) -> str:
+    """Where this chat's changes stand, in the words the environment's page uses, or "" when that is not known.
+    `saved` is `pending` or `clear` (the page's own Unsaved changes, held or not), `published` (this chat put
+    changes there, `unapplied` of them left out, the page not read), `none` (nothing changed in this chat), `unsaved`
+    (changed here and not yet under Unsaved changes), `building` or `unknown`."""
+    except_ = f", except {unapplied} scenarios that could not be applied" if unapplied else ""
+    return {
+        # The page says it holds unsaved changes.
+        "pending": UNDER_UNSAVED + except_ + ".",
+        # The page holds none: saved or discarded there, so nothing is said about them.
+        "clear": "",
+        # What this chat did, where the page's own state was not read.
+        "published": f"This chat put its changes under Unsaved changes{except_}.",
+        "none": "No changes in this chat.",
+        "unsaved": "Changes in this chat are not yet under Unsaved changes.",
+        "building": "The environment is still being built.",
+        "unknown": "",
+    }[saved]
+
+
+def _status_line(
+    workspace: Path, kept: list[Any] | None, saved: str, unapplied: int = 0, counts: Mapping[str, Any] | None = None
+) -> str:
+    """The line that closes every builder reply, written by code, never by the model: how many scenarios there are,
+    the Scenarios tab's own counts when the platform sent them (never counts from this chat's proofs, which can
+    contradict the tab), and where this chat's changes stand."""
+    tab = (
+        f" On the Scenarios tab: {int(counts.get('proved') or 0)} proved, {int(counts.get('kept_as_written') or 0)} "
+        f"kept as written, {int(counts.get('not_proved') or 0)} not proved."
+        if isinstance(counts, Mapping)
+        else ""
+    )
+    return " ".join(
+        part for part in (f"Status: {len(kept or [])} scenarios.{tab}", _changes_said(saved, unapplied)) if part
+    )
+
+
+def _removed_matching(removed: Any, query: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The removed cases whose key or name is exactly one the query names or searches for."""
+    wanted = {str(one).strip() for one in query.get("names") or []} | {str(query.get("search") or "").strip()}
+    wanted.discard("")
+    rows = removed.get("removed") if isinstance(removed, dict) else None
+    return [
+        row
+        for row in rows or []
+        if isinstance(row, dict) and (str(row.get("scenario_key") or "") in wanted or str(row.get("name") or "") in wanted)
+    ]
+
+
+def _with_removed_hint(answer: Any, query: Mapping[str, Any], removed: list[dict[str, Any]] | None = None) -> Any:
+    """The suite's rows, with each removed case the query names exactly, flagged as removed with how to restore it,
+    and, for a search by name or words that matches nothing at all, where removed cases are read."""
+    if not isinstance(answer, dict):
+        return answer
+    if removed:
+        answer = {
+            **answer,
+            "removed_matches": [
+                {
+                    **row,
+                    "removed": f"removed after suite version {row.get('suite_version')}; it is not in the suite. "
+                    f'Restore it exactly as it was with restored_from {{"key": "{row.get("scenario_key")}"}} and '
+                    "as_it_was true; with a change, with its scenario_key and restored_from",
+                }
+                for row in removed
+            ],
+        }
+    if answer.get("matching") or answer.get("removed_matches") or not (query.get("names") or query.get("search")):
+        return answer
+    return {
+        **answer,
+        "note": "Nothing in the current suite matches. A case the environment had and removed is read with "
+        "find_scenarios(removed: true); restore it from that row with its scenario_key and restored_from, never by "
+        "writing it again.",
+    }
+
+
+def _status_note(workspace: Path, kept: list[Any] | None, saved: str = "unknown") -> str:
+    """How many scenarios there are and where this chat's changes stand, put at the head of every message so a
+    status the conversation stated earlier can never stand in for them."""
+    if not kept:
+        return ""
+    where = _changes_said(saved)
+    return (
+        f"[Suite now: {len(kept)} scenarios.{' ' + where if where else ''} Anything said earlier about their state "
+        "may be stale. Give a scenario's state, or counts of states, only as scenario_status reads them from the "
+        "Scenarios tab, and say a change is under Unsaved changes only after save_changes reports it applied.]\n\n"
+    )
+
+
 _PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
 # Each turn's ending as it was reported, usage included: kept before the turn's final
 # checkpoint, so a restart after a failed delivery replays the same ending.
 _TURN_ENDINGS = ".futureagi-turn-endings.json"
+_ENDING_PREFIX = ".futureagi-turn-ending-"
 _ENDING_OUTCOMES = frozenset({"success", "failed", "interrupted"})
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
 _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
@@ -97,6 +236,7 @@ _NEEDS_CONFIRMATION = frozenset(
         "declare_tool",
         "fix_tool",
         "amend_contract",
+        "set_worker_tools",
         "add_rule",
         "drop_rule",
         "add_sub_goal",
@@ -115,6 +255,7 @@ _ASKS_ALONE = frozenset(
         "declare_tool",
         "fix_tool",
         "amend_contract",
+        "set_worker_tools",
         "add_rule",
         "drop_rule",
     }
@@ -122,6 +263,43 @@ _ASKS_ALONE = frozenset(
 _SUBMITS = ("submit_scenario", "edit_scenario")
 _CONFIRM = "Yes, make this change"
 _CONFIRM_ALL = "Yes, make every change for this request"
+
+
+def _canonical(arguments: Any) -> str:
+    return json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
+
+
+def _call_digest(tool: str, arguments: Any) -> str:
+    """One exact call: its tool and its arguments, canonically ordered."""
+    import hashlib
+
+    return hashlib.sha256(f"{tool}\n{_canonical(arguments)}".encode()).hexdigest()
+
+
+# How much of one argument a plan shows; the approval still covers the whole call (`_call_digest`).
+_SHOWN_PER_ARGUMENT = 200
+
+
+def _shown(value: Any) -> str:
+    said = value if isinstance(value, str) else _canonical(value)
+    if len(said) <= _SHOWN_PER_ARGUMENT:
+        return said
+    return f"{said[:_SHOWN_PER_ARGUMENT].rstrip()}... ({len(said) - _SHOWN_PER_ARGUMENT} more characters)"
+
+
+def _adds_a_case(tool: str, arguments: Mapping[str, Any], kept: Sequence[Any] = ()) -> bool:
+    """Whether a planned call adds a scenario rather than changing one: a submission matching no kept case by key or
+    by name, as `accept_scenario` replaces one."""
+    if tool != "submit_scenario":
+        return False
+    key, name = str(arguments.get("scenario_key") or "").strip(), str(arguments.get("name") or "").strip()
+    return not any((key and one.scenario_key == key) or (name and one.name == name) for one in kept)
+
+
+def _call_line(tool: str, arguments: Mapping[str, Any]) -> str:
+    """A call as the person reads it in a plan: the tool and each argument it is called with, a long one cut short."""
+    shown = "; ".join(f"{name}: {_shown(value)}" for name, value in sorted(arguments.items()))
+    return f"{tool} ({shown})" if shown else tool
 _NUDGE_NOTE = (
     "\n\nLoad `builder/agent-update` with read_skill first, and end the turn with "
     "report_update."
@@ -156,6 +334,7 @@ _WRITING_TOOLS = frozenset(
         "save_scenarios",
         "add_sub_goal",
         "amend_contract",
+        "set_worker_tools",
         "add_rule",
         "drop_rule",
         "fix_tool",
@@ -538,6 +717,27 @@ observable artifact proves that the requested change has taken effect.
 """
 
 
+# How the chat says a reply to an open question reached it: `picked` from the question's own options, or `typed`
+# into the message box. Recorded by the client on the reply; a client that records nothing is taken at its word.
+ANSWERED_BY = "answered_by"
+TYPED = "typed"
+
+
+def _framed_answer(answer: str, reply: dict[str, Any], payload: dict[str, Any], asked: list[dict[str, Any]]) -> str:
+    """The reply to a question as the model reads it. The chat sends whatever the person types while a question is
+    open as its answer, and records on the reply that it was typed. Where the question offered options and the
+    reply was typed instead, the model is told so: it may be a new request rather than an answer. Which it is, the
+    model judges; nothing here reads the words."""
+    offered = bool(payload.get("options")) or any(one.get("options") for one in asked)
+    if not answer or not offered or reply.get(ANSWERED_BY) != TYPED:
+        return answer
+    return (
+        "The person typed this instead of picking one of the options, so it may not answer the question: "
+        f"{answer}\nIf it answers the question, go on from it. If it is a different request, the question is "
+        "closed: say so in one line and act on this request."
+    )
+
+
 async def _enter(stage: Stage) -> None:
     """Open the stage; a stored session the provider refuses to resume opens fresh instead."""
     servers = stage.spec.servers
@@ -662,15 +862,9 @@ class HostedChatRuntime:
         self.job = job
         # A builder chat is always a hosted job: with no switch in it, actors are off.
         publish_actors_switch(job.get("metadata") if isinstance(job, dict) else None, hosted=True)
-        from .scenario import used_keys
+        from .scenario import seed_used_keys
 
-        # Every key the environment has given a scenario, a dropped one's included, so a new
-        # scenario never takes one and inherits another's row and run history.
-        used_keys(workspace).update(
-            str(key)
-            for key in (job.get("metadata") or {}).get("used_scenario_keys") or ()
-            if key
-        )
+        seed_used_keys(workspace, job.get("metadata"))
         backend = resolve()
         self.backend_name = backend.name
         self.event_store: Any = None
@@ -686,16 +880,23 @@ class HostedChatRuntime:
         self._from_platform = False
         self._turn_acknowledged_through = 0
         self._tool_names: dict[str, str] = {}
+        # Calls to a tool the session was never offered (a name the model made up): logged, never shown as a card.
+        self._unoffered_calls: set[str] = set()
         self._checkpoint_lock = asyncio.Lock()
         # The message whose turn is running, and the one whose every change the person approved.
         self._turn_message_id = ""
         self._approved_all_in: str | None = None
+        # A plan the person said yes to (`confirm_plan`): the message it answers, and the exact calls it still covers,
+        # each by its digest (`_call_digest`), one use per listed call.
+        self._plan_turn: str | None = None
+        self._plan_left: Counter[str] = Counter()
         # One confirmation open at a time: the platform takes an answer to the latest only.
         self._confirming = asyncio.Lock()
         self._restart_after_turn = False
         # Endings the coordinator state already holds, as stored: each control-only checkpoint
         # adds only new or changed endings, not the whole history of them.
-        self._stored_endings: dict[str, str] = {}
+        self._endings: dict[str, dict[str, Any]] | None = None
+        self._pending_endings: dict[str, dict[str, Any]] = {}
         self._skipped_endings: set[str] = set()
         # The rebuild command this sandbox runs.
         self._nudge: dict[str, Any] | None = None
@@ -715,7 +916,7 @@ class HostedChatRuntime:
         if isinstance(self.conversation, BuilderConversation):
             # What the sandbox started from is what the environment holds, unless an earlier
             # sandbox of this conversation already recorded otherwise.
-            self._published_fingerprint()
+            self._mint_published()
 
     def _conversation(self) -> BuilderConversation | CoordinatorConversation:
         if self._side_chat():
@@ -728,7 +929,6 @@ class HostedChatRuntime:
     async def _open_builder(self, *, resume: bool = True) -> Stage:
         from .builder import BUILDER
         from .poc_guest_booking import guest_booking_policy_job
-        from .understand import load as load_contract
 
         policy_job = guest_booking_policy_job(self.job)
         # A reading the platform handed this build is used before anything opens.
@@ -796,7 +996,6 @@ class HostedChatRuntime:
 
     def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
         from .builder import environment_brief, open_builder
-        from .catalogue import load_catalogue
         from .nudge import ENVIRONMENT
         from .poc_guest_booking import guest_booking_pin_scenario_problem
 
@@ -822,6 +1021,8 @@ class HostedChatRuntime:
             if world
             else self._cast_servers(contract),
             catalogue=catalogue,
+            removed_lookup=self._removed_with_key,
+            tab_status=self._tab_status,
         )
         if self._nudge is not None:
             self._nudge_tools(stage, catalogue)
@@ -938,7 +1139,6 @@ class HostedChatRuntime:
 
     def _what_exists(self) -> tuple[bool, bool]:
         """Whether the workspace has a contract, and a world: what the harness's tools follow."""
-        from .understand import load as load_contract
         from .world.snapshot import saved as world_saved
 
         return load_contract(self.workspace) is not None, bool(world_saved(self.workspace))
@@ -1007,6 +1207,11 @@ class HostedChatRuntime:
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
+            digest = _call_digest(spec.name, args)
+            if self._plan_turn == self._turn_message_id and self._plan_left[digest] > 0:
+                # This very call is part of the plan the person said yes to for this message: asked once, not again.
+                self._plan_left[digest] -= 1
+                return await handler(args)
             alone = spec.name in _ASKS_ALONE
             async with self._confirming:
                 if alone or self._approved_all_in != self._turn_message_id:
@@ -1042,6 +1247,59 @@ class HostedChatRuntime:
 
         return replace(spec, handler=guarded)
 
+    async def _confirm_plan(self, changes: list[Any]) -> dict[str, Any]:
+        """One question for a whole plan. Each change is a tool and the exact arguments it will be called with; the
+        person reads each as this tool renders it from those arguments (`_call_line`), never the model's own summary,
+        and answers once. On yes, only those exact calls run unasked, each once."""
+        listed = [
+            (str(one.get("tool") or "").strip(), one.get("arguments"))
+            for one in changes
+            if isinstance(one, dict)
+        ]
+        listed = [(tool, arguments) for tool, arguments in listed if tool and isinstance(arguments, dict)]
+        if not listed or len(listed) != len(changes):
+            return {"content": [{"type": "text", "text": "List each change as its tool and the exact arguments you "
+                                 "will call it with."}], "is_error": True}
+        yes = f"Yes, apply these {len(listed)} changes" if len(listed) > 1 else "Yes, apply this change"
+        # A submission matching no kept case adds one, which the person sees said outright, not inferred.
+        kept = getattr(getattr(self.conversation, "stage", None), "kept", None) or []
+        added = [_adds_a_case(tool, arguments, kept) for tool, arguments in listed]
+        async with self._confirming:
+            answer = await self._ask(
+                "confirm_plan",
+                {
+                    "question": (f"Apply these {len(listed)} changes?" if len(listed) > 1 else "Apply this change?")
+                    + (
+                        f" {sum(added)} of them {'adds a new scenario' if sum(added) == 1 else 'add new scenarios'}."
+                        if any(added)
+                        else ""
+                    )
+                    + "\n"
+                    + "\n".join(
+                        f"{at}. {'NEW SCENARIO: ' if new else ''}{_call_line(tool, arguments)}"
+                        for at, ((tool, arguments), new) in enumerate(zip(listed, added), 1)
+                    ),
+                    "options": [yes, "No"],
+                    "options_only": True,
+                },
+                None,
+            )
+        said = (
+            " ".join(str(part.get("text") or "") for part in (answer.get("content") or [])).strip()
+            if isinstance(answer, dict)
+            else ""
+        )
+        if said != yes:
+            return {
+                "content": [{"type": "text", "text": f"The person did not approve the plan (they said: "
+                             f"{said or 'nothing'}). Make none of these changes; follow what they said."}],
+                "is_error": True,
+            }
+        self._plan_turn = self._turn_message_id
+        self._plan_left = Counter(_call_digest(tool, arguments) for tool, arguments in listed)
+        return {"content": [{"type": "text", "text": f"Approved: make the {len(listed)} listed calls now, each with "
+                             "exactly the arguments listed; any other call is asked about on its own."}]}
+
     def _changes_situation(self, args: dict[str, Any]) -> bool:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
         return self._changes(
@@ -1059,8 +1317,6 @@ class HostedChatRuntime:
         )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
-        from .catalogue import load_catalogue
-
         return any(one.name == args.get("name") for one in load_catalogue(self.workspace).sub_goals)
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
@@ -1162,7 +1418,9 @@ class HostedChatRuntime:
             "persona.location, persona.personality, persona.communication_style, "
             "background_noise, coverage.overlay, coverage.overlay_intensity, coverage.task, "
             "sub_goals, keywords; append _not to exclude). `full` returns every field. Pages "
-            "hold up to 100 rows.",
+            "hold up to 100 rows. `removed` reads instead the cases this environment had and no longer holds, "
+            "each with its scenario_key, the saved suite_version it last existed in and its content, to restore "
+            "one or copy it.",
             schema(
                 {
                     "numbers": _NUMBERS,
@@ -1173,21 +1431,48 @@ class HostedChatRuntime:
                     "page": int,
                     "page_size": int,
                     "full": bool,
+                    "removed": bool,
                 },
                 [],
             ),
         )
         async def find_scenarios(args: dict[str, Any]) -> dict[str, Any]:
             query = {key: value for key, value in args.items() if value not in (None, "", [], {})}
-            return await call(self.client.scenarios(query))
+            if not query.get("removed"):
+
+                async def hinted() -> Any:
+                    answer = await self.client.scenarios(query)
+                    removed: list[dict[str, Any]] = []
+                    if query.get("names") or query.get("search"):
+                        try:
+                            removed = _removed_matching(await self.client.scenarios({"removed": True}), query)
+                        except ConversationTransportError:
+                            # The suite's own rows still answer; only the removed ones are not shown.
+                            removed = []
+                        from .scenario_tools import remember_removed
+
+                        remember_removed(self.workspace, removed)
+                    return _with_removed_hint(answer, query, removed)
+
+                return await call(hinted())
+            try:
+                answer = await self.client.scenarios(query)
+            except ConversationTransportError as exc:
+                return text(str(exc), error=True)
+            from .scenario_tools import remember_removed
+
+            # Kept so a restore of one of them can say what it changed.
+            remember_removed(self.workspace, (answer or {}).get("rows"))
+            return text(answer)
 
         @tool(
             "save_changes",
-            "Put every change made in this conversation into the environment: scenarios added, "
-            "rewritten or dropped, sub-goals and contract corrections. Seals them so runs play "
-            "them, and returns exactly what changed by tab number. Until this says applied, "
-            "nothing you changed is in the environment. `force` reseals and publishes even when "
-            "nothing changed here, to repair a sealed bundle or index out of step.",
+            "Put every change made in this conversation under the environment's Unsaved changes: scenarios "
+            "added, rewritten or dropped, sub-goals and contract corrections. Seals them so runs play them, and "
+            "returns exactly what changed by tab number. Until this says applied, nothing you changed is there. "
+            "Under Unsaved changes is not a saved version: the person keeps them as one with Validate, then Save. "
+            "`force` reseals and publishes even when nothing changed here, to repair a sealed bundle or index out "
+            "of step.",
             schema({"force": bool}, []),
         )
         async def save_changes(args: dict[str, Any]) -> dict[str, Any]:
@@ -1226,7 +1511,7 @@ class HostedChatRuntime:
             "run_scenarios",
             "Start a run of the numbered scenarios against the agent, each played `repeats` times "
             "(1 to 20). Every call costs time and money: confirm the numbers and repeats with the "
-            "person first unless they said exactly what to run. Unsaved changes are saved first.",
+            "person first unless they said exactly what to run. Changes in this chat are put under Unsaved changes first.",
             schema({"numbers": _NUMBERS, "ranges": _RANGES, "repeats": int}, []),
         )
         async def run_scenarios(args: dict[str, Any]) -> dict[str, Any]:
@@ -1285,12 +1570,14 @@ class HostedChatRuntime:
         async def finish_build(args: dict[str, Any]) -> dict[str, Any]:
             from .builder import suite_health
             from .scenario_tools import load_scenarios
-            from .understand import load as load_contract
 
             contract = load_contract(self.workspace)
             has_contract, has_world = self._what_exists()
             kept = load_scenarios(self.workspace) if has_world else []
-            asked = int(self.job.get("scenario_count") or 0)
+            from .authoring_runtime_validation import supported_count
+
+            # Fewer when the plan's cells hold fewer distinct cases than were asked for; yield.json says so.
+            asked = supported_count(self.workspace, int(self.job.get("scenario_count") or 0))
             missing = (
                 ["no contract is saved"] if not has_contract
                 else ["no world is saved"] if not has_world
@@ -1311,17 +1598,48 @@ class HostedChatRuntime:
                 return text("Not finished:\n- " + "\n- ".join(missing[:60]), error=True)
             # The bundle is sealed from the world as it is now, after every change made during the build.
             await asyncio.to_thread(self._after_saved, world_changed=True)
+            proofs = load_proofs(self.workspace)
+            keys = [proof_key(one) for one in kept]
+            counts = proof_counts(proofs, keys)
             (self.workspace / _BUILD_FINISHED).write_text(
-                json.dumps({"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or "")}),
+                json.dumps(
+                    {"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or ""), "proofs": counts}
+                ),
                 encoding="utf-8",
             )
             return text(
-                f"Finished: {len(kept)} scenarios (the build asked for {asked}). It is now being "
+                f"Finished: {len(kept)} scenarios (the build asked for {asked}): "
+                + _proof_summary(proofs, keys, counts)
+                + " It is now being "
                 "validated against the running agent and sealed; the environment opens when that "
                 "is done, and this conversation carries on there."
             )
 
-        tools = [find_scenarios, save_changes, read_runs, run_scenarios, remember]
+        @tool(
+            "confirm_plan",
+            "Ask the person once to approve every change you are about to make for their message: list each one as "
+            "the `tool` and the exact `arguments` you will call it with. The person sees each call as written and "
+            "answers Yes or No for the whole plan. On Yes, each listed call runs once without asking again during "
+            "this message; a call with any other arguments, or one you did not list, is asked about on its own. "
+            "Never ask in your own words whether to go ahead.",
+            schema(
+                {
+                    "changes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"tool": {"type": "string"}, "arguments": {"type": "object"}},
+                            "required": ["tool", "arguments"],
+                        },
+                    }
+                },
+                ["changes"],
+            ),
+        )
+        async def confirm_plan(args: dict[str, Any]) -> dict[str, Any]:
+            return await self._confirm_plan(args.get("changes") or [])
+
+        tools = [find_scenarios, save_changes, read_runs, run_scenarios, remember, confirm_plan]
         if self._control_only():
             tools.append(finish_build)
         return tool_server(name="platform", version="0.1.0", tools=tools)
@@ -1335,6 +1653,110 @@ class HostedChatRuntime:
         except (OSError, ValueError):
             body = {}
         return body if isinstance(body, dict) else {}
+
+    def _suite_here(self) -> list[Any] | None:
+        """The suite this conversation holds: its session's list, else the scenarios on disk; None before there is a
+        suite at all. Read from disk too, so every kind of conversation (the builder, the coordinator, a builder still
+        opening) closes with the same line."""
+        kept = getattr(getattr(self.conversation, "stage", None), "kept", None)
+        if kept is not None:
+            return kept
+        if not (self.workspace / "scenarios").is_dir():
+            return None
+        from .scenario_tools import load_scenarios
+
+        try:
+            return load_scenarios(self.workspace)
+        except Exception:  # noqa: BLE001 - a suite that cannot be read is not counted, never guessed
+            return None
+
+    def _review_line(self) -> str:
+        """The texts a rule or tool change listed for review that still read as they did then: never left to the
+        model's account of what it reviewed."""
+        from .amend import cases_citing_rules_gone, review_still_open
+
+        try:
+            kept = self._suite_here() or []
+            still = review_still_open(self.workspace, kept)
+            contract = load_contract(self.workspace)
+            gone = cases_citing_rules_gone(self.workspace, kept, contract) if contract else []
+        except Exception:  # noqa: BLE001 - a review file that cannot be read never costs the reply
+            return ""
+        names = {one.scenario_key: one.name for one in kept}
+        lines = []
+        if still:
+            lines.append(
+                "Still to review against the rule that changed (neither edited nor kept since): "
+                + "; ".join(f"{names.get(key, key)}: {', '.join(fields)}" for key, fields in list(still.items())[:20])
+                + ("; and more" if len(still) > 20 else "")
+                + "."
+            )
+        if gone:
+            # A rule dropped while cases still cite it: each shows its source as not in this environment until fixed.
+            lines.append(
+                f"Still to review: {len(gone)} case(s) cite a rule the agent no longer has: "
+                + ", ".join(names.get(key, key) for key in gone[:20])
+                + ("; and more" if len(gone) > 20 else "")
+                + ". Link the rule that replaced it (add_rule with replaces naming the old rule), or rewrite each case's "
+                "rule source."
+            )
+        return "\n".join(lines)
+
+    async def _overview(self) -> dict[str, Any]:
+        """The platform's overview of the environment, or {} when it does not answer."""
+        try:
+            overview = await self.client.overview()
+        except Exception:  # noqa: BLE001 - what is not read is said as unknown, never guessed
+            return {}
+        return overview if isinstance(overview, dict) else {}
+
+    async def _tab_status_counts(self) -> dict[str, Any]:
+        """The Scenarios tab's counts from the overview, or {} when it sends none."""
+        counts = (await self._overview()).get("lifecycle_counts")
+        return counts if isinstance(counts, dict) else {}
+
+    async def _tab_status(self, names: list[str]) -> dict[str, Any]:
+        """The Scenarios tab's own states: the overview's `lifecycle_counts` and the rows of `names` (the first page
+        when none are named), each with its `lifecycle`. {} for whatever the platform does not answer."""
+        counts = await self._tab_status_counts()
+        found: dict[str, Any] = {"counts": counts} if counts else {}
+        try:
+            query: dict[str, Any] = {"page_size": 100, **({"names": names} if names else {})}
+            answer = await self.client.scenarios(query)
+            found["rows"] = list((answer or {}).get("rows") or []) if isinstance(answer, dict) else []
+        except Exception:  # noqa: BLE001 - no rows is said as none, never guessed
+            pass
+        return found
+
+    async def _removed_with_key(self, key: str) -> list[dict[str, Any]]:
+        """The removed cases with this exact key, as find_scenarios(removed: true) reads them."""
+        answer = await self.client.scenarios({"removed": True})
+        rows = answer.get("removed") if isinstance(answer, dict) else None
+        return [row for row in rows or [] if isinstance(row, dict) and row.get("scenario_key") == key]
+
+    def _closing_status(self, overview: Mapping[str, Any] | None = None) -> str:
+        """The code-written status line for the end of this reply, or "" before the environment has a suite. With the
+        platform's `overview`, the counts and whether the page holds Unsaved changes are its own."""
+        kept = self._suite_here()
+        if kept is None:
+            return ""
+        overview = overview or {}
+        counts = overview.get("lifecycle_counts") if isinstance(overview.get("lifecycle_counts"), Mapping) else None
+        state = self._saved_state()
+        drafts = overview.get("drafts")
+        if state in ("published", "none") and isinstance(drafts, Mapping):
+            state = "pending" if any(drafts.values()) else "clear"
+        unapplied = int(self._published().get("unapplied") or 0) if state in ("published", "pending") else 0
+        return _status_line(self.workspace, kept, state, unapplied, counts)
+
+    def _turn_status_note(self) -> str:
+        try:
+            kept = self._suite_here()
+            if not kept:
+                return ""
+            return _status_note(self.workspace, kept, self._saved_state())
+        except Exception:  # noqa: BLE001 - the note is read from files; one that cannot be read never costs the turn
+            return ""
 
     def _ledger_note(self) -> str:
         """The conversation's kept references, put at the head of every message so a summary
@@ -1387,14 +1809,38 @@ class HostedChatRuntime:
                     digest.update(path.read_bytes())
         return digest.hexdigest()
 
-    def _published_fingerprint(self) -> str:
-        path = self.workspace / _PUBLISHED
+    def _published(self) -> dict[str, Any]:
+        """The marker of what was last saved: its `fingerprint` and how many scenarios it left `unapplied`; {} when
+        there is none or it cannot be read."""
         try:
-            return str(json.loads(path.read_text(encoding="utf-8")).get("fingerprint") or "")
+            body = json.loads((self.workspace / _PUBLISHED).read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            fingerprint = self._environment_fingerprint()
-            self._write_dotfile(_PUBLISHED, {"fingerprint": fingerprint})
-            return fingerprint
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    def _published_fingerprint(self) -> str:
+        """The fingerprint last saved, or "" when that is not known: never taken to be what is here now."""
+        return str(self._published().get("fingerprint") or "")
+
+    def _mint_published(self) -> None:
+        """At a fresh open from the environment (no turn of this conversation has run here yet), what the sandbox
+        opened is what the environment holds. A working copy carried on from earlier turns with no marker stays
+        unknown: it may hold changes that were never saved."""
+        if not self._published_fingerprint() and not (self.workspace / _JOURNAL).is_file():
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+
+    def _saved_state(self) -> str:
+        """`building`, `unknown`, `unsaved` (changed here, not under Unsaved changes), `published` (this chat's
+        changes are under Unsaved changes) or `none` (nothing changed in this chat)."""
+        if self._control_only():
+            return "building"
+        published = self._published()
+        if not published.get("fingerprint"):
+            return "unknown"
+        if self._environment_fingerprint() != published["fingerprint"]:
+            return "unsaved"
+        # A marker written by a publish carries `unapplied`, an older one too; one minted at the start does not.
+        return "published" if published.get("published") or "unapplied" in published else "none"
 
     def _write_dotfile(self, name: str, body: dict[str, Any]) -> None:
         path = self.workspace / name
@@ -1406,14 +1852,23 @@ class HostedChatRuntime:
         """Seal and publish the workspace now, and return what the platform says changed."""
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
-            return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
-        from .bundle_author_v2 import reseal_scenarios
+            return {"applied": True, "unchanged": True, "message": "nothing changed here since the last save_changes"}
         from .pre_run import refresh_stale
 
+        # A scenario a run could not load is left out of the seal (it keeps its last sealed
+        # version) and named to the platform, so one broken case never blocks the rest.
         try:
             # A pre-run session written from an actor record that has since changed is written again before sealing.
             await refresh_stale(self.workspace)
-            await asyncio.to_thread(reseal_scenarios, self.workspace)
+            try:
+                problems = await asyncio.to_thread(bundle_author_v2.scenario_seal_problems, self.workspace)
+            except Exception as exc:  # noqa: BLE001 - an unreadable tree is the reseal's to report
+                print(f"scenario seal problems not read: {type(exc).__name__}", file=sys.stderr, flush=True)
+                problems = {}
+            if problems:
+                await asyncio.to_thread(bundle_author_v2.reseal_scenarios, self.workspace, skip=set(problems))
+            else:
+                await asyncio.to_thread(bundle_author_v2.reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()
             return {
@@ -1421,12 +1876,18 @@ class HostedChatRuntime:
                 "code": "reseal_failed",
                 "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
             }
+        failed = [{"scenario_key": key, "reason": reason} for key, reason in sorted(problems.items())]
         result: dict[str, Any] = {}
         for _attempt in range(3):
             try:
                 async with self._checkpoint_lock:
                     stored = await self.client.checkpoint(self.workspace)
-                    result = await self.client.publish(str(stored.get("digest") or ""))
+                    digest = str(stored.get("digest") or "")
+                    result = (
+                        await self.client.publish(digest, failed_scenarios=failed)
+                        if failed
+                        else await self.client.publish(digest)
+                    )
             except ConversationTransportError as exc:
                 return {"applied": False, "code": "publish_unreachable", "message": str(exc)}
             if result.get("code") != "conversation_checkpoint_not_latest":
@@ -1439,11 +1900,17 @@ class HostedChatRuntime:
                 "loaded, so these changes were not saved. The chat reloads the current "
                 "environment after this reply; the change has to be made again on it."
             )
+        if result.get("applied") and failed:
+            result["failed"] = failed
         if result.get("applied"):
             await self._record_touched(result)
             if result.get("revision"):
                 self._write_dotfile(_AUTHORING_BASIS, {"authoring_revision": result["revision"]})
-            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+            # Saved, but a scenario left unapplied is not in the environment: the marker says how many.
+            self._write_dotfile(
+                _PUBLISHED,
+                {"fingerprint": self._environment_fingerprint(), "unapplied": len(failed), "published": True},
+            )
         return result
 
     async def _publish_if_changed(self) -> tuple[str, bool]:
@@ -1456,10 +1923,16 @@ class HostedChatRuntime:
             return "", False
         result = await self._save_changes()
         if not result.get("applied"):
+            if result.get("code") == "reseal_failed":
+                # Not a fault of one case: the change stays in this chat's working copy as a draft.
+                return (
+                    "These changes stay in this chat's working copy and are NOT under Unsaved changes: "
+                    f"{result.get('message') or 'they could not be sealed for runs'}."
+                ), True
             return (
-                "These changes were NOT saved to the environment: "
+                "These changes are NOT under Unsaved changes: "
                 f"{result.get('message') or result.get('code') or 'unknown reason'}."
-            ), result.get("code") == "reseal_failed"
+            ), False
 
         def named(rows: list[dict[str, Any]]) -> str:
             return ", ".join(f"#{one.get('number')} {one.get('name')}" for one in rows)
@@ -1469,10 +1942,20 @@ class HostedChatRuntime:
             for label, key in (("added", "added"), ("removed", "removed"), ("changed", "changed"))
             if result.get(key)
         ]
+        failed = result.get("failed") or []
+        except_line = (
+            f" Except {len(failed)} scenarios that could not be applied: "
+            + "; ".join(f"{one['scenario_key']}: {one['reason']}" for one in failed)
+            + "."
+            if failed
+            else ""
+        )
         return (
-            "Saved to the environment: "
+            "Put under Unsaved changes: "
             + ("; ".join(parts) or "no scenario changed")
-            + f". It now has {result.get('scenario_count')} scenarios."
+            + f". With them the suite has {result.get('scenario_count')} scenarios."
+            + except_line
+            + " Validate, then Save to keep them as a new version."
         ), False
 
     async def _selection_note(self, payload: dict[str, Any]) -> str:
@@ -1679,12 +2162,17 @@ class HostedChatRuntime:
         elif self._idle_turns >= 3:
             return False
         self._idle_turns += 1
+        if exists[0] and not exists[1] and self._environment_refused():
+            # Written for the build, which stops on it; nothing more is built here.
+            return False
         await asyncio.to_thread(self._after_saved)
         if self._opened_with is not None and exists != self._opened_with:
             await self.conversation.close()
             said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
         else:
-            asked = int(self.job.get("scenario_count") or 0)
+            from .authoring_runtime_validation import supported_count
+
+            asked = supported_count(self.workspace, int(self.job.get("scenario_count") or 0))
             said = (
                 f"[The build is not finished: the test environment for this agent, with {asked} "
                 "scenarios. Carry on, and call finish_build when it is.]"
@@ -1706,7 +2194,6 @@ class HostedChatRuntime:
         done for whatever exists and has not had it yet, so a restart in between loses nothing."""
         from .cli import after_contract, after_world
         from .job import HarnessJob
-        from .understand import load as load_contract
 
         has_contract, has_world = self._what_exists()
         try:
@@ -1717,6 +2204,16 @@ class HostedChatRuntime:
             after_contract(self.workspace, self.source, job)
         if has_world and (world_changed or not (self.workspace / "environment-bundle" / "manifest.json").is_file()):
             after_world(self.source if self.source.is_dir() else None, self.workspace, load_contract(self.workspace))
+
+    def _environment_refused(self) -> bool:
+        """Refuse a saved contract whose agent needs an environment the job doesn't give, before
+        its world is built. True once refused: the failure is written for the build."""
+        from .browser_environment import refuse_saved_contract
+
+        # Only the metadata is read, never the whole job: a job this process can't validate must
+        # not pass for one with nothing to check.
+        metadata = self.job.get("metadata") if isinstance(self.job, dict) else None
+        return refuse_saved_contract(self.workspace, metadata if isinstance(metadata, dict) else {}) is not None
 
     def _take_seed(self) -> None:
         """Use the reading the platform handed this build, at the first opening only, and leave
@@ -1797,7 +2294,19 @@ class HostedChatRuntime:
             print(f"seed contract: error; class: {type(exc).__name__}", file=sys.stderr, flush=True)
             print_trace(exc)
             return "error", []
-        return use_seed(seed, job, self.source, self.workspace)
+        try:
+            profile = _load_provider_import_profile(
+                job, None, self.source.parent / _PROVIDER_PROFILE
+            )
+        except (RuntimeError, OSError, ValueError) as exc:
+            print(
+                f"seed contract: profile unavailable; class: {type(exc).__name__}",
+                file=sys.stderr,
+                flush=True,
+            )
+            print_trace(exc)
+            profile = None
+        return use_seed(seed, job, self.source, self.workspace, profile)
 
     async def _handle(self, command: dict[str, Any]) -> None:
         if str(command["kind"]) != "nudge":
@@ -1822,13 +2331,15 @@ class HostedChatRuntime:
         delivery fails, the restart replays this same ending."""
         ending = {"command_message_id": message_id, "outcome": outcome, **self._turn_usage()}
         endings = self._read_turn_endings()
+        if self._control_only():
+            # A command id is an opaque wire value, not a workspace path.
+            digest = hashlib.sha256(message_id.encode()).hexdigest()
+            self._write_dotfile(f"{_ENDING_PREFIX}{digest}.json", {message_id: ending})
+            self._pending_endings[message_id] = ending
+        else:
+            # A workspace checkpoint packs every file. Keep a single archive member.
+            self._write_dotfile(_TURN_ENDINGS, {**endings, message_id: ending})
         endings[message_id] = ending
-        path = self.workspace / _TURN_ENDINGS
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(endings, sort_keys=True, separators=(",", ":")), encoding="utf-8"
-        )
-        temporary.replace(path)
         return ending
 
     def _turn_ending(self, message_id: str, **bare: Any) -> dict[str, Any]:
@@ -1840,8 +2351,18 @@ class HostedChatRuntime:
         }
 
     def _read_turn_endings(self) -> dict[str, dict[str, Any]]:
+        if self._endings is None:
+            endings = self._read_ending_file(self.workspace / _TURN_ENDINGS)
+            if self._control_only():
+                for path in self.workspace.glob(f"{_ENDING_PREFIX}*.json"):
+                    endings.update(self._read_ending_file(path))
+                self._pending_endings.update(endings)
+            self._endings = endings
+        return self._endings
+
+    def _read_ending_file(self, path: Path) -> dict[str, dict[str, Any]]:
         try:
-            body = json.loads((self.workspace / _TURN_ENDINGS).read_text(encoding="utf-8"))
+            body = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
         if not isinstance(body, dict):
@@ -1869,18 +2390,32 @@ class HostedChatRuntime:
         keys = [str(one) for one in self._nudge.get("user_draft_keys") or []]
         if self._nudge.get("stage") != SUITE:
             return _NUDGE_NOTE + _ENVIRONMENT_NUDGE_NOTE
+        restored = self._restore_note()
         if not keys:
             return (
                 _NUDGE_NOTE
                 + "\n\nNo scenario is being edited by the person now: no list of edits in "
                 "an earlier message applies any more, so repair every scenario this update "
                 "breaks."
+                + restored
             )
         return (
             _NUDGE_NOTE
             + "\n\nScenarios the person is still editing (keep what they wrote; only carry "
             "over a renamed tool or argument): " + ", ".join(keys)
+            + restored
         )
+
+    def _restore_note(self) -> str:
+        """The line on dropped scenarios this suite rebuild restores, or ""."""
+        try:
+            return restore_note(
+                self.workspace,
+                load_contract(self.workspace),
+                load_catalogue(self.workspace).names(),
+            )
+        except (OSError, ValueError):
+            return ""
 
     def _report_again_if_written(self) -> None:
         """A write after the last report_update runs the gate again over what lands."""
@@ -2037,6 +2572,7 @@ class HostedChatRuntime:
         )
         emitted_text: list[str] = []
         turn_failures: list[str] = []
+        finished_before = self._build_finished_stamp()
         queue: asyncio.Queue[Event | None] = asyncio.Queue()
 
         def receive(event: Event) -> None:
@@ -2060,6 +2596,10 @@ class HostedChatRuntime:
                         "stage": self.conversation.stage_name,
                         "command_message_id": message_id,
                     }
+            if resume_invocation_id is None:
+                from .amend import begin_turn
+
+                begin_turn(self.workspace)
             turn = (
                 self.conversation.resume(resume_invocation_id, receive)
                 if resume_invocation_id is not None
@@ -2068,6 +2608,7 @@ class HostedChatRuntime:
                     if str(payload.get("content") or "").lstrip().startswith("/")
                     else retry_note
                     + self._ledger_note()
+                    + self._turn_status_note()
                     + await self._selection_note(payload)
                     + str(payload.get("content") or "")
                     + self._nudge_note(),
@@ -2153,22 +2694,11 @@ class HostedChatRuntime:
         # added: added first, they would change how it is read (a reply that is one URL broken by
         # a line break is cleaned whole).
         final_text = _redact("".join(emitted_text).strip())
-        saved, unsealed = await self._publish_if_changed()
+        # Changes no run could replay (a contract or seed fault, not one case) are kept: the turn
+        # completes and its checkpoint is promoted as the chat's draft, unsaved to the environment.
+        saved, _unsealed = await self._publish_if_changed()
         if saved:
             final_text = f"{final_text}\n\n{_redact(saved)}".strip()
-        if unsealed:
-            # Changes no run could replay are not promoted with this turn.
-            await self._fail_turn(
-                journal,
-                message_id,
-                assistant_message_id,
-                invocation_id,
-                final_text,
-                "reseal_failed",
-            )
-            if self._restart_after_turn:
-                self.stopping.set()
-            return
         if self._last_health and not self._last_health.startswith("Healthy") and not self._control_only():
             problems = [line for line in self._last_health.splitlines() if line.strip()]
             final_text = (
@@ -2177,7 +2707,20 @@ class HostedChatRuntime:
                 + ("; and more" if len(problems) > 3 else "")
             ).strip()
         self._last_health = ""
+        if open_review := self._review_line():
+            final_text = f"{final_text}\n\n{open_review}".strip()
         self._report_again_if_written()
+        overview = await self._overview()
+        if not isinstance(overview.get("lifecycle_counts"), dict):
+            # One source of counts: the tab's when the platform sends them, else the finished build's.
+            final_text = self._close_with_proof_counts(final_text, finished_before)
+        # Every reply ends with it, one that was only tool calls included: the person always sees the real state.
+        try:
+            truth = self._closing_status(overview)
+        except Exception:  # noqa: BLE001 - the line is read from files; one that cannot be read never costs the reply
+            truth = ""
+        if truth:
+            final_text = f"{final_text}\n\n{truth}".strip()
         if final_text:
             await self.client.emit(
                 "assistant_message",
@@ -2205,6 +2748,26 @@ class HostedChatRuntime:
         )
         if self._restart_after_turn:
             self.stopping.set()
+
+    def _build_finished_stamp(self) -> int | None:
+        """When the build-finished file was last written, or None when there is none."""
+        try:
+            return (self.workspace / _BUILD_FINISHED).stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _close_with_proof_counts(self, text: str, finished_before: int | None) -> str:
+        """Append code-written proof counts when this turn finished the build, so the reply cannot overclaim."""
+        stamp = self._build_finished_stamp()
+        if stamp is None or stamp == finished_before:
+            return text
+        try:
+            counts = json.loads(
+                (self.workspace / _BUILD_FINISHED).read_text(encoding="utf-8")
+            ).get("proofs")
+        except (OSError, ValueError, AttributeError):
+            return text
+        return _with_proof_counts(text, counts) if isinstance(counts, dict) else text
 
     async def _fail_turn(
         self,
@@ -2352,6 +2915,12 @@ class HostedChatRuntime:
                         )
                 elif event.kind == TOOL:
                     call_id = str(event.detail.get("call_id") or "")
+                    offered = self._offered_tools()
+                    if offered is not None and event.tool.rsplit("__", 1)[-1] not in offered:
+                        # The provider refuses it and the model carries on; the person has nothing to act on.
+                        self._unoffered_calls.add(call_id)
+                        print(f"builder_called_unoffered_tool tool={event.tool!r}", file=sys.stderr)
+                        continue
                     tool = event.tool.rsplit("__", 1)[-1]
                     self._tool_names[call_id] = tool
                     if self._nudge is not None:
@@ -2380,6 +2949,10 @@ class HostedChatRuntime:
                         )
                 elif event.kind == RESULT:
                     call_id = str(event.detail.get("call_id") or "")
+                    if call_id in self._unoffered_calls:
+                        self._unoffered_calls.discard(call_id)
+                        print(f"builder_unoffered_tool_result text={_redact(event.text)!r}", file=sys.stderr)
+                        continue
                     tool = self._tool_names.get(call_id, "")
                     if tool == "check_health":
                         self._last_health = str(event.text or "")
@@ -2433,6 +3006,17 @@ class HostedChatRuntime:
                 }
             ]
         }
+
+    def _offered_tools(self) -> set[str] | None:
+        """Every tool the open session or its workers may call, by its own name (without its server); None when
+        unknown."""
+        spec = getattr(getattr(self.conversation, "stage", None), "spec", None)
+        if spec is None:
+            return None
+        try:
+            return {one.rsplit("__", 1)[-1] for one in (*spec.granted_anywhere(), DELEGATE_TOOL)}
+        except Exception:  # noqa: BLE001 - unknown means every card is shown, as before
+            return None
 
     def _ask_reply(self, text: str, *, is_error: bool | None, from_the_cli: bool) -> Any:
         """A reply to a question in the form its caller takes.
@@ -2529,7 +3113,7 @@ class HostedChatRuntime:
                         pass
                     await self._checkpoint()
                     answer_sequence = int(command["sequence"])
-                    answered = answer
+                    answered = _framed_answer(answer, command_payload, payload, asked)
                     if not any(
                         self._turn_acknowledged_through
                         < int(queued["sequence"])
@@ -2551,7 +3135,7 @@ class HostedChatRuntime:
                                 },
                             }
                         )
-                    return self._ask_reply(answer, is_error=not bool(answer), from_the_cli=False)
+                    return self._ask_reply(answered, is_error=not bool(answer), from_the_cli=False)
                 await asyncio.sleep(0.5)
         return self._ask_reply(
             "The conversation was stopped.", is_error=True, from_the_cli=bool(asked)
@@ -2605,32 +3189,30 @@ class HostedChatRuntime:
             except ConversationTransportError:
                 pass
         if self._control_only():
-            files = {}
-            for name in (_JOURNAL, _PENDING_QUESTION):
-                path = self.workspace / name
-                if path.is_file():
-                    files[name] = json.loads(path.read_text(encoding="utf-8"))
-            new_endings = {
-                key: value
-                for key, value in self._read_turn_endings().items()
-                if self._stored_endings.get(key) != json.dumps(value, sort_keys=True)
-            }
-            if new_endings:
-                files[_TURN_ENDINGS] = new_endings
-            await self.client.append_session(
-                self._coordinator_state_key(),
-                [
-                    {
-                        "type": "coordinator_state",
-                        "uuid": str(uuid.uuid4()),
-                        "files": files,
-                    }
-                ],
-            )
-            self._stored_endings.update(
-                {key: json.dumps(value, sort_keys=True) for key, value in new_endings.items()}
-            )
-            return {"control_only": True, "stored": True}
+            async with self._checkpoint_lock:
+                files = {}
+                for name in (_JOURNAL, _PENDING_QUESTION):
+                    path = self.workspace / name
+                    if path.is_file():
+                        files[name] = json.loads(path.read_text(encoding="utf-8"))
+                self._read_turn_endings()  # initialize once for a pre-existing workspace
+                new_endings = self._pending_endings.copy()
+                if new_endings:
+                    files[_TURN_ENDINGS] = new_endings
+                await self.client.append_session(
+                    self._coordinator_state_key(),
+                    [
+                        {
+                            "type": "coordinator_state",
+                            "uuid": str(uuid.uuid4()),
+                            "files": files,
+                        }
+                    ],
+                )
+                for key, ending in new_endings.items():
+                    if self._pending_endings.get(key) is ending:
+                        del self._pending_endings[key]
+                return {"control_only": True, "stored": True}
         async with self._checkpoint_lock:
             return await self.client.checkpoint(self.workspace)
 
@@ -2668,9 +3250,12 @@ class HostedChatRuntime:
             temporary.replace(path)
         else:
             path.unlink(missing_ok=True)
-        self._stored_endings = {
-            key: json.dumps(value, sort_keys=True) for key, value in endings.items()
-        }
+        # Local records can include an ending whose coordinator append failed.
+        self._endings = None
+        self._pending_endings.clear()
+        for key, value in self._read_turn_endings().items():
+            if endings.get(key) == value:
+                self._pending_endings.pop(key, None)
         self.conversation = self._conversation()
 
     def _provider_sessions(self) -> dict[str, str]:
@@ -2755,6 +3340,10 @@ async def _run(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    from .grounding import publish_source_root
+
+    # A `file:` source may cite the agent's own source: every proof this process runs reads it from here.
+    publish_source_root(args.source)
     try:
         asyncio.run(_run(args))
     except (ConversationTransportError, ValueError, OSError) as exc:
