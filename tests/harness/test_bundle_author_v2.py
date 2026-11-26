@@ -9808,3 +9808,46 @@ def test_a_node_control_gets_no_python_tool_wiring_at_seal_or_reseal(tmp_path, l
         p for p in resealed.processes if p.name == resealed.runtime.control_service
     )
     assert _node_tool_wiring(control, resealed.processes) == {"trace": [], "door": False}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["node", "../server.js"], ["node", "--require", "../setup.js", "server.js"]],
+)
+def test_a_node_entrypoint_outside_runtime_workdir_is_refused_at_admission(tmp_path, command):
+    """v1 seals one npm package, at runtime.workdir: a file the command names outside it would be left out."""
+    source = _repo(
+        tmp_path,
+        {
+            "server.js": _NODE_CHAT_SERVER,
+            "setup.js": "module.exports = {};\n",
+            "agent/server.js": _NODE_CHAT_SERVER,
+        },
+    )
+    _node_package(source / "agent")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "execution": "native",
+                    "workdir": "agent",
+                    "command": command,
+                    "interface": _NODE_JSON_INTERFACE,
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+
+    with pytest.raises(BundleAuthorError, match="runtime_node_entrypoint_outside_workdir"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=tmp_path / "bundle",
+        )
+    assert not (tmp_path / "bundle").exists()

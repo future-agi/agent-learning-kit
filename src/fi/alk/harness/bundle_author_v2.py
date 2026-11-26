@@ -1544,6 +1544,15 @@ def _plan_node_process(source: Path, **kwargs: Any) -> SourceProcess:
     source, root = source.resolve(), kwargs["root"].resolve()
     if not root.is_relative_to(source):
         raise BundleAuthorError("runtime_node_workdir_outside_source")
+    # v1 seals one npm package, at the launch folder: a file the command names outside it is left
+    # out of the bundle, so the process could not start. `--require=../x` names one too.
+    for token in command[1:]:
+        named = token.partition("=")[2] if token.startswith("-") else token
+        if named and (Path(named).is_absolute() or not (root / named).resolve().is_relative_to(root)):
+            raise BundleAuthorError(
+                f"runtime_node_entrypoint_outside_workdir: {token}; v1 runs one npm package, "
+                "so the command may name only files inside runtime.workdir"
+            )
     manifest_path = root / "package.json"
     if not manifest_path.is_file():
         raise BundleAuthorError(
