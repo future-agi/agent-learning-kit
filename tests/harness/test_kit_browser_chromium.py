@@ -45,6 +45,14 @@ setTimeout(() => {
   document.getElementById('i').dispatchEvent(new InputEvent('input', {bubbles: true}));
 }, 200);
 </script></body></html>""",
+    "/card": """<html><body>
+<input id=name aria-label="Name on card" autocomplete="cc-name">
+<input id=num aria-label="Card number" autocomplete="cc-number">
+<input id=csc aria-label="Security code" autocomplete="section-a billing cc-csc">
+<input id=otp aria-label="Code" autocomplete="one-time-code">
+</body></html>""",
+    "/card-switched": """<html><body><input id=num aria-label="Card number" autocomplete="cc-number">
+<script>document.getElementById('num').setAttribute('autocomplete', 'off');</script></body></html>""",
     "/switched": """<html><body><input id=pw name=secret type=password>
 <script>document.getElementById('pw').type = 'text';</script></body></html>""",
 }
@@ -479,3 +487,40 @@ def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, tmp_path) 
     finally:
         kit.close()
     assert json.loads((tmp_path / "w0-record.json").read_text())["complete"] is False
+
+
+def test_card_numbers_security_codes_and_one_time_codes_are_never_kept_as_text(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/card")
+        for field, text in (("#name", "Pat Lee"), ("#num", "4111111111111111"), ("#csc", "737"), ("#otp", "482913")):
+            await page.click(field)
+            await page.type(text)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == "http://shop.test/card"]
+    assert [(row["target"].get("label"), row["secret"], row["text"]) for row in typed] == [
+        ("Name on card", False, "Pat Lee"),
+        ("Card number", True, None),
+        ("Security code", True, None),
+        ("Code", True, None),
+    ]
+    for kept in ("4111111111111111", "737", "482913"):
+        assert kept not in json.dumps(body)
+
+
+def test_a_card_field_the_page_stops_marking_stays_one(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/card-switched")
+        await page.click("#num")
+        await page.type("4111111111111111")
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == "http://shop.test/card-switched"]
+    assert typed and all(row["secret"] is True and row["text"] is None for row in typed)
+    assert "4111111111111111" not in json.dumps(body)

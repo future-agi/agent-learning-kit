@@ -33,6 +33,10 @@ def _action(kind: str, **fields) -> str:
     return json.dumps({"kind": kind, "url": "http://shop.test/", **fields})
 
 
+def _refuse_connect(*_args, **_kwargs):
+    raise ConnectionRefusedError("no browser here")
+
+
 # Pages, clicks and typing
 
 
@@ -73,6 +77,45 @@ def test_text_typed_into_a_password_field_is_never_kept(tmp_path) -> None:
     [row] = record.body()["rows"]
     assert row["text"] is None and row["secret"] is True
     assert "hunter2" not in json.dumps(record.body())
+
+
+def test_a_declared_secret_typed_into_a_plain_field_is_masked_wherever_the_record_holds_it() -> None:
+    # A field the page does not mark as a password can still take one of the job's own secrets: the record never
+    # holds it, in the text, the field's description or the page's address, and typing it in pieces changes nothing.
+    secret = "tok-4f9a1c7e2b"
+    record, clock = _record(secret_values=(secret,))
+    for text in ["tok", "tok-4f9a", f"my key is {secret}"]:
+        clock.now += 1
+        record.acted(
+            "tab-1",
+            json.dumps(
+                {
+                    "kind": "typing",
+                    "url": f"http://shop.test/?k={secret}",
+                    "target": {"tag": "input", "label": f"key {secret}"},
+                    "text": text,
+                }
+            ),
+        )
+    record.navigated("tab-1", f"http://shop.test/next#{secret}")
+    body = record.body()
+    assert secret not in json.dumps(body)
+    typed = [row for row in body["rows"] if row["kind"] == "typing"]
+    assert [row["text"] for row in typed] == ["my key is ***"]
+
+
+def test_the_recorder_s_records_mask_the_job_s_secrets_after_every_attach(tmp_path) -> None:
+    secret = "tok-4f9a1c7e2b"
+    recorder = browser_record.BrowserRecorder(
+        ["shop.test"], tmp_path / "w0-record.json", secret_values=(secret,), connect=_refuse_connect
+    )
+    try:
+        for _ in range(2):
+            recorder.attach(1)
+            recorder.record.acted("tab-1", _action("typing", target={"tag": "input"}, text=secret))
+            assert secret not in json.dumps(recorder.record.body())
+    finally:
+        recorder.close()
 
 
 def test_what_a_row_holds_passes_the_kit_s_cleaner() -> None:
@@ -1418,3 +1461,49 @@ def test_the_sealed_record_holds_the_browser_s_refusals_split_and_counted_never_
 def test_with_no_record_the_sealed_record_keeps_the_proxy_s_counts() -> None:
     changes = [{"who": "agent", "blocked": [{"host": "a.test", "method": "GET", "via": "browser", "count": 2}]}]
     assert browser_record.sealed_browser_blocked(changes, None) == changes
+
+
+# Typed text and the run's artifact level
+
+
+def _typed_evidence() -> dict:
+    return {
+        "state": "used",
+        "rows": [
+            {"kind": "click", "url": "http://shop.test/", "target": {"tag": "button", "text": "Buy"}},
+            {"kind": "typing", "url": "http://shop.test/", "target": {"label": "Search"}, "secret": False, "text": "red shoes"},
+            {"kind": "typing", "url": "http://shop.test/", "target": {"label": "password"}, "secret": True, "text": None},
+        ],
+    }
+
+
+def test_typed_text_leaves_with_a_run_whose_level_keeps_recordings() -> None:
+    from fi.alk.harness.chat_worker import _ArtifactCollector
+
+    body = browser_record.browser_file_body(_typed_evidence(), [], adapter=_ArtifactCollector(screenshots_kept=True))
+    assert [row.get("text") for row in body["browser"]["rows"]] == [None, "red shoes", None]
+    assert "typed_text" not in body["browser"]
+
+
+def test_a_run_whose_level_keeps_no_recordings_keeps_no_typed_text_and_says_so() -> None:
+    import asyncio
+
+    from fi.alk.harness.chat_worker import _ArtifactCollector
+
+    adapter = _ArtifactCollector(screenshots_kept=False)
+    evidence = _typed_evidence()
+    body = browser_record.browser_file_body(evidence, [], adapter=adapter)
+    rows = body["browser"]["rows"]
+    # That typing happened, and where, is kept; what was typed is not, and the file says why rather than reading as
+    # nothing typed.
+    assert [(row["kind"], row.get("text")) for row in rows] == [("click", None), ("typing", None), ("typing", None)]
+    assert rows[1]["target"] == {"label": "Search"} and rows[1]["secret"] is False
+    assert body["browser"]["typed_text"] == browser_record.TYPED_TEXT_NOT_KEPT_AT_LEVEL
+    assert "red shoes" not in json.dumps(body)
+    # The record the trial read is left as it was.
+    assert evidence["rows"][1]["text"] == "red shoes"
+
+    asyncio.run(browser_record.upload_browser_state(adapter, "one", _typed_evidence(), []))
+    stored = json.loads(base64.b64decode(adapter.artifacts[0]["data"]))
+    assert "red shoes" not in json.dumps(stored)
+    assert stored["browser"]["typed_text"] == browser_record.TYPED_TEXT_NOT_KEPT_AT_LEVEL
