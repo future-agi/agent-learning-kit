@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import signal
 import socket
 import stat
@@ -227,7 +228,7 @@ async def _communicate(
                 await exchange
 
 
-def _private_directory(directory: Path) -> Path:
+def _private_directory(directory: Path) -> tuple[Path, bool]:
     """``directory`` made this process's own (0700), or, where it is not (another account owns it or may write in it,
     or it is a link), a new private one in its place: a worker's result is written inside it, so such a directory
     could be made to hand back another result."""
@@ -236,9 +237,9 @@ def _private_directory(directory: Path) -> Path:
         directory.mkdir(mode=0o700)
     found = os.lstat(directory)
     if stat.S_ISDIR(found.st_mode) and found.st_uid == os.geteuid() and not found.st_mode & 0o022:
-        return directory
+        return directory, False
     logging.getLogger(__name__).warning("worker directory %s is not this account's alone; using a private one instead", directory)
-    return Path(tempfile.mkdtemp(prefix="alk-workers-"))
+    return Path(tempfile.mkdtemp(prefix="alk-workers-")), True
 
 
 async def run_json_worker(
@@ -261,7 +262,7 @@ async def run_json_worker(
     """
     if os.name != "posix":
         raise IsolatedWorkerError("isolated workers require POSIX process groups")
-    work_directory = _private_directory(work_directory)
+    work_directory, made_here = _private_directory(work_directory)
     parent_end, child_end = socket.socketpair() if serve is not None else (None, None)
     try:
         return await _run_json_worker(
@@ -280,6 +281,9 @@ async def run_json_worker(
         for end in (parent_end, child_end):
             if end is not None:
                 end.close()
+        if made_here:
+            # The private directory made in place of the given one is this call's alone.
+            shutil.rmtree(work_directory, ignore_errors=True)
 
 
 async def _run_json_worker(

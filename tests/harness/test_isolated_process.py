@@ -320,3 +320,5 @@ def test_a_work_directory_another_account_could_change_is_not_used(tmp_path, wor
     assert result["marker"] == "parent"
     scratch = Path(result["tmp"]).resolve()
     assert not scratch.is_relative_to(work.resolve()) and not scratch.is_relative_to((tmp_path / "elsewhere").resolve())
+    # The private directory used instead is gone with the worker.
+    assert not scratch.parent.exists()
