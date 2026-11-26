@@ -26,21 +26,18 @@ from ..backends import tool, tool_server
 
 from ..catalogue import (
     CHECK_RULES,
-    CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     CRITERIA_RULES,
-    settled_by,
+    authored_sub_goal,
     worker_subjects_note,
 )
 from ..actors import load_actors
 from ..contract import AgentContract
 from ..environment import (
-    SubGoal,
     load_catalogue,
     save_catalogue,
     save_simulator_prompt,
     validate_simulator_prompt,
-    validate_sub_goal,
 )
 from ..tools import schema
 from .stores import Store, StoreError, resolve, supported
@@ -358,35 +355,14 @@ def provision_tools(
             None,
         )
         try:
-            one = SubGoal(
-                name=str(args["name"]),
-                what=str(args.get("what") or ""),
-                check=str(args.get("check") or ""),
-                judged=str(args.get("judged") or ""),
-                output=str(args.get("output") or "pass_fail"),
-                overlay=str(args.get("overlay") or ""),
-                subject=str(
-                    args.get("subject")
-                    or (previous.subject if previous is not None else "task")
-                ),
-                actor=str(
-                    args.get("actor")
-                    or (previous.actor if previous is not None else "")
-                ),
-                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            one, problems = authored_sub_goal(
+                args,
+                previous=previous,
+                worker_ids={worker.id for worker in contract.workers},
+                actor_ids=set(load_actors(destination).by_id()),
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
-        one.verifier = settled_by(one)
-        problems = validate_sub_goal(one)
-        if one.worker and one.worker not in {worker.id for worker in contract.workers}:
-            problems.append(
-                f"subject_unknown_worker: {one.worker} is not one of the contract's workers"
-            )
-        if one.actor and one.actor not in load_actors(destination).by_id():
-            problems.append(
-                f"actor: {one.actor!r} is not an actor of this environment; add it with add_actor first"
-            )
         if problems:
             return _err(f"{one.name} not added:\n  - " + "\n  - ".join(problems))
         catalogue.sub_goals = [

@@ -44,19 +44,16 @@ from ..actors import (
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     worker_subjects_note,
-    CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    authored_sub_goal,
     Catalogue,
-    SubGoal,
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
-    settled_by,
-    validate_sub_goal,
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
@@ -1848,29 +1845,18 @@ def world_tools(
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        # Repairing a sub-goal keeps whose result it checks and the actor it depends on unless the repair says
-        # otherwise: a fix to its check never quietly turns a worker's check into the task's.
+        # A repair keeps whose result the sub-goal checks and the actor it depends on unless it says otherwise: a fix
+        # to its check never quietly turns a worker's check into the task's.
         previous = next((one for one in catalogue.sub_goals if one.name == str(args.get("name") or "")), None)
         try:
-            sub_goal = SubGoal(
-                name=str(args.get("name") or ""),
-                what=str(args.get("what") or ""),
-                check=str(args.get("check") or ""),
-                judged=str(args.get("judged") or ""),
-                output=str(args.get("output") or "pass_fail"),
-                overlay=str(args.get("overlay") or ""),
-                subject=str(args.get("subject") or (previous.subject if previous is not None else "task")),
-                actor=str(args.get("actor") or (previous.actor if previous is not None else "")),
-                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            sub_goal, problems = authored_sub_goal(
+                args,
+                previous=previous,
+                worker_ids={one.id for one in contract.workers},
+                actor_ids=set(load_actors(destination).by_id()),
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
-        sub_goal.verifier = settled_by(sub_goal)
-        problems = validate_sub_goal(sub_goal)
-        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
-            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
-        if sub_goal.actor and sub_goal.actor not in load_actors(destination).by_id():
-            problems.append(f"actor: {sub_goal.actor!r} is not an actor of this environment; add it with add_actor first")
         if native_runtime and sub_goal.deterministic():
             from ..prove import native_source_problem
 

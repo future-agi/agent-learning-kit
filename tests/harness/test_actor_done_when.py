@@ -156,7 +156,11 @@ def _agent(url: str, path: str, body: dict) -> int:
 
 
 # The agent's tool and the route its service serves it on, as a contract records them.
-APPROVAL_ROUTE = {"tool_entrypoints": [{"tool": "request_approval", "endpoint": "/records/request_approval"}]}
+APPROVAL_ROUTE = {
+    "tool_entrypoints": [
+        {"tool": "request_approval", "endpoint": "/records/request_approval"}
+    ]
+}
 
 
 def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial_shows_both(

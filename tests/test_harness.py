@@ -11706,7 +11706,9 @@ def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_ch
     assert "subject_unknown_worker" in refused
 
 
-def test_the_provision_stage_names_a_worker_as_a_sub_goal_s_subject_and_refuses_one_the_contract_lacks(tmp_path):
+def test_the_provision_stage_names_a_worker_as_a_sub_goal_s_subject_and_refuses_one_the_contract_lacks(
+    tmp_path,
+):
     """The provision stage writes the same sub-goal fields as the world stage: a worker's own check, refused for a
     worker the contract does not declare or a subject that is not one."""
     import asyncio
@@ -11715,7 +11717,9 @@ def test_the_provision_stage_names_a_worker_as_a_sub_goal_s_subject_and_refuses_
     from fi.alk.harness.world.provision import provision_tools
 
     _root, contract, _catalogue = _built_environment(tmp_path)
-    contract.workers = [DeclaredWorker(id="refund", name="Refund worker", tools=["add"])]
+    contract.workers = [
+        DeclaredWorker(id="refund", name="Refund worker", tools=["add"])
+    ]
     server = provision_tools(contract, tmp_path / "w")[0]
 
     async def call(name, payload):
@@ -11723,7 +11727,9 @@ def test_the_provision_stage_names_a_worker_as_a_sub_goal_s_subject_and_refuses_
 
         instance = _instance(server)
         handler = _request_handler(instance, "tools/call")
-        result = await handler.handler(None, CallToolRequestParams(name=name, arguments=payload))
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
         return result.content[0].text
 
     judged = (
@@ -11732,12 +11738,20 @@ def test_the_provision_stage_names_a_worker_as_a_sub_goal_s_subject_and_refuses_
         "Fail when: it refunds without looking the order up.\n"
         "If it does not arise: Pass, since no refund was asked for."
     )
-    goal = {"name": "refund-checked", "what": "the refund worker checked the order", "judged": judged}
+    goal = {
+        "name": "refund-checked",
+        "what": "the refund worker checked the order",
+        "judged": judged,
+    }
     said = asyncio.run(call("add_sub_goal", {**goal, "subject": "worker:refund"}))
     assert "not added" not in said.lower(), said
-    refused = asyncio.run(call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"}))
+    refused = asyncio.run(
+        call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"})
+    )
     assert "subject_unknown_worker" in refused
-    invalid = asyncio.run(call("add_sub_goal", {**goal, "name": "odd", "subject": "nobody"}))
+    invalid = asyncio.run(
+        call("add_sub_goal", {**goal, "name": "odd", "subject": "nobody"})
+    )
     assert "not added" in invalid.lower(), invalid
 
 

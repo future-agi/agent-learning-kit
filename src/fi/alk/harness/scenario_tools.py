@@ -45,21 +45,18 @@ from .call_actor import (
 )
 from .catalogue import (
     worker_subjects_note,
-    CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     NO_OVERLAY,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    authored_sub_goal,
     unused_sub_goals,
     Catalogue,
-    SubGoal,
     load_catalogue,
     save_catalogue,
-    settled_by,
     judged_wording_advisory,
-    validate_sub_goal,
     without_delivery_overlay,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
@@ -3235,26 +3232,14 @@ def scenario_tools(
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            sub_goal = SubGoal(
-                name=str(args.get("name") or ""),
-                what=str(args.get("what") or ""),
-                check=str(args.get("check") or ""),
-                judged=str(args.get("judged") or ""),
-                output=str(args.get("output") or "pass_fail"),
-                overlay=str(args.get("overlay") or ""),
-                actor=str(args.get("actor") or ""),
-                subject=str(args.get("subject") or "task"),
-                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            sub_goal, problems = authored_sub_goal(
+                args,
+                previous=None,
+                worker_ids={one.id for one in contract.workers},
+                actor_ids=set(load_actors(world_root).by_id()),
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
-        # Labelled by what runs: a check makes it code, criteria a judge, both makes it both.
-        sub_goal.verifier = settled_by(sub_goal)
-        problems = validate_sub_goal(sub_goal)
-        if sub_goal.actor and sub_goal.actor not in load_actors(world_root).by_id():
-            problems.append(f"actor: {sub_goal.actor!r} is not an actor of this environment; add it with add_actor first")
-        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
-            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
         if native_runtime(world_root) and sub_goal.deterministic():
             if problem := native_source_problem(sub_goal.check, "check"):
                 problems.append(problem)
@@ -4210,8 +4195,14 @@ def scenario_tools(
                 else ". No accent, language or location may dominate the suite"
             )
         if args.get("actor_share") is not None and not with_actors:
-            return _err("actor_share is not taken: actors are off for this environment, so no scenario includes one.")
-        if args.get("actor_share") is not None and target.get("actor_share") and not args.get("change_actor_share"):
+            return _err(
+                "actor_share is not taken: actors are off for this environment, so no scenario includes one."
+            )
+        if (
+            args.get("actor_share") is not None
+            and target.get("actor_share")
+            and not args.get("change_actor_share")
+        ):
             kept_share = target["actor_share"]
             said += (
                 f". The environment's actor share stays {kept_share['min']:g}-{kept_share['max']:g}: it changes only "

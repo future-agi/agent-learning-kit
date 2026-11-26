@@ -2228,7 +2228,9 @@ def test_the_scenario_s_limits_keep_an_explicit_no_limit_and_its_model_plays_eve
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_a_proof_follows_the_actors_switch_as_a_run_does(monkeypatch, tmp_path, enabled):
+def test_a_proof_follows_the_actors_switch_as_a_run_does(
+    monkeypatch, tmp_path, enabled
+):
     """Off, a scenario is proved without its actors, pre-run, first speaker and faults, as `as_played` runs it."""
     from fi.alk.harness import prove as prove_module
     from fi.alk.harness.catalogue import Catalogue
@@ -2238,7 +2240,13 @@ def test_a_proof_follows_the_actors_switch_as_a_run_does(monkeypatch, tmp_path, 
     scenario = Scenario(
         name="acme",
         instruction="x",
-        pre_run=[{"actors": ["priya"], "where": {"action": "slack.post", "arguments": {}}, "about": "Acme"}],
+        pre_run=[
+            {
+                "actors": ["priya"],
+                "where": {"action": "slack.post", "arguments": {}},
+                "about": "Acme",
+            }
+        ],
         faults=[{"action": "issue_refund", "mode": "unavailable", "on_call": 1}],
     )
     seen = []
@@ -2251,7 +2259,11 @@ def test_a_proof_follows_the_actors_switch_as_a_run_does(monkeypatch, tmp_path, 
         raise Stop
 
     monkeypatch.setattr(prove_module, "checks_for", checks_for)
-    monkeypatch.setattr(prove_module, "current_actors_switch", lambda: ActorsSwitch(enabled=enabled, share=[0.0, 1.0]))
+    monkeypatch.setattr(
+        prove_module,
+        "current_actors_switch",
+        lambda: ActorsSwitch(enabled=enabled, share=[0.0, 1.0]),
+    )
     with pytest.raises(Stop):
         prove_module.prove(scenario, Catalogue(sub_goals=[]), tmp_path)
 
