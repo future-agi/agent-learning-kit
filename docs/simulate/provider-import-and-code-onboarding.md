@@ -64,6 +64,28 @@ does not rewire tools, and never owns provider resources.
 | Vapi | reusable tools, assistant | assistant server, function/API-request tool URLs | referenced resources that cannot be fetched or copied |
 | Retell | Retell LLM or Conversation Flow, voice agent | every nested custom-function URL, agent webhook | custom-LLM and undeclared custom-tool implementations |
 
+## Tool calls, retries and evidence
+
+The world's tool server runs each rewired tool call in one database transaction: the call's
+writes, its row in the tool trace and the answer it was given commit together, so a write the
+world keeps is never missing from the evidence. If the trace cannot be written at all, the call's
+writes are undone, the agent hears a failure, and a durable mark makes the trial unmeasured; an
+empty trace is never read as a run that made no call.
+
+A repeat delivery of one tool call is answered from the stored answer and never runs again:
+
+| Provider | Operation id | Repeat delivery |
+| --- | --- | --- |
+| Vapi | `toolCallList[].id` | answered from the stored answer |
+| Retell | none in the request; the `tool_call_id` of the invocation in `call.transcript_with_tool_calls` (chat: `chat.message_with_tool_calls`) when it is the transcript's last invocation, names this tool with these arguments and has no result yet | answered from the stored answer when the id is found |
+
+Retell's custom-function request is `{name, call, args}` with an `X-Retell-Signature` header and
+no per-request id; a retry repeats the request. The transcript id above is read from Retell's
+documented example, not from a guaranteed field, so a request without it runs unremembered. ALK
+therefore sets `max_retry: 0` on every custom tool it rewires, and Retell never retries a call
+into the world. Name, arguments and order are never used as a key: an agent that makes the same
+call twice made two calls, and the scenario should see both.
+
 ## Acceptance gates
 
 Every provider/mode fixture must prove: source build and readiness, clone/provision receipt,

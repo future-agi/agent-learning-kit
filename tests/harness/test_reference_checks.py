@@ -635,6 +635,7 @@ def test_same_id_still_tells_apart_identifiers_that_name_different_records():
     assert not same_id("", "")
     assert not same_id("--", " ")
     assert not same_id("CLM-88213", "")
+    assert not same_id("A-1-23", "A-12-3")
 
 
 def _raw_claims_world(tmp_path):

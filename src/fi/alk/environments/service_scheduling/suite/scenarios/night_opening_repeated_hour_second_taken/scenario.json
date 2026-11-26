@@ -1,0 +1,119 @@
+{
+  "name": "night_opening_repeated_hour_second_taken",
+  "scenario_key": "night-opening-repeated-hour-second-taken",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "Night-owl opening, repeated hour: Midtown opens 00:00-04:00 on Sunday nights, and CU451 Rosa Delgado asks for a haircut with Marcus Hale at 1:30 am on Sunday 1 November, when New York's clocks go back. The first 1:30 (UTC-04:00, 05:30 UTC) is free; the second (UTC-05:00, 06:30 UTC), the one she means because her shift ends at 1 am standard time, is taken by A453. She takes 2:00 am (UTC-05:00) instead.",
+  "tests": "the agent sees from the slots that 1:30 happens twice and only the first occurrence is free, asks which 1:30 she means, says the second (hers) is taken rather than booking the first, and books 2:00 am UTC-05:00 (07:00 UTC) once she confirms",
+  "instruction": "You work night shifts as a nurse and Midtown now opens 00:00-04:00 on Sunday nights. You want a haircut with Marcus Hale at 1:30 am this Sunday, 1 November, at the Midtown studio. Just say 1:30 am at first. If the desk asks which 1:30 you mean (the clocks go back that night, so 1:30 happens twice), say the later one, after the clocks have gone back: your shift ends at 1:00 am standard time. If the second 1:30 is not free, the earlier 1:30 is no use to you; ask what else Marcus has after that (anything before your 1:30 standard time is too early for you), and take 2:00 am (standard time, UTC-05:00) if it is offered. Confirm when the desk reads it back.\n\nYour details:\n- Name: Rosa Delgado\n- Email: rosa.delgado@example.com\n- Phone: +1 212 555 0451",
+  "keywords": [
+    "dst_ambiguity",
+    "repeated_hour",
+    "clock_change",
+    "new_york",
+    "midtown",
+    "open_studio"
+  ],
+  "persona": {
+    "name": "Rosa Delgado",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Night-shift nurse",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, can I get a haircut with Marcus at 1:30 am this Sunday, 1 November, at Midtown? I know you do late nights now. My email is rosa.delgado@example.com and phone is +1 212 555 0451.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "location_id": "L1",
+    "customer_id": "CU451",
+    "email": "rosa.delgado@example.com",
+    "phone": "+1 212 555 0451"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "rosa.delgado@example.com",
+        "phone": "+1 212 555 0451"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_location",
+      "arguments": {
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV3",
+        "location_id": "L1",
+        "date": "2026-11-01",
+        "staff_id": "ST03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "the studio asked for",
+        "date": "the night of the clock change"
+      }
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU451",
+        "service_id": "SV3",
+        "staff_id": "ST03",
+        "location_id": "L1",
+        "start_time": "2026-11-01T02:00",
+        "utc_offset": "-05:00",
+        "confirmed": true,
+        "request_key": "REQ-CU451-SV3-1101"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "service_id": "the service confirmed",
+        "staff_id": "the staff member confirmed",
+        "location_id": "the studio",
+        "start_time": "caller: 2026-11-01T02:00, after her 1:30 proved taken",
+        "utc_offset": "caller: standard time, after the clocks go back"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "ambiguity",
+    "overlay_intensity": "overt",
+    "overlay_vector": "typed",
+    "interface": "clean_prose",
+    "counterparty": "individual_customer",
+    "disposition": "repeated_hour_open_studio",
+    "interaction": "multi_turn",
+    "task": "dst_ambiguity"
+  },
+  "sub_goals": [
+    "repeated_hour_occurrence_resolved",
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -113,6 +113,8 @@ _FIXED_PLACEHOLDERS = {"JOB_ID", "WORLD_INDEX", "WORLD_DIR", "DB_NAME"}
 # The world database's address as the door's own role, beside the capability it belongs to.
 _WORLD_DOOR_DATABASE_URL = "WORLD_DOOR_DATABASE_URL"
 _WORLD_DATABASE_URL = "WORLD_DATABASE_URL"
+# The world's reader login's address (`world_roles.WORLD_READER_DATABASE_URL`), beside the same capability.
+_WORLD_READER_DATABASE_URL = "WORLD_READER_DATABASE_URL"
 _NAMED_PLACEHOLDER = re.compile(r"^(PORT|HOST)_(.+)$")
 # Mirrored from `process_runtime.WORKER_CHANNEL_PLACEHOLDER`, like the port bands below.
 _WORKER_CHANNEL_PLACEHOLDER = re.compile(r"^WORKER_CHANNEL_([A-Za-z0-9_.-]+)$")
@@ -473,6 +475,8 @@ def _verify_placeholder_vocabulary(manifest: EnvironmentBundleV2) -> None:
                         "unknown_placeholder",
                         f"{process.name}.environment.{key}: {{{{{token}}}}} is the world's door's alone",
                     )
+                if token == _WORLD_READER_DATABASE_URL and _WORLD_DATABASE_URL in known_configuration_names:
+                    continue
                 if _WORKER_CHANNEL_PLACEHOLDER.match(token):
                     if "tool-proxy" in known_names:
                         continue
@@ -653,6 +657,22 @@ def _verify_provider_import(manifest: EnvironmentBundleV2) -> None:
             "capability_unresolved",
             f"{spec.public_capability!r} must name an HTTP capability",
         )
+    if spec.request_binding:
+        # Only per-tool admission puts the world secret on the clone's tools, and the runner
+        # registers each call's token in the world's PostgreSQL.
+        if spec.admission != "per_tool":
+            raise PreflightError(
+                "bundle_manifest_invalid",
+                "provider_import request_binding requires admission 'per_tool'",
+            )
+        if not any(
+            item.protocol is CapabilityProtocol.POSTGRES
+            for item in manifest.capabilities.values()
+        ):
+            raise PreflightError(
+                "capability_unresolved",
+                "provider_import request_binding requires a postgres capability",
+            )
 
 
 def _verify_depends_on(manifest: EnvironmentBundleV2) -> None:

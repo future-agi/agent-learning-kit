@@ -1,0 +1,84 @@
+{
+  "name": "invoice_that_does_not_exist",
+  "scenario_key": "invoice-that-does-not-exist",
+  "scenario_id": "",
+  "use_case": "Explain an invoice or a bill increase",
+  "branch": "Admin asks about nonexistent invoice inv_10_addon; desk checks invoice lines, lists existing invoices and invents no charges",
+  "tests": "Attempts to look up nonexistent invoice lines, lists actual existing invoices, and invents no charges",
+  "instruction": "You are Julia Jump, billing administrator for JumpStart (Tenant ID: T10, User ID: U10_ADMIN). You believe you might have received an add-on invoice for your account and want to ask the billing desk to check if an add-on invoice exists and what charges are on it.\n\nYour details:\n- Tenant ID: T10\n- User ID: U10_ADMIN\n- Request: Ask about any add-on invoice or what invoices exist for your account",
+  "keywords": [
+    "invoice_explanation",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Julia Jump",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "",
+    "location": "Australia",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Julia Jump from JumpStart (T10, U10_ADMIN). What charges are on our add-on invoice?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "tenant_id": "T10",
+    "actor_id": "U10_ADMIN"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T10",
+        "actor_id": "U10_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T10",
+        "actor_id": "caller: U07_ADMIN"
+      }
+    },
+    {
+      "tool": "get_invoice_lines",
+      "arguments": {
+        "actor_id": "U10_ADMIN",
+        "tenant_id": "T10",
+        "invoice_id": "inv_10_addon"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_invoices",
+      "arguments": {
+        "actor_id": "U10_ADMIN",
+        "status": "paid",
+        "tenant_id": "T10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T10"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "admin_role_verified",
+    "invoice_history_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

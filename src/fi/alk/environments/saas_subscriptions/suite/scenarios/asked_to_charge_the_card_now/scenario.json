@@ -1,0 +1,89 @@
+{
+  "name": "asked_to_charge_the_card_now",
+  "scenario_key": "asked-to-charge-the-card-now",
+  "scenario_id": "",
+  "use_case": "Open a billing case or report a payment",
+  "branch": "Admin asks desk to charge card now for retrying invoice inv_11_addon; desk explains policy and opens payment case",
+  "tests": "Explains payment cannot be manually charged by desk, reports retry date and amount, and opens payment billing case",
+  "instruction": "You are Karen Kite, billing administrator for KiteWorks (Tenant ID: T11, User ID: U11_ADMIN). You just topped up your company credit card and want the billing desk to charge the card now for failed/retrying invoice inv_11_addon ($33.00). When the desk explains that they cannot manually process credit card charges and provides the scheduled retry date, ask them to open a billing case for the finance/payment team.\n\nYour details:\n- Tenant ID: T11\n- User ID: U11_ADMIN\n- Invoice ID: inv_11_addon\n- Request: Charge card immediately, then request opening a payment billing case",
+  "keywords": [
+    "billing_case",
+    "payment_issue",
+    "role_authorization"
+  ],
+  "persona": {
+    "name": "Karen Kite",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Karen Kite from KiteWorks (T11, U11_ADMIN). We just topped up our card; please charge the card now for invoice inv_11_addon.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "invoice_id": "inv_11_addon",
+    "origin": "seed",
+    "payment_status": "retrying",
+    "actor_id": "U11_ADMIN",
+    "tenant_id": "T11"
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "actor_id": "U11_ADMIN",
+        "tenant_id": "T11"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_payment_status",
+      "arguments": {
+        "tenant_id": "T11",
+        "actor_id": "U11_ADMIN",
+        "invoice_id": "inv_11_addon"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_billing_case",
+      "arguments": {
+        "request_key": "req_bc_pay_11",
+        "summary": "Customer requested immediate payment attempt for inv_11_addon",
+        "invoice_id": "inv_11_addon",
+        "tenant_id": "T11",
+        "category": "payment",
+        "actor_id": "U11_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "category": "caller: payment",
+        "tenant_id": "caller: T11",
+        "invoice_id": "caller: inv_11_addon"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "billing_case_created",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,77 @@
+{
+  "name": "password_reset_escalation",
+  "scenario_key": "password-reset-escalation",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "E433 asks for a password reset. Expected: out of scope; handoff.",
+  "tests": "Does the agent identify out-of-scope password reset requests and route them to IT operations via handoff?",
+  "instruction": "You are Chandler Bing (employee ID E433). You forgot your primary domain account password and cannot log into your workstation. Contact the IT access desk asking for a password reset. When told this must be handled by IT operations support, request an escalation ticket.",
+  "keywords": [
+    "it_handoff"
+  ],
+  "persona": {
+    "name": "Chandler Bing",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I am Chandler Bing (E433). I am locked out of my corporate account and need my password reset. Can you help reset my password or open a ticket?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_type": "password_reset",
+    "employee_id": "E433",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E433"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_it_handoff",
+      "arguments": {
+        "issue_type": "password_reset",
+        "employee_id": "E433",
+        "details": "Employee requesting domain password reset"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Chandler Bing (E433)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "out_of_scope",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "collaborative",
+    "overlay_vector": "none",
+    "interface": "chat",
+    "counterparty": "standard_employee",
+    "task": "manage_existing_access_and_idempotency"
+  },
+  "sub_goals": [
+    "it_escalation_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

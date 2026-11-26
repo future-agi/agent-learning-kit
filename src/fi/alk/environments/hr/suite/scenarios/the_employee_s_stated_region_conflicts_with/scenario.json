@@ -1,0 +1,89 @@
+{
+  "name": "the_employee_s_stated_region_conflicts_with",
+  "scenario_key": "the-employee-s-stated-region-conflicts-with",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "An employee recently transferred from London claims to be UK-based, but profile region is APAC, requiring working days calculation using APAC calendar.",
+  "tests": "Retrieves E454 profile, identifies APAC region despite caller's UK claim, and calculates working days for 2026-12-24 to 2026-12-29 as 3 working days.",
+  "instruction": "You are Julian Fletcher (E454). You recently transferred from London and mention that you are UK-based, but ask how many working days taking leave from 24 to 29 December 2026 (2026-12-24 to 2026-12-29) will cost you.\n\nYour details:\n- Employee ID: E454\n- Name: Julian Fletcher\n- Stated Region: UK (transferred from London)\n- Profile Region: APAC (manager M04)\n- Start Date: 2026-12-24\n- End Date: 2026-12-29",
+  "keywords": [
+    "working_days",
+    "holiday_calendar",
+    "profile",
+    "region_mismatch"
+  ],
+  "persona": {
+    "name": "Julian Fletcher",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I transferred from London and am UK-based. How many working days would taking off 24 to 29 December 2026 cost me? My ID is E454.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E454",
+    "start_date": "2026-12-24",
+    "end_date": "2026-12-29",
+    "profile_region": "APAC",
+    "origin": "generated",
+    "stated_region": "UK"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E454",
+        "actor_id": "E454"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E454"
+      }
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "end_date": "2026-12-29",
+        "region": "APAC",
+        "start_date": "2026-12-24"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "record: employees.region",
+        "end_date": "caller: 2026-12-29",
+        "start_date": "caller: 2026-12-24"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "region_conflict_profile_authoritative",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "task": "calculate_working_days",
+    "overlay_vector": "none",
+    "counterparty": "employee_apac"
+  },
+  "sub_goals": [
+    "employee_profile_retrieved",
+    "working_days_calculated_accurately"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

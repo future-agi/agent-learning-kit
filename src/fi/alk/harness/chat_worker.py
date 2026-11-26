@@ -57,6 +57,8 @@ _CHAT_ENV = frozenset(
         "CLOUD_ML_REGION",
         "ALK_STAGE_IDLE_TIMEOUT_SECONDS",
         "ALK_STAGE_IDLE_RETRIES",
+        # Not a credential: it tells the worker's usage records who pays for the simulator.
+        "ALK_SIMULATOR_FUNDING",
     }
 )
 
@@ -258,6 +260,8 @@ class _UsageCollector:
         self.records.append({**facts, "occurred_at": facts["occurred_at"].isoformat()})
 
 
+
+
 class _ArtifactCollector:
     def __init__(self) -> None:
         self.artifacts: list[dict[str, Any]] = []
@@ -278,6 +282,8 @@ class _ArtifactCollector:
 
 async def main() -> None:
     from .chat_call_runner import HostedChatCallRunner
+    from .hosted_agent import CONNECTOR as HOSTED_AGENT
+    from .hosted_agent import HostedAgentCallRunner
     from .job import HarnessJob
     from .retell_chat_call_runner import RetellChatCallRunner
 
@@ -317,11 +323,10 @@ async def main() -> None:
             if handler_fd is not None
             else None,
         )
-        runner_type = (
-            RetellChatCallRunner
-            if job.agent.connector == "retell_chat"
-            else HostedChatCallRunner
-        )
+        runner_type = {
+            "retell_chat": RetellChatCallRunner,
+            HOSTED_AGENT: HostedAgentCallRunner,
+        }.get(job.agent.connector, HostedChatCallRunner)
         runtime = EnvironmentRuntime.model_validate(payload["runtime"])
         runtime._local_auth_values = dict(payload.get("local_auth_values", {}))
         runner = runner_type(collector, context)
@@ -358,8 +363,7 @@ async def main() -> None:
         result = {"error": USER_CANCELED, "error_code": USER_CANCELED}
     except Exception as exc:  # noqa: BLE001 - return a secret-safe worker failure
         result = {"error": type(exc).__name__}
-    if usage.records:
-        result["usage"] = usage.records
+    result["usage"] = usage.records
     fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
         json.dump(result, stream, default=str)

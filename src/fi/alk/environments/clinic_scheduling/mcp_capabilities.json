@@ -1,0 +1,46 @@
+{
+  "calendar_scheduling_desk": {
+    "server": "Google Calendar MCP server (Developer Preview)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "list_calendars",
+      "list_events",
+      "get_event",
+      "search_events",
+      "suggest_time",
+      "create_event",
+      "update_event",
+      "delete_event"
+    ],
+    "tables": [
+      "calendar_approvals",
+      "calendar_attendees",
+      "calendar_calendars",
+      "calendar_event_attendees",
+      "calendar_events",
+      "calendar_fault_injections",
+      "calendar_simulated_outbox"
+    ]
+  },
+  "gmail_inbox_triage": {
+    "server": "Google Gmail MCP server (Developer Preview)",
+    "recorded": "2026-11-04",
+    "tools": [
+      "search_threads",
+      "get_thread",
+      "get_message",
+      "list_labels",
+      "label_thread",
+      "unlabel_thread",
+      "list_drafts",
+      "create_draft"
+    ],
+    "tables": [
+      "gmail_drafts",
+      "gmail_labels",
+      "gmail_messages",
+      "gmail_thread_labels",
+      "gmail_threads"
+    ]
+  }
+}

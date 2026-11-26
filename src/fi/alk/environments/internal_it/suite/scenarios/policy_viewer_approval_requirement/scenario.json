@@ -1,0 +1,81 @@
+{
+  "name": "policy_viewer_approval_requirement",
+  "scenario_key": "policy-viewer-approval-requirement",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks whether viewer roles require manager approval under current policy; agent reads current policy (acc_pol_v3) and confirms approval is required.",
+  "tests": "Does the agent consult the current approved access policy (acc_pol_v3) and confirm viewer roles require approval, rather than relying on superseded rules?",
+  "instruction": "You are Celia Moreau (employee ID E511), a marketing professional. You are preparing to request a read-only viewer role for an internal dashboard. Ask the IT access desk whether viewer roles require manager approval under the current company access policy, or if they can be provisioned without approval.",
+  "keywords": [
+    "policy_citation",
+    "approval_routing"
+  ],
+  "persona": {
+    "name": "Celia Moreau",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, does requesting a viewer role for an application require manager approval under our current access policy, or is it approved automatically?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "target_file": "acc_pol_v3"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "excludeContentSnippets": false,
+        "pageToken": "",
+        "pageSize": 10,
+        "query": "title contains 'Access Policy'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "revisionId": "",
+        "fileId": "acc_pol_v3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files where policy_family='access_policy' and status='approved'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "policy_inquiry",
+    "interaction": "inquisitive",
+    "counterparty": "standard_employee",
+    "interface": "chat",
+    "task": "answer_access_policy_questions_with_citations",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

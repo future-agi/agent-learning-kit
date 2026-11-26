@@ -1,0 +1,80 @@
+{
+  "name": "referral_dermatology_no_referral_needed_info",
+  "scenario_key": "referral-dermatology-no-referral-needed-info",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "the patient asks whether a GP referral is required for dermatology and what preparation is required for the visit",
+  "tests": "the agent checks the clinic records and confirms dermatology requires no referral while providing preparation instructions",
+  "instruction": "You are looking to consult a specialist about a skin condition at Riverbank Clinics.\n\nAsk two things:\n1. Do you need a GP referral to see a dermatologist?\n2. What preparation or instructions should you follow before arriving for a dermatology visit?\n\nYour details:\n- Full Name: Fiona Campbell",
+  "keywords": [
+    "referrals",
+    "dermatology",
+    "preparation",
+    "provider_directory"
+  ],
+  "persona": {
+    "name": "Fiona Campbell",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Questioning",
+    "initial_message": "Hello, do I need a GP referral to see a dermatologist at your clinic, and is there any preparation required for the appointment?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "specialty": "dermatology",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "language": null,
+        "location_id": null,
+        "payer": null,
+        "specialty": "dermatology"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "specialty": "caller: dermatology"
+      }
+    },
+    {
+      "tool": "get_preparation_instructions",
+      "arguments": {
+        "specialty": "dermatology"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "prospective_patient",
+    "interaction": "single_request",
+    "overlay": "none",
+    "disposition": "general_inquiry",
+    "task": "referral_inquiry",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "clinic_information_reported"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,113 @@
+{
+  "name": "cancel_massage_and_queue_confirmation",
+  "scenario_key": "cancel-massage-and-queue-confirmation",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "customer cancels appointment A016 and asks for an email cancellation confirmation, which is queued after the cancellation is committed",
+  "tests": "the agent cancels appointment A016 and queues a cancellation confirmation to the customer's email",
+  "instruction": "You want to cancel your Massage Therapy appointment with Priya at Shoreditch on Thursday 12 November at 3:00 pm (appointment A016).\nAfter confirming the cancellation, ask the agent to send you an email confirmation.\n\nYour details:\n- Name: Hana Sato\n- Email: hana.sato@example.com\n- Phone: +44 20 7946 0108\n- Appointment: A016",
+  "keywords": [
+    "cancel_appointment",
+    "queue_confirmation",
+    "massage"
+  ],
+  "persona": {
+    "name": "Hana Sato",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'd like to cancel my massage appointment on November 12th (A016) and get an email confirmation.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A016",
+    "name": "Hana Sato",
+    "location_id": "L2",
+    "origin": "seed",
+    "service_id": "SV2",
+    "phone": "+44 20 7946 0108",
+    "customer_id": "CU08",
+    "email": "hana.sato@example.com",
+    "staff_id": "ST04",
+    "time": "2026-11-12T15:00"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0108",
+        "email": "hana.sato@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_cancellation_policy",
+      "arguments": {
+        "appointment_id": "A016",
+        "customer_id": "CU08"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "customer_id": "CU08",
+        "appointment_id": "A016",
+        "confirmed": true,
+        "acknowledged_fee": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: A016"
+      }
+    },
+    {
+      "tool": "queue_confirmation",
+      "arguments": {
+        "appointment_id": "A016",
+        "channel": "email",
+        "kind": "cancelled",
+        "customer_id": "CU08"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: A016",
+        "kind": "rule: \"Tell the customer something is booked, moved or cancelled, or queue a confirmation, only after the tool committed it.\"",
+        "customer_id": "record: CU08"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "returning_customer",
+    "disposition": "cancel_and_confirm",
+    "task": "cancel_appointment",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "appointment_cancelled_with_fee_disclosed",
+    "confirmation_queued_after_commit"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

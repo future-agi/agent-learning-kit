@@ -1,0 +1,93 @@
+{
+  "name": "qualify_new_web_form_lead_in_chat",
+  "scenario_key": "qualify-new-web-form-lead-in-chat",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Ruth Abebe (C401, ACC401, Kaleo Care, US, lead L401 new; 30 seats, support, 0-3 months) chats asking for a demo; desk finds L401 and qualifies it",
+  "tests": "the agent searches contacts for ruth.abebe@kaleo-care.example, reads lead L401, and qualifies L401",
+  "instruction": "You are Ruth Abebe, Director of Support at Kaleo Care in the United States. You submitted a web form request yesterday for 30 seats for customer support with a 0-3 month timeline. You are in chat to check on your submission and see if your request qualifies for a live demo.\n\nYour details:\n- Name: Ruth Abebe\n- Email: ruth.abebe@kaleo-care.example\n- Company: Kaleo Care\n- Country: United States\n- Use case: support\n- Seats: 30\n- Timeline: 0-3 months",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Ruth Abebe",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I submitted a web form for Kaleo Care yesterday. I wanted to follow up and see if we can get our lead qualified for a demo.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L401",
+    "account_id": "ACC401",
+    "origin": "generated",
+    "contact_id": "C401"
+  },
+  "solution": [
+    {
+      "tool": "search_contacts",
+      "arguments": {
+        "email": "ruth.abebe@kaleo-care.example"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L401"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L401"
+      }
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "lead_id": "L401",
+        "facts": {}
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L401"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "task": "qualify_lead",
+    "overlay_vector": "none",
+    "disposition": "eligible",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "counterparty": "prospect",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
