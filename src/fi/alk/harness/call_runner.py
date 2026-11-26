@@ -94,6 +94,7 @@ from .world_door import (
     is_read,
     logged_as,
     named_alike,
+    own_tool,
     route_action,
     routed_faults,
     row_arguments,
@@ -151,6 +152,7 @@ from .simulator_voice import (
 )
 from . import tool_evidence as evidence
 from .world.errors import WorldUnavailable
+from . import request_binding
 from .world.runtime import (
     Call,
     graded_calls,
@@ -242,6 +244,8 @@ _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 # constant + two functions (`_clear_tool_trace_calls`, `collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
+# `world_tools.TRACE_FAILURES_TABLE`: calls the tool server ran but could not trace.
+_TRACE_FAILURES_TABLE = "_alk_trace_failures"
 
 _RESULT_TRUNCATE_CHARS = 2000
 
@@ -786,6 +790,7 @@ def _build_spec(
     environ: Mapping[str, str],
     connector: str = "livekit",
     provider_target_id: str | None = None,
+    call_binding: Mapping[str, str] | None = None,
     call_actors: list[dict[str, Any]] | None = None,
 ) -> SimulationSpec:
     """The hosted lane: values come from job config and the bundle's scenario document.
@@ -800,6 +805,13 @@ def _build_spec(
     # supply authoring context, but the call itself dials the existing number.
     if connector in {"vapi", "retell"} and simulator_config.get("phone_number"):
         connector = "phone"
+    if call_binding and connector not in {"vapi", "retell"}:
+        raise ValueError(f"request_binding_unsupported_connector: {connector}")
+    bound = (
+        {"call_metadata": dict(call_binding), "call_variables": dict(call_binding)}
+        if call_binding
+        else {}
+    )
     provider_agent: simulate.AgentDefinition | None = None
     if connector == "vapi":
         if not provider_target_id:
@@ -817,6 +829,7 @@ def _build_spec(
                     simulator_config.get("vapi_api_base_url") or "https://api.vapi.ai"
                 ),
                 "api_key_env": VAPI_API_KEY_ALIAS,
+                **bound,
             },
             transport={"kind": "vapi_websocket"},
             provider_evidence={
@@ -838,6 +851,7 @@ def _build_spec(
                 "agent_id": provider_target_id,
                 "api_url": _retell_web_call_url(simulator_config.get("retell_api_url")),
                 "api_key_env": RETELL_API_KEY_ALIAS,
+                **bound,
             },
             transport={"kind": "retell_webcall"},
             provider_evidence={
@@ -1099,12 +1113,120 @@ def _clear_tool_trace_calls(dsn: str) -> None:
             connection.execute(
                 "DO $$ BEGIN IF to_regclass('public._alk_action_keys') IS NOT NULL THEN DELETE FROM public._alk_action_keys; END IF; END $$"
             )
+            # So are the marks of calls whose rows could not be written.
+            connection.execute(
+                f"DO $$ BEGIN IF to_regclass('public.{_TRACE_FAILURES_TABLE}') IS NOT NULL THEN "
+                f"DELETE FROM public.{_TRACE_FAILURES_TABLE}; END IF; END $$"
+            )
     except Exception as exc:  # noqa: BLE001 - best-effort housekeeping only, never a call-blocking failure
         # WHY: never log exc_info / str(exc) here -- a psycopg connection failure embeds the raw
         # DSN (including the world DB password) in its own exception message; only the exception
         # TYPE is safe for a local log line.
         logger.debug(
             "tool_trace clear skipped (table likely absent): %s", type(exc).__name__
+        )
+
+
+@dataclass(frozen=True)
+class _RequestBinding:
+    dsn: str
+    token: str
+
+    def call_values(self) -> dict[str, str]:
+        return request_binding.call_metadata(self.token)
+
+
+def _bundle_binds_requests(bundle_dir: Path) -> bool:
+    try:
+        manifest = json.loads((bundle_dir / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return False
+    metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+    spec = metadata.get("provider_import") if isinstance(metadata, dict) else None
+    return isinstance(spec, dict) and spec.get("request_binding") is True
+
+
+def _bind_call(
+    context: CallRunnerContext, runtime: EnvironmentRuntime, scenario_key: str
+) -> _RequestBinding | None:
+    """§6.2: make a fresh token the only one this world's tool server executes, before the
+    provider call or chat exists."""
+    if not _bundle_binds_requests(context.bundle_dir):
+        return None
+    secret = runtime.metadata.get(request_binding.SECRET_METADATA_KEY)
+    endpoint = _find_postgres_endpoint(runtime)
+    if not isinstance(secret, str) or not secret or endpoint is None:
+        raise CallAborted(
+            "request_binding_unavailable: the world has no clone secret or no PostgreSQL store"
+        )
+    token = request_binding.new_token()
+    try:
+        request_binding.register_active_call(
+            endpoint.address, token=token, secret=secret, scenario_key=scenario_key
+        )
+    except Exception as exc:  # noqa: BLE001 - str(exc) can carry the world DSN
+        raise CallAborted(
+            f"request_binding_register_failed: {type(exc).__name__}"
+        ) from None
+    return _RequestBinding(dsn=endpoint.address, token=token)
+
+
+def _stray_calls(binding: _RequestBinding, scenario_key: str) -> dict[str, Any]:
+    try:
+        rows = request_binding.read_stray_calls(binding.dsn)
+    except Exception as exc:  # noqa: BLE001 - str(exc) can carry the world DSN
+        logger.warning(
+            "stray calls unreadable scenario=%s: %s", scenario_key, type(exc).__name__
+        )
+        return {"count": None, "error": f"read_failed: {type(exc).__name__}"}
+    logger.info("stray calls scenario=%s count=%d", scenario_key, len(rows))
+    return {
+        "count": len(rows),
+        "calls": [
+            {key: row.get(key) for key in ("reason", "tool", "provider_call_id", "at")}
+            for row in rows
+        ],
+    }
+
+
+async def _upload_tool_trace(
+    adapter: "ArtifactUploader",
+    calls: tuple[Call, ...],
+    *,
+    scenario_key: str,
+    binding: _RequestBinding | None,
+) -> None:
+    """One JSON line per call; a request-bound run adds a final `{"stray_calls": ...}` line and
+    uploads even when the agent made no call."""
+    lines = [
+        json.dumps(
+            {
+                "name": call.name,
+                "arguments": call.arguments,
+                "result": call.result,
+                "ok": call.ok,
+                "error": call.error,
+                "refused": call.refused,
+                "at": call.at,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        for call in calls
+    ]
+    if binding is not None:
+        lines.append(
+            json.dumps(
+                {"stray_calls": _stray_calls(binding, scenario_key)},
+                sort_keys=True,
+                default=str,
+            )
+        )
+    if lines:
+        await adapter.upload_artifact(
+            "\n".join(lines).encode("utf-8"),
+            kind=ArtifactKind.TOOL_TRACE,
+            scenario_key=scenario_key,
         )
 
 
@@ -1164,7 +1286,7 @@ def evidence_notices(
             # The in-process door names the call by the tool or records the tool beside it. The proxy logs the world
             # action it reached (a route's `{part}` standing for the part the call named) with the method it was
             # made with; its row's name is only the route's last part, never the tool.
-            if not proxied and (str(row.get("name") or "") in tools or str(row.get("agent_tool") or "") in tools):
+            if not proxied and (str(row.get("name") or "") in tools or own_tool(row) in tools):
                 return True
             made_with = str(row.get("method") or "").upper()
             return action_matches(logged_as(row), action) and not (method and made_with and made_with != method)
@@ -1274,6 +1396,7 @@ def collect_tool_trace_calls(
         return ()
     try:
         records = read_tool_trace(endpoint.address)
+        untraced = _trace_failures(endpoint.address)
     except Exception as exc:  # noqa: BLE001 - missing table / connection failure -> no evidence, not a crash
         # WHY: same DSN-in-exception-message risk as `_clear_tool_trace_calls` above -- log only
         # the exception TYPE, never exc_info/str(exc), which can carry the world DB password.
@@ -1285,11 +1408,18 @@ def collect_tool_trace_calls(
                 f"tool_trace read failed: {type(exc).__name__}"
             ) from None
         return ()
+    if untraced:
+        # The tool server ran a call it could not trace: the rows read are not the whole record,
+        # and an empty read is not a run that made no call.
+        logger.warning("tool_trace incomplete: %d call(s) ran untraced", untraced)
+        if strict:
+            raise ToolCaptureFailed(f"tool_trace incomplete: {untraced} call(s) ran untraced")
+        return ()
 
     calls: list[Call] = []
     for record in records:
         # The agent's own tool name when the world recorded it beside the route the call took.
-        name = record.get("agent_tool") or record.get("name")
+        name = own_tool(record) or record.get("name")
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")
@@ -1320,6 +1450,29 @@ def collect_tool_trace_calls(
             )
         )
     return tuple(calls)
+
+
+def _trace_failures(dsn: str) -> int:
+    """How many calls the world's tool server marked as run without their trace rows."""
+    with _read_only(dsn) as connection:
+        present = connection.execute(
+            f"SELECT to_regclass('public.{_TRACE_FAILURES_TABLE}') IS NOT NULL"
+        ).fetchone()
+        if not present or not present[0]:
+            return 0
+        row = connection.execute(
+            f'SELECT count(*) FROM public."{_TRACE_FAILURES_TABLE}"'
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+
+def _read_tool_trace(runtime: EnvironmentRuntime) -> tuple[Call, ...] | None:
+    """The world's trace rows as calls, or None when they could not be read: an empty tuple is a
+    trace that was read and holds no call (our agent over MCP, `hosted_agent.py`)."""
+    try:
+        return collect_tool_trace_calls(runtime, strict=True)
+    except ToolCaptureFailed:
+        return None
 
 
 def _contract_workers(bundle_dir: Any) -> list[Mapping[str, Any]]:
@@ -1533,7 +1686,7 @@ def trial_state_changes(
             "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
         # A call through the tool proxy is named by the agent's own tool, as its checks are graded, not by its route.
-        name = str(row.get("agent_tool") or row.get("name") or "")
+        name = own_tool(row) or str(row.get("name") or "")
         if outcome == "committed" and is_read(row):
             entry["read"] += 1
             entry["read_actions"].append(name if who == AGENT or who.startswith("worker:") else logged_as(row))
@@ -1661,7 +1814,7 @@ def trial_shared_record_fields(
         arguments = row.get("arguments")
         if not isinstance(arguments, Mapping):
             continue
-        tool = str(row.get("agent_tool") or row.get("name") or "")
+        tool = own_tool(row) or str(row.get("name") or "")
         outcome = logged_outcome(row) if row.get("outcome") else (
             "refused" if row.get("refused") else "committed" if logged_ok(row.get("ok", True)) else "faulted"
         )
@@ -2155,7 +2308,7 @@ def fault_notices(
         # A call through the tool proxy also carries the agent's own tool name, which a fault may name instead.
         rows = [
             row for row in agent_rows
-            if same_action(row, action) or named_alike(action, str(row.get("agent_tool") or ""))
+            if same_action(row, action) or named_alike(action, own_tool(row))
         ]
         # A fault that names its method holds only calls made with it: a GET of the route is not a call of its DELETE.
         # A row from a log that kept no method still counts, as before methods were logged.
@@ -3907,6 +4060,23 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+# A served tool the platform says was called and the world never ran is no evidence it was.
+WORLD_RAN_NONE = "the platform reports calls of the world's tools, and the world ran none"
+
+
+def _served_tools(bundle_dir: Path, contract: Mapping[str, Any]) -> set[str]:
+    """Every name the world's tool server answers to or traces under: the agent's tools and the
+    environment's. A call under any of them either reached the world or was not made there."""
+    from .releases import TOOL_SERVER_DIRECTORY, TOOLS, attached_tool_names, load_tools
+
+    served = {str(tool.get("name") or "") for tool in contract.get("tools") or []}
+    server = Path(bundle_dir) / TOOL_SERVER_DIRECTORY
+    if (server / TOOLS).is_file():
+        served |= {tool.name for tool in load_tools(server)}
+        served |= attached_tool_names(server)
+    return served
+
+
 def _langchain_arguments(arguments: dict[str, Any]) -> bool:
     return set(arguments) == {"input"} and isinstance(arguments["input"], str)
 
@@ -4595,6 +4765,7 @@ class CallRunnerImpl:
                 else None
             )
 
+        binding = _bind_call(self._context, runtime, scenario.scenario_key)
         # Off the event loop: choosing the caller's voice may ask Cartesia over HTTP.
         spec = await asyncio.to_thread(
             _build_spec,
@@ -4603,6 +4774,7 @@ class CallRunnerImpl:
             connector=connector,
             agent_name=agent_name,
             provider_target_id=provider_target_id,
+            call_binding=binding.call_values() if binding else None,
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=call_environ,
@@ -4746,6 +4918,7 @@ class CallRunnerImpl:
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
+                binding=binding,
                 call_actors=resolved,
                 actor_decisions=(actors.record() if actors is not None else []) + no_door,
                 actor_usage=meter.rows(),
@@ -4824,6 +4997,7 @@ class CallRunnerImpl:
         runtime: EnvironmentRuntime,
         scenario_key: str,
         started_at: datetime,
+        binding: _RequestBinding | None = None,
         call_actors: Sequence[dict[str, Any]] = (),
         actor_decisions: Sequence[dict[str, Any]] = (),
         actor_usage: Sequence[dict[str, Any]] = (),
@@ -4871,10 +5045,17 @@ class CallRunnerImpl:
         # from a proxy/transport failure.
         capture_failed = False
         try:
-            calls = self._collect_calls(runtime) if case is not None else ()
+            calls = (
+                self._collect_calls(runtime, request_bound=binding is not None)
+                if case is not None
+                else ()
+            )
         except ToolCaptureFailed as exc:
             logger.warning("tool capture failed for %s: %s", scenario_key, exc)
             calls, capture_failed = exc.calls, True
+        # A request-bound world's tool server traces every call it runs, so a trace read without
+        # failure is the complete record, even when it holds no call (§6.4, "No calls").
+        collected = binding is not None and case is not None and not capture_failed
         # Provider-hosted agents execute tools outside the guest process, so their
         # authoritative call evidence is returned by Vapi/Retell after the call.
         # Preserve provider-native controls such as ``end_call`` because scenario
@@ -4883,9 +5064,25 @@ class CallRunnerImpl:
         # from transcript prose.
         # Hand-offs are kept for the record but are not calls checks grade, so they neither stand
         # in for the provider's stream nor count as a capture.
-        if not graded_calls(calls) and case is not None:
-            calls = (*calls, *_collect_provider_tool_calls(case))
-        capture_failed = capture_failed and not graded_calls(calls)
+        # A request-bound world ran the agent's tools itself: an unread trace leaves the trial
+        # unmeasured, and only the platform's own actions, which never reach the tool server, are
+        # taken from what it reports.
+        ran_elsewhere: tuple[str, ...] = ()
+        if binding is not None:
+            if collected and not graded_calls(calls):
+                reported = _collect_provider_tool_calls(case)
+                served = _served_tools(
+                    self._context.bundle_dir, _bundle_contract(self._context.bundle_dir)
+                )
+                own = tuple(call for call in reported if call.name not in served)
+                if own != reported:
+                    capture_failed, collected = True, False
+                    ran_elsewhere = (WORLD_RAN_NONE,)
+                calls = (*calls, *own)
+        else:
+            if not graded_calls(calls) and case is not None:
+                calls = (*calls, *_collect_provider_tool_calls(case))
+            capture_failed = capture_failed and not graded_calls(calls)
         # Only when the world's door saw the agent's tools can the trial say what changed in the world.
         door_seen = (
             self._context.evidence_seam is EvidenceSeam.TOOL_TRACE or runtime.endpoints.get("world_door") is not None
@@ -4957,14 +5154,20 @@ class CallRunnerImpl:
         held = {one["worker"] for one in unenforced}
         unenforced = [*unenforced, *(one for one in ran_on if one["worker"] not in held)]
         bypassed += unenforced_deadline_notices(unenforced) + stopped_notices
-        if calls:
-            workers = declared_worker_ids(self._context.bundle_dir)
-            tool_trace = "\n".join(
-                json.dumps({**trace_row(call, workers), **mark_of.get(id(call), {})}, sort_keys=True, default=str)
-                for call in calls
-            ).encode("utf-8")
+        workers = declared_worker_ids(self._context.bundle_dir)
+        lines = [
+            json.dumps({**trace_row(call, workers), **mark_of.get(id(call), {})}, sort_keys=True, default=str)
+            for call in calls
+        ]
+        if binding is not None:
+            # A request-bound run records the calls its world's tool server refused as stray, and
+            # uploads even when the agent made no call (§6.2).
+            lines.append(
+                json.dumps({"stray_calls": _stray_calls(binding, scenario_key)}, sort_keys=True, default=str)
+            )
+        if lines:
             await self._adapter.upload_artifact(
-                tool_trace,
+                "\n".join(lines).encode("utf-8"),
                 kind=ArtifactKind.TOOL_TRACE,
                 scenario_key=scenario_key,
             )
@@ -5099,9 +5302,10 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
+            evidence_collected=collected,
             world_actions=tuple(acted),
             duplicates=tuple(duplicates),
-            unmeasured=unmeasured_reasons(trial_notices),
+            unmeasured=(*ran_elsewhere, *unmeasured_reasons(trial_notices)),
             world_failures=world_failure_reasons(trial_notices),
             missing_evidence=missing_evidence(trial_notices, records),
             actor_briefs={
@@ -5262,9 +5466,19 @@ class CallRunnerImpl:
         calls = () if is_silent_agent else base.calls
         # Copied rather than rebuilt field by field: relisting them dropped `messages` silently,
         # and the judge then had no transcript to settle a spoken claim against.
-        return replace(base, calls=calls)
+        return replace(
+            base,
+            calls=calls,
+            evidence_collected=base.evidence_collected and not is_silent_agent,
+        )
 
-    def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    def _collect_calls(
+        self, runtime: EnvironmentRuntime, *, request_bound: bool = False
+    ) -> tuple[Call, ...]:
+        """``request_bound`` is a release bundle's world, whose tool server traces every call it
+        runs: its trace is the whole record, read strictly, and nothing else is consulted."""
+        if request_bound and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE:
+            return collect_tool_trace_calls(runtime, strict=True)
         return collect_seam_calls(
             runtime,
             self._context.evidence_seam,

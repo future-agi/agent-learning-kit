@@ -1,0 +1,105 @@
+{
+  "name": "london_massage_with_priya_from_calendar",
+  "scenario_key": "london-massage-with-priya-from-calendar",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "Farah Haddad emailed for a massage with Priya Desai at Shoreditch on Tuesday 3 November at 2 pm London time; the agent checks Priya's calendar and books 14:00 London (14:00 UTC)",
+  "tests": "the agent reads Priya's calendar for that day, books the requested massage once, and states London time",
+  "instruction": "You emailed asking for a massage with Priya at the London (Shoreditch) studio on Tuesday 3 November at 2 pm London time. Ask the desk to book it and confirm when read back.\n\nYour details:\n- Name: Farah Haddad\n- Email: farah.haddad@example.com\n- Phone: +44 20 7946 0106",
+  "keywords": [],
+  "persona": {
+    "name": "Farah Haddad",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, I emailed about a massage with Priya next Tuesday, could you book it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s06_london_massage"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the customer's email thread"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "farah.haddad@example.com",
+        "phone": "+44 20 7946 0106"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "calendarId": "CAL-ST04",
+        "startTime": "2026-11-03T00:00:00Z",
+        "endTime": "2026-11-04T00:00:00Z"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "calendarId": "Priya Desai's calendar"
+      }
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "customer_id": "CU06",
+        "service_id": "SV2",
+        "staff_id": "ST04",
+        "location_id": "L2",
+        "start_time": "2026-11-03T14:00",
+        "confirmed": true,
+        "request_key": "REQ-CU06-SV2-1103"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "service_id": "the service confirmed",
+        "staff_id": "the staff member confirmed",
+        "location_id": "the studio",
+        "start_time": "the local time confirmed",
+        "confirmed": "the customer agreed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book",
+    "disposition": "calendar_check",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

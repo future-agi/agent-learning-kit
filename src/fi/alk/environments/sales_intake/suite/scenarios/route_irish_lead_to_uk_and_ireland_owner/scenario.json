@@ -1,0 +1,89 @@
+{
+  "name": "route_irish_lead_to_uk_and_ireland_owner",
+  "scenario_key": "route-irish-lead-to-uk-and-ireland-owner",
+  "scenario_id": "",
+  "use_case": "Route leads by territory with a fallback queue",
+  "branch": "Declan Murphy asks desk to route Shannon Air (Ireland, lead L402 qualified); desk consults territory rules and assigns L402 to A03 (Oliver Hughes)",
+  "tests": "the agent consults routing rules for Ireland and assigns lead L402 to rep A03",
+  "instruction": "You are Declan Murphy, an operations manager at BrightDesk.\nShannon Air's inbound lead L402 (Ireland) is fully qualified and ready for sales routing.\nYou want the sales intake desk to look up the lead, consult the territory routing rules for Ireland, and assign the lead to the appropriate territory representative (A03).\n\nYour details:\n- Name: Declan Murphy\n- Role: Manager\n- Lead ID: L402\n- Company: Shannon Air\n- Country: Ireland",
+  "keywords": [
+    "territory_rules"
+  ],
+  "persona": {
+    "name": "Declan Murphy",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, Shannon Air (L402) in Ireland is qualified and ready for assignment. Could you route it to the territory owner?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C402",
+    "lead_id": "L402",
+    "account_id": "ACC402",
+    "origin": "generated",
+    "rep_id": "A03"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L402"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L402"
+      }
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "Ireland"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "lead_id": "L402",
+        "rep_id": "A03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L402",
+        "rep_id": "record: A03"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "task": "route_lead",
+    "disposition": "eligible",
+    "counterparty": "colleague"
+  },
+  "sub_goals": [
+    "owner_assigned_by_territory"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

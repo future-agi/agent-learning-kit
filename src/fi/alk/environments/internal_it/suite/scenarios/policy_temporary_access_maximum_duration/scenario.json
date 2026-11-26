@@ -1,0 +1,81 @@
+{
+  "name": "policy_temporary_access_maximum_duration",
+  "scenario_key": "policy-temporary-access-maximum-duration",
+  "scenario_id": "",
+  "use_case": "Answer access policy questions with citations",
+  "branch": "Caller asks for the maximum permitted duration for temporary application access; agent consults temp_access_policy (30 days).",
+  "tests": "Does the agent read temp_access_policy and cite the 30-day maximum duration limit for temporary access?",
+  "instruction": "You are Anika Rao (employee ID E510), an operations consultant. You need temporary access for a project and want to know the maximum number of days allowed under the Temporary Access Policy. Ask the IT access desk how long temporary access can be granted for.",
+  "keywords": [
+    "policy_citation",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Anika Rao",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, what is the maximum duration in days that I can request for temporary application access under our IT policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "target_file": "temp_access_policy"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "pageToken": "",
+        "pageSize": 10,
+        "query": "title contains 'Temporary Access'",
+        "excludeContentSnippets": false
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": "",
+        "fileId": "temp_access_policy",
+        "includeComments": false
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files file_id='temp_access_policy'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "policy_inquiry",
+    "overlay_vector": "none",
+    "counterparty": "external_contractor",
+    "task": "answer_access_policy_questions_with_citations",
+    "interaction": "exploratory",
+    "overlay_intensity": "absent",
+    "interface": "chat",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

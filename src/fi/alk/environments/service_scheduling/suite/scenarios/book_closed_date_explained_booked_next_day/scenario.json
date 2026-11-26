@@ -1,0 +1,120 @@
+{
+  "name": "book_closed_date_explained_booked_next_day",
+  "scenario_key": "book-closed-date-explained-booked-next-day",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "customer asks for an appointment on a studio blackout date (closed for training) and is booked for the following day at 11:00 am instead",
+  "tests": "the agent identifies Midtown is closed on 11 November, explains the closure, and books Thursday 12 November 11:00 with confirmation",
+  "instruction": "You want to book an Initial Consultation with Olivia Bennett at the Midtown studio on Wednesday 11 November 2026. If the agent explains that the studio is closed on 11 November for staff training, you ask for the following day (Thursday 12 November 2026) at 11:00 am instead.\n\nYour details:\n- Name: Maya Sen\n- Email: maya.sen@example.com\n- Phone: +1 212 555 0409\n- Service: Initial Consultation\n- Staff: Olivia Bennett\n- Location: Midtown Studio (410 Lexington Ave)\n- Date and time: Thursday 12 November 2026 at 11:00 am (2026-11-12T11:00)\n- Time zone: America/New_York (-05:00)",
+  "keywords": [
+    "book_appointment",
+    "blackout_date",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Maya Sen",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to book an Initial Consultation with Olivia at Midtown on Wednesday, November 11th.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "location_id": "L1",
+    "phone": "+1 212 555 0409",
+    "origin": "mixed",
+    "customer_id": "CU409",
+    "time": "2026-11-12T11:00",
+    "name": "Maya Sen",
+    "service_id": "SV1",
+    "email": "maya.sen@example.com",
+    "staff_id": "ST01"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "maya.sen@example.com",
+        "phone": "+1 212 555 0409"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-11-11",
+        "staff_id": "ST01",
+        "location_id": "L1",
+        "service_id": "SV1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "date": "2026-11-12",
+        "staff_id": "ST01",
+        "service_id": "SV1",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "staff_id": "ST01",
+        "start_time": "2026-11-12T11:00",
+        "customer_id": "CU409",
+        "request_key": "REQ-CU409-SV1",
+        "confirmed": true,
+        "utc_offset": "-05:00",
+        "service_id": "SV1",
+        "location_id": "L1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "location_id": "record: L1",
+        "service_id": "record: SV1",
+        "utc_offset": "caller: -05:00",
+        "customer_id": "record: CU409",
+        "start_time": "caller: 2026-11-12T11:00",
+        "staff_id": "record: ST01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "task": "book_appointment",
+    "interaction": "multi_turn",
+    "counterparty": "returning_customer",
+    "overlay_vector": "none",
+    "disposition": "closed_date",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "declined_action_explained",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,9 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C104", "first_name": "Diana", "last_name": "Whitcombe", "email": "diana.whitcombe@example.com", "phone": "+15551234104", "passcode": "9045", "kba_answer": "Bella", "otp_code": "830192", "address": "104 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC104", "customer_id": "C104", "account_number": "1000000104", "account_type": "checking", "balance": 610000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD104", "account_id": "ACC104", "customer_id": "C104", "card_number_masked": "••••••••••••7319", "last_four": "7319", "card_type": "debit", "status": "active", "expiration_date": "2028-05-31", "locked_at": None})
+    world.put("card_controls", {"card_id": "CARD104", "international_enabled": 0, "online_enabled": 1, "contactless_enabled": 1, "daily_limit": 250000, "updated_at": "2026-01-15T09:00:00Z"})
+    world.put("sessions", {"session_id": "SESS104", "customer_id": "C104", "channel": "chat", "is_verified": False, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z"})
+    world.put("transactions", {"transaction_id": "TX104", "account_id": "ACC104", "card_id": "CARD104", "merchant_name": "Jiffy Lube", "amount": 9900, "currency": "USD", "status": "posted", "transaction_time": "2026-10-22T10:00:00Z", "description": "Auto service"})
+    world.put("disputes", {"dispute_id": "D104", "transaction_id": "TX104", "customer_id": "C104", "amount": 9900, "currency": "USD", "dispute_reason": "unrecognized_charge", "status": "open", "created_at": "2026-10-26T11:45:00Z", "updated_at": "2026-10-26T11:45:00Z", "request_key": "REQ-C104-TX104", "notes": "Initial submission before timeout"})
+    world.change("session_caller", "default", {"customer_id": "C104", "staff_id": None}, by="id")

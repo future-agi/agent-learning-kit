@@ -496,6 +496,75 @@ def test_a_door_role_s_password_never_reaches_a_kept_log():
     secrets_by_name = pr._engine_diagnostic_secrets(credentials, 2)
     for index in (0, 1):
         assert pr.door_role(credentials["postgres"], index).password in secrets_by_name.values()
+        assert pr.reader_role(credentials["postgres"], index).password in secrets_by_name.values()
+
+
+def _reader_manifest():
+    def mutate(body):
+        body["capabilities"]["database"]["configuration_name"] = "WORLD_DATABASE_URL"
+        for process in body["processes"]:
+            if process["name"] == "tools-api":
+                process["environment"]["DATABASE_URL"] = "{{WORLD_DATABASE_URL}}"
+                process["environment"]["WORLD_READER_DATABASE_URL"] = "{{WORLD_READER_DATABASE_URL}}"
+        return body
+
+    return runtime_tests._manifest(mutate)
+
+
+@pytest.mark.parametrize("world_roles", [True, False])
+def test_a_bundle_whose_servers_read_the_world_gets_its_reader_under_either_mode(tmp_path: Path, world_roles: bool):
+    manifest = _reader_manifest()
+    credentials = pr.generate_engine_credentials(manifest)
+    plan = pr.plan_ports(manifest, instances=2)
+    endpoints = pr.build_endpoints(
+        manifest, world_index=1, port_plan=plan, credentials=credentials, world_roles=world_roles
+    )
+    tools = next(one for one in manifest.processes if one.name == "tools-api")
+
+    rendered = pr.render_environment(
+        tools,
+        world_index=1,
+        world_dir=tmp_path,
+        port_plan=plan,
+        configuration_addresses=pr.configuration_addresses_from_endpoints(endpoints),
+    )
+
+    reader = urlsplit(rendered["WORLD_READER_DATABASE_URL"])
+    assert (reader.username, reader.path) == ("alk_r1", "/w1")
+    assert reader.password == pr.reader_role(credentials["postgres"], 1).password
+    assert urlsplit(rendered["DATABASE_URL"]).username == ("alk_w1" if world_roles else "harness")
+    # A bundle that names it nowhere has none.
+    plain = runtime_tests._manifest()
+    assert (
+        pr.build_endpoints(
+            plain, world_index=1, port_plan=pr.plan_ports(plain, instances=2), credentials=credentials,
+            world_roles=world_roles,
+        )["database"].reader_address
+        is None
+    )
+
+
+@pytest.mark.parametrize("isolate", [True, False])
+def test_a_reset_makes_the_worlds_reader_login_and_lets_it_in(isolate: bool):
+    statements, runner = _recording()
+    reader = pr.reader_role(_CREDENTIALS, 3)
+
+    pr._reset_template_database(
+        host="localhost", port=1, credentials=_CREDENTIALS, world_db="w3", template_db="baseline_t",
+        sql_runner=runner, process_name="db", isolate=isolate,
+        role=pr.world_role(_CREDENTIALS, 3) if isolate else None, reader=reader,
+    )
+
+    made = next(i for i, one in enumerate(statements) if 'CREATE ROLE "alk_r3" LOGIN IN ROLE "world_reader"' in one)
+    assert statements[made + 1 : made + 3] == [
+        "ALTER ROLE \"alk_r3\" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS "
+        f"PASSWORD '{reader.password}'",
+        'GRANT CONNECT ON DATABASE "w3" TO "alk_r3"',
+    ]
+    assert made > next(i for i, one in enumerate(statements) if one.startswith('CREATE DATABASE "w3"'))
+    assert statements[made + 3 : made + 6] == pr._only_member_of("alk_r3", "world_reader")
+    if isolate:
+        assert statements[made + 6] == 'ALTER DATABASE "w3" ALLOW_CONNECTIONS true'
 
 
 def test_a_world_with_a_door_lets_in_its_own_door_role_only():
@@ -3343,3 +3412,76 @@ def test_a_world_s_role_keeps_its_workers_runs_and_stops(worlds):
         assert connection.execute("SELECT worker, reason FROM _alk_worker_stops").fetchall() == [
             ("refunds", "deadline_passed")
         ]
+
+
+def test_the_world_s_reader_is_made_like_every_other_world_role():
+    """The reader login: in the reader group and no other, with no setting of its own, its password quoted by the
+    driver; under either reset mode."""
+    reader = pr.reader_role(_CREDENTIALS, 3)
+
+    statements = pr._reader_login_statements(reader, "w3")
+
+    assert statements[1] == (
+        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
+        f"PASSWORD {pr._literal(reader.password)}"
+    )
+    assert statements[3:] == pr._only_member_of(reader.username, pr.READER_ROLE)
+    assert any("RESET ALL" in one for one in statements)
+    assert pr._reader_login_statements(None, "w3") == []
+
+
+def test_a_reader_password_with_a_quote_stays_one_literal():
+    reader = pr.EngineCredentials("alk_r3", "it's; DROP ROLE x; --", world_secret="s")
+
+    statement = pr._reader_login_statements(reader, "w3")[1]
+
+    assert statement.endswith("PASSWORD 'it''s; DROP ROLE x; --'")
+
+
+@real_postgres
+def test_a_reader_left_in_another_group_with_its_own_settings_is_put_back_to_its_one_group():
+    """Break-it: a reader role an older harness, or the world's code, gave a second group and settings comes out of the
+    reset in the reader group only, with no setting, and can still log in."""
+    parts = urlsplit(_REAL)
+    host, port = parts.hostname or "localhost", parts.port or 5432
+    superuser = pr.EngineCredentials(parts.username, parts.password or "", world_secret=uuid.uuid4().hex)
+    reader = pr.reader_role(superuser, 97)
+    world_db = f"alk_reader_{uuid.uuid4().hex[:8]}"
+    extra = f"alk_extra_{uuid.uuid4().hex[:6]}"
+
+    def run(statement: str, dbname: str = "postgres") -> list:
+        return _customer_sql(
+            host=host, port=port, user=superuser.username, password=superuser.password, dbname=dbname,
+            statement=statement,
+        )
+
+    run(f'CREATE DATABASE "{world_db}"')
+    try:
+        run(f'CREATE ROLE "{extra}" NOLOGIN')
+        for statement in pr._reader_login_statements(reader, world_db):
+            run(statement)
+        run(f'GRANT "{extra}" TO "{reader.username}"')
+        run(f'ALTER ROLE "{reader.username}" SET search_path = evil')
+        run(f'ALTER ROLE "{reader.username}" IN DATABASE "{world_db}" SET statement_timeout = 1')
+
+        for statement in pr._reader_login_statements(reader, world_db):
+            run(statement)
+
+        groups = run(
+            "SELECT g.rolname FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid "
+            f"JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = '{reader.username}'"
+        )
+        settings = run(
+            "SELECT s.setconfig FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole "
+            f"WHERE r.rolname = '{reader.username}'"
+        )
+        assert [row[0] for row in groups] == [pr.READER_ROLE]
+        assert settings == []
+        assert _customer_sql(
+            host=host, port=port, user=reader.username, password=reader.password, dbname=world_db,
+            statement="SELECT 1",
+        ) == [(1,)]
+    finally:
+        run(f'DROP DATABASE IF EXISTS "{world_db}"')
+        run(f'DROP ROLE IF EXISTS "{reader.username}"')
+        run(f'DROP ROLE IF EXISTS "{extra}"')

@@ -1,0 +1,112 @@
+{
+  "name": "uk_annual_leave_submission_bank_holiday",
+  "scenario_key": "uk-annual-leave-submission-bank-holiday",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "The requested date span spans the Christmas and Boxing Day bank holidays in the UK, resulting in exactly two working days deducted for annual leave.",
+  "tests": "Submits a 2-working-day UK leave request taking into account Christmas and Boxing Day bank holidays.",
+  "instruction": "You want to take annual leave in the UK from Thursday, December 24, 2026 to Tuesday, December 29, 2026. You know that December 25 (Christmas Day) and December 28 (Boxing Day observed) are UK bank holidays, and the weekend is in between, so this uses exactly 2 working days of your annual leave. You want the assistant to check your balance and submit this request to your manager.\n\nYour details:\n- Employee ID: E05\n- Name: Edward Norton\n- Region: UK\n- Leave Type: annual\n- Start Date: 2026-12-24\n- End Date: 2026-12-29\n- Reason: Festive family holiday",
+  "keywords": [
+    "leave_submission",
+    "manager_approval"
+  ],
+  "persona": {
+    "name": "Edward Norton",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I would like to check my balance and submit an annual leave request from 24th December to 29th December 2026.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "working_days": 2,
+    "region": "UK",
+    "requested_span": "2026-12-24 to 2026-12-29",
+    "employee_id": "E05",
+    "origin": "seed",
+    "manager_id": "M02"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E05"
+      }
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "leave_type": "annual",
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E05",
+        "leave_type": "caller: annual"
+      }
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "region": "UK",
+        "end_date": "2026-12-29",
+        "start_date": "2026-12-24"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "start_date": "2026-12-24",
+        "employee_id": "E05",
+        "reason": "Festive family holiday",
+        "leave_type": "annual",
+        "end_date": "2026-12-29"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "end_date": "caller: 2026-12-29",
+        "start_date": "caller: 2026-12-24",
+        "employee_id": "caller: E05",
+        "leave_type": "caller: annual"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "standard",
+    "overlay_intensity": "absent",
+    "task": "submit_leave_request",
+    "counterparty": "employee_uk",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly",
+    "truthful_status_and_approval_workflow_explained",
+    "details_confirmed_before_submission"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

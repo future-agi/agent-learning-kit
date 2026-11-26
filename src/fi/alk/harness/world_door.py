@@ -260,6 +260,13 @@ def logged_as(row: Mapping[str, Any]) -> str:
     return str(row.get("action") or row.get("name") or "")
 
 
+def own_tool(row: Mapping[str, Any]) -> str:
+    """The agent's own tool a door recorded beside the route its call took, empty when there is none. A release
+    world's tool server, which alone writes `status`, records the customer's tool there and names its rows by the
+    environment operation, as that world's checks do."""
+    return "" if row.get("status") else str(row.get("agent_tool") or "")
+
+
 def action_matches(logged: str, action: str) -> bool:
     """Whether a logged world action is this one. A `{part}` in `action` (a route's template, `orders.{id}.cancel`)
     stands for any one part."""

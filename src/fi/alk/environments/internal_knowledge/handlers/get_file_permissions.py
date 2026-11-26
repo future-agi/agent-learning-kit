@@ -1,0 +1,59 @@
+def _caller_collections(db):
+    """The collections the employee signed in to this conversation may read. The desk opens Drive on
+    their behalf, so a file outside their role's collections stays closed even where the desk's
+    own account could open it."""
+    row = db.one("SELECT employee_id FROM session_caller WHERE id = 'default'")
+    e = db.one("SELECT * FROM employees WHERE employee_id = ?", [row["employee_id"]]) if row and row["employee_id"] else None
+    if e is None or e["status"] != "active":
+        raise ToolError("No active employee is signed in to this conversation; the desk reads Drive only for the signed-in employee.", category="permission_denied")
+    return {r["collection_id"] for r in db.query("SELECT collection_id FROM collection_access WHERE role = ?", [e["role"]])}
+
+
+def _caller_may_read(db, f, readable):
+    """Whether a Drive file is in a collection the caller may read: the corpus document it mirrors
+    names its collection; any other file goes by its folder."""
+    k = db.one("SELECT collection_id FROM kb_documents WHERE drive_file_id = ?", [f["file_id"]])
+    c = k or db.one("SELECT collection_id FROM collections WHERE drive_folder_id = ?", [f["folder_id"]])
+    return c is None or c["collection_id"] in readable
+
+
+def handle(args, db):
+    if not args.get("fileId"):
+        raise ToolError("Missing required argument: fileId", category="invalid_input")
+    file_id = str(args["fileId"])
+
+    file_row = db.one("SELECT * FROM drive_files WHERE file_id = ?", (file_id,))
+    if not file_row or file_row["is_deleted"]:
+        raise ToolError(f"File '{file_id}' not found or has been deleted.", category="not_found")
+
+    actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
+    user_id = actor_row["user_id"] if actor_row else "u_alice"
+    user_record = db.one("SELECT role FROM drive_users WHERE user_id = ?", (user_id,))
+    is_admin = user_record and user_record["role"] == "administrator"
+
+    if not is_admin:
+        perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (file_row["folder_id"], user_id))
+        file_perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (file_id, user_id))
+        if not perm and not file_perm:
+            raise ToolError(f"Permission denied: You do not have access to file '{file_id}'.", category="permission_denied")
+    if not _caller_may_read(db, file_row, _caller_collections(db)):
+        raise ToolError(f"Permission denied: file '{file_id}' is outside the collections the signed-in employee may read.", category="permission_denied")
+
+    # The file's own grants plus the folder's it inherits, in the official Permission shape.
+    perms = db.query(
+        "SELECT p.role, p.user_id, u.email, u.name FROM drive_permissions p LEFT JOIN drive_users u ON u.user_id = p.user_id "
+        "WHERE (p.target_type = 'file' AND p.target_id = ?) OR (p.target_type = 'folder' AND p.target_id = ?) ORDER BY p.permission_id",
+        (file_id, file_row["folder_id"]),
+    )
+    roles = {"owner": "owner", "editor": "writer", "viewer": "reader", "commenter": "commenter"}
+    return {
+        "permissions": [
+            {
+                "role": roles.get(p["role"], p["role"]),
+                "type": "user",
+                "emailAddress": p["email"] or "",
+                "displayName": p["name"] or p["user_id"],
+            }
+            for p in perms
+        ]
+    }
