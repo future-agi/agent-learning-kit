@@ -328,7 +328,10 @@ class _FakeCdp:
                 if self.closed:
                     raise ConnectionError("closed")
                 self.ready.wait(0.05)
-            return self.inbox.pop(0)
+            message = self.inbox.pop(0)
+        if isinstance(message, Exception):
+            raise message
+        return message
 
     def close(self) -> None:
         with self.ready:
@@ -414,6 +417,44 @@ def test_a_connection_that_ends_while_the_browser_runs_leaves_an_incomplete_reco
     finally:
         recorder.close()
     assert json.loads((tmp_path / "w0-record.json").read_text())["complete"] is False
+
+
+
+def _until(done, seconds: float = 5.0) -> None:
+    deadline = __import__("time").monotonic() + seconds
+    while not done() and __import__("time").monotonic() < deadline:
+        __import__("time").sleep(0.02)
+
+
+def test_a_connection_whose_message_cannot_be_read_is_closed_so_no_tab_stays_held(tmp_path, devtools_port) -> None:
+    # The browser holds each new tab for the recorder while it is connected: one it has stopped reading must be let go.
+    fake = _FakeCdp()
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake)
+    recorder.attach(devtools_port)
+    try:
+        fake.queue(FrameTooLarge("a DevTools message over the limit"))
+        _until(lambda: fake.closed)
+        assert fake.closed
+    finally:
+        recorder.close()
+    assert json.loads((tmp_path / "w0-record.json").read_text())["complete"] is False
+
+
+def test_an_event_the_recorder_cannot_handle_is_said_and_the_record_goes_on(tmp_path, devtools_port) -> None:
+    fake = _FakeCdp()
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake)
+    recorder.attach(devtools_port)
+    try:
+        fake.queue(_attached())
+        fake.queue({"method": "Page.frameNavigated", "sessionId": "S1", "params": {"frame": "not a frame"}})
+        fake.queue(
+            {"method": "Page.frameNavigated", "sessionId": "S1", "params": {"frame": {"id": "T1", "url": "http://shop.test/"}}}
+        )
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [row["url"] for row in body["rows"]] == ["http://shop.test/"]
+    assert body["complete"] is False
 
 
 
