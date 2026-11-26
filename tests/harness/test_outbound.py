@@ -55,6 +55,7 @@ from fi.alk.harness.outbound import (
     CAPABILITIES_SCHEMA_VERSION,
     EVENT_PAYLOAD_MAX_BYTES,
     ArtifactBudgetTracker,
+    SCREENSHOT_SHARE,
     ArtifactKind,
     ArtifactManifestDraft,
     ArtifactsClient,
@@ -1972,6 +1973,20 @@ def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_and_othe
     assert tracker.would_admit(ArtifactKind.TRACE, 70, digest="d2")
     # Recordings are NOT subject to the headroom reservation themselves -- only class-2 candidates.
     assert tracker.would_admit(ArtifactKind.RECORDING_COMBINED, 100, digest="d3")
+
+
+def test_screenshots_take_no_more_than_their_share_and_a_later_trace_still_fits() -> None:
+    # Many browser trials photograph their pages: their screenshots stop at their share of the job's budget, so a
+    # trace uploaded after all of them is still taken.
+    tracker = ArtifactBudgetTracker(max_artifact_bytes=100)
+    share = int(100 * SCREENSHOT_SHARE)
+    for index in range(share):
+        assert tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}")
+        tracker.record(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}")
+    assert not tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest="shot-past-share")
+    assert tracker.would_admit(ArtifactKind.TRACE, 100 - share, digest="trace")
+    # A screenshot already taken is no new spend.
+    assert tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest="shot-0")
 
 
 # --- ResultReceiptDraft / build_result_receipt / build_skipped_receipt -----------------------------
