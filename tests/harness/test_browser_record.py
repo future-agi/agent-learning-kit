@@ -141,6 +141,38 @@ def test_requests_a_page_made_off_the_list_are_counted_by_host() -> None:
     assert record.body()["blocked_navigations"] == []
 
 
+def test_a_page_retried_every_second_is_one_attempt_each_two_seconds_never_one_for_the_trial() -> None:
+    record, clock = _record()
+    for _ in range(5):
+        record.requested("tab-1", "http://www.example.com/", document=True, main_frame=True)
+        clock.now += 1
+    assert len(record.body()["blocked_navigations"]) == 3
+
+
+def test_the_same_page_tried_in_two_tabs_at_once_is_two_attempts() -> None:
+    record, _ = _record()
+    record.requested("tab-1", "http://www.example.com/", document=True, main_frame=True)
+    record.requested("tab-2", "http://www.example.com/", document=True, main_frame=True)
+    assert [one["tab"] for one in record.body()["blocked_navigations"]] == [1, 2]
+
+
+def test_hosts_a_page_asked_for_are_capped_and_what_the_record_holds_stays_within_it() -> None:
+    record, clock = _record(cap=3)
+    for index in range(10):
+        record.requested("tab-1", f"http://h{index}.example.net/x.js", document=False, main_frame=False)
+        record.requested("tab-1", f"http://www.example.com/{index}", document=True, main_frame=True)
+        clock.now += 5
+    record.requested("tab-1", "http://h0.example.net/y.js", document=False, main_frame=False)
+    body = record.body()
+    assert body["blocked_page_requests"] == [
+        {"host": "h0.example.net", "count": 2},
+        {"host": "h1.example.net", "count": 1},
+        {"host": "h2.example.net", "count": 1},
+    ]
+    assert len(body["blocked_navigations"]) == 3 and body["truncated"] is True
+    assert len(record._last_refused) <= 3
+
+
 def test_requests_to_the_sites_are_not_blocked_and_a_refused_page_is_no_navigation() -> None:
     record, _ = _record()
     record.requested("tab-1", "http://shop.test/cart", document=True, main_frame=True)
@@ -849,6 +881,36 @@ def test_a_blocked_file_is_capped_and_says_so(tmp_path) -> None:
     found = browser_record.blocked_from_file(tmp_path / "w0-blocked.jsonl")
     assert [one["host"] for one in found if "host" in one] == ["a.example.com", "b.example.com"]
     assert {"truncated": True} in found
+
+
+def test_a_blocked_log_holds_no_more_in_memory_than_in_its_file(tmp_path) -> None:
+    log = browser_record.BlockedFileLog(tmp_path / "w0-blocked.jsonl", cap=2)
+    for index in range(6):
+        _refused(log, f"h{index}.example.com")
+    assert len(log.rows()) <= 2
+
+
+def test_a_blocked_file_that_could_not_be_cut_is_unreadable_never_the_last_trial_s(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "w0-blocked.jsonl"
+    log = browser_record.BlockedFileLog(path)
+    _refused(log, "last.example.com")
+
+    def cannot(*args, **kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(browser_record, "_write_text", cannot)
+    log.reset()
+    assert browser_record.blocked_from_file(path) is None
+
+
+def test_a_kit_file_larger_than_its_limit_is_never_read_whole(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(browser_record, "KIT_FILE_BYTES", 64)
+    big = tmp_path / "w0-blocked.jsonl"
+    big.write_text(json.dumps({"arguments": {"host": "a.example.com"}, "pad": "x" * 100}) + "\n")
+    assert browser_record.blocked_from_file(big) is None
+    record = tmp_path / "w0-record.json"
+    record.write_text(json.dumps({"complete": True, "rows": [], "pad": "x" * 100}))
+    assert browser_record.sealed_record(record, timeout=0.1) is None
 
 
 def test_a_blocked_file_that_cannot_be_read_is_unreadable_never_empty(tmp_path) -> None:
