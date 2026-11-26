@@ -288,6 +288,7 @@ __all__ = [
     "POSTGRES_COMPILER_VERSION",
     "CompileDecision",
     "PostgresCompileError",
+    "PostgresApplyError",
     "PostgresCompileResult",
     "PostgresInsert",
     "PostgresSequenceReset",

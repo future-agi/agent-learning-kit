@@ -70,7 +70,10 @@ def test_array_failure_is_identified_from_datatype_not_message() -> None:
 def test_a_value_the_column_type_cannot_parse_goes_to_authoring_repair() -> None:
     # The shape PostgreSQL really sends for 22P02: no table, column or datatype.
     diagnostic = diagnose_postgres_error(
-        DatabaseError("22P02", Diag(message_primary='invalid input syntax for type uuid: "rider-1"')),
+        DatabaseError(
+            "22P02",
+            Diag(message_primary='invalid input syntax for type uuid: "rider-1"'),
+        ),
         stage=HarnessStage.VALIDATING_ENVIRONMENT,
     )
 
@@ -116,14 +119,20 @@ def test_a_real_postgresql_parse_failure_names_the_table_and_type_but_never_the_
             with pytest.raises(PostgresApplyError) as raised:
                 apply_postgres(
                     connection,
-                    PostgresCompileResult.model_construct(operations=(operation,), sequence_resets=()),
+                    PostgresCompileResult.model_construct(
+                        operations=(operation,), sequence_resets=()
+                    ),
                 )
         finally:
             connection.execute("DROP SCHEMA IF EXISTS diag_test CASCADE")
 
     # The driver's own error travels inside, with the table PostgreSQL does not name.
-    assert isinstance(raised.value.error, psycopg.Error) and raised.value.table == "riders"
-    diagnostic = diagnose_postgres_error(raised.value, stage=HarnessStage.VALIDATING_ENVIRONMENT)
+    assert (
+        isinstance(raised.value.error, psycopg.Error) and raised.value.table == "riders"
+    )
+    diagnostic = diagnose_postgres_error(
+        raised.value, stage=HarnessStage.VALIDATING_ENVIRONMENT
+    )
     assert diagnostic.code == code
     assert diagnostic.owner is RepairOwner.AUTHORING
     assert diagnostic.location.table == "riders"
