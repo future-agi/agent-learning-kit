@@ -61,7 +61,7 @@ def test_import_roots_equal_at_build_certification_and_run(tmp_path, repo, monke
         metadata={},
         endpoints={"world_db": SimpleNamespace(protocol="postgres", address="unused")},
     )
-    chat_call_runner._tool_world(tmp_path / "bundle", contract, runtime, repo)
+    chat_call_runner.tool_world(tmp_path / "bundle", contract, runtime, repo)
 
     assert reached == [(str(repo), "agents/a")] * 2
 

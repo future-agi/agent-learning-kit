@@ -1,3 +1,4 @@
+import os
 import re
 import copy
 import time
@@ -16,12 +17,61 @@ from fi.evals.templates import (
 )
 from fi.evals.protect_input_adapter import ProtectInputAdapter
 from fi.utils.routes import Routes
-from fi.utils.utils import get_keys_from_env, get_base_url_from_env
+from fi.utils.utils import get_base_url_from_env
 from fi.utils.errors import InvalidAuthError, SDKException, InvalidValueType, MissingRequiredKey
 from pydantic import ValidationError  
 
 PROTECT_FLASH_ID = "76"
 SUPPORT_PROTECT_FLASH = True  # feature toggle
+
+_NOT_RUN_MESSAGE = (
+    "We couldn't process this request. Check your input or your credit balance."
+    "If it keeps failing, contact support."
+)
+
+
+class ProtectCheckRefused(SDKException):
+    """A Protect check that never ran: the server refused it (rate, budget or
+    plan limit) or the request failed. This is not a verdict on the content."""
+
+    def __init__(
+        self,
+        status_code: int | None = None,
+        code: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self.code = code
+        self.reason = reason
+        super().__init__(reason or "Protect check was not run.")
+
+
+class _ProtectResponseHandler(EvalResponseHandler):
+    """Keeps the HTTP status, server code and reason of a refused check."""
+
+    @classmethod
+    def _handle_error(cls, response) -> None:
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            body = {}
+        code = body.get("code") or body.get("error_code")
+        reason = next(
+            (
+                body[key]
+                for key in ("message", "result", "detail", "error")
+                if isinstance(body.get(key), str) and body[key].strip()
+            ),
+            None,
+        )
+        raise ProtectCheckRefused(
+            status_code=response.status_code,
+            code=code if isinstance(code, str) else None,
+            reason=reason,
+        )
+
 
 class Protect:
     """Client for protecting against unwanted content using various metrics"""
@@ -37,10 +87,10 @@ class Protect:
         Args:
             evaluator: Instance of Evaluator to use for evaluations. If None, creates a new one.
         """
-        env_api_key, env_secret_key = get_keys_from_env() 
-        fi_api_key = env_api_key or fi_api_key
-        fi_secret_key = env_secret_key or fi_secret_key
-        fi_base_url = get_base_url_from_env() or fi_base_url
+        # Keys / base URL passed in code win; the environment is only a fallback.
+        fi_api_key = fi_api_key or os.getenv("FI_API_KEY")
+        fi_secret_key = fi_secret_key or os.getenv("FI_SECRET_KEY")
+        fi_base_url = fi_base_url or get_base_url_from_env()
         if not fi_api_key or not fi_secret_key:
             raise InvalidAuthError("API key or secret key is missing for Protect initialization.")
         
@@ -118,15 +168,13 @@ class Protect:
                     json=payload,
                     timeout=3000
                 ),
-                response_handler=EvalResponseHandler,
+                response_handler=_ProtectResponseHandler,
             )
-        except Exception:
-            err_msg = (
-                "We couldn't process this request. Check your input or your credit balance."
-                "If it keeps failing, contact support." 
-            )
-            # Return a synthetic “failed” for this rule so the outer loop can present a clean error.
-            return rule["metric"], True, err_msg, None
+        except ProtectCheckRefused:
+            # The rule never ran; never report it as a completed/triggered check.
+            raise
+        except Exception as exc:
+            raise ProtectCheckRefused() from exc
 
         # end_time = time.time()
         # print(f"Completed rule check for {rule['metric']} in thread {thread_name} at {end_time} (took {end_time - start_time:.2f}s)")
@@ -160,7 +208,7 @@ class Protect:
 
     def _process_rules_batch(
         self, rules: List[Dict], test_case: ProtectInputAdapter, remaining_time: float
-    ) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
+    ) -> Tuple[List[str], List[str], List[str], List[str], List[str], list[dict]]:
         """
         Process a batch of rules in parallel
 
@@ -170,8 +218,9 @@ class Protect:
             remaining_time: Time remaining for processing
 
         Returns:
-            Tuple[List[str], List[str], List[str], List[str], List[str]]:
-                (failure_messages, completed_rules, uncompleted_rules, failure_reasons, failed_rule)
+            Tuple[List[str], List[str], List[str], List[str], List[str], List[Dict]]:
+                (failure_messages, completed_rules, uncompleted_rules, failure_reasons, failed_rule, refusals)
+                A refused rule stays in uncompleted_rules and is listed in refusals.
         """
         # print(f"\nProcessing batch of {len(rules)} rules")
         # batch_start = time.time()
@@ -181,6 +230,7 @@ class Protect:
         failure_messages = []
         failure_reasons = []
         failed_rule = []
+        refusals = []
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             # Submit all rules to the thread pool
@@ -210,6 +260,28 @@ class Protect:
                                 if not f_key.done():
                                     f_key.cancel()
 
+                    except ProtectCheckRefused as refused:
+                        # Not run: keep it uncompleted, keep the code and reason,
+                        # and stop the batch so the result fails closed.
+                        reason_text = self._sanitize_reason(refused.reason)
+                        refusals.append(
+                            {
+                                "rule": rule_name,
+                                "status_code": refused.status_code,
+                                "code": refused.code,
+                                "reason": reason_text,
+                            }
+                        )
+                        label = refused.code or refused.status_code or "request failed"
+                        failure_messages.append(_NOT_RUN_MESSAGE)
+                        failure_reasons.append(
+                            f"{rule_name} check was not run ({label})"
+                            + (f": {reason_text}" if reason_text else "")
+                        )
+                        for f_key in future_to_rule:
+                            if not f_key.done():
+                                f_key.cancel()
+
                     except Exception:
                         if rule_name in uncompleted_rules:
                             # uncompleted_rules.remove(rule_name) # Errored rule should remain uncompleted
@@ -232,6 +304,7 @@ class Protect:
             uncompleted_rules,
             failure_reasons,
             failed_rule,
+            refusals,
         )
 
     def _is_url(self, text: str) -> bool:
@@ -353,6 +426,9 @@ class Protect:
                 status: "passed" or "failed"
                 completed_rules: List of rules that were checked
                 uncompleted_rules: List of rules that couldn't be checked
+                refusals: Checks that never ran (rate/budget/plan limit or request
+                    error), each with rule, status_code, code and reason. Any
+                    refusal makes status "failed"; it is never reported as passed.
                 failed_rule: The rule that triggered the failure (if any)
                 messages: The action message for the failed rule or the input if passed
                 reasons: The reason for failure or "All checks passed"
@@ -597,6 +673,8 @@ class Protect:
         all_completed_rules = []
         all_uncompleted_rules = []
         all_failure_reasons = []
+        all_refusals = []
+        failed_rule = []
         # try:
         bool_check_fail = False
         for test_case in test_cases:
@@ -621,11 +699,13 @@ class Protect:
                     uncompleted,
                     failure_reasons,
                     failed_rule,
+                    refusals,
                 ) = self._process_rules_batch(rules_batch, test_case, remaining_time_seconds)
 
                 all_completed_rules.extend(completed)
                 all_uncompleted_rules.extend(uncompleted)
                 all_failure_reasons.extend(failure_reasons)
+                all_refusals.extend(refusals)
                 if messages:
                     all_failure_messages.extend(messages)
                     bool_check_fail = True
@@ -645,6 +725,8 @@ class Protect:
                 all_failure_reasons if all_failure_reasons else ["All checks passed"]
             ),
             "time_taken": final_processing_duration_seconds, # Use final calculated duration in seconds
+            # Checks the server refused or that failed to run (never a pass).
+            "refusals": all_refusals,
         }
 
         if len(ans["uncompleted_rules"]) == len(protect_rules_copy):

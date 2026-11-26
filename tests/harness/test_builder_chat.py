@@ -103,11 +103,13 @@ class EditingConversation(BuilderConversation):
         on_event(RuntimeEvent(kind="text", text="Added it.", detail={"stage": "builder"}))
 
 
-def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRuntime:
+def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch, *, closing: bool = False) -> HostedChatRuntime:
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
     monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     (tmp_path / "scenarios" / "one").mkdir(parents=True, exist_ok=True)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
+    # These stub folders are not real scenarios; a test about one a run cannot load says so itself.
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.scenario_seal_problems", lambda root: {})
     policy = tmp_path / "policy.yaml"
     policy.write_text("schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8")
     runtime = HostedChatRuntime(
@@ -117,6 +119,9 @@ def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRu
         source=tmp_path,
         job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
     )
+    if not closing:
+        # The closing status line has its own tests; these read the reply the model wrote.
+        runtime._closing_status = lambda: ""  # type: ignore[method-assign]
     return runtime
 
 
@@ -134,7 +139,7 @@ def test_selected_rows_reach_the_builder_by_tab_number(tmp_path, monkeypatch):
     runtime = _runtime(tmp_path, client, monkeypatch)
     conversation = EditingConversation(tmp_path, writes=False)
     runtime.conversation = conversation
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     _turn(runtime, {"content": "make these harder", "scenario_ids": ["a", "b"]})
 
@@ -149,13 +154,13 @@ def test_unsaved_changes_are_published_and_reported_by_number(tmp_path, monkeypa
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
 
     _turn(runtime, {"content": "add one"})
 
     assert len(client.published) == 1
-    assert "Saved to the environment: added #41 late_driver" in _reply(client)
+    assert "Put under Unsaved changes: added #41 late_driver" in _reply(client)
     basis = json.loads((tmp_path / ".futureagi-authoring-basis.json").read_text())
     assert basis == {"authoring_revision": "sha256:new"}
     # Saved once; nothing is left for the next turn to publish again.
@@ -166,7 +171,7 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     (tmp_path / "world.sqlite").write_bytes(b"before")
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
 
     (tmp_path / "world.sqlite").write_bytes(b"after")
@@ -179,7 +184,7 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
 def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr(
         "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None
     )
@@ -193,26 +198,195 @@ def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch):
     assert len(client.published) == 1
 
 
+def test_the_closing_status_line_says_what_is_saved_and_never_guesses(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    runtime._mint_published()
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root, skip=None: None)
+    assert runtime._saved_state() == "none"
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text('{"changed": 1}')
+    assert runtime._saved_state() == "unsaved"
+    # A lost marker is not knowledge that everything is saved, and nothing writes one in its place.
+    (tmp_path / ".futureagi-published.json").unlink()
+    assert runtime._saved_state() == "unknown" and runtime._published_fingerprint() == ""
+    assert not (tmp_path / ".futureagi-published.json").exists()
+    # A save that leaves a scenario unapplied says so, rather than saved.
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.scenario_seal_problems", lambda root: {"one": "its seed does not load"}
+    )
+    client.publish = _publish_with_failed(client)
+    assert asyncio.run(runtime._save_changes())["applied"] is True
+    assert runtime._saved_state() == "published"
+    # Where the page's own state is not read, it is said as what this chat did, with no instruction.
+    assert runtime._closing_status().endswith(
+        "This chat put its changes under Unsaved changes, except 1 scenarios that could not be applied."
+    )
+    # The page still holds them: the instruction. The page holds none (saved or discarded there): nothing said.
+    assert runtime._closing_status({"drafts": {"scenarios": {"summary": "1 removed"}}}).endswith(
+        "Changes from this chat are under Unsaved changes; Validate, then Save to keep them as a new version, except "
+        "1 scenarios that could not be applied."
+    )
+    assert runtime._closing_status({"drafts": {"scenarios": None, "world": None}}) == "Status: 0 scenarios."
+
+
+def test_a_suite_with_every_scenario_dropped_still_closes_with_its_status(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch, closing=True)
+    runtime._mint_published()
+    runtime.conversation = SimpleNamespace(stage=SimpleNamespace(kept=[]))
+    assert runtime._closing_status().startswith("Status: 0 scenarios")
+    # With no suite on disk either, there is nothing to report yet.
+    import shutil
+
+    shutil.rmtree(tmp_path / "scenarios")
+    runtime.conversation = SimpleNamespace(stage=SimpleNamespace())
+    assert runtime._closing_status() == ""
+
+
+def _publish_with_failed(client):
+    async def publish(digest, failed_scenarios=None):
+        client.published.append(digest)
+        return {"applied": True, "scenario_count": 1, "added": [], "removed": [], "changed": []}
+
+    return publish
+
+
+def test_the_reply_the_platform_stores_ends_with_the_status_line_even_after_only_tool_calls(tmp_path, monkeypatch):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import write_scenarios
+    from fi.alk.harness.catalogue import Catalogue
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    import shutil
+
+    shutil.rmtree(tmp_path / "scenarios")
+    write_scenarios([Scenario(name="refund_ok"), Scenario(name="refund_late")], tmp_path, Catalogue(sub_goals=[]))
+    (tmp_path / ".futureagi-published.json").unlink()
+    runtime._mint_published()
+
+    class ToolsOnly(EditingConversation):
+        async def say(self, message, on_event=None):
+            on_event(RuntimeEvent(kind="tool", tool="mcp__x__find_scenarios", detail={"call_id": "f"}))
+
+    # The builder's session has not opened a stage that lists the suite: the line is read from the files.
+    runtime.conversation = ToolsOnly(tmp_path, writes=False)
+    _turn(runtime, {"content": "is everything saved?"})
+
+    assert _reply(client) == (
+        "Status: 2 scenarios. No changes in this chat."
+    )
+
+
+def test_a_status_line_that_cannot_be_read_never_costs_the_reply(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    runtime._mint_published()
+
+    def unreadable():
+        raise OSError("a file vanished mid-read")
+
+    runtime._closing_status = unreadable  # type: ignore[method-assign]
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "anything"})
+    assert _reply(client) == "Added it."
+
+
+def test_a_working_copy_carried_on_from_earlier_turns_is_never_minted_as_saved(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch, closing=True)
+    (tmp_path / ".futureagi-published.json").unlink()
+    (tmp_path / ".futureagi-conversation.json").write_text("{}", encoding="utf-8")
+    runtime._mint_published()
+    assert runtime._saved_state() == "unknown"
+    # A fresh open from the environment, with no turn run here yet, is what the environment holds.
+    (tmp_path / ".futureagi-conversation.json").unlink()
+    runtime._mint_published()
+    assert runtime._saved_state() == "none"
+
+
+def test_the_chat_reads_a_removed_case_from_the_platform_by_its_exact_key(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+
+    async def scenarios(query):
+        client.queries.append(query)
+        return {"removed": [{"scenario_key": "lookup_order"}, {"scenario_key": "lookup_order_2"}]}
+
+    client.scenarios = scenarios
+    assert asyncio.run(runtime._removed_with_key("lookup_order")) == [{"scenario_key": "lookup_order"}]
+    assert client.queries == [{"removed": True}]
+
+
+def test_the_closing_line_carries_the_scenarios_tab_s_own_counts(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    (tmp_path / ".futureagi-published.json").unlink()
+    runtime._mint_published()
+
+    async def overview():
+        return {"lifecycle_counts": {"proved": 4, "kept_as_written": 0, "not_proved": 2}}
+
+    client.overview = overview
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "how many are proved?"})
+    assert _reply(client).endswith(
+        "On the Scenarios tab: 4 proved, 0 kept as written, 2 not proved. No changes in this chat."
+    )
+
+
+def test_a_marker_written_by_an_older_publish_still_reads_as_published(tmp_path, monkeypatch):
+    import json
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch, closing=True)
+    (tmp_path / ".futureagi-published.json").write_text(
+        json.dumps({"fingerprint": runtime._environment_fingerprint(), "unapplied": 0}), encoding="utf-8"
+    )
+    assert runtime._saved_state() == "published"
+
+
+def test_a_build_finishing_turn_shows_the_tab_s_counts_alone_when_the_platform_sends_them(tmp_path, monkeypatch):
+    import json
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch, closing=True)
+    runtime._mint_published()
+
+    async def overview():
+        return {"lifecycle_counts": {"proved": 5, "kept_as_written": 0, "not_proved": 2}}
+
+    client.overview = overview
+
+    class Finishing(EditingConversation):
+        async def say(self, message, on_event=None):
+            counts = {"proved": 0, "kept_as_written": 7, "not_proved": 0}
+            (self.workspace / ".futureagi-build-finished.json").write_text(json.dumps({"proofs": counts}))
+            on_event(RuntimeEvent(kind="text", text="Finished.", detail={"stage": "builder"}))
+
+    runtime.conversation = Finishing(tmp_path, writes=False)
+    _turn(runtime, {"content": "finish"})
+    reply = _reply(client)
+    assert "Proof counts:" not in reply and "On the Scenarios tab: 5 proved, 0 kept as written, 2 not proved." in reply
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
 
     _turn(runtime, {"content": "add one"})
 
-    assert "These changes were NOT saved to the environment: bad." in _reply(client)
+    assert "These changes are NOT under Unsaved changes: bad." in _reply(client)
     assert not (tmp_path / ".futureagi-authoring-basis.json").exists()
 
 
-def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
-    tmp_path, monkeypatch
-):
+def test_a_failed_reseal_keeps_the_change_as_a_draft(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     runtime.conversation = EditingConversation(tmp_path, writes=True)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     def fails(root):
         raise RuntimeError("seed import failed")
@@ -223,18 +397,19 @@ def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
 
     assert client.published == []
     reply = next(e for e in client.events if e["kind"] == "assistant_message")
-    assert "These changes were NOT saved" in reply["payload"]["text"]
-    assert reply["payload"]["error"] == "reseal_failed"
+    assert "stay in this chat's working copy and are NOT under Unsaved changes" in reply["payload"]["text"]
+    assert "seed import failed" in reply["payload"]["text"]
     kinds = [event["kind"] for event in client.events]
-    assert "checkpoint_committed" not in kinds
+    # The turn completes and its checkpoint is promoted as the chat's draft.
+    assert "checkpoint_committed" in kinds
     assert client.events[-1]["kind"] == "turn_completed"
-    assert client.events[-1]["payload"]["outcome"] == "failed"
+    assert client.events[-1]["payload"]["outcome"] != "failed"
 
 
 def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     class ReadingConversation(EditingConversation):
         async def say(self, message, on_event=None):
@@ -299,7 +474,7 @@ def test_a_turn_whose_pump_failed_still_sends_its_reply_and_completes(tmp_path, 
     # The turn's opening checkpoint is the first; the write's, packed by the pump, fails.
     client = PackFailingClient(failing={2})
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     class WritingConversation(EditingConversation):
         async def say(self, message, on_event=None):
@@ -745,7 +920,7 @@ def test_one_yes_to_every_change_runs_the_rest_of_its_message_and_the_next_messa
             on_event(RuntimeEvent(kind="text", text="Done.", detail={"stage": "builder"}))
 
     runtime.conversation = Changing()
-    runtime._published_fingerprint()
+    runtime._mint_published()
     for sequence in (1, 2):
         command = {
             "sequence": sequence,
@@ -1625,6 +1800,47 @@ def test_a_lost_failed_or_interrupted_ending_comes_back_in_a_fresh_sandbox(
     assert payload["usage"]["usd"] == 0.02
 
 
+def test_workspace_checkpoint_archives_one_ending_file_and_replays_turns(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    from fi.alk.harness import spend
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+
+    monkeypatch.setattr(spend, "_stages", {})
+    client = BuilderClient()
+    workspace = tmp_path / "original"
+    runtime = _runtime(workspace, client, monkeypatch)
+    runtime.conversation = SpendingConversation(workspace, writes=False)
+    commands = [
+        {"sequence": n, "message_id": f"m-{n}", "kind": "user_message", "payload": {"content": "hello"}}
+        for n in range(1, 4)
+    ]
+    for command in commands:
+        asyncio.run(runtime._handle(command))
+    expected = [event["payload"] for event in client.events if event["kind"] == "turn_completed"]
+    assert len(expected) == len(commands)
+
+    async def archive_checkpoint(workspace):
+        return {"archive": _workspace_archive(workspace)}
+
+    monkeypatch.setattr(client, "checkpoint", archive_checkpoint)
+    packed = asyncio.run(runtime._checkpoint())["archive"]
+    fresh = tmp_path / "restored"
+    with tarfile.open(fileobj=io.BytesIO(packed), mode="r:gz") as archive:
+        assert [n for n in archive.getnames() if n.startswith(".futureagi-turn-ending")] == [
+            ".futureagi-turn-endings.json"
+        ]
+        archive.extractall(fresh, filter="data")
+
+    restarted = _runtime(fresh, client, monkeypatch)
+    client.events.clear()
+    for command in commands:
+        asyncio.run(restarted._handle(command))
+    replay = [event["payload"] for event in client.events if event["kind"] == "turn_completed"]
+    assert replay == [{**ending, "replayed": True} for ending in expected]
+
+
 def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch):
     """The coordinator state is appended every turn: it must not carry the whole history."""
     from fi.alk.harness import spend
@@ -1681,6 +1897,76 @@ def test_a_control_only_checkpoint_stores_each_ending_once(tmp_path, monkeypatch
     assert added == ["m-6"]
 
 
+def test_restored_checkpoint_only_processes_changed_endings(tmp_path, monkeypatch):
+    client = LosingClient(control_only=True)
+    name = ".futureagi-turn-endings.json"
+    history = {f"old-{i}": {"command_message_id": f"old-{i}", "outcome": "failed"}
+               for i in range(1000)}
+    entries = client.sessions["futureagi-coordinator-state"] = [{"files": {name: history}}]
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    asyncio.run(runtime._restore_coordinator_state())
+    assert runtime._turn_ending("old-999") == history["old-999"]
+
+    read, write, dumps = Path.read_text, Path.write_text, json.dumps
+    reads, writes, historical_encodes = [], [], []
+
+    def record_read(path, *args, **kwargs):
+        if "turn-ending" in path.name:
+            reads.append(path)
+        return read(path, *args, **kwargs)
+
+    def record_write(path, text, *args, **kwargs):
+        if "turn-ending" in path.name:
+            writes.append(len(text.encode()))
+        return write(path, text, *args, **kwargs)
+
+    def record_encode(value, *args, **kwargs):
+        text = dumps(value, *args, **kwargs)
+        if '"old-' in text:
+            historical_encodes.append(len(text))
+        return text
+
+    monkeypatch.setattr(Path, "read_text", record_read)
+    monkeypatch.setattr(Path, "write_text", record_write)
+    monkeypatch.setattr(json, "dumps", record_encode)
+    asyncio.run(runtime._checkpoint())
+    assert name not in entries[-1]["files"]
+    assert (len(reads), len(historical_encodes), sum(writes)) == (0, 0, 0)
+    ending = runtime._end_turn("new", "interrupted")
+    asyncio.run(runtime._checkpoint())
+    assert entries[-1]["files"][name] == {"new": ending}
+    assert not reads and not historical_encodes
+    assert 0 < sum(writes) < 1024
+
+
+def test_checkpoint_retries_only_a_locally_persisted_ending(tmp_path, monkeypatch):
+    client = LosingClient(control_only=True)
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    with monkeypatch.context() as patch:
+        def fail_replace(*args):
+            raise OSError("disk full")
+
+        patch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(OSError, match="disk full"):
+            runtime._end_turn("new", "failed")
+    name = ".futureagi-turn-endings.json"
+    asyncio.run(runtime._checkpoint())
+    entries = client.sessions["futureagi-coordinator-state"]
+    assert name not in entries[-1]["files"]
+    ending = runtime._end_turn("new", "failed")
+    with monkeypatch.context() as patch:
+        async def fail_append(*args):
+            raise ConversationTransportError("not acknowledged")
+
+        patch.setattr(client, "append_session", fail_append)
+        with pytest.raises(ConversationTransportError, match="not acknowledged"):
+            asyncio.run(runtime._checkpoint())
+    asyncio.run(runtime._checkpoint())
+    assert entries[-1]["files"][name] == {"new": ending}
+    asyncio.run(runtime._checkpoint())
+    assert name not in entries[-1]["files"]
+
+
 def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch):
     from fi.alk.harness import spend
 
@@ -1696,7 +1982,7 @@ def test_an_endings_file_that_is_not_an_object_is_ignored(tmp_path, monkeypatch)
     assert completed["kind"] == "turn_completed"
     assert completed["payload"]["outcome"] == "success"
     assert completed["payload"]["usage"]["tokens_in"] == 40
-    endings = json.loads((runtime.workspace / ".futureagi-turn-endings.json").read_text())
+    endings = _runtime(tmp_path, client, monkeypatch)._read_turn_endings()
     assert list(endings) == ["m-1"]
 
 
@@ -1744,6 +2030,23 @@ def test_prove_scenarios_records_each_proof(tmp_path):
         proofs["adds-a-big-mac"]["holds"] is True
         and proofs["adds-a-big-mac"]["proved_at"]
     )
+
+
+def test_proving_an_old_case_again_keeps_it_as_written(tmp_path):
+    from test_nudge_turn import _edit_scenario, _suite
+
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _edit_scenario(root, "adds-a-big-mac", negative_controls=[])
+    server = builder.suite_server(root, load_scenarios(root))
+    prove = next(one for one in server.tools if one.name == "prove_scenarios")
+
+    asyncio.run(prove.handler({"names": ["adds-a-big-mac"]}))
+
+    entry = load_proofs(root)["adds-a-big-mac"]
+    assert (entry["kept_as_written"], entry["blocked_reason"]) == (True, "no_negative_control")
 
 
 def test_a_write_after_the_last_report_runs_the_checks_again(tmp_path, monkeypatch):
@@ -2198,8 +2501,10 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
 
     async def act(stage):
         await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        # A rebuild cites where a new case comes from, as any builder submit does.
+        assumed = [{"kind": "assumption", "quote": "Customers order one item at a time.", "supports": "one Big Mac"}]
         seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(
-            _scenario("adds-one-big-mac")
+            {**_scenario("adds-one-big-mac"), "sources": assumed}
         )
 
     _rebuild(tmp_path, monkeypatch, "suite", act)
@@ -2209,6 +2514,20 @@ def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
         "adds-a-big-mac",
         "adds-one-big-mac",
     }
+
+
+def test_the_builder_s_submit_keeps_a_new_case_that_cites_nothing(tmp_path, monkeypatch):
+    from test_nudge_turn import _scenario
+
+    seen: dict = {}
+
+    async def act(stage):
+        await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(_scenario("adds-one-big-mac"))
+
+    _rebuild(tmp_path, monkeypatch, "suite", act)
+
+    assert not seen["added"].get("is_error"), seen["added"]
 
 
 def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
@@ -2476,6 +2795,209 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
     assert calls == [corrected]
 
 
+def test_finished_message_reports_counts(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.proofs import record_proof
+    from fi.alk.harness.prove import Proof
+
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n      enabled: true\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+
+    class LiveBuildClient(BuilderClient):
+        def __init__(self):
+            super().__init__()
+            self.turn_context = {**self.capabilities.turn_context, "capabilities": {"control_only": True}}
+
+        async def overview(self):
+            return {}
+
+    runtime = HostedChatRuntime(
+        client=LiveBuildClient(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 10},
+    )
+    stage = asyncio.run(runtime._open_builder())
+    finish = next(one for one in stage.spec.servers["platform"].tools if one.name == "finish_build")
+    # Every solution uses only the two in-process tools, which have no endpoint: each step is assumed.
+    kept = [SimpleNamespace(name=f"case-{n}", scenario_key=f"case-{n}") for n in range(10)]
+    for one in kept:
+        not_run = [{"name": "wrong", "why": "orders twice", "failed": True, "held": [], "assumed": ["place_order"]}]
+        proof = Proof(
+            ready=True, solvable=True, vacuous=False, assumed=["place_order", "search_books"], controls=not_run
+        )
+        record_proof(workspace, one.scenario_key, proof, solution_steps=2)
+    monkeypatch.setattr(runtime, "_what_exists", lambda: (True, True))
+    monkeypatch.setattr(runtime, "_after_saved", lambda **kwargs: None)
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: kept)
+    monkeypatch.setattr(builder, "suite_health", lambda *args, **kwargs: [])
+
+    said = asyncio.run(finish.handler({}))["content"][0]["text"]
+
+    assert "0 proved, 10 kept as written (place_order, search_books), 0 not proved" in said
+    assert said.endswith(
+        "It is now being validated against the running agent and sealed; the environment opens when that "
+        "is done, and this conversation carries on there."
+    )
+    finished = json.loads((workspace / ".futureagi-build-finished.json").read_text(encoding="utf-8"))
+    assert finished["proofs"] == {"proved": 0, "kept_as_written": 10, "not_proved": 0}
+
+
+def _finished_runtime(tmp_path):
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n      enabled: true\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+    runtime = HostedChatRuntime(
+        client=BuilderClient(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}},
+    )
+    return runtime, workspace
+
+
+def test_finished_turn_appends_code_counts(tmp_path):
+    runtime, workspace = _finished_runtime(tmp_path)
+    before = runtime._build_finished_stamp()
+    counts = {"proved": 3, "kept_as_written": 8, "not_proved": 1}
+    (workspace / ".futureagi-build-finished.json").write_text(
+        json.dumps({"proofs": counts}), encoding="utf-8"
+    )
+
+    text = runtime._close_with_proof_counts("The suite is built.", before)
+
+    assert (
+        text
+        == "The suite is built.\n\nProof counts: 3 proved, 8 kept as written, 1 not proved."
+    )
+    # A turn that did not write the finished file leaves the reply as the model wrote it.
+    assert (
+        runtime._close_with_proof_counts(
+            "Edited one case.", runtime._build_finished_stamp()
+        )
+        == "Edited one case."
+    )
+
+
+def test_a_reply_is_followed_by_the_counts_written_by_code_whatever_it_claims(tmp_path):
+    runtime, workspace = _finished_runtime(tmp_path)
+    counts = {"proved": 3, "kept_as_written": 9, "not_proved": 0}
+    (workspace / ".futureagi-build-finished.json").write_text(json.dumps({"proofs": counts}), encoding="utf-8")
+
+    text = runtime._close_with_proof_counts("All 12 scenarios proved.", None)
+
+    # The reply is never parsed; the counts that follow it are the proofs'.
+    assert text == "All 12 scenarios proved.\n\nProof counts: 3 proved, 9 kept as written, 0 not proved."
+
+
+def test_one_broken_scenario_does_not_block_the_save(tmp_path, monkeypatch):
+    class FailedAwareClient(BuilderClient):
+        def __init__(self):
+            super().__init__()
+            self.failed: list = []
+
+        async def publish(self, digest, failed_scenarios=None):
+            self.failed.append(failed_scenarios)
+            return await super().publish(digest)
+
+    client = FailedAwareClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=True)
+    runtime._mint_published()
+    sealed: list = []
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.scenario_seal_problems",
+        lambda root: {"broken_case": "checks/refunded.py would not compile"},
+    )
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root, skip=(): sealed.append(set(skip))
+    )
+
+    _turn(runtime, {"content": "edit three cases"})
+
+    assert sealed == [{"broken_case"}]
+    assert client.failed == [[{"scenario_key": "broken_case", "reason": "checks/refunded.py would not compile"}]]
+    text = _reply(client)
+    assert "Put under Unsaved changes: added #41 late_driver" in text
+    assert "Except 1 scenarios that could not be applied: broken_case: checks/refunded.py would not compile." in text
+
+
+def test_a_folder_a_run_cannot_load_keeps_its_sealed_version(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios, scenario_seal_problems
+
+    authoring = tmp_path / "authoring"
+    for name, body in (("good", '{"scenario_key": "good"}'), ("broken", "{not json")):
+        (authoring / "scenarios" / name).mkdir(parents=True)
+        (authoring / "scenarios" / name / "scenario.json").write_text(body, encoding="utf-8")
+    sealed = tmp_path / "bundle"
+    (sealed / "scenarios" / "broken").mkdir(parents=True)
+    (sealed / "scenarios" / "broken" / "scenario.json").write_text('{"scenario_key": "broken", "v": 1}', encoding="utf-8")
+
+    assert "broken" in scenario_seal_problems(authoring)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    _copy_scenarios(authoring, staging, count=2, skip=frozenset({"broken"}), sealed=sealed)
+
+    assert json.loads((staging / "scenarios" / "broken" / "scenario.json").read_text())["v"] == 1
+    assert (staging / "scenarios" / "good").is_dir()
+
+
+def test_a_held_copy_never_takes_the_folder_of_a_case_written_now(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios
+
+    authoring = tmp_path / "authoring"
+    for name, body in (("a_broken", "{not json"), ("late", '{"scenario_key": "late"}')):
+        (authoring / "scenarios" / name).mkdir(parents=True)
+        (authoring / "scenarios" / name / "scenario.json").write_text(body, encoding="utf-8")
+    sealed = tmp_path / "bundle"
+    (sealed / "scenarios" / "late").mkdir(parents=True)
+    (sealed / "scenarios" / "late" / "scenario.json").write_text('{"scenario_key": "a_broken"}', encoding="utf-8")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    _copy_scenarios(authoring, staging, count=2, skip=frozenset({"a_broken"}), sealed=sealed)
+
+    assert json.loads((staging / "scenarios" / "late" / "scenario.json").read_text())["scenario_key"] == "late"
+    assert sorted(path.name for path in (staging / "scenarios").iterdir()) == ["late"]
+
+
+def test_publish_sends_at_most_the_platform_limit_of_failed_scenarios():
+    from types import SimpleNamespace
+
+    body = _capabilities().model_dump(mode="json")
+    body["endpoints"]["publish"] = body["endpoints"]["run_status"].replace("run-status", "publish")
+    sent = []
+
+    class Transport:
+        def request(self, method, url, **kwargs):
+            sent.append(kwargs.get("json_body"))
+            return SimpleNamespace(status_code=200, body={"applied": True})
+
+    client = ConversationClient(ConversationCapabilities.model_validate(body), transport=Transport())
+    failed = [{"scenario_key": f"case-{one}", "reason": "bad check"} for one in range(250)]
+
+    asyncio.run(client.publish("sha256:abc", failed_scenarios=failed))
+    asyncio.run(client.publish("sha256:abc"))
+
+    assert len(sent[0]["failed_scenarios"]) == 200
+    assert sent[0]["failed_scenarios"][0] == {"scenario_key": "case-0", "reason": "bad check"}
+    assert "failed_scenarios" not in sent[1]
+
+
 def _two_agent_world(tmp_path: Path, folder: str):
     """A saved environment whose contract records ``folder``, over a repository of two agents."""
     from test_nudge_turn import _suite
@@ -2678,7 +3200,7 @@ class _Saying(EditingConversation):
 def test_the_turns_assistant_message_loses_url_credentials(tmp_path, monkeypatch, ending):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     events = [
         RuntimeEvent(kind="text", text="Saved https://bot:hun", detail={"stage": "builder"}),
         RuntimeEvent(kind="text", text="ter2@hooks.example/v1?key=sk-1#frag for you.", detail={}),
@@ -3055,7 +3577,7 @@ def test_the_reply_is_cleaned_before_the_save_note_and_the_health_lines_are_adde
     """Change review r3, A-M1 shape 1: notes added first made a one-URL reply prose."""
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
     runtime.conversation = _SayingAndWriting(tmp_path, _texts(_BROKEN_URL_PIECES))
     runtime._last_health = f"The hook check failed for {_SECRET_URL}"
@@ -3065,7 +3587,7 @@ def test_the_reply_is_cleaned_before_the_save_note_and_the_health_lines_are_adde
     assert _leaks(client.events) == []
     assert "".join(_deltas(client)) == _SEEN
     assert _reply(client) == (
-        f"{_SEEN}\n\nSaved to the environment: added #41 late_driver. It now has 41 scenarios."
+        f"{_SEEN}\n\nPut under Unsaved changes: added #41 late_driver. With them the suite has 41 scenarios. Validate, then Save to keep them as a new version."
         f"\n\nStill open from the last health check (1): The hook check failed for {_SEEN}"
     )
 
@@ -3079,7 +3601,7 @@ def test_the_save_note_is_cleaned_on_its_own(tmp_path, monkeypatch):
 
     client = NamingClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
     runtime.conversation = _SayingAndWriting(tmp_path, _texts(["Added it."]))
 
@@ -3088,14 +3610,15 @@ def test_the_save_note_is_cleaned_on_its_own(tmp_path, monkeypatch):
     assert _leaks(client.events) == []
     # The full stop after #frag is part of the fragment, so it goes too.
     assert _reply(client) == (
-        f"Added it.\n\nSaved to the environment: added #41 posts to {_SEEN} It now has 41 scenarios."
+        f"Added it.\n\nPut under Unsaved changes: added #41 posts to {_SEEN} With them the suite has 41 scenarios. "
+        "Validate, then Save to keep them as a new version."
     )
 
 
 def test_a_failed_reseal_sends_the_reply_cleaned_before_its_note(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
 
     def fails(root):
         raise RuntimeError("seed import failed")
@@ -3107,8 +3630,9 @@ def test_a_failed_reseal_sends_the_reply_cleaned_before_its_note(tmp_path, monke
 
     reply = next(e for e in client.events if e["kind"] == "assistant_message")
     assert _leaks(client.events) == []
-    assert reply["payload"]["error"] == "reseal_failed"
-    assert reply["payload"]["text"].startswith(f"{_SEEN}\n\nThese changes were NOT saved")
+    # The change stays in the chat's working copy as a draft and the turn completes.
+    assert "error" not in reply["payload"]
+    assert reply["payload"]["text"].startswith(f"{_SEEN}\n\nThese changes stay in this chat's working copy and are NOT under")
 
 
 @pytest.mark.parametrize(
@@ -3132,7 +3656,7 @@ def test_a_failed_stage_cleans_its_detail_whole_before_cutting_it(
     """Change review r3, A-M1 and round 2's L2: the detail is cleaned before the prefix and cut."""
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     events = [RuntimeEvent(kind="done", detail={"outcome": "failed", "error": error})]
     runtime.conversation = _Saying(tmp_path, events)
 
@@ -3151,7 +3675,7 @@ def test_whitespace_around_a_one_url_reply_leaves_the_stream_as_clean_as_the_rep
     Fix check B-M4: the interrupted ending strips its reply too."""
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime._published_fingerprint()
+    runtime._mint_published()
     pieces = ["\n\nhttps://bot:hun", "\nter2@hooks.example/v1", "\n?key=sk-1", " \n"]
     if ending == "interrupted":
 
@@ -3242,6 +3766,1505 @@ def test_random_splits_never_send_a_credential_the_stripped_whole_drops():
     assert found == []
 
 
+# -- TH-9500: the hold rule for secrets matched across whitespace (plan v1.1, C1-C4) --------------
+# Every key-shaped value is fake. The cases are the design reviewers' lists, copied as data.
+
+_GH = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+_SKP = "sk-proj-" + "FAKEfake0123456789abcdefFAKEfake0123456789ab"
+_AK = "AKIA" + "FAKEFAKE12345678"
+_XB = "xoxb-12345678901-12345678901-" + "FAKEfakeFAKEfakeFAKEfake"
+_SLACK = "https://hooks.slack.com/services/" + "T00FAKE00/B00FAKE00/" + "FAKEfakeFAKEfakeFAKEfake"
+_TG = "https://api.telegram.org/bot123456789:AAFAKEfakeFAKEfakeFAKEfakeFAKEfake_x/sendMessage"
+_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEsigFAKEsig"
+_PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIEFAKEFAKEFAKE\nABCDEFFAKE==\n-----END RSA PRIVATE KEY-----"
+# Round 1's cases (r1cases.py) and the addendum's three: round 2's 1,919 stream splits.
+_ROUND1 = {
+    "page: ws in password": "https://bot:hun ter2@h/v1",
+    "page: lb in password": "see https://bot:hun\n    ter2@h/v1 is the hook",
+    "page: tab in password": "see https://bot:hun\tter2@h/v1 is the hook",
+    "page: query next line": "see https://u:pw@h/x\n  ?key=sk-1 and more",
+    "page: ?# in password": "https://bot:8812#x@db/",
+    "page: / in password": "https://bot:pa/ss@db",
+    "page: :// in password": "https://bot:pa://ss@db",
+    "bare ghp prose": f"Use {_GH} to push.",
+    "bare sk-proj prose": f"key is {_SKP}.",
+    "bare AKIA quoted": f'aws="{_AK}"',
+    "bare xoxb json": f'{{"t": "{_XB}"}}',
+    "slack hook": f"Post to {_SLACK} daily",
+    "telegram": f"Call {_TG} now",
+    "jwt prose": f"Bearer {_JWT}",
+    "pem": f"key:\n{_PEM}\nend",
+    "pem header only": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAAFAKE\n(truncated)",
+    "assign pw": "password=hunter22",
+    "assign spaced": "token: s3cr3tvalue99",
+    "tab query": "see https://h/x\t?key=sk-1 more",
+    "mid-query break": "see https://h/x?a=1&\n    key=sk-1 more",
+    "break before ? no indent": "see https://h/x\n?key=sk-1 more",
+    "nbsp query": "see https://h/x\xa0?key=sk-1 more",
+    "nbsp password": "https://bot:hun\xa0ter2@h/v1",
+    "H port+email": "Run at http://localhost:3000 and email support@acme.com",
+    "H query email": "https://host:8080/path?email=a@b.com",
+    "H npm scoped": "Install from https://registry.npmjs.org:443/@babel/core today",
+    "H medium": "Read https://medium.com/@user for more",
+    "H port then mention": "Open http://localhost:8080 and ping @oncall in Slack",
+    "H md amp": "See https://docs.x.com/a\n&copy=2024 Acme",
+    "H password required": "password: required",
+    "H token expires": "the token: expires hourly",
+    "H secret never": "secret: never tell anyone",
+    "H env": 'api_key=os.environ["OPENAI_API_KEY"]',
+    "H env placeholder": "Send the token: ${SLACK_BOT_TOKEN} in the header",
+    "H commit": "Fixed in 1ac329e16b0f2c9a8e7d6c5b4a3f2e1d0c9b8a7f",
+    "H uuid": "order 123e4567-e89b-12d3-a456-426614174000",
+    "H b64img": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "H order": "Order ID ORD-2024-000123 and SKU AKIAMODEL",
+    "H token count": "max_tokens: 4096 and token=streaming",
+    "a1": 'config "password": "Zq8wYv3Lp9" ok',
+    "a3": "use https://bot:hun ter2@h/v1 now",
+    "a4": f"key:\n{_PEM}\nend",
+}
+# The design page's chat-test list, each with trailing text.
+_RUN = "/".join(["a" * 50] * 90)
+_CHAT_CASES = {
+    "ghp in a long run": '{"x":"'
+    + _RUN[:3000]
+    + '","t":"'
+    + _GH
+    + '","y":"'
+    + _RUN[:2000]
+    + '"} done now',
+    "named value at its ': '": 'config "password": "Zq8wYv3Lp9" ok then more',
+    "rule 1 at its space": "use https://bot:hun ter2@h/v1 now and later",
+    "rule 1 at a break + 4": "see https://bot:hun\n    ter2@h/v1 is the hook",
+    "block": f"key:\n{_PEM}\nend of message here",
+    "block in YAML": f"tls:\n  key: |\n    {_PEM.replace(chr(10), chr(10) + '    ')}\n  ok: true",
+    "block CRLF": f"Here:\r\n{_PEM.replace(chr(10), chr(13) + chr(10))}\r\nKeep it safe.",
+    "block encrypted": "Here:\n-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: "
+    "AES-128-CBC,3F17F5316E2BAC89\n\nMIIEFAKEQUJDREVG\n-----END RSA PRIVATE KEY-----\nKeep it.",
+    "block one line": "Use this: -----BEGIN RSA PRIVATE KEY----- MIIEFAKEQUJDREVG "
+    "-----END RSA PRIVATE KEY----- then restart",
+    "login query": "Login at https://h.example/login?user=bob&password=Sunshine then stop",
+    "oauth code": "POST https://oauth2.googleapis.com/token?code=4/0AXfakeFAKEcode123&grant_type=x and wait",
+    "telegram path": f"Call {_TG}?chat_id=1 now please",
+    "a URL holding a name and a prefix": "Open https://h.example/cb/token?ref=sk-not-a-key&session=Qm9vZmFrZQ then go",
+    "rule 2 on the next line": "see https://h/x?a=1\n&token=Sunshine and more",
+    "named md label": "- **Password:** Zq8wYv3Lp9 then go on",
+    "named camel json": '{"clientSecret": "Zq8wYv3Lp9Kd2xT", "x": 1} done now',
+    "named env pass": "DB_PASS=Zq8wYv3Lp9\nSMTP_PASS=hunter22x9\nok",
+    "named 16 spaces": 'admin = "x"\npassword                = "Zq8wYv3Lp9" ok',
+    "named kebab": "cloud.aws.credentials.secret-key: Zq8wYv3Lp9Kd2xT ok",
+    "named quoted with spaces": 'cfg "password": "correct horse battery 9" ok more',
+    "named break + 4": "password:\n   Zq8wYv3Lp9 ok",
+    "escaped sk-proj in a repr": "got " + repr("key below\n" + _SKP) + " back",
+    "escaped ghp in JSON": 'then {"text": "a\\t' + _GH + '"} done',
+    "escaped password in a repr": "got " + repr("ok\npassword=hunter22x9") + " back",
+    "escaped pem with no END in JSON": 'body {"key": "-----BEGIN RSA PRIVATE KEY-----\\nMIIEFAKEQUJDREVG\\nABCDEFFAKE=="} ok',
+    "bare // at its colon": "run --db //admin:Xk9Qp2Zr8@db.example.com/app now and more",
+    "bare // broken by a space": "use //bot:hun ter2@h.io/v1 now and later",
+    "bare // after (": "see (//admin:Xk9Qp2Zr8@db.example.com/app) now and more",
+    "bare // with an @ in the password": "use //admin:P@ss9Xk9Qp@db.example.com/app now and more",
+    "header Token scheme": "send Authorization: Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE now",
+    "header bare uuid": 'then {"Authorization": "3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"} ok',
+    "escaped u000a key": "got a\\u000a" + _SKP + " back",
+    "nested JSON named value": 'got {"content": "{\\"password\\": \\"correct horse 9 battery\\"}"} back',
+    "curl -u at its space": "run curl -s -u admin:Xk9Qp2Zr8wq https://h/v1 now",
+    "--password at its space": "then mysql --password Xk9Qp2Zr8wq db ok",
+    "host:port userinfo": "set host: admin:Xk9Qp2Zr8@db.example.com:5432 for now",
+    "three runs in a password": "see https://bot:hun ter 2@h/v1 now and later on",
+    "wide run in a password": "see https://bot:hun     ter2@h/v1 now and later on",
+    "blank line in a password": "see https://bot:hun\n\n  ter2@h/v1 now and later",
+    "fragment after an address": "see https://x.com/a #ops&token=Zq8wYv3Lp9Kd now and later",
+    "quoted --password with a space": 'then mysql --password "Xk9 Qp2Zr8wq" db ok',
+    "curl -u 390 characters on": "curl " + "a " * 192 + "-u admin:Xk9Qp2Zr8wq https://h/v1 now",
+    "CRLF blank line in a password": "see https://bot:hun\r\n\r\n  ter2@h/v1 now and later",
+    "Token then an escaped break": 'send {"Authorization": "Token\\u000aTk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE"} now',
+    "Bearer then \\x0a": 'send {"Authorization": "Bearer\\x0a3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b"} now',
+    "Go header Set": 'then req.Header.Set("Authorization", "Token Tk4fR9xQ2mZ7vB3nL8wY5cH1jD6sA0pE") ok',
+    "host:port IPv6": "set host: admin:Xk9Qp2Zr8@[::1]:5432 for now",
+    "host:port Go DSN": "set DSN=root:Xk9Qp2Zr8@tcp(db.example.com:3306)/app for now",
+    "bare // after <": "see <code>//a:Xk9Qp2Zr8wq@h.io/x</code> now and later",
+    "curl -u continued": "run curl -s \\\n  -u admin:Xk9Qp2Zr8wq \\\n  https://h/v1 now",
+    "mysql -p": "then mysql -uroot -pXk9Qp2Zr8wq db ok",
+    "redis-cli -a": "then redis-cli -a Xk9Qp2Zr8wq ping ok",
+    "sqlplus": "then sqlplus admin/Xk9Qp2Zr8wq@db.example.com/app ok",
+    "URL broken after =": "see https://h/x?token=\nXk9Qp2Zr8wqLm7 more and later",
+    "URL broken in a name": "see https://h/x?a=1&api_ke\ny=Xk9Qp2Zr8wqLm7 more and later",
+    "escaped \\U before a key": "got a\\U0001f511" + _GH + " back",
+    "bearer at its space": "run curl -H 'Authorization: Bearer 3f6a8c2e-1b4d-4e5f-9a7b-0c1d2e3f4a5b' now",
+    "basic at its space": 'then {"Authorization": "Basic dXNlcjpGQUtFZmFrZTAxMjM0NTY3ODk="} ok',
+    "conn string": "Use DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=FAKEazureFAKEkey0123"
+    "456789abcdef==;EndpointSuffix=core.windows.net then go",
+    "azure key, spaced": "set AZURE_KEY = "
+    + ("FAKEazureFAKEkey0123456789abcdefFAKE+/" * 3)[:86]
+    + "== ok",
+}
+_PLANTED = [
+    "3f6a8c2e-1b4d",
+    "Xk9Qp2Zr8wq",
+    "Xk9Qp2Zr8",
+    "Xk9Qp2Zr8wqLm7",
+    "ter 2",
+    "correct horse 9",
+    "Tk4fR9xQ2mZ7",
+    "ss9Xk9Qp",
+    "Xk9Qp2Zr8",
+    "dXNlcjpGQUtFZmFrZTAx",
+    "hun ter2",
+    "ter2@",
+    "hunter22",
+    "Zq8wYv3Lp9",
+    "s3cr3tvalue99",
+    "MIIEFAKE",
+    "ABCDEFFAKE",
+    _GH,
+    _SKP,
+    "battery 9",
+    "FAKEazureFAKEkey0123",
+    "Sunshine",
+    "4/0AXfake",
+    "Qm9vZmFrZQ",
+    "AAFAKEfake",
+    "key=sk-1",
+    "FAKEfakeFAKEfakeFAKEfake",
+    "FAKEsigFAKEsig",
+    "QUJDREVG",
+]
+
+
+def _events_of(deltas: list[str]) -> list[str]:
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+    events = [cleaner.feed(delta) for delta in deltas]
+    events.append(cleaner.flush())
+    return [event for event in events if event]
+
+
+def _removed_fragments(text: str, whole: str) -> set[str]:
+    """k1_stream's frags(): 6-character fragments of what the whole clean removes, less any
+    that also occur in what it keeps (r4 L8)."""
+    import difflib
+
+    matcher = difflib.SequenceMatcher(None, text, whole, autojunk=False)
+    removed = [
+        text[start:end]
+        for op, start, end, _, _ in matcher.get_opcodes()
+        if op in ("delete", "replace") and len(text[start:end].strip()) >= 6
+    ]
+    fragments = {
+        piece[at : at + 6] for piece in removed for at in range(len(piece) - 5)
+    }
+    return {fragment for fragment in fragments if fragment not in whole}
+
+
+def _split_problems(text: str, splits: list[list[str]]) -> list[str]:
+    """C1's three checks, for each way of splitting `text` into deltas: the joined events equal
+    one whole clean; no 6-character fragment of a removed string is in any event; no planted
+    secret the whole clean drops is in the joined events."""
+    from fi.alk.providers.agent import _redact
+
+    whole = _redact(text)
+    fragments = _removed_fragments(text, whole)
+    problems = []
+    for deltas in splits:
+        events = _events_of(deltas)
+        joined = "".join(events)
+        if joined != whole:
+            problems.append(f"unequal at {[len(d) for d in deltas][:3]}")
+        elif any(
+            event[at : at + 6] in fragments
+            for event in events
+            for at in range(len(event) - 5)
+        ):
+            problems.append(f"a fragment at {[len(d) for d in deltas][:3]}")
+        elif any(
+            secret in text and secret not in whole and secret in joined
+            for secret in _PLANTED
+        ):
+            problems.append(f"a planted secret at {[len(d) for d in deltas][:3]}")
+    return problems
+
+
+def _every_split(text: str) -> list[list[str]]:
+    return [[text[:at], text[at:]] for at in range(1, len(text))] + [list(text)]
+
+
+def test_round_twos_1919_stream_splits_each_equal_one_whole_clean() -> None:
+    """C2 (W3): round 1's cases and the addendum's, every two-way split and char by char."""
+    splits = {name: _every_split(text) for name, text in _ROUND1.items()}
+    assert sum(len(each) for each in splits.values()) == 1919
+
+    problems = {
+        name: _split_problems(_ROUND1[name], each) for name, each in splits.items()
+    }
+
+    assert {name: found[:3] for name, found in problems.items() if found} == {}
+
+
+@pytest.mark.parametrize("name", list(_CHAT_CASES))
+def test_each_chat_case_split_at_every_offset_equals_one_whole_clean(name: str) -> None:
+    """C1: every offset (sampled in the long run), and 1-, 3- and 7-character deltas."""
+    text = _CHAT_CASES[name]
+    offsets = range(1, len(text)) if len(text) < 2000 else range(1, len(text), 7)
+    splits = [[text[:at], text[at:]] for at in offsets]
+    splits += [
+        [text[at : at + size] for at in range(0, len(text), size)] for size in (1, 3, 7)
+    ]
+
+    assert _split_problems(text, splits)[:3] == []
+
+
+def test_every_event_the_pump_sends_masks_a_secret_split_across_its_whitespace(
+    tmp_path, monkeypatch
+):
+    """C1 through _pump_events: assistant_delta, tool_result and the turn's assistant_message
+    (the question is below). A named value split at its ': ' and a password at its space."""
+    from fi.alk.providers.agent import _redact
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    queue: asyncio.Queue = asyncio.Queue()
+    said = 'Set "password": "Zq8wYv3Lp9" and use https://bot:hun ter2@h.example/v1 then go.'
+    colon, space = said.index(": ") + 1, said.index("hun ") + 4
+    pieces = [
+        said[:colon],
+        said[colon : colon + 1],
+        said[colon + 1 : space],
+        said[space:],
+    ]
+    for piece in pieces:
+        queue.put_nowait(
+            RuntimeEvent(kind="text", text=piece, detail={"partial": True})
+        )
+    queue.put_nowait(
+        RuntimeEvent(kind="tool", tool="mcp__x__Read", detail={"call_id": "r"})
+    )
+    queue.put_nowait(
+        RuntimeEvent(
+            kind="result", text=f".env:1: GITHUB_TOKEN={_GH}", detail={"call_id": "r"}
+        )
+    )
+    queue.put_nowait(None)
+
+    asyncio.run(
+        runtime._pump_events(
+            queue,
+            assistant_message_id="a-1",
+            fallback_invocation_id="turn-1",
+            emitted_text=[],
+            turn_failures=[],
+        )
+    )
+
+    shown = json.dumps(client.events)
+    assert "Zq8wYv3Lp9" not in shown and "ter2" not in shown and _GH[4:12] not in shown
+    assert "".join(_deltas(client)) == _redact(said)
+    [result] = [one["payload"] for one in client.events if one["kind"] == "tool_result"]
+    assert result["text"] == ".env:1: GITHUB_TOKEN=[redacted]"
+
+
+def test_a_call_to_a_tool_the_session_was_never_offered_is_logged_not_shown(tmp_path, monkeypatch, capsys):
+    """The live shape: the builder called `default_api:Read`, a name it made up for Read, and the chat showed the
+    provider's refusal as an error card."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.backends import SessionSpec
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation.stage = SimpleNamespace(spec=SessionSpec(system_prompt="", builtins=("Read",)))
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait(RuntimeEvent(kind="tool", tool="default_api:Read", detail={"call_id": "made-up"}))
+    queue.put_nowait(
+        RuntimeEvent(
+            kind="result",
+            text="Error: No such tool available: default_api:Read",
+            detail={"call_id": "made-up", "is_error": True},
+        )
+    )
+    queue.put_nowait(RuntimeEvent(kind="tool", tool="Read", detail={"call_id": "real"}))
+    queue.put_nowait(RuntimeEvent(kind="result", text="agent.py", detail={"call_id": "real"}))
+    queue.put_nowait(None)
+
+    asyncio.run(
+        runtime._pump_events(
+            queue, assistant_message_id="a-1", fallback_invocation_id="turn-1", emitted_text=[], turn_failures=[]
+        )
+    )
+
+    cards = [one["payload"] for one in client.events if one["kind"] in ("tool_started", "tool_result")]
+    assert [one["tool"] for one in cards] == ["Read", "Read"] and cards[1]["text"] == "agent.py"
+    assert "default_api:Read" in capsys.readouterr().err
+
+
+def test_the_turns_assistant_message_masks_a_key_split_between_its_pieces(
+    tmp_path, monkeypatch
+):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._mint_published()
+    runtime.conversation = _Saying(
+        tmp_path, _texts(["Saved password: ", "Zq8wYv3Lp9 ", "for you."])
+    )
+
+    _turn(runtime, {"content": "save it"})
+
+    assert "Zq8wYv3Lp9" not in json.dumps(client.events)
+    assert "".join(_deltas(client)) == "Saved password: [redacted] for you."
+    assert _reply(client) == "Saved password: [redacted] for you."
+
+
+def test_a_question_the_model_asks_masks_a_named_value(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.stopping.set()
+
+    asyncio.run(
+        runtime._ask(
+            "AskUserQuestion",
+            {
+                "question": "Keep DB_PASSWORD=Zq8wYv3Lp9 ?",
+                "options": [f"use {_GH}", "drop it"],
+            },
+            None,
+        )
+    )
+
+    asked = next(one for one in client.events if one["kind"] == "question_requested")
+    assert asked["payload"] == {
+        "prompt": "Keep DB_PASSWORD=[redacted] ?",
+        "options": ["use [redacted]", "drop it"],
+    }
+
+
+def _seconds(deltas: list[str]) -> float:
+    import time
+
+    best = 9.0
+    for _ in range(3):
+        start = time.perf_counter()
+        _events_of(deltas)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def test_the_seams_work_per_delta_is_bounded_by_the_delta() -> None:
+    """C3 (r4 H2, r1 M7): each under 0.5 s, best of 3."""
+    words = "The quick brown fox jumps over the lazy dog while the build runs. "
+    refuse = (
+        "If a user pastes -----BEGIN PRIVATE KEY----- text, refuse. "
+        + (words * 700)[: 40 * 1024]
+    )
+    # 10,000 pairs, so a build that looks over the whole held text on every delta shows.
+    no_space = "Here: " + "a/" * 10_000 + _GH + " done"
+    saml = (
+        "Sign in at https://idp.example.com/sso?SAMLRequest="
+        + ("fZJNT8MwDIbvSPyHKPeuWwdbDEFAKE" * 160)[:4200]
+        + "&tok="
+        + _GH
+        + "&RelayState=Sunshine then come back"
+    )
+    quoted = 'cfg "password": "' + "a b c " * 500 + '" ok'
+    named_lines = ("token: Zq8wYv3Lp9 and password = abc\n" * 1200)[: 40 * 1024]
+
+    times = {
+        "honest BEGIN + 40 KiB, 4-char deltas": _seconds(
+            [refuse[i : i + 4] for i in range(0, len(refuse), 4)]
+        ),
+        "20,000 with no space + ghp_, 1-char deltas": _seconds(list(no_space)),
+        "4 KB SAML query past N, 1-char deltas": _seconds(list(saml)),
+        "3 KB quoted value, 4-char deltas": _seconds(
+            [quoted[i : i + 4] for i in range(0, len(quoted), 4)]
+        ),
+        "a name on every line, 40 KiB, 4-char deltas": _seconds(
+            [named_lines[i : i + 4] for i in range(0, len(named_lines), 4)]
+        ),
+    }
+
+    assert {name: seconds for name, seconds in times.items() if seconds >= 0.5} == {}
+
+
+def test_a_lone_webhook_broken_by_a_line_break_before_prose_is_cleaned_as_one_url() -> (
+    None
+):
+    """C4 (r4 M2): before the text is known to be prose, the seam never cuts at \\n."""
+    from fi.alk.providers.agent import _redact
+
+    text = "https://hooks.slack.com/services/" + "T00FAKE00/B00FAKE00/\nFAKEfakeFAKEfakeFAKEfake"
+    for size in (1, 3, 7):
+        joined = "".join(
+            _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        )
+        assert joined == _redact(text) == "https://hooks.slack.com/services/[redacted]"
+
+
+@pytest.mark.parametrize("at", [4058, 4070, 4080, 4090, 4095])
+def test_a_key_straddling_the_soft_bound_in_a_held_url_query_never_streams(
+    at: int,
+) -> None:
+    """C4 (r4 M1, r1 L6), at 1-character deltas: no head of the key in any event, and the honest
+    word after the URL ("then") is kept."""
+    from fi.alk.providers.agent import _redact
+
+    url = "https://idp.example.com/sso?SAMLRequest="
+    filler = ("fZJNT8MwDIbvSPyHKPeuWwdbDEFAKE" * 160)[: at - len(url) - len("&tok=")]
+    text = (
+        "Sign in at "
+        + url
+        + filler
+        + "&tok="
+        + _GH
+        + "&RelayState=Sunshine then come back"
+    )
+
+    events = _events_of(list(text))
+
+    assert "".join(events) == _redact(text)
+    assert "".join(events).endswith(" then come back")
+    assert not any(_GH[:6] in event for event in events)
+
+
+def test_a_key_block_longer_than_the_hard_bound_is_held_never_streamed() -> None:
+    """C4 (r4 L7): an 18 KB block is held whole, whatever M is."""
+    from fi.alk.providers.agent import _redact
+
+    lines = [f"L{i:03d}FAKEQUJDREVGR0hJSktM" + "A" * 36 for i in range(300)]
+    text = (
+        "Key:\n-----BEGIN RSA PRIVATE KEY-----\n"
+        + "\n".join(lines)
+        + "\n-----END RSA PRIVATE KEY-----\nKeep it safe."
+    )
+    assert len(text) > 16_384
+
+    events = _events_of([text[i : i + 7] for i in range(0, len(text), 7)])
+
+    assert "".join(events) == _redact(text) == "Key:\n[redacted]\nKeep it safe."
+    assert not any(line[4:30] in event for line in lines for event in events)
+
+
+# -- TH-9500 change review r1 (cr1): what streams past the soft bound ---------------------------
+
+# cr1 M3: a named value longer than N, plain, quoted with spaces, AWS's guard name, and a URL as
+# the value. Past N the shed sent the value cleaned only as far as it was held, then the rest
+# with no name in front of it, or the URL whole.
+_LONG_NAMED = {
+    "plain": "Note token: " + "Zq8w" * 1100 + " ok then",
+    "quoted with spaces": 'cfg "password": "' + "a1 b2 c3 " * 540 + '" ok then',
+    "aws guard": "aws_secret_access_key = "
+    + "wJalrXUtnFEMIFAKEK7MD" * 210
+    + " ok then",
+    "a URL as the value": "Note token: https://h.example/" + "a" * 4200 + " ok then",
+}
+
+
+@pytest.mark.parametrize("name", list(_LONG_NAMED))
+def test_a_named_value_longer_than_the_soft_bound_streams_as_one_whole_clean(
+    name: str,
+) -> None:
+    """cr1 M3: held as a key is, up to the hard bound, at 1-, 5- and 50-character deltas."""
+    text = _LONG_NAMED[name]
+    splits = [
+        [text[at : at + size] for at in range(0, len(text), size)]
+        for size in (1, 5, 50)
+    ]
+
+    assert _split_problems(text, splits) == []
+
+
+@pytest.mark.parametrize("at", [4070, 4090])
+@pytest.mark.parametrize("size", [1, 5])
+def test_a_key_straddling_the_soft_bound_in_a_run_with_no_space_never_streams(
+    at: int, size: int
+) -> None:
+    """cr1 M5 (round 3's w3_flush shape): a ghp_ key in a whitespace-free run, across the
+    4,096th held character. The key is held whole, up to the hard bound."""
+    from fi.alk.providers.agent import _redact
+
+    text = "Here: " + ("a/" * 3000)[: at - 6] + _GH + "/" + "b/" * 300 + " done now"
+    assert text.find(_GH) == at
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == _redact(text)
+    assert not any(_GH[:12] in event or _GH[-20:] in event for event in events)
+
+
+def test_the_seam_stays_linear_on_an_honest_begin_then_256_kib_of_prose() -> None:
+    """cr1 M6: the per-delta END search is bounded by the delta (r4 H2), at 256 KiB, best of
+    3, under 1.5 s. Searched from the block's header on every delta, it took 3.5 s."""
+    words = "The quick brown fox jumps over the lazy dog while the build runs. "
+    refuse = (
+        "If a user pastes -----BEGIN PRIVATE KEY----- text, refuse. "
+        + (words * 4100)[: 256 * 1024]
+    )
+
+    seconds = _seconds([refuse[i : i + 4] for i in range(0, len(refuse), 4)])
+
+    assert seconds < 1.5, f"{seconds:.3f} s"
+
+
+def test_text_after_an_end_split_across_two_deltas_streams_before_the_flush() -> None:
+    """cr1 L3: an END line split between two deltas closes the block when its second half
+    arrives, so what follows streams then, not only at the message's end."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    text = f"key:\n{_PEM}\nThen restart the service and check the logs."
+    split = text.index("-----END") + len("-----END RSA PRI")
+    after = text.index("Then")
+    cleaner = _DeltaCleaner()
+
+    streamed = "".join(
+        cleaner.feed(delta) for delta in (text[:split], text[split:after], text[after:])
+    )
+
+    assert streamed.startswith("key:\n[redacted]\nThen restart the service and")
+    assert (
+        streamed + cleaner.flush()
+        == "key:\n[redacted]\nThen restart the service and check the logs."
+    )
+
+
+# -- TH-9500 rule 1b: an @ before the password's / (design addendum v2.5.2) ----------------------
+# The rows test_secret_shapes.py's R1B_CLEANED and R1B_KEPT check on the whole text, copied as
+# data. 1b's span and its host lookahead cross no whitespace and no ://, so ChatHold is
+# unchanged (L5); a one-URL value runs step 1 on its joined token, as `_clean` does (M3, M-A).
+_R1B_ROWS = [
+    "postgres://admin:Xk9/Qp+Zr8@db.example.com:5432/app",
+    "https://user:pa#ss@host.example/x",
+    "postgres://admin:P@ss/Xk9@db.example.com:5432/app",
+    "smtp://me@gmail.com:app/pass@smtp.gmail.com:587",
+    "redis://:p@w/x9@cache.internal:6379/0",
+    "postgres://admin:P@ss:99/Xk9@db.example.com/app",
+    "postgres://admin:P@ss/Xk9@localhost/app",
+    "postgres://admin:P@ss/Xk9@db/app",
+    "postgres://admin:P@ss/Xk9@[::1]:5432/app",
+    "postgres://admin:P@ss/Xk9@postgres_db:5432/app",
+    "postgres://admin:P@ss/Xk9@my_db/app",
+    "`redis://:p@w/x9@redis`",
+    "postgres://admin:P@ss/Xk9@db:${DB_PORT}/app",
+    "postgres://admin:P@ss/Xk9@db:$DB_PORT/app",
+    "postgres://admin:P@ss/Xk9@db?sslmode=disable",
+    "redis://:p@w/x9@redis#0",
+    "(amqp://u:p@w/x9@rabbitmq)",
+    "amqp://u:p@w/x9@rabbitmq, then",
+    "amqp://u:p@w/x9@rabbitmq; then",
+    "<amqp://u:p@w/x9@rabbitmq>",
+    "[amqp://u:p@w/x9@rabbitmq]",
+    "postgres://admin:P@ss/Xk9@[fe80::1%25en0]:5432/app",
+    "a://u:x://v:p@h/x@host.example",
+    "http://admin@localhost:8080/bob@example.com",
+    "ssh://git@gitlab.example.com:2222/ops@infra.example/repo.git",
+    "https://ci@registry.example.com:8443/lodash@4.17.21",
+    "ssh://git@host.example:22/org@team/repo",
+    "http://admin@[::1]/bob@example.com",
+    "ssh://git@[fd00::5]/org@team/repo",
+    "https://ci@registry.example.com/lodash@4.17.21",
+    "ssh://git@github.com/org@team/repo",
+    "Mail https://u:p@h.example/to@~team now",
+]
+# M3 and M-A: equal and clean when the URL stands alone (in prose, a break inside the span is a
+# named limit).
+_R1B_BROKEN = {
+    "postgres://admin:P@ss/Xk\n9@db.example.com:5432/app": "postgres://db.example.com:5432/app",
+    "postgres://admin:Pa\nss@w/x9@db.example.com/app": "postgres://db.example.com/app",
+    "redis://:pa\nss@w/x9@cache.internal:6379/0": "redis://cache.internal:6379/0",
+    "a://u:x://v:p@h/\nx@host.example": "a://host.example",
+}
+
+
+@pytest.mark.parametrize("text", _R1B_ROWS, ids=range(len(_R1B_ROWS)))
+def test_rule_1b_streams_as_the_whole_text_cleans_at_every_split(text: str) -> None:
+    """Alone and in prose, every two-way split and char by char, with C1's three checks."""
+    for each in (text, f"Use {text} now, then {text} again."):
+        assert _split_problems(each, _every_split(each))[:3] == [], each
+
+
+@pytest.mark.parametrize("text", list(_R1B_BROKEN), ids=range(len(_R1B_BROKEN)))
+def test_a_one_url_value_broken_inside_1bs_span_streams_equal_and_clean(
+    text: str,
+) -> None:
+    from fi.alk.providers.agent import _redact
+
+    assert _redact(text) == _R1B_BROKEN[text]
+    assert _split_problems(text, _every_split(text)) == []
+
+
+# -- TH-9500 change review r2 (cr2) -----------------------------------------------------------------
+
+# cr2 H1: a reply that is one URL, with a key or a named value at the start of a later line.
+# Cleaning the whole text masks it before the join; before prose, so does the stream. Each row
+# is (reply, the secret that must not stream). Owl's ten shapes, then rows longer than N, which
+# go through `_shed`'s branch before prose.
+_AKIA = "AKIA" + "FAKEFAKEFAKE1234"
+_JWT_LONG = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEsigFAKEsigFAKEsig"
+_LONG_URL = "https://h.example/" + "a" * 4100
+_LINE_STARTS = {
+    "url \\n ghp": ("https://github.com/settings/tokens\n" + _GH, _GH),
+    "url \\t ghp": ("https://github.com/settings/tokens\t" + _GH, _GH),
+    "url \\r\\n ghp": ("https://h.example/p\r\n" + _GH, _GH),
+    "url \\n AKIA": ("https://console.aws.amazon.com/iam\n" + _AKIA, _AKIA),
+    "url \\n jwt": ("https://jwt.io\n" + _JWT_LONG, "FAKEsigFAKEsigFAKEsig"),
+    "url \\n sk-proj": ("https://platform.openai.com/api-keys\n" + _SKP, _SKP),
+    "url \\n token=": ("https://h.example/p\ntoken=Zq8wYv3Lp9Kd2xT", "Zq8wYv3Lp9Kd2xT"),
+    "url \\n DB_PASSWORD=": (
+        "https://h.example/p\nDB_PASSWORD=Zq8wYv3Lp9Kd2xT",
+        "Zq8wYv3Lp9Kd2xT",
+    ),
+    "url \\n url \\n ghp": ("https://a.example/x\nhttps://b.example/y\n" + _GH, _GH),
+    "1b url \\n ghp": (
+        "postgres://admin:P@ss/Xk9@db.example.com:5432/app\n" + _GH,
+        _GH,
+    ),
+    "past N \\n ghp": (_LONG_URL + "\n" + _GH, _GH),
+    "past N \\n token: \\n value": (
+        _LONG_URL + "\ntoken:\nZq8wYv3Lp9Kd2xT",
+        "Zq8wYv3Lp9Kd2xT",
+    ),
+    "past N \\n ghp \\n url": (_LONG_URL + "\n" + _GH + "\nhttps://c.example/z", _GH),
+    # A URL on the key's own line: the cut there sends the key's line, masked at its start.
+    "past N \\n ghp/url": (_LONG_URL + "\n" + _GH + "/https://c.example/z", _GH),
+    "past N, many lines": ("https://h.example/x" + "\nabc" * 1100 + "\n" + _GH, _GH),
+    # cr3 M5: a key on the line after a slash, glued to a URL.
+    "past N /\\n AKIA glued to url": (
+        _LONG_URL + "/\n" + _AKIA + "https://c.example/z",
+        _AKIA,
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_LINE_STARTS))
+def test_a_key_at_a_line_start_in_a_one_url_reply_never_streams(name: str) -> None:
+    """cr2 H1: at 1- and 7-character deltas and as one delta, the stream equals cleaning the
+    whole text, and no event holds the secret's tail, in any case: a value cleaned as part of
+    a scheme comes out lower-cased (cr3 H1)."""
+    from fi.alk.providers.agent import _redact
+
+    text, secret = _LINE_STARTS[name]
+    tail = secret[-12:].lower()
+    whole = _redact(text)
+    assert tail not in whole.lower()
+    for size in (1, 7, len(text)):
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        assert "".join(events) == whole, size
+        assert not any(tail in event.lower() for event in events), size
+
+
+# cr3 H1: past N before prose, a named value or a key on the line before a URL line. The
+# branches find URL starts on the joined text, where that line is glued onto the URL's scheme;
+# a cut there sent the name alone and cleaned the value as a scheme, lower-cased. Hawk's rows
+# 1, 3 and 5.
+_V = "Zq8wYv3Lp9Kd2xT"
+_GRAFANA = "\n".join(
+    f"https://grafana.example.com/d/service-{i}/latency" for i in range(90)
+)
+_LINE_BEFORE_A_URL = {
+    "a long URL, DB_PASSWORD=V, a URL": (
+        _LONG_URL + "\nDB_PASSWORD=" + _V + "\nhttps://b.example/y",
+        _V,
+    ),
+    "a long URL, token=V glued to a URL": (
+        _LONG_URL + "\ntoken=" + _V + "https://c.example/z",
+        _V,
+    ),
+    "90 grafana URLs, GITHUB_TOKEN=ghp_, a URL": (
+        _GRAFANA + "\nGITHUB_TOKEN=" + _GH + "\nhttps://github.com/org/repo",
+        _GH,
+    ),
+    # A name and its value on the next line go together.
+    "a long URL, token:, V, a URL": (
+        _LONG_URL + "\ntoken:\n" + _V + "\nhttps://c.example/z",
+        _V,
+    ),
+    # A cut never splits a URL's userinfo from its host.
+    "a long user, :V@host on the next line, a URL": (
+        "https://" + "u" * 4100 + "\n:" + _V + "@host.example/x\nhttps://c.example/z",
+        _V,
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_LINE_BEFORE_A_URL))
+@pytest.mark.parametrize("size", [1, 4, 512, 0])
+def test_a_value_on_the_line_before_a_url_never_streams(name: str, size: int) -> None:
+    """cr3 H1: before prose, a shed cuts only at a line boundary, at 1-, 4- and 512-character
+    deltas and as one delta."""
+    from fi.alk.providers.agent import _redact
+
+    text, secret = _LINE_BEFORE_A_URL[name]
+    size = size or len(text)
+    tail = secret[-12:].lower()
+    whole = _redact(text)
+    assert tail not in whole.lower()
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == whole
+    assert not any(tail in event.lower() for event in events)
+
+
+@pytest.mark.parametrize("size", [1, 7, 0])
+def test_a_line_start_masked_in_the_stream_is_logged_once(
+    size: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """cr2 H1: the line-start mask's kinds go on the cleaner's one log line."""
+    text = "https://github.com/settings/tokens\n" + _GH
+    size = size or len(text)
+    with caplog.at_level("WARNING"):
+        _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "fi.alk.providers.agent"
+    ] == ["secrets redacted: kinds=github"]
+
+
+@pytest.mark.parametrize("size", [1, 7, 0])
+def test_a_line_start_masked_by_a_shed_is_logged_once(
+    size: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """cr3 L3: past N, the shed sends the key's line, masked, and logs its kind once."""
+    text = _LONG_URL + "\n" + _GH + "/\nhttps://c.example/z"
+    size = size or len(text)
+    with caplog.at_level("WARNING"):
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "[redacted]/" in events[0]
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "fi.alk.providers.agent"
+    ] == ["secrets redacted: kinds=github"]
+
+
+# cr3 M6 and L1: an opening that fills N with scheme characters and no :// is prose, so the
+# URL lines after it aren't glued onto it. L1's named limit ("an opening of 4,096 or more scheme
+# characters with no ://") is closed by it, and its row now passes.
+_LONG_OPENINGS = {
+    "M6: a query value on a later URL line": (
+        "Zq8w" * 1100 + "\nhttps://registry.example.com/x\n&tok=" + _V,
+        _V,
+    ),
+    "L1: a key on the next line": ("a" * 4100 + "\n" + _GH, _GH),
+}
+
+
+@pytest.mark.parametrize("name", list(_LONG_OPENINGS))
+@pytest.mark.parametrize("size", [1, 7, 64, 0])
+def test_a_long_opening_with_no_scheme_streams_as_prose(name: str, size: int) -> None:
+    from fi.alk.providers.agent import _redact
+
+    text, secret = _LONG_OPENINGS[name]
+    size = size or len(text)
+    tail = secret[-12:].lower()
+    whole = _redact(text)
+    assert tail not in whole.lower()
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == whole
+    assert not any(tail in event.lower() for event in events)
+
+
+# cr2 M2: rule 1 across whitespace, then rule 2's next piece (S's r1r2.py).
+_RULE1_THEN_RULE2 = [
+    "See redis://:pa ss@h:6379\n?code=s3cr3tvalue99 then",
+    "See redis://u:pa ss@h.example:6379 &tok=s3cr3tvalue99 then",
+    "Try postgres://admin:Xk9/Qp+Zr\n  8@db.example.com:5432/app\n&tok=s3cr3tvalue99 ok",
+    # cr3 M2: the address piece's query ends in &, so rule 2 reaches the next piece.
+    "See redis://:pa ss@h:6379/?a=1& tok=s3cr3tvalue99 then",
+]
+
+
+@pytest.mark.parametrize("text", _RULE1_THEN_RULE2, ids=range(len(_RULE1_THEN_RULE2)))
+def test_rule_2s_next_piece_holds_after_a_password_broken_by_whitespace(
+    text: str,
+) -> None:
+    """cr2 M2: the piece a rule 1 match ends in is an address piece, at 1- and 5-character
+    deltas, and at every two-way split, where the @ arrives in the delta its piece ends in
+    (cr3 M2)."""
+    splits = [
+        [text[i : i + size] for i in range(0, len(text), size)] for size in (1, 5)
+    ] + _every_split(text)
+
+    assert _split_problems(text, splits) == []
+    assert not any("s3cr3tvalue99" in event for event in _events_of(list(text)))
+
+
+def test_a_password_broken_by_a_crlf_split_between_deltas_never_streams() -> None:
+    """cr2 M3: `\\r` and `\\n` in separate deltas, at 1-, 2- and 3-character deltas; and with
+    spaces and a tab before the `\\r` (cr3 M3)."""
+    for text in (
+        "Try postgres://admin:Xk9/Qp+Zr\r\n8@db.example.com:5432/app now",
+        "Try postgres://admin:Xk9/Qp+Zr \t\r\n8@db.example.com:5432/app now",
+    ):
+        splits = [
+            [text[i : i + size] for i in range(0, len(text), size)]
+            for size in (1, 2, 3)
+        ]
+
+        assert _split_problems(text, splits) == [], text
+
+
+def test_an_open_quoted_value_longer_than_the_hard_bound_still_streams() -> None:
+    """cr2 M4: a named value is held up to M (`_LONGEST_HELD_KEY`), not past it: text streams
+    before the message ends."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    words = "The quick brown fox jumps over the lazy dog while the build runs. "
+    text = 'Set "password": "' + (words * 320)[: 20 * 1024]
+    cleaner = _DeltaCleaner()
+
+    streamed = "".join(cleaner.feed(text[i : i + 4]) for i in range(0, len(text), 4))
+
+    assert len(streamed) > 1024
+
+
+def test_one_large_delta_of_passwords_broken_by_spaces_stays_linear() -> None:
+    """cr3 M1: `_address` finds its piece by bisection. One 256 KiB delta of rule 1 matches
+    that cross a space takes at most twice the same text with no broken password, best of 3,
+    interleaved (cr4 L1: an absolute time failed on a loaded machine)."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    def text(unit: str) -> str:
+        return (unit * (256 * 1024 // len(unit) + 1))[: 256 * 1024]
+
+    broken, control = (
+        text("See redis://:pa ss@h x y z "),
+        text("See redis://h:6379 x y z now "),
+    )
+    best = {broken: 99.0, control: 99.0}
+    for _ in range(3):
+        for each in (broken, control):
+            cleaner = _DeltaCleaner()
+            start = time.perf_counter()
+            cleaner.feed(each)
+            best[each] = min(best[each], time.perf_counter() - start)
+
+    assert best[broken] <= 2 * best[control], (
+        f"{best[broken]:.3f} s, {best[control]:.3f} s"
+    )
+
+
+# -- TH-9500 change review r4 (cr4) -----------------------------------------------------------------
+
+# cr4 H1: Dileep's rule 1b input with its password broken by a line break, after the / and
+# before it, past N before prose. A cut between the password's lines sent its first half; the
+# cut holds while the text after it, up to the next ://, may still be that URL's userinfo.
+_RULE1B_BROKEN_PAST_N = {
+    "after the /": _LONG_URL
+    + "\npostgres://admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\nhttps://c.example/z",
+    "before the /": _LONG_URL
+    + "\npostgres://admin:Xk\n9/Qp+Zr8@db.example.com:5432/app\nhttps://c.example/z",
+}
+
+
+@pytest.mark.parametrize("name", list(_RULE1B_BROKEN_PAST_N))
+@pytest.mark.parametrize("size", [1, 7, 512, 0])
+def test_a_rule_1b_password_broken_by_a_line_break_past_n_never_streams(
+    name: str, size: int
+) -> None:
+    from fi.alk.providers.agent import _redact
+
+    text = _RULE1B_BROKEN_PAST_N[name]
+    size = size or len(text)
+    whole = _redact(text)
+    assert "qp+zr" not in whole.lower()
+
+    events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+
+    assert "".join(events) == whole
+    assert not any("qp+zr" in event.lower() for event in events)
+
+
+# cr4 M1: honest replies that are only URLs, one per line. Each line ends in scheme characters,
+# so joined it is glued onto the next line's scheme; the cut must still fall between them.
+_URL_LISTS = {
+    "400 grafana dashboards": "\n".join(
+        f"https://grafana.example.com/d/service-{i}/latency" for i in range(400)
+    ),
+    "800 bare hosts": "\n".join(f"https://host{i}.example.com" for i in range(800)),
+    "400 GitHub repositories": "\n".join(
+        f"https://github.com/org-{i}/repo-{i}" for i in range(400)
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_URL_LISTS))
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_an_honest_url_list_streams_before_its_end(name: str, size: int) -> None:
+    """cr4 M1: the stream equals the whole text, and most of it goes before the flush."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+    from fi.alk.providers.agent import _redact
+
+    text = _URL_LISTS[name]
+    size = size or len(text)
+    cleaner = _DeltaCleaner()
+
+    streamed = "".join(
+        cleaner.feed(text[i : i + size]) for i in range(0, len(text), size)
+    )
+
+    assert streamed + cleaner.flush() == _redact(text)
+    assert len(streamed) > len(text) // 2
+
+
+def _best_interleaved(texts: dict[str, str], size: int = 4) -> dict[str, float]:
+    """Each text fed in `size`-character deltas, best of 3, the texts taking turns so that a
+    loaded machine slows them alike."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    best = dict.fromkeys(texts, 99.0)
+    for _ in range(3):
+        for name, text in texts.items():
+            cleaner = _DeltaCleaner()
+            start = time.perf_counter()
+            for i in range(0, len(text), size):
+                cleaner.feed(text[i : i + size])
+            cleaner.flush()
+            best[name] = min(best[name], time.perf_counter() - start)
+    return best
+
+
+# 16 KiB held in 4-character deltas costs the same for any text it holds, a cut that is walked
+# once or one that is walked again on every delta aside; one URL with no breaks is the control.
+_HELD_16K = 16 * 1024
+_HELD_CONTROL = ("https://a.example/" + "x" * _HELD_16K)[:_HELD_16K]
+
+
+def test_a_held_cut_is_not_walked_again_on_every_delta() -> None:
+    """cr4 M2: while a cut holds, the held text grows by lines it can't cut at; they are walked
+    once, not on every delta. R's shape at 16 KiB in 4-character deltas takes at most twice a
+    control (walked on every delta, about a minute)."""
+    held = ("https://hostA\nhttps://hostB" + "\nx" * _HELD_16K)[:_HELD_16K]
+    # The cut held at a line that is only a URL's own `://` keeps its place too.
+    at_scheme = ("https://hostA/a\nhttps\n://hostB/p\nhttps://c/" + "\nx" * _HELD_16K)[:_HELD_16K]
+
+    best = _best_interleaved({"held": held, "at_scheme": at_scheme, "control": _HELD_CONTROL})
+
+    assert best["held"] <= 2 * best["control"], best
+    assert best["at_scheme"] <= 2 * best["control"], best
+
+
+def test_a_cut_the_userinfo_guard_holds_is_not_walked_again_on_every_delta() -> None:
+    """cr4b M2: the other way a cut is held: an @ line before the next URL. The guard path
+    keeps the held cut too."""
+    held = (
+        "https://a.example/\nalice@example.com\nhttps://b.example/" + "\nx" * _HELD_16K
+    )[:_HELD_16K]
+
+    best = _best_interleaved({"held": held, "control": _HELD_CONTROL})
+
+    assert best["held"] <= 2 * best["control"], best
+
+
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_a_cut_held_by_an_at_line_is_released_by_the_url_lines_after_it(
+    size: int,
+) -> None:
+    """cr4b M2: a long URL, an email line, then 800 URL lines (24,844 joined). The cut the
+    @ line holds moves on with the URL starts after it: the list streams as stored, not as
+    `[redacted]`, at every size (a held cut that stays put past a later start fails at 7)."""
+    from fi.alk.providers.agent import _redact
+
+    text = (
+        _LONG_URL
+        + "\nalice@example.com\nhttps://c.example/z"
+        + "".join(f"\nhttps://h{i}.example.com/p" for i in range(800))
+    )
+    step = size or len(text)
+
+    events = _events_of([text[i : i + step] for i in range(0, len(text), step)])
+
+    assert "".join(events).strip() == _redact(text.strip())
+    assert sum(len(event) for event in events[:-1]) > len(text) // 2
+
+
+def test_tab_split_lines_are_cut_without_one_call_blocking() -> None:
+    """cr4b H3: a URL whose lines are split by tabs, 1 MiB of them, then a :// that moves the
+    cut. No call takes a second (a search back to the held text's start for every line took
+    2 s at 1 MiB, 9 s at 2), and the held text, breaks counted, stays within the hard bound."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _HOLD_HARD, _DeltaCleaner
+
+    run = 128
+    text = (
+        "https://a.example/@x"
+        + ("\t" * run + "x") * (1024 * 1024 // (run + 1))
+        + "://b"
+    )
+    cleaner = _DeltaCleaner()
+    slowest = most = 0
+    for i in range(0, len(text), 4096):
+        start = time.perf_counter()
+        cleaner.feed(text[i : i + 4096])
+        slowest = max(slowest, time.perf_counter() - start)
+        most = max(most, len(cleaner.held))
+    cleaner.flush()
+
+    assert slowest < 1.0, f"{slowest:.2f} s"
+    assert most <= _HOLD_HARD + 4096
+
+
+def test_the_walk_over_tab_split_lines_costs_each_line_its_own_length() -> None:
+    """cr4b H3: `_line_cut` on 1 MiB of tab-split lines, with the cut on the first, takes at
+    most twice the same on newline-split lines (searching back for every line took 2 s)."""
+    import time
+
+    from fi.alk.harness.hosted_chat_entrypoint import _URL_BREAKS, _DeltaCleaner
+
+    run = 128
+    unit = ("\t" * run + "x", "\n" * run + "x")
+    best = [99.0, 99.0]
+    for _ in range(3):
+        for n, each in enumerate(unit):
+            raw = "https://a.example/@x" + each * (1024 * 1024 // (run + 1)) + "://b"
+            start = time.perf_counter()
+            _DeltaCleaner()._line_cut(raw, raw.translate(_URL_BREAKS), 0)
+            best[n] = min(best[n], time.perf_counter() - start)
+
+    assert best[0] <= 2 * best[1] + 0.05, best
+
+
+def test_a_name_its_equals_and_its_value_on_three_lines_past_n_is_a_named_limit() -> (
+    None
+):
+    """cr4 M3, a named limit: before prose and past N, a name, its `=` and its value each on a
+    line of its own, then a URL line. No cut keeps all three lines with the name: the value
+    streams joined onto the URL's scheme, lower-cased, where the whole text masks it. The
+    stream is pinned as it is, at every size."""
+    text = _LONG_URL + "\ntoken\t=\tZq8wYv3Lp9Kd2xT\nhttps://c.example/z"
+    for size in (1, 7, 512, len(text)):
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        assert "".join(events) == (
+            _LONG_URL + "token=zq8wyv3lp9kd2xthttps://c.example/z"
+        ), size
+
+
+# -- TH-9500 change review r5 (cr5): the offset sweeps as tests -------------------------------------
+
+# Three rounds of hand-picked rows each passed and then failed the next offset class a sweep
+# found. So each class is swept here: a break at every offset after the ://, or at every place
+# the input has one, and the rule is the one chat has: the stream, joined, is the stored message
+# (`_redact(reply.strip())`), and no event holds the secret, compared lower-cased. A sweep that
+# ran fewer cases than it should have, or whose check was taken out, fails on its count.
+_SWEEP_BREAKS = {"n": "\n", "t": "\t", "rn": "\r\n"}
+_SWEEP_GRAFANA = "\n".join(
+    f"https://grafana.example.com/d/service-{i}/latency" for i in range(90)
+)
+# (url, the tail of the password that must never stream)
+_SWEEP_URLS = {
+    "1b": ("postgres://admin:Xk9/Qp+Zr8@db.example.com:5432/app", "qp+zr"),
+    "r1": ("postgres://admin:S3cretPw9x@db.example.com/app", "cretp"),
+    "r1-nouser": ("redis://:S3cretPw9x@cache.internal:6379/0", "cretp"),
+    "1b-at": ("postgres://admin:P@ss/Xk9@db.example.com:5432/app", "ss/xk"),
+    "1b-ash": ("redis://:p@w/x9@cache.internal:6379/0", "w/x9"),
+    "1b-pass": ("postgres://admin:Pass@w/x9@db.example.com/app", "w/x9"),
+}
+_SWEEP_TAILS = ("\nhttps://c.example/z", "https://c.example/z")
+
+
+def _swept(cases, size: int) -> tuple[int, list[str], int]:
+    """(cases held, the ones that were not, cases skipped) over `cases` of (label, text,
+    secret): each streamed in deltas of `size`. A case whose stored message keeps the secret is
+    skipped: that is the base cleaner's, not the stream's."""
+    from fi.alk.providers.agent import _redact
+
+    held, bad, skipped = 0, [], 0
+    for label, text, secret in cases:
+        whole = _redact(text.strip())
+        if secret in whole.lower():
+            skipped += 1
+            continue
+        events = _events_of([text[i : i + size] for i in range(0, len(text), size)])
+        joined = "".join(events)
+        leak = any(secret in event.lower() for event in events)
+        if leak or joined.strip() != whole:
+            bad.append(f"{label}: {'leak' if leak else 'unequal'}")
+        else:
+            held += 1
+    return held, bad, skipped
+
+
+def _assert_swept(cases, size: int, at_least: int) -> None:
+    held, bad, skipped = _swept(cases, size)
+    assert not bad, f"{len(bad)} of {held + len(bad)}: {bad[:6]}"
+    # Every case is held or bad, so an emptied sweep, or a check taken out, changes this.
+    assert held >= at_least, f"swept {held}, skipped {skipped}"
+
+
+def test_a_sweep_reports_a_leak_and_an_unequal_stream(monkeypatch) -> None:
+    """The sweeps' own check, on streams made to fail it: a sweep that cannot see a leak or a
+    difference would pass on any tree."""
+    import sys
+
+    here = sys.modules[__name__]
+    case = [("c", "See https://h.example/p now", "zzzzz")]
+
+    monkeypatch.setattr(
+        here, "_events_of", lambda deltas: ["See https://h.example/p now"]
+    )
+    assert _swept(case, 5) == (1, [], 0)
+    monkeypatch.setattr(
+        here, "_events_of", lambda deltas: ["See https://h.example/p ZZZZZ"]
+    )
+    assert _swept(case, 5) == (0, ["c: leak"], 0)
+    monkeypatch.setattr(
+        here, "_events_of", lambda deltas: ["See https://h.example/q now"]
+    )
+    assert _swept(case, 5) == (0, ["c: unequal"], 0)
+    # The base cleaner's own miss is no stream's: skipped, not held.
+    assert _swept([("k", "See zzzzz now", "zzzzz")], 5) == (0, [], 1)
+
+
+def _url_sweep(size: int, brk: str):
+    """A credentialed URL after a long URL, with the break at every offset after its ://."""
+    # One delta per character over the long URL alone keeps the 1-character run short.
+    prefixes = (_LONG_URL,) if size == 1 else (_LONG_URL, _SWEEP_GRAFANA)
+    tails = _SWEEP_TAILS[:1] if size == 1 else _SWEEP_TAILS
+    for pn, prefix in enumerate(prefixes):
+        for name, (url, secret) in _SWEEP_URLS.items():
+            for k in range(url.index("://") + 3, len(url) + 1):
+                for tn, tail in enumerate(tails):
+                    text = prefix + "\n" + url[:k] + brk + url[k:] + tail
+                    yield f"{name}/{pn}/{k}/{tn}", text, secret
+
+
+@pytest.mark.parametrize("brk", list(_SWEEP_BREAKS))
+@pytest.mark.parametrize("size", [1, 7, 64, 512])
+def test_a_credentialed_url_broken_at_any_offset_past_n_streams_as_stored(
+    size: int, brk: str
+) -> None:
+    """cr4b H1, H2: U's sweep. After a long URL (or a URL list), a credentialed URL with a
+    break at every offset from just after its :// to its end, before and after its @, inside its
+    host, and before its port."""
+    _assert_swept(_url_sweep(size, _SWEEP_BREAKS[brk]), size, 215 if size == 1 else 860)
+
+
+def _rule_1b_sweep(brk: str):
+    """R's: a rule 1b password (it holds a /) broken after each of its characters."""
+    for pn, prefix in enumerate((_LONG_URL, _SWEEP_GRAFANA)):
+        for password in ("Xk9/Qp+Zr8", "Xk9/Qp+Zr8Wv5Ty", "ab/cdEFgh12"):
+            for k in range(1, len(password) + 1):
+                for tn, tail in enumerate(
+                    ("\nhttps://c.example/z", "https://c.example/z")
+                ):
+                    text = (
+                        prefix
+                        + "\npostgres://admin:"
+                        + password[:k]
+                        + brk
+                        + password[k:]
+                        + "@db.example.com:5432/app"
+                        + tail
+                    )
+                    yield (
+                        f"{pn}/{password}/{k}/{tn}",
+                        text,
+                        password.split("/")[1][:5].lower(),
+                    )
+
+
+@pytest.mark.parametrize("brk", list(_SWEEP_BREAKS))
+@pytest.mark.parametrize("size", [1, 7, 64, 512])
+def test_a_rule_1b_password_broken_at_any_offset_past_n_streams_as_stored(
+    size: int, brk: str
+) -> None:
+    """cr4 H1: R's sweep, a break after each character of a password that holds a /."""
+    _assert_swept(_rule_1b_sweep(_SWEEP_BREAKS[brk]), size, 144)
+
+
+def _dodge_cases(brk: str):
+    """Every :// held is broken by a line break, so the guard that looks for one finds none
+    (cr4b H2), and rule 1b passwords broken after the @ or inside the host (cr4b H1)."""
+    long = _LONG_URL + "/"
+    z = "https://c.example/" + "z" * 4100
+    cases = {
+        "a :/ break /": (
+            long + "\npostgres:/\n/admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+        "b : break //": (
+            long + "\npostgres:\n//admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+        "c :/ break /, P@ss/Xk9@": (
+            long + "\npostgres:/\n/admin:P@ss/Xk9@\ndb.example.com:5432/app\n" + z,
+            "ss/xk9",
+        ),
+        "d pw broken twice": (
+            long + "\npostgres:/\n/admin:Xk9/Qp\n+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+        "e control, :// whole": (
+            long + "\npostgres://admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\n" + z,
+            "qp+zr",
+        ),
+    }
+    long_url = _LONG_URL
+    other = "https://c.example/z"
+    h123 = {
+        "H1 broken after the path's @": (
+            long_url
+            + "\npostgres://admin:P@ss/Xk9@\ndb.example.com:5432/app\n"
+            + other,
+            "ss/xk9",
+        ),
+        "H1 addendum shape, port in password": (
+            long_url + "\npostgres://admin:P@ss:99/Xk9@\ndb.example.com/app\n" + other,
+            "ss:99/xk9",
+        ),
+        "H1 redis 1b, glued URL after": (
+            long_url + "\nredis://:p@w/x9@\ncache.internal:6379/0" + other,
+            "w/x9",
+        ),
+        "H1 broken inside the host": (
+            long_url
+            + "\npostgres://admin:P@ss/Xk9@db.\nexample.com:5432/app\n"
+            + other,
+            "ss/xk9",
+        ),
+        "H1 control, under N": (
+            "https://h.example/p\npostgres://admin:P@ss/Xk9@\ndb.example.com:5432/app\n"
+            + other,
+            "ss/xk9",
+        ),
+        "H2 :/ break /, password broken": (
+            long_url
+            + "/\npostgres:/\n/admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\nhttps://c.example/"
+            + "z" * 4100,
+            "qp+zr",
+        ),
+        "H2 control, :// whole": (
+            long_url
+            + "/\npostgres://admin:Xk9/Qp+Zr\n8@db.example.com:5432/app\nhttps://c.example/"
+            + "z" * 4100,
+            "qp+zr",
+        ),
+    }
+    for name, (text, secret) in {**cases, **h123}.items():
+        yield name, text.replace("\n", brk), secret
+
+
+@pytest.mark.parametrize("brk", list(_SWEEP_BREAKS))
+@pytest.mark.parametrize("size", [1, 7, 64, 512])
+def test_a_url_whose_own_scheme_or_host_is_broken_past_n_streams_as_stored(
+    size: int, brk: str
+) -> None:
+    """cr4b H1, H2: the guard may not depend on a :// being whole in the text held, nor on the
+    break falling in a place that leaves the password's host on the next line."""
+    _assert_swept(_dodge_cases(_SWEEP_BREAKS[brk]), size, 12)
+
+
+def _honest_lists() -> dict[str, str]:
+    def alt(n: int, a: str, b: str) -> str:
+        return "\n".join(a.format(i=i) + "\n" + b.format(i=i) for i in range(n))
+
+    return {
+        "github + email x300": alt(
+            300, "https://github.com/user{i}", "user{i}@example.com"
+        ),
+        "email + github x300": "https://example.com/team\n"
+        + "\n".join(
+            f"user{i}@example.com\nhttps://github.com/user{i}" for i in range(300)
+        ),
+        "url + git@ x300": alt(
+            300,
+            "https://gitlab.example.com/org/repo{i}",
+            "git@gitlab.example.com:org/repo{i}.git",
+        ),
+        "url + mailto x300": alt(
+            300, "https://example.com/people/p{i}", "mailto:p{i}@example.com"
+        ),
+        "url + @mention x400": alt(
+            400, "https://github.com/org/repo{i}/pull/{i}", "@reviewer{i}"
+        ),
+        "url + img@sha256 x150": alt(
+            150,
+            "https://hub.docker.com/r/org/img{i}",
+            "org/img{i}@sha256:" + "ab12" * 16,
+        ),
+        "medium /@user x500": "\n".join(
+            f"https://medium.com/@writer{i}" for i in range(500)
+        ),
+        "npm /@scope/pkg x500": "\n".join(
+            f"https://www.npmjs.com/package/@scope{i}/pkg" for i in range(500)
+        ),
+        "control: github only x600": "\n".join(
+            f"https://github.com/user{i}" for i in range(600)
+        ),
+    }
+
+
+# The lists that stream: an @ in a URL's own path or a /@ segment is no userinfo.
+_STREAMING_LISTS = (
+    "medium /@user x500",
+    "npm /@scope/pkg x500",
+    "control: github only x600",
+)
+# cr4b M1, a named limit: an @ on the line before a URL could be the end of a userinfo, and the
+# cut after it can't tell, so the held text isn't cut while a later URL follows an @ line. Past
+# _HOLD_HARD it is sent as `[redacted]` and the rest of the token is dropped; short of it,
+# nothing goes before the flush. (Holding only while rule 1 finds a userinfo that would cross
+# the cut was tried: rule 1 is the cross-whitespace rule, and the plain userinfo of a URL on one
+# line isn't its span, so it let passwords through.) The raw text is counted toward the bound,
+# breaks too, so a list of about 16,000 joined characters with a break per URL is past it.
+_AT_LINE_LISTS_REDACTED = (
+    "url + git@ x300",
+    "url + @mention x400",
+    "url + img@sha256 x150",
+    "url + mailto x300",
+)
+_AT_LINE_LISTS_HELD = ("github + email x300", "email + github x300")
+
+
+def _fed(text: str, size: int) -> tuple[str, str]:
+    """What the stream sends before the flush, and what the flush sends."""
+    from fi.alk.harness.hosted_chat_entrypoint import _DeltaCleaner
+
+    cleaner = _DeltaCleaner()
+    sent = "".join(cleaner.feed(text[i : i + size]) for i in range(0, len(text), size))
+    return sent, cleaner.flush()
+
+
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_an_honest_url_list_streams_as_stored_and_before_its_end(size: int) -> None:
+    """URL-only lists past _HOLD_SOFT joined with an @ in a path: the stream is the stored
+    message, and most of it goes before the flush."""
+    from fi.alk.providers.agent import _redact
+
+    lists = _honest_lists()
+    for name in _STREAMING_LISTS:
+        text = lists[name]
+        sent, flushed = _fed(text, size or len(text))
+        assert (sent + flushed).strip() == _redact(text.strip()), name
+        assert len(sent) > len(text) // 2, name
+    assert (
+        len(_STREAMING_LISTS) + len(_AT_LINE_LISTS_REDACTED) + len(_AT_LINE_LISTS_HELD)
+        == 9
+    )
+    assert len(lists) == 9
+
+
+@pytest.mark.parametrize("size", [7, 512, 0])
+def test_an_honest_url_list_with_an_at_line_before_each_url_is_a_named_limit(
+    size: int,
+) -> None:
+    """cr4b M1, a named limit: pinned as it is, so that a change to it shows."""
+    from fi.alk.providers.agent import _redact
+
+    lists = _honest_lists()
+    for name in _AT_LINE_LISTS_REDACTED + _AT_LINE_LISTS_HELD:
+        text = lists[name]
+        sent, flushed = _fed(text, size or len(text))
+        if name in _AT_LINE_LISTS_REDACTED:
+            assert sent + flushed == "[redacted]", name
+        else:
+            assert sent == "", name
+            assert flushed.strip() == _redact(text.strip()), name
+
+
+# -- TH-9500 change review r5, H1: a break just before a credentialed URL's own :// -----------------
+_PRE_SCHEME_URLS = {
+    "1b": ("postgres://admin:Xk9/Qp+Zr8@db.example.com:5432/app", "qp+zr"),
+    "1b-at": ("postgres://admin:P@ss/Xk9@db.example.com:5432/app", "ss/xk"),
+    "1b-port": ("postgres://admin:P@ss:99/Xk9@db.example.com/app", "ss:99"),
+    "1b-ash": ("redis://:p@w/x9@cache.internal:6379/0", "w/x9"),
+    "r1": ("postgres://admin:S3cretPw9x@db.example.com/app", "cretp"),
+}
+
+
+def _pre_scheme_cases():
+    for name, (url, secret) in _PRE_SCHEME_URLS.items():
+        at = url.index("://")
+        for kind, brk in _SWEEP_BREAKS.items():
+            text = _LONG_URL + "\n" + url[:at] + brk + url[at:] + "\nhttps://c.example/z"
+            yield f"{name}/{kind}", text, secret
+
+
+@pytest.mark.parametrize("size", [1, 7, 64, 512, 0], ids=lambda size: f"size_{size or 'whole'}")
+def test_a_credentialed_url_broken_just_before_its_scheme_past_n_streams_as_stored(size) -> None:
+    """Past N before prose, the line cut can fall between a URL's scheme and its own ://, where
+    the text after the cut still holds the userinfo. Each of 5 URLs × 3 breaks streams equal to
+    the stored message, with no part of its password in any event."""
+    cases = list(_pre_scheme_cases())
+    assert len(cases) == 15
+    if size == 0:
+        held = sum(_swept([case], len(case[1]))[0] for case in cases)
+        bad = [b for case in cases for b in _swept([case], len(case[1]))[1]]
+        assert not bad, bad
+        assert held == len(cases)
+        return
+    _assert_swept(cases, size, at_least=len(cases))
+
+
+@pytest.mark.parametrize("size", [1, 7, 64])
+def test_a_scheme_line_then_a_lone_colon_line_past_n_streams_as_stored(size) -> None:
+    """The scheme, its `:` and its `//` on three lines, with a password holding `://` and an @
+    on a line of its own: the cut must not fall between the scheme and its `://`."""
+    text = (
+        _LONG_URL
+        + "\npostgres\n:\n//admin:S3cretPw9x/a://b\n@\ndb.example.com/app\nhttps://c.example/z"
+    )
+    _assert_swept([("scheme, :, //", text, "s3cretpw9x")], size, at_least=1)
+
+
+_R5_STREAM_SHAPES = {
+    "bare // starts": " //a:b ",
+    "bare // after =": "=//a:b",
+    "bearer words": "bearer ",
+    "basic then a run": "basic " + "a" * 15 + " ",
+    "escaped starts": "\\nsk-\\tAKIA ",
+    "runs words": "https://u:a b c d ",
+    "fragment words": "https://x.com #a&b=c ",
+    "curl words": "curl ",
+    "curl -u words": "curl -u a:b ",
+    "nested JSON words": '{\\"password\\": \\"a1 b\\"} ',
+    "header words": "authorization: token ",
+    "header then a value": "authorization: token " + "a1" * 8 + " ",
+    "bare // after (": "(//a:b ",
+    "bare // with @": " //a:p@q ",
+}
+
+
+@pytest.mark.parametrize("size", [64 * 1024, 1024 * 1024], ids=["64KiB", "1MiB"])
+@pytest.mark.parametrize("shape", list(_R5_STREAM_SHAPES))
+def test_the_round_five_seams_stay_linear_over_many_deltas(shape: str, size: int) -> None:
+    """The candidates the stream holds for a bare //, bearer and basic, in 1 KiB deltas: under
+    0.5 s at 64 KiB and under 6 s at 1 MiB, best of 3 (a quadratic hold took minutes)."""
+    unit = _R5_STREAM_SHAPES[shape]
+    text = (unit * (size // len(unit) + 1))[:size]
+    deltas = [text[at : at + 1024] for at in range(0, size, 1024)]
+
+    assert _seconds(deltas) < (0.5 if size < 1024 * 1024 else 6.0)
+
+
+def test_a_question_nobody_answers_reaches_the_claude_cli_as_a_permission_result(
+    tmp_path, monkeypatch
+):
+    from claude_agent_sdk.types import PermissionResultDeny
+
+    # For the Claude CLI the ask callback is its permission callback, which must return a
+    # permission result; a plain dict there is a TypeError inside the SDK.
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    runtime.backend_name = "claude"
+
+    runtime._from_platform = True
+    question = {"questions": [{"question": "Which?", "options": [{"label": "A"}]}]}
+    nobody = asyncio.run(runtime._ask("AskUserQuestion", question, None))
+    assert isinstance(nobody, PermissionResultDeny)
+    assert "Nobody answers" in nobody.message
+
+    runtime._from_platform = False
+    runtime.stopping.set()
+    stopped = asyncio.run(runtime._ask("AskUserQuestion", question, None))
+    assert isinstance(stopped, PermissionResultDeny)
+    assert "stopped" in stopped.message
+
+    # The kit's own confirmation asks without the CLI's question shape and reads a tool result.
+    runtime._from_platform = True
+    confirm = asyncio.run(runtime._ask("submit_scenario", {"question": "Confirm?"}, None))
+    assert "Nobody answers" in confirm["content"][0]["text"]
 
 
 def test_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
@@ -3359,7 +5382,7 @@ def test_stale_pre_run_sessions_are_written_again_before_a_save_seals_the_scenar
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     (tmp_path / "world.sqlite").write_bytes(b"before")
-    runtime._published_fingerprint()
+    runtime._mint_published()
     order = []
 
     async def refresh(root, write=None):
@@ -3389,3 +5412,629 @@ def test_a_change_waiting_on_the_person_asks_to_be_answered_with_an_option(tmp_p
     asyncio.run(guarded("edit_scenario")({"scenario_key": "one", "instruction": "ask for an exchange"}))
 
     assert [one.get("options_only") for one in asked] == [True]
+
+
+def _cited_suite(tmp_path):
+    """Two cases: one cites the refund-window rule, the other the item cap."""
+    from test_nudge_turn import _edit_scenario, _suite
+
+    from fi.alk.harness.contract import write_contract
+
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
+    contract = builder.contract_of(root)
+    contract.hard_constraints = ["Refund only within 30 days of delivery.", "Never sell more than 130 items."]
+    write_contract(contract, root)
+    _edit_scenario(
+        root,
+        "adds-a-big-mac",
+        use_case="Refuse a refund past the window",
+        branch="an order delivered 31 days ago",
+        sources=[{"kind": "rule", "ref": "rule:0", "quote": "within 30 days of delivery"}],
+    )
+    _edit_scenario(
+        root, "adds-one-big-mac", sources=[{"kind": "rule", "ref": "rule:1", "quote": "more than 130 items"}]
+    )
+    return root, builder.contract_of(root)
+
+
+def _key(root, name):
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    return next(one.scenario_key for one in load_scenarios(root) if one.name == name)
+
+
+def test_rewording_a_rule_links_the_two_by_id_and_lists_only_the_cases_citing_the_old_one(tmp_path):
+    from fi.alk.harness.amend import add_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
+
+    done, said = add_rule(contract, root, rule=new, why="policy changed", replaces=rule_id(old))
+
+    assert done, said
+    assert contract.hard_constraints == ["Never sell more than 130 items.", new]
+    assert [one.model_dump() for one in contract.amendment_records] == [
+        {"kind": "rule", "key": rule_id(old), "action": "removed", "previous": "", "replaced_by": rule_id(new),
+         "text": old},
+        {"kind": "rule", "key": rule_id(new), "action": "added", "previous": rule_id(old), "replaced_by": "",
+         "text": new},
+    ]
+    assert (
+        f"{_key(root, 'adds-a-big-mac')}: adds-a-big-mac\n      use case (its group heading): Refuse a refund past "
+        "the window" in said
+    )
+    # Its branch is listed too, and the builder is told to look for the old wording in cases that do not cite it.
+    assert "\n      branch: an order delivered 31 days ago" in said and "search the suite for it too" in said
+    # Every text that states what the case tests is shown for review, its controls' descriptions included.
+    assert "\n      control adds_twice: " in said
+    assert "adds-one-big-mac" not in said
+    # Saved as records, so a reader never parses the amendment line.
+    saved = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+    assert saved["amendment_records"][1]["previous"] == rule_id(old)
+
+
+def test_a_case_citing_a_reworded_rule_stands_on_its_replacement_and_an_orphaned_one_does_not(tmp_path):
+    """The live shape: "change the refund window from 14 days to 10 days" was made with add_rule replacing the old
+    rule, and every case citing it was then held as citing a source not in the environment."""
+    from fi.alk.harness.amend import add_rule, cases_citing_rules_gone, drop_rule
+    from fi.alk.harness.grounding import agent_source_root, resolve_sources
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    new = "Refund only within 10 days of delivery."
+    done, said = add_rule(contract, root, rule=new, why="the window is 10 days now", replaces=old)
+    assert done, said
+    # Reworded twice: the source still stands on the rule now held.
+    newest = "Refund only within 7 days of delivery."
+    done, said = add_rule(contract, root, rule=newest, why="7 days now", replaces=new)
+    assert done, said
+    by_name = {one.name: one for one in load_scenarios(root)}
+
+    [entry] = resolve_sources(by_name["adds-a-big-mac"], contract, root, agent_source_root(root))
+
+    assert entry["resolved"] is True and contract.hard_constraints[entry["rule_index"]] == newest
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == []
+
+    # Dropped with nothing in its place, it stays unresolved and listed.
+    done, said = drop_rule(contract, root, rule="Never sell more than 130 items.", why="gone", orphan=True)
+    assert done, said
+    [entry] = resolve_sources(by_name["adds-one-big-mac"], contract, root, agent_source_root(root))
+    assert entry["resolved"] is False
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == [_key(root, "adds-one-big-mac")]
+
+
+def test_a_case_kept_after_its_rule_was_reworded_cites_the_rule_now_held(tmp_path):
+    """Reviewed and kept as it reads, a case went on quoting the old rule's words, so it read Source changed for
+    good. Kept, it now cites the rule that replaced it."""
+    import asyncio
+
+    from fi.alk.harness.amend import add_rule, review_still_open
+    from fi.alk.harness.scenario_tools import load_scenarios, scenario_tools
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 10 days of delivery."
+    done, said = add_rule(contract, root, rule=new, why="the window is 10 days now", replaces=old)
+    assert done, said
+    key = _key(root, "adds-a-big-mac")
+    server, _kept = scenario_tools(contract, root, root, wanted=2)
+    edit = {one.name: one.handler for one in server.tools}["edit_scenario"]
+    still = review_still_open(root, load_scenarios(root))[key]
+
+    said = asyncio.run(edit({"scenario_key": key, "reviewed": list(still)}))["content"][0]["text"]
+
+    [source] = next(one for one in load_scenarios(root) if one.scenario_key == key).sources
+    assert "Kept as reviewed" in said and "now cites the rule that replaced it" in said, said
+    assert (source.ref, source.quote) == (f"rule:{contract.hard_constraints.index(new)}", new)
+    assert review_still_open(root, load_scenarios(root)).get(key) is None
+
+    # Written again quoting the old words, by any path: kept citing the rule now held.
+    stale = [{"kind": "rule", "ref": "rule:0", "quote": "within 30 days of delivery"}]
+    said = asyncio.run(edit({"scenario_key": key, "sources": stale, "tests": "the refund window"}))["content"][0]["text"]
+    [source] = next(one for one in load_scenarios(root) if one.scenario_key == key).sources
+    assert source.quote == new, said
+
+
+def test_a_rule_dropped_first_is_linked_when_its_rewrite_names_it(tmp_path):
+    from fi.alk.harness.amend import add_rule, drop_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    done, said = drop_rule(contract, root, rule=old, why="being reworded", orphan=True)
+    assert done and rule_id(old) in said and "adds-a-big-mac" in said
+
+    done, said = add_rule(contract, root, rule="Refund only within 14 days.", why="reworded", replaces=old)
+    assert done, said
+    removed, added = contract.amendment_records
+    assert (removed.action, removed.replaced_by) == ("removed", rule_id("Refund only within 14 days."))
+    assert (added.action, added.previous) == ("added", rule_id(old))
+
+
+def test_a_rule_dropped_and_added_in_one_message_is_never_linked_but_the_reply_names_the_drop(tmp_path):
+    from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    begin_turn(root)
+    old = "Refund only within 30 days of delivery."
+    drop_rule(contract, root, rule=old, why="gone", orphan=True)
+    # An unrelated rule added in the same message: whether it rewords the dropped one is the builder's call.
+    done, said = add_rule(contract, root, rule="Never take a card payment over the phone.", why="new")
+
+    assert done and all(not one.replaced_by and not one.previous for one in contract.amendment_records)
+    assert f"You dropped {rule_id(old)} earlier in this message" in said
+    assert f"replaces {rule_id(old)}" in said and "rest on what changed" not in said
+    # A later message does not name it as this message's drop.
+    begin_turn(root)
+    done, said = add_rule(contract, root, rule="Never sell gift cards.", why="new")
+    assert "earlier in this message" not in said
+
+
+def test_a_cited_rule_is_dropped_only_reworded_or_explicitly_orphaned(tmp_path):
+    """The live shape: asked to make a 30-day window 14 days, the builder dropped the rule and added the new one with
+    no link, and every case citing it read "A cited source is not in this environment". Dropping a cited rule now
+    has to say what becomes of it."""
+    from fi.alk.harness.amend import drop_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 14 days of delivery."
+
+    done, said = drop_rule(contract, root, rule=old, why="the window is 14 days now")
+    assert not done and "1 case(s) cite this rule" in said and "`replaced_by`" in said and "`orphan: true`" in said
+    assert old in contract.hard_constraints and contract.amendment_records == []
+
+    # Reworded: linked as add_rule with replaces does it, and the citing case listed for review.
+    done, said = drop_rule(contract, root, rule=old, why="the window is 14 days now", replaced_by=new)
+    assert done and "adds-a-big-mac" in said
+    removed, added = contract.amendment_records
+    assert (removed.replaced_by, added.previous) == (rule_id(new), rule_id(old))
+    assert old not in contract.hard_constraints and new in contract.hard_constraints
+
+
+def test_an_orphaned_cited_rule_leaves_its_cases_listed_until_they_are_fixed(tmp_path, monkeypatch):
+    from fi.alk.harness.amend import cases_citing_rules_gone, drop_rule
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == []
+    done, said = drop_rule(contract, root, rule=old, why="the agent no longer has a window", orphan=True)
+    assert done and "adds-a-big-mac" in said
+    gone = cases_citing_rules_gone(root, load_scenarios(root), contract)
+    assert gone == [_key(root, "adds-a-big-mac")]
+
+    # The reply's closing lines list it, as they do a heading left unreviewed.
+    runtime = _runtime(tmp_path / "chat", BuilderClient(), monkeypatch)
+    runtime.workspace = root
+    runtime._suite_here = lambda: load_scenarios(root)  # type: ignore[method-assign]
+    line = runtime._review_line()
+    assert "1 case(s) cite a rule the agent no longer has: adds-a-big-mac" in line
+    assert "add_rule with replaces" in line
+
+
+def test_a_rule_written_in_a_policy_file_rests_its_cases_on_that_line_only_once_the_line_is_gone(tmp_path):
+    from test_nudge_turn import _edit_scenario
+
+    from fi.alk.harness.amend import add_rule, begin_turn, cases_citing_rules_gone, drop_rule
+    from fi.alk.harness.contract import RuleSource, write_contract
+    from fi.alk.harness.scenario_tools import load_scenarios
+    from fi.alk.harness.understand import load as load_contract
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 25 days of delivery."
+    line = "Refunds are accepted within 30 days of delivery."
+    policy = root / "knowledge" / "refund-policy.md"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text(f"# Refunds\n\n{line}\n")
+    contract.rule_sources = [RuleSource(rule=old, file="knowledge/refund-policy.md", quote=line)]
+    write_contract(contract, root)
+    # The cases cite the policy file, not the rule: one its whole line, one only a part of it.
+    _edit_scenario(
+        root,
+        "adds-a-big-mac",
+        sources=[{"kind": "file", "ref": "file:knowledge/refund-policy.md", "quote": "accepted within 30 days"}],
+    )
+    _edit_scenario(
+        root, "adds-one-big-mac", sources=[{"kind": "file", "ref": "file:knowledge/refund-policy.md", "quote": line}]
+    )
+    begin_turn(root)
+    # The line is still in the file, so no case loses its ground: the drop needs neither replaced_by nor orphan.
+    done, said = drop_rule(contract, root, rule=old, why="the window changes")
+    assert done and "adds-one-big-mac" not in said and "adds-a-big-mac" not in said
+    done, said = add_rule(contract, root, rule=new, why="the window is 25 days now", replaces=old)
+    assert done, said
+    # The reworded rule keeps the line it is written on, saved with the contract.
+    saved = load_contract(root)
+    assert saved.rule_source(new) == RuleSource(rule=new, file="knowledge/refund-policy.md", quote=line)
+    assert cases_citing_rules_gone(root, load_scenarios(root), saved) == []
+
+    # The policy now says 25 days. The reworded rule still stands, so no rule is gone yet.
+    policy.write_text("# Refunds\n\nRefunds are accepted within 25 days of delivery.\n")
+    assert cases_citing_rules_gone(root, load_scenarios(root), saved) == []
+    # Dropped with nothing in its place: the case quoting its line exactly rests on a rule gone; a part never does.
+    done, said = drop_rule(saved, root, rule=new, why="no window any more")
+    assert not done and "1 case(s) cite this rule" in said
+    done, said = drop_rule(saved, root, rule=new, why="no window any more", orphan=True)
+    assert done, said
+    assert cases_citing_rules_gone(root, load_scenarios(root), saved) == [_key(root, "adds-one-big-mac")]
+
+
+def test_a_cited_rule_drop_is_refused_only_for_cases_that_lose_their_ground(tmp_path):
+    from test_nudge_turn import _edit_scenario
+
+    from fi.alk.harness.amend import cases_citing_rules_gone, drop_rule
+    from fi.alk.harness.contract import write_contract
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, contract = _cited_suite(tmp_path)
+    old = "Refund only within 30 days of delivery."
+    # Another rule the agent keeps holds the case's quoted words, so dropping this one leaves the case its ground.
+    contract.hard_constraints.append("Exchange only within 30 days of delivery.")
+    write_contract(contract, root)
+    # A case quoting words no rule ever held, and one quoting nothing, never rest on a dropped rule.
+    _edit_scenario(
+        root,
+        "adds-one-big-mac",
+        sources=[{"kind": "rule", "ref": "rule:9", "quote": "never more than two refunds a year"}],
+    )
+
+    done, said = drop_rule(contract, root, rule=old, why="the agent no longer refunds")
+    assert done, said
+    assert cases_citing_rules_gone(root, load_scenarios(root), contract) == []
+
+
+def test_a_cited_rule_drop_refused_again_and_again_is_counted_like_every_refusal(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract = _cited_suite(tmp_path)
+    server, _kept = scenario_tools(contract, root, root, wanted=2)
+    drop = {one.name: one.handler for one in server.tools}["drop_rule"]
+    asked = {"rule": "Refund only within 30 days of delivery.", "why": "gone"}
+
+    said = [asyncio.run(drop(asked))["content"][0]["text"] for _ in range(3)]
+
+    assert "not removed" in said[0] and "refusal" not in said[0]
+    assert "This is refusal 3 of dropping this rule" in said[2]
+
+
+def test_world_stage_drop_rule_needs_only_the_rule_and_why(tmp_path):
+    from fi.alk.harness.world.tools import world_tools
+
+    root, contract = _cited_suite(tmp_path)
+    server, _world = world_tools(contract, root)
+    [drop] = [one for one in server.tools if one.name == "drop_rule"]
+
+    assert sorted(drop.input_schema["required"]) == ["rule", "why"]
+
+
+def test_a_rule_source_is_a_file_and_its_line_together(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    done, said = add_rule(contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md")
+    assert not done and "give both, or neither" in said
+    done, said = add_rule(
+        contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md",
+        source_quote="Gift cards are never sold.",
+    )
+    assert done and contract.rule_source("Never sell gift cards.").quote == "Gift cards are never sold."
+
+
+def test_a_listed_heading_left_unedited_stays_open_until_edited_or_kept(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.amend import add_rule, review_still_open
+    from fi.alk.harness.contract import rule_id
+    from fi.alk.harness.scenario_tools import load_scenarios, scenario_tools
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 14 days of delivery."
+    done, said = add_rule(contract, root, rule=new, why="window is 14 days", replaces=rule_id(old))
+    assert done and "`use_case` is its group's heading" in said
+    key = _key(root, "adds-a-big-mac")
+    assert "use_case" in review_still_open(root, load_scenarios(root))[key]
+
+    server, kept = scenario_tools(contract, root, root, wanted=2)
+    tools = {one.name: one.handler for one in server.tools}
+    # The builder rewrote the scenario's other texts but left its group heading as it was.
+    still = review_still_open(root, load_scenarios(root))[key]
+    assert "use_case" in still
+    # Kept explicitly: the heading is right as it reads.
+    said = asyncio.run(tools["edit_scenario"]({"scenario_key": key, "reviewed": ["use_case"]}))["content"][0]["text"]
+    assert "Kept as reviewed: use_case" in said
+    assert "use_case" not in review_still_open(root, load_scenarios(root)).get(key, [])
+    # Every other listed text closes the same way; then nothing is open.
+    asyncio.run(tools["edit_scenario"]({"scenario_key": key, "reviewed": list(still)}))
+    assert review_still_open(root, load_scenarios(root)) == {}
+
+
+def test_editing_a_listed_text_closes_it_and_the_reply_lists_what_is_open(tmp_path, monkeypatch):
+    from fi.alk.harness.amend import _open_review, review_still_open
+    from fi.alk.harness.scenario import Scenario
+
+    case = Scenario(
+        name="refund_late", scenario_key="refund_late", use_case="Refund within the 30-day window", tests="the 30-day window"
+    )
+    _open_review(tmp_path, [case])
+    assert review_still_open(tmp_path, [case]) == {"refund_late": ["tests", "use_case"]}
+    edited = case.model_copy(update={"use_case": "Refund within the 14-day window"})
+    assert review_still_open(tmp_path, [edited]) == {"refund_late": ["tests"]}
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._suite_here = lambda: [edited]  # type: ignore[method-assign]
+    runtime._mint_published()
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "change the window to 14 days"})
+    assert "Still to review against the rule that changed (neither edited nor kept since): refund_late: tests." in (
+        _reply(client)
+    )
+
+
+def test_a_rule_source_quote_longer_than_a_line_is_refused_before_anything_changes(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    before = list(contract.hard_constraints)
+    done, said = add_rule(
+        contract, root, rule="Never sell gift cards.", why="asked", source_file="knowledge/p.md", source_quote="x" * 501
+    )
+    assert not done and "at most 500 characters" in said and contract.hard_constraints == before
+
+
+def test_a_contract_with_no_rule_sources_saves_as_before():
+    from fi.alk.harness.contract import AgentContract
+
+    assert "rule_sources" not in AgentContract(agent="shop").model_dump()
+
+
+def test_a_rule_added_with_no_replaces_is_never_linked_to_one_that_reads_alike(tmp_path):
+    from fi.alk.harness.amend import add_rule, begin_turn, drop_rule
+    from fi.alk.harness.contract import rule_id
+
+    root, contract = _cited_suite(tmp_path)
+    old, new = "Refund only within 30 days of delivery.", "Refund only within 20 days of delivery."
+    drop_rule(contract, root, rule=old, why="gone", orphan=True)
+    # A later message: the drop is not this message's rewrite.
+    begin_turn(root)
+    done, said = add_rule(contract, root, rule=new, why="new")
+
+    assert done and [one.replaced_by for one in contract.amendment_records] == ["", ""]
+    assert [one.previous for one in contract.amendment_records] == ["", ""]
+    assert "rest on what changed" not in said
+    # The reply names the removal nothing replaces, so a rewrite made as remove and add can still be declared.
+    assert f"{rule_id(old)}: {old}" in said and "replaces" in said
+
+    done, said = add_rule(contract, root, rule=new, why="it rewords the 30-day rule", replaces=rule_id(old))
+
+    assert done, said
+    assert contract.hard_constraints.count(new) == 1
+    removed, added = contract.amendment_records
+    assert (removed.replaced_by, added.previous) == (rule_id(new), rule_id(old))
+    assert "adds-a-big-mac" in said
+    # Linked, it is no longer listed as a removal nothing replaces.
+    done, said = add_rule(contract, root, rule="Never sell gift cards.", why="new")
+    assert done and rule_id(old) not in said
+
+
+def test_an_existing_rule_with_no_removal_to_link_is_still_refused(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    done, said = add_rule(
+        contract, root, rule="Never sell more than 130 items.", why="x", replaces="Refund only within 7 days."
+    )
+    assert not done and contract.amendment_records == []
+
+
+def test_replacing_a_rule_that_is_not_there_changes_nothing(tmp_path):
+    from fi.alk.harness.amend import add_rule
+
+    root, contract = _cited_suite(tmp_path)
+    before = (root / "contract.json").read_bytes()
+
+    done, said = add_rule(contract, root, rule="Refund within 7 days.", why="x", replaces="Refund within 30 days")
+
+    assert not done and "no rule" in said and "rule-" in said
+    assert (root / "contract.json").read_bytes() == before
+    assert contract.hard_constraints == ["Refund only within 30 days of delivery.", "Never sell more than 130 items."]
+
+
+def test_correcting_a_tool_lists_the_cases_that_call_it(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    root, contract = _cited_suite(tmp_path)
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    tool = load_scenarios(root)[0].solution[-1].tool
+    done, said = fix_tool(contract, root, tool_name=tool, why="read wrong", description="Adds one item to the cart.")
+
+    assert done, said
+    assert "adds-a-big-mac" in said and "adds-one-big-mac" in said
+    assert contract.amendment_records[-1].model_dump() == {
+        "kind": "tool", "key": tool, "action": "changed", "previous": "", "replaced_by": "", "text": ""
+    }
+
+
+def test_a_contract_with_no_amendment_records_saves_the_same_bytes(tmp_path):
+    from fi.alk.harness.contract import write_contract
+
+    root, contract = _cited_suite(tmp_path)
+    write_contract(contract, root)
+    assert "amendment_records" not in json.loads((root / "contract.json").read_text(encoding="utf-8"))
+
+
+def test_dropping_a_case_names_the_key_that_restores_it(tmp_path):
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
+    kept = load_scenarios(root)
+    key = next(one.scenario_key for one in kept if one.name == "adds-a-big-mac")
+    server = builder.suite_server(root, kept)
+    drop = next(one for one in server.tools if one.name == "drop_scenarios")
+
+    said = asyncio.run(drop.handler({"names": ["adds-a-big-mac"]}))["content"][0]["text"]
+    assert f"adds-a-big-mac (scenario_key {key})" in said
+    assert 'restored_from {"key": its scenario_key}: it takes that key back' in said
+
+
+def test_finding_removed_cases_asks_the_platform_for_them(tmp_path, monkeypatch):
+    class RemovedClient(BuilderClient):
+        async def scenarios(self, query):
+            self.queries.append(query)
+            return {"rows": [{"scenario_key": "refund-late", "name": "refund_late", "suite_version": "v-3",
+                              "content": {"name": "refund_late", "instruction": "Ask for a refund."}}]}
+
+    client = RemovedClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    spec = next(spec for spec in runtime._builder_platform_server().tools if spec.name == "find_scenarios")
+
+    asyncio.run(spec.handler({"removed": True, "search": "refund"}))
+
+    assert client.queries == [{"removed": True, "search": "refund"}]
+    # The builder is told it can ask, and what a removed case comes back with.
+    assert "removed" in str(spec.input_schema)
+    assert "suite_version it last existed in" in spec.description
+    # Kept, so restoring it can say what changed.
+    from fi.alk.harness.scenario_tools import REMOVED_CASES
+
+    kept = json.loads((tmp_path / REMOVED_CASES).read_text(encoding="utf-8"))
+    assert kept == {"refund-late": {"name": "refund_late", "instruction": "Ask for a refund."}}
+
+
+def _drop_30():
+    return {"rule": "Refund only within 30 days.", "why": "policy changed"}
+
+
+def _add_20():
+    return {"rule": "Refund only within 20 days.", "why": "policy changed", "replaces": "Refund only within 30 days."}
+
+
+def test_a_plan_is_confirmed_once_and_its_exact_calls_then_run_without_asking(tmp_path, monkeypatch):
+    questions = []
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
+
+    async def ask(tool, payload, context):
+        questions.append(payload)
+        return {"content": [{"type": "text", "text": payload["options"][0]}]}
+
+    runtime._ask = ask
+    runtime._turn_message_id = "m1"
+    plan = [{"tool": "drop_rule", "arguments": _drop_30()}, {"tool": "add_rule", "arguments": _add_20()}]
+    said = asyncio.run(runtime._confirm_plan(plan))
+    assert not said.get("is_error"), said
+    # One question; each change shown as the call it is, from its own arguments, never the model's summary.
+    [question] = questions
+    assert question["question"].startswith("Apply these 2 changes?")
+    assert "1. drop_rule (rule: Refund only within 30 days.; why: policy changed)" in question["question"]
+    assert question["options"] == ["Yes, apply these 2 changes", "No"] and question["options_only"] is True
+
+    # The listed calls run unasked, arguments in any order.
+    asyncio.run(guarded("drop_rule")(dict(reversed(list(_drop_30().items())))))
+    asyncio.run(guarded("add_rule")(_add_20()))
+    assert len(ran) == 2 and len(questions) == 1
+    # A listed call runs once: the same call again is asked about.
+    asyncio.run(guarded("drop_rule")(_drop_30()))
+    assert len(questions) == 2
+
+
+def test_a_plan_says_outright_which_calls_add_a_new_scenario(tmp_path, monkeypatch):
+    questions = []
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
+
+    async def ask(tool, payload, context):
+        questions.append(payload)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    runtime._turn_message_id = "m1"
+    from types import SimpleNamespace
+
+    runtime.conversation.stage = SimpleNamespace(
+        kept=[SimpleNamespace(scenario_key="late-refund", name="late_refund"), SimpleNamespace(scenario_key="k2", name="by_name")]
+    )
+    edit = {"tool": "submit_scenario", "arguments": {"name": "late_refund", "scenario_key": "late-refund"}}
+    by_name = {"tool": "submit_scenario", "arguments": {"name": "by_name"}}
+    add = {"tool": "submit_scenario", "arguments": {"name": "late_refund_21_days"}}
+    asyncio.run(runtime._confirm_plan([{"tool": "add_rule", "arguments": _add_20()}, edit, by_name, add]))
+
+    [question] = questions
+    assert question["question"].startswith("Apply these 4 changes? 1 of them adds a new scenario.")
+    assert "\n4. NEW SCENARIO: submit_scenario (name: late_refund_21_days)" in question["question"]
+    # A submission matching a kept case by key, or by name with no key, changes that case.
+    assert "\n2. submit_scenario" in question["question"] and "\n3. submit_scenario (name: by_name)" in question["question"]
+
+
+def test_a_plan_shows_a_long_argument_cut_short_and_still_approves_the_whole_call():
+    from fi.alk.harness.hosted_chat_entrypoint import _SHOWN_PER_ARGUMENT, _call_line
+
+    payload = {"scenarios": [{"name": f"case-{n}", "instruction": "x" * 80} for n in range(40)]}
+    line = _call_line("save_changes", {"changes": payload, "why": "tidy"})
+
+    assert len(line) < 3 * _SHOWN_PER_ARGUMENT and "more characters)" in line and "why: tidy" in line
+
+
+def test_a_listed_tool_called_with_other_arguments_is_asked_about(tmp_path, monkeypatch):
+    """A plan approves drop_rule on rule A, never drop_rule on rule B."""
+    asked = []
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda n: "No")
+
+    async def yes_to_plan(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": payload["options"][0] if tool == "confirm_plan" else "No"}]}
+
+    runtime._ask = yes_to_plan
+    runtime._turn_message_id = "m1"
+    asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "arguments": _drop_30()}]))
+
+    asyncio.run(guarded("drop_rule")({"rule": "Never sell more than 130 items.", "why": "policy changed"}))
+
+    assert asked == ["confirm_plan", "drop_rule"] and ran == []
+
+
+def test_a_plan_without_exact_arguments_is_not_offered(tmp_path, monkeypatch):
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda n: "Yes, apply this change")
+    runtime._turn_message_id = "m1"
+
+    said = asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "what": "Remove the 30-day rule"}]))
+
+    assert said["is_error"] and "exact arguments" in said["content"][0]["text"] and offered == []
+
+
+def test_a_plan_the_person_turns_down_makes_no_change(tmp_path, monkeypatch):
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
+    runtime._turn_message_id = "m1"
+
+    said = asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "arguments": _drop_30()}]))
+
+    assert said["is_error"] and "did not approve" in said["content"][0]["text"]
+    asyncio.run(guarded("drop_rule")(_drop_30()))
+    assert ran == [] and len(offered) == 2
+
+
+def test_a_plan_approved_for_one_message_is_not_used_for_the_next(tmp_path, monkeypatch):
+    runtime, guarded, ran, offered = _guarded_refund_changes(tmp_path, monkeypatch, lambda asked: "No")
+
+    async def yes(tool, payload, context):
+        return {"content": [{"type": "text", "text": payload["options"][0]}]}
+
+    runtime._ask = yes
+    runtime._turn_message_id = "m1"
+    asyncio.run(runtime._confirm_plan([{"tool": "drop_rule", "arguments": _drop_30()}]))
+    asked = []
+
+    async def no(tool, payload, context):
+        asked.append(payload)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = no
+    runtime._turn_message_id = "m2"
+    asyncio.run(guarded("drop_rule")(_drop_30()))
+    assert ran == [] and len(asked) == 1

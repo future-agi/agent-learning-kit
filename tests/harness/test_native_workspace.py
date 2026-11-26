@@ -497,7 +497,7 @@ def test_checkpoint_preserves_workspace_root_mode(tmp_path):
 
 
 def test_workspace_digest_changes_when_native_file_changes(tmp_path):
-    from fi.alk.harness.authoring_runtime_validation import _world_state_digest
+    from fi.alk.harness.authoring_runtime_validation import world_state_digest
     from test_world_handle import FakeStore
 
     root = tmp_path / "workspace"
@@ -510,9 +510,9 @@ def test_workspace_digest_changes_when_native_file_changes(tmp_path):
         workspace_roots={"project": root},
     )
     w.write_file("project", "file", "first")
-    before = _world_state_digest(w)
+    before = world_state_digest(w)
     (root / "file").write_text("second")
-    assert _world_state_digest(w) != before
+    assert world_state_digest(w) != before
 
 
 def test_snapshot_refuses_over_cap_instead_of_truncating(tmp_path, monkeypatch):

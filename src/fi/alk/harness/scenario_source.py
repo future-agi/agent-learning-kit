@@ -205,7 +205,7 @@ def _compile_entry(
     right behavior for "no setup/ready code here" -- would silently turn "there is no check" into
     "the check passed": a vacuous deterministic pass, which is exactly what `hosted_scheduler.py`
     forbids one scenario level up ("scenario declared zero sub_goals"). Absence of the file
-    entirely is what means "judged" (see `_load_one`); an existing-but-empty file is malformed.
+    entirely is what means "judged" (see `load_one`); an existing-but-empty file is malformed.
     """
     if not source.strip():
         if allow_empty:
@@ -273,6 +273,12 @@ class _CompiledSubGoal:
     # The actor this sub-goal is about, if any.
     actor: str = ""
     compares: str = ""
+    # Whose result: the task, or `worker:<id>`, whose check is given only that worker's calls.
+    subject: str = "task"
+
+    @property
+    def worker(self) -> str:
+        return self.subject[len("worker:") :] if self.subject.startswith("worker:") else ""
 
 
 @dataclass(frozen=True)
@@ -293,6 +299,12 @@ class _CompiledScenario:
     # same document and sent at pre-allocation, so a call can be read on the platform without the
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
+    # The fields `presented` is built from, uncut (`_presented(..., fields=True)`). The provision
+    # payload cleans them and builds its record from them (TH-9500 cr2 M1, cr3 L4): `persona_of`
+    # cuts `name`, `role` and `scenario_name` at 255 characters and rewrites the name it shows,
+    # and a key cut or rewritten there no longer has a key's shape. Kept uncleaned, so loading a
+    # scenario cleans and logs nothing; `presented` stays as written, since the judge reads it.
+    presented_fields: dict[str, Any] = field(default_factory=dict)
     source_scenario_key: str | None = None
     # One correct way through the call: handed to reference checks and shown to the judge.
     solution: tuple[dict[str, Any], ...] = ()
@@ -308,7 +320,7 @@ def _read_text(path: Path, *, label: str) -> str:
     but unreadable (permission denied, a directory instead of a file) or present but not valid
     UTF-8 is a typed `ScenarioDocumentInvalid`, never a raw `OSError`/`UnicodeDecodeError` escaping
     this module (R1-1) -- both are equally "this scenario folder is malformed", the same
-    conclusion `_load_one`'s other reads already reach for a bad `scenario.json`.
+    conclusion `load_one`'s other reads already reach for a bad `scenario.json`.
     """
     if not path.exists():
         return ""
@@ -334,12 +346,18 @@ def _validate_subgoal_name(name: str, *, folder_name: str) -> None:
         )
 
 
-def _presented(body: dict[str, Any], *, scenario_key: str) -> dict[str, Any]:
+def _presented(
+    body: dict[str, Any], *, scenario_key: str, fields: bool = False
+) -> dict[str, Any]:
     """The persona record the platform stores for a scenario, built by the platform module's own
     helper rather than a second copy of it here, so both paths describe a person the same way.
 
     Presentation only, and never load-bearing: anything missing from the document is simply absent
     from what the platform shows, and a document this cannot read still runs.
+
+    With `fields`, the fields `persona_of` would read, `scenario_key` among them, uncut and as
+    written. They are the same keys `body` has, so a record built from them, cleaned, is
+    `_presented(cleaned, scenario_key=...)` (TH-9500 cr3 L4).
     """
     from types import SimpleNamespace
 
@@ -355,22 +373,22 @@ def _presented(body: dict[str, Any], *, scenario_key: str) -> dict[str, Any]:
         use_case = scenario_key.replace("-", " ").replace("_", " ")
         use_case = use_case[:1].upper() + use_case[1:]
 
+    read = {
+        "persona": body.get("persona") or {},
+        "name": str(body.get("name") or ""),
+        "instruction": str(body.get("instruction") or ""),
+        "tests": str(body.get("tests") or ""),
+        "use_case": use_case,
+    }
+    if fields:
+        return {**read, "scenario_key": scenario_key}
     try:
-        return persona_of(
-            SimpleNamespace(
-                persona=body.get("persona") or {},
-                name=str(body.get("name") or ""),
-                scenario_key=scenario_key,
-                instruction=str(body.get("instruction") or ""),
-                tests=str(body.get("tests") or ""),
-                use_case=use_case,
-            )
-        )
+        return persona_of(SimpleNamespace(**read, scenario_key=scenario_key))
     except Exception:  # noqa: BLE001 - a scenario never fails to run over how it is displayed
         return {}
 
 
-def _deterministic_names(bundle_dir: Path) -> set[str]:
+def deterministic_names(bundle_dir: Path) -> set[str]:
     """Sub-goals the catalogue settles in code, so a missing check file is a defect and not a judge.
 
     Absence of `checks/<name>.py` is what marks a sub-goal judged, which is right when the catalogue
@@ -392,7 +410,7 @@ def _deterministic_names(bundle_dir: Path) -> set[str]:
         return set()
 
 
-def _declared_tool_names(bundle_dir: Path) -> set[str]:
+def declared_tool_names(bundle_dir: Path) -> set[str]:
     """Return the target tools declared by the authored contract.
 
     The solution format intentionally permits semantic steps that are not executable tools.  The
@@ -467,6 +485,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
             "actor": goal.actor,
+            "subject": goal.subject,
             "overlay": goal.overlay,
             "conversation_only": "yes" if goal.conversation_only() else "",
         }
@@ -497,7 +516,7 @@ def _needs_a_tool_action(
     return not (claimed or wanted in goal.name.strip().lower())
 
 
-def _load_one(
+def load_one(
     folder: Path,
     *,
     settled_in_code: set[str] | None = None,
@@ -633,6 +652,7 @@ def _load_one(
         setup=setup,
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
+        presented_fields=_presented(body, scenario_key=scenario_key, fields=True),
         solution=tuple(solution),
         actors=tuple(
             str((one or {}).get("id") or "") for one in body.get("actors") or []
@@ -650,7 +670,7 @@ def _with_claims(
 ) -> _CompiledScenario:
     """Restore each sub-goal's real claim from the catalogue.
 
-    `_load_one` can only tell that a sub-goal is judged, never what it was meant to decide:
+    `load_one` can only tell that a sub-goal is judged, never what it was meant to decide:
     `folder.py` writes no file for one. Without this the platform judge gets a name and a
     placeholder, which is not something a verdict can be reached from.
 
@@ -677,6 +697,7 @@ def _with_claims(
             both=combined(goal),
             compares=claims[goal.name].get("contract", "") or goal.compares,
             actor=claims[goal.name].get("actor", "") or goal.actor,
+            subject=claims[goal.name].get("subject") or goal.subject,
         )
         if goal.name in claims
         else goal
@@ -706,8 +727,8 @@ def load_scenarios(
         raise ScenarioDocumentInvalid(
             f"{root}: cannot list scenario folders: {exc}"
         ) from exc
-    settled_in_code = _deterministic_names(bundle_dir)
-    declared_tools = _declared_tool_names(bundle_dir)
+    settled_in_code = deterministic_names(bundle_dir)
+    declared_tools = declared_tool_names(bundle_dir)
     claims = _load_catalogue_claims(bundle_dir)
     speaking = _speaking_actor_ids(bundle_dir)
     scenarios: list[_CompiledScenario] = []
@@ -716,7 +737,7 @@ def load_scenarios(
             continue
         scenarios.append(
             _with_claims(
-                _load_one(
+                load_one(
                     folder,
                     settled_in_code=settled_in_code,
                     declared_tools=declared_tools,
@@ -733,22 +754,40 @@ def load_scenarios(
 
 
 def authored_agent_document(
-    contract_text: str, *, subfolder: str | None, framework: Any
+    contract_text: str,
+    *,
+    subfolder: str | None,
+    framework: Any,
+    source: Path | None = None,
 ) -> dict[str, Any]:
     """The agent document stored for a saved contract, ``{"sdk_version", "agent"}``.
 
     Both a build and a reading with no build make it here, so the two can't differ. The caller
-    reads the contract, so what it checked is what is used.
+    reads the contract, so what it checked is what is used. With ``source``, the agent's files
+    the kit's Python can't parse are named in the document (``unparsed_note``), inside its hash.
     """
     contract = AgentContract.model_validate(json.loads(contract_text)).model_dump(mode="json")
     # The echo proves which folder was built, so it comes from the contract.
     built_from = str((contract.get("runtime") or {}).get("source_subfolder") or "")
     if built_from != (subfolder or ""):
         raise AgentBuildError("agent_invalid", "subfolder_mismatch")
+    note: dict[str, Any] = {}
+    if source is not None:
+        from .python_source import unparsed_note
+
+        note = unparsed_note(
+            source,
+            built_from or None,
+            [
+                entry["module"]
+                for entry in contract.get("tool_entrypoints") or []
+                if isinstance(entry, dict) and isinstance(entry.get("module"), str)
+            ],
+        )
     return {
         "sdk_version": _sdk_version,
         "agent": build_authored_agent(
-            contract, subfolder=built_from or None, framework=framework
+            contract, subfolder=built_from or None, framework=framework, source_note=note
         ),
     }
 
@@ -843,10 +882,12 @@ class BundleScenarioSource:
         if source_kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
             framework = await self._detect_framework()
             try:
+                folders = self._framework_folders
                 authored_agent = authored_agent_document(
                     (bundle_dir / "contract.json").read_text(encoding="utf-8"),
                     subfolder=job.source.subfolder,
                     framework=framework,
+                    source=folders.repo_root if folders is not None else None,
                 )
             except Exception as exc:
                 # A field path can name the customer's own keys, so only the mismatch is named.
@@ -1033,14 +1074,29 @@ def _provision_payload(
     `scenario.json` for scheduler-facing fields only, and the cost was a platform that could show a
     call but not who was on it or what they came for.
     """
+
+    def cleaned(scenario: Any) -> dict[str, Any]:
+        # `persona_of` over the cleaned fields (cr2 M1), here at the send, so its log line is
+        # the send's (cr3 L4). Cleaned again after: the shown name's `-` and `_` become spaces,
+        # which can give a key back its shape (`call_AKIA…` shows as `Call AKIA…`, cr3 M4).
+        read = dict(scenario.presented_fields)
+        if not read:
+            # No document was read (or it couldn't be): send the bare key, never a record
+            # `persona_of` would make up from nothing ("caller", "Scenario").
+            return {}
+        scenario_key = str(read.pop("scenario_key", "") or "")
+        return _redact(_presented(_redact(read), scenario_key=scenario_key))
+
     payload: dict[str, Any] = {
         "operation": "provision",
         "name": run_name,
         # Everything the serializer accepts, where the document had it: name, role, situation,
         # outcome and the persona itself. `scenario_key` is set last because it is the one field the
         # platform matches on and it must be this scenario's, whatever the persona record says.
+        # The record is cleaned first (TH-9500): it is free text from the customer's own files,
+        # and this is the one place it leaves for the platform.
         "personas": [
-            {**scenario.presented, "scenario_key": scenario.scenario_key}
+            {**cleaned(scenario), "scenario_key": scenario.scenario_key}
             for scenario in scenarios
         ],
     }

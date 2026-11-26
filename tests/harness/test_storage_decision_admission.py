@@ -165,6 +165,130 @@ def test_explicit_chat_interface_is_saved(tmp_path, kind):
     assert saved["runtime"]["interface"]["kind"] == kind
 
 
+ADK_WEB = ["adk", "web", "--port", "8080", "."]
+
+
+def _adk_source(root, *apps):
+    """A checkout holding one ADK app package for each name, as ``adk web`` finds them."""
+    for app in apps:
+        (root / app).mkdir(parents=True)
+        (root / app / "__init__.py").write_text("from . import agent\n")
+        (root / app / "agent.py").write_text("root_agent = None\n")
+    return root
+
+
+def test_adk_web_command_is_saved_without_a_written_interface(tmp_path):
+    # The build writes ADK's own HTTP interface for this command, so the reading isn't asked
+    # for one the source doesn't hold.
+    source = _adk_source(tmp_path / "source", "support_agent")
+    out = tmp_path / "out"
+    result = accept_contract(
+        payload(data_store={"kind": "none"}, runtime={"command": ADK_WEB}),
+        out,
+        source_root=source,
+        require_setup_contract=True,
+    )
+    assert not result.get("is_error"), result["content"][0]["text"]
+    saved = json.loads((out / "contract.json").read_text())
+    assert saved["runtime"]["command"] == ADK_WEB
+    assert not saved["runtime"].get("interface")
+
+
+def test_adk_web_command_in_a_subfolder_is_saved_without_a_written_interface(tmp_path):
+    source = tmp_path / "source"
+    _adk_source(source / "agents" / "support", "support_agent")
+    _adk_source(source, "another_agent")
+    out = tmp_path / "out"
+    result = accept_contract(
+        payload(data_store={"kind": "none"}, runtime={"command": ADK_WEB}),
+        out,
+        source_root=source,
+        require_setup_contract=True,
+        subfolder="agents/support",
+    )
+    assert not result.get("is_error"), result["content"][0]["text"]
+    assert (out / "contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "apps,command",
+    [
+        # Two apps: the build can't tell which one `adk web` serves, so it writes nothing.
+        (("support_agent", "billing_agent"), ADK_WEB),
+        (("",), ADK_WEB),
+        # `adk run` answers once and exits; the build writes no interface for it.
+        (("support_agent",), ["adk", "run", "support_agent"]),
+        (("support_agent",), ["python", "-m", "agent_cli"]),
+    ],
+)
+def test_a_command_the_build_writes_no_interface_for_still_needs_one(tmp_path, apps, command):
+    source = _adk_source(tmp_path / "source", *[app for app in apps if app])
+    source.mkdir(parents=True, exist_ok=True)
+    out = tmp_path / "out"
+    result = accept_contract(
+        payload(data_store={"kind": "none"}, runtime={"command": command}),
+        out,
+        source_root=source,
+        require_setup_contract=True,
+    )
+    assert result["is_error"]
+    assert "missing-chat-interface" in result["content"][0]["text"]
+    assert not (out / "contract.json").exists()
+
+
+def test_adk_web_command_without_the_source_still_needs_an_interface(tmp_path):
+    result = accept_contract(
+        payload(data_store={"kind": "none"}, runtime={"command": ADK_WEB}),
+        tmp_path,
+        require_setup_contract=True,
+    )
+    assert result["is_error"]
+    assert "missing-chat-interface" in result["content"][0]["text"]
+
+
+@pytest.mark.parametrize(
+    "runtime,subfolder",
+    [
+        ({"command": ADK_WEB}, "agents/missing"),
+        ({"command": ADK_WEB, "workdir": "elsewhere"}, "agents/support"),
+    ],
+)
+def test_adk_web_command_the_folder_cannot_hold_still_needs_an_interface(
+    tmp_path, runtime, subfolder
+):
+    source = tmp_path / "source"
+    _adk_source(source / "agents" / "support", "support_agent")
+    _adk_source(source / "elsewhere", "support_agent")
+    result = accept_contract(
+        payload(data_store={"kind": "none"}, runtime=runtime),
+        tmp_path / "out",
+        source_root=source,
+        require_setup_contract=True,
+        subfolder=subfolder,
+    )
+    assert result["is_error"]
+    assert "missing-chat-interface" in result["content"][0]["text"]
+    assert not (tmp_path / "out" / "contract.json").exists()
+
+
+def test_adk_web_command_with_an_unsupported_interface_is_still_refused(tmp_path):
+    source = _adk_source(tmp_path / "source", "support_agent")
+    result = accept_contract(
+        payload(
+            data_store={"kind": "none"},
+            runtime={
+                "command": ADK_WEB,
+                "interface": {"kind": "websocket", "port": 8000, "path": "/ws"},
+            },
+        ),
+        tmp_path / "out",
+        source_root=source,
+        require_setup_contract=True,
+    )
+    assert result["is_error"]
+    assert "unsupported-chat-interface" in result["content"][0]["text"]
+
+
 def test_setup_admission_returns_both_missing_decisions(tmp_path):
     result = accept_contract(payload(), tmp_path, require_setup_contract=True)
     assert result["is_error"]

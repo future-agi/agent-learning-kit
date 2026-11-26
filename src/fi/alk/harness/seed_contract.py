@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -29,6 +30,7 @@ from .job import (
     HarnessStage,
     ProviderExecutionMode,
     SourceKind,
+    provider_profile_source,
 )
 from .reading_result import _CONTRACT_LIMIT_BYTES
 
@@ -46,7 +48,10 @@ SEED_LIMIT_BYTES = _CONTRACT_LIMIT_BYTES
 
 _CONTRACT = "contract.json"
 _SOURCE_MODEL = Path("generic-harness") / "source-model.json"
+# What a build compares before it reuses a reading. `made_by` is deliberately not here.
 _COMPARED = ("source", "subfolder", "evals_sha256", "generic_harness_v1")
+# The kit build is the commit the sandbox template was built from; nothing else is accepted.
+_BUILD_ID = re.compile(r"[0-9a-fA-F]{7,40}")
 
 
 class Problem(NamedTuple):
@@ -121,17 +126,28 @@ def print_trace(exc: BaseException) -> None:
         pass
 
 
-def record_for(job: HarnessJob) -> dict[str, Any] | None:
+def record_for(
+    job: HarnessJob, profile: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """What a reading for ``job`` was made from, or None when nothing pins its source."""
-    # A provider's own definition can change behind the same job, so no reading of it is reused.
-    if job.agent.mode in {
-        ProviderExecutionMode.PROVIDER_IMPORT,
-        ProviderExecutionMode.CONNECT_ONLY,
-    }:
-        return None
     source = job.source
-    if source.kind is SourceKind.GITHUB and source.repository and source.commit_sha:
+    if job.agent.mode is ProviderExecutionMode.CONNECT_ONLY:
+        if (
+            profile is None
+            or source.kind is not SourceKind.PROVIDER
+            or provider_profile_source(job.agent) is None
+        ):
+            return None
         made_from: dict[str, Any] = {
+            "kind": "provider",
+            "connector": job.agent.connector.strip().lower(),
+            "profile_sha256": hashlib.sha256(_canon(profile)).hexdigest(),
+        }
+    # A provider's own definition can change behind the same job, so no reading of it is reused.
+    elif job.agent.mode is ProviderExecutionMode.PROVIDER_IMPORT:
+        return None
+    elif source.kind is SourceKind.GITHUB and source.repository and source.commit_sha:
+        made_from = {
             "kind": "github",
             "repository": source.repository,
             # The platform may send either case for the same commit.
@@ -158,6 +174,26 @@ def record_for(job: HarnessJob) -> dict[str, Any] | None:
     }
 
 
+def _kit_version() -> str:
+    """The installed package's version (its metadata), not pyproject's: a release bump made on
+    main never reaches dev's constant."""
+    from .. import __version__
+
+    return str(__version__)
+
+
+def _build_id() -> str:
+    value = os.environ.get("ALK_BUILD_ID", "")
+    # fullmatch: `$` would let a trailing newline through.
+    return value.lower() if _BUILD_ID.fullmatch(value) else ""
+
+
+def _made_by() -> dict[str, str]:
+    """Which kit build is writing the reading, for information only. Nothing is caught here: a
+    failure goes to `document()`, which logs it with the trace and keeps the reading."""
+    return {"kit_version": _kit_version(), "build_id": _build_id()}
+
+
 def _splice(raw: bytes, record: dict[str, Any], *, empty: bool) -> bytes:
     # Every byte the reading saved is kept, so the world is still built from its own rows.
     start = raw.index(b"{") + 1
@@ -170,17 +206,24 @@ def _splice(raw: bytes, record: dict[str, Any], *, empty: bool) -> bytes:
     return raw[:start] + entry + (b"" if empty else b", ") + raw[start:]
 
 
-def with_record(job: HarnessJob, raw: bytes) -> bytes | None:
+def with_record(
+    job: HarnessJob, raw: bytes, profile: dict[str, Any] | None = None
+) -> bytes | None:
     """The saved contract ``raw`` with what the reading was made from put in, or None to keep it."""
     # Sized before it is parsed: the reading's own size check refuses what is over.
     if len(raw) > SEED_LIMIT_BYTES:
         return None
-    record = record_for(job)
+    record = record_for(job, profile)
     if record is None:
         return None
     body = json.loads(raw.decode("utf-8"))
     if not isinstance(body, dict) or RECORD_KEY in body:
         return None
+    # Added here, not in `record_for`: it says who wrote the reading, not what it was made from.
+    spliced = _splice(raw, {**record, "made_by": _made_by()}, empty=not body)
+    if len(spliced) <= SEED_LIMIT_BYTES:
+        return spliced
+    # made_by is what tipped it over: the record alone is worth more than who wrote it.
     spliced = _splice(raw, record, empty=not body)
     # A reading at the edge stays as it was rather than crossing the platform's cap.
     if len(spliced) > SEED_LIMIT_BYTES:
@@ -202,15 +245,20 @@ def replace_if_unchanged(path: Path, expected: bytes, new: bytes) -> bool:
     return True
 
 
-def differs(body: dict[str, Any], job: HarnessJob) -> list[str]:
-    """The names that keep this reading from being reused for ``job``; empty when it matches."""
+def differs(
+    body: dict[str, Any], job: HarnessJob, profile: dict[str, Any] | None = None
+) -> list[str]:
+    """The names that keep this reading from being reused for ``job``; empty when it matches.
+
+    Only ``_COMPARED`` is looked at: ``made_by`` (which kit build wrote the reading) never is.
+    """
     record = body.get(RECORD_KEY)
     if not isinstance(record, dict):
         return [RECORD_KEY]
     version = record.get("version")
     if type(version) is not int or version != 1:
         return ["version"]
-    expected = record_for(job)
+    expected = record_for(job, profile)
     if expected is None:
         return ["source"]
     # Compared as JSON, so true and 1, or a missing name and null, never pass for each other.
@@ -375,7 +423,11 @@ def holds_seed(contract: Path, seed: str | Path) -> bool:
 
 
 def use_seed(
-    seed: str | Path, job: HarnessJob, source: Path, output: Path
+    seed: str | Path,
+    job: HarnessJob,
+    source: Path,
+    output: Path,
+    profile: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     """Install the seed as the build's contract when it matches ``job``, and say what happened:
     the outcome, and the names that differ when it is a mismatch.
@@ -399,7 +451,7 @@ def use_seed(
             # It was checked when it was accepted, so it changed since.
             result = "unreadable"
         else:
-            names = differs(body, job)
+            names = differs(body, job, profile)
             if names:
                 result = "mismatch"
             else:
