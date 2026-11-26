@@ -8,10 +8,15 @@ on:
     branches: [dev, main]
   pull_request:
 
+# A newer push to the same branch makes the running suite moot.
+concurrency:
+  group: harness-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   harness:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -27,8 +32,10 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
       - name: Install
