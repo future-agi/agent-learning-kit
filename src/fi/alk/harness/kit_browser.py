@@ -501,10 +501,7 @@ class KitBrowser:
         deadline = time.monotonic() + _START_SECONDS
         exited = False
         while time.monotonic() < deadline:
-            try:
-                first = written.read_text(encoding="utf-8").split("\n", 1)[0].strip()
-            except OSError:
-                first = ""
+            first = _first_line(written)
             if first.isdigit():
                 return int(first)
             running = getattr(self._handle, "is_running", None)
@@ -534,6 +531,24 @@ def _exit_code(handle: Any) -> int | None:
     popen = getattr(handle, "popen", None)
     code = popen.poll() if popen is not None else None
     return code if isinstance(code, int) else None
+
+
+def _first_line(path: Path) -> str:
+    """The first line of a file the browser's own user can write: a regular file only, never followed through a
+    link, never waited on, read for a bounded size."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        raw = os.read(fd, 256)
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+    return raw.decode("utf-8", errors="replace").split("\n", 1)[0].strip()
 
 
 def _log_tail(path: Path) -> str:
