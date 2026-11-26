@@ -79,6 +79,17 @@ def test_text_typed_into_a_password_field_is_never_kept(tmp_path) -> None:
     assert "hunter2" not in json.dumps(record.body())
 
 
+def test_each_recorder_s_world_and_binding_are_its_own_and_its_listener_calls_its_own(tmp_path) -> None:
+    one = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=_refuse_connect)
+    two = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w1-record.json", connect=_refuse_connect)
+    try:
+        assert len({one.binding, two.binding}) == 2 and len({one.listener_world, two.listener_world}) == 2
+        assert f"globalThis.{one.binding}" in one.listener and two.binding not in one.listener
+    finally:
+        one.close()
+        two.close()
+
+
 def test_a_declared_secret_typed_into_a_plain_field_is_masked_wherever_the_record_holds_it() -> None:
     # A field the page does not mark as a password can still take one of the job's own secrets: the record never
     # holds it, in the text, the field's description or the page's address, and typing it in pieces changes nothing.

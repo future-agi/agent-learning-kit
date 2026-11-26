@@ -524,3 +524,28 @@ def test_a_card_field_the_page_stops_marking_stays_one(browser) -> None:
     typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == "http://shop.test/card-switched"]
     assert typed and all(row["secret"] is True and row["text"] is None for row in typed)
     assert "4111111111111111" not in json.dumps(body)
+
+
+def test_a_world_the_agent_makes_under_the_recorder_s_old_name_cannot_write_the_record(browser) -> None:
+    # The recorder's world and binding names are its own, new for each browser: a world the agent makes with the
+    # name the recorder once had is just the agent's, and what it sends is never a row.
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/form")
+        tree = await page.call("Page.getFrameTree")
+        frame = tree["result"]["frameTree"]["frame"]["id"]
+        world = await page.call("Page.createIsolatedWorld", {"frameId": frame, "worldName": "alk-browser-record"})
+        row = {"kind": "click", "url": "http://forged.example/", "target": {"text": "forged-world"}}
+        await page.call(
+            "Runtime.evaluate",
+            {
+                "expression": f"try {{ alkBrowserRecord({json.dumps(json.dumps(row))}) }} catch (e) {{}}",
+                "contextId": world["result"]["executionContextId"],
+            },
+        )
+
+    _run(kit, steps)
+    rows = _settled(kit)["rows"]
+    assert not [row for row in rows if "forged" in json.dumps(row)]
+    assert kit.recorder.binding != "alkBrowserRecord" and kit.recorder.listener_world != "alk-browser-record"
