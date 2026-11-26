@@ -363,6 +363,9 @@ def test_a_refused_page_is_kept_whole_and_a_page_s_refused_requests_are_counted(
     assert "http://www.example.com/deals" in [one["url"] for one in body["blocked_navigations"]]
     assert "tracker.example.net" in [one["host"] for one in body["blocked_page_requests"]]
     assert not any(one["url"].startswith("http://tracker.") for one in body["blocked_navigations"])
+    # The browser's own error page at the refused address is no page the agent opened, and is never photographed.
+    assert not any(row["url"].startswith("chrome-error:") for row in body["rows"])
+    assert not any(one["url"].startswith("chrome-error:") for one in body["screenshots"])
 
 
 def test_a_page_s_own_script_cannot_write_the_record(browser) -> None:
