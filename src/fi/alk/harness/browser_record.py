@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import shutil
 import socket
 import stat
@@ -68,7 +69,8 @@ SECRET_AUTOFILL = frozenset(
     }
 )
 
-# The page's listener runs in this world and only this world can call the binding.
+# The page's listener runs in a world of its own and only that world can call the binding. Both names are new for
+# each recorder, so a world the agent makes cannot share them; these are only their beginnings.
 LISTENER_WORLD = "alk-browser-record"
 BINDING = "alkBrowserRecord"
 
@@ -77,8 +79,8 @@ BINDING = "alkBrowserRecord"
 # except to report typing into a field that is not one.
 LISTENER = r"""
 (() => {
-  if (globalThis.__alkBrowserRecord) return;
-  globalThis.__alkBrowserRecord = true;
+  if (globalThis.__%(binding)s) return;
+  globalThis.__%(binding)s = true;
   const send = globalThis.%(binding)s;
   if (typeof send !== 'function') return;
   const say = (row) => { try { send(JSON.stringify(row)); } catch (e) {} };
@@ -145,7 +147,12 @@ LISTENER = r"""
     say({kind: 'typing', url: location.href, target: describe(el), secret: hidden, text: typed});
   }, true);
 })();
-""" % {"binding": BINDING, "text": _TEXT, "fill": json.dumps(sorted(SECRET_AUTOFILL))}
+"""
+
+
+def listener_for(binding: str) -> str:
+    """The page's listener, sending its rows through ``binding``."""
+    return LISTENER % {"binding": binding, "text": _TEXT, "fill": json.dumps(sorted(SECRET_AUTOFILL))}
 
 
 def _clean(text: Any, limit: int = _TEXT, secret_values: tuple[str, ...] = ()) -> str:
@@ -510,6 +517,10 @@ class BrowserRecorder:
         self._shot_seconds = shot_seconds
         self.sites = tuple(sites)
         self._secrets = tuple(secret_values)
+        # Its own names, never the fixed ones a world the agent makes could take.
+        self.listener_world = f"{LISTENER_WORLD}-{secrets.token_hex(16)}"
+        self.binding = f"{BINDING}_{secrets.token_hex(16)}"
+        self.listener = listener_for(self.binding)
         self.record_path = record_path
         self.shots_dir = shots_dir_for(record_path)
         self._shot_limits = {"shots": shots, "shot_bytes": shot_bytes}
@@ -770,7 +781,7 @@ class BrowserRecorder:
                     document=params.get("type") == "Document",
                     main_frame=params.get("frameId") == tab[1],
                 )
-        elif method == "Runtime.bindingCalled" and params.get("name") == BINDING:
+        elif method == "Runtime.bindingCalled" and params.get("name") == self.binding:
             tab = self._tabs.get(session or "")
             if tab is not None:
                 self.record.acted(tab[0], str(params.get("payload") or ""))
@@ -821,10 +832,10 @@ class BrowserRecorder:
                 ("Network.enable", {}),
                 # The binding's calls are Runtime events.
                 ("Runtime.enable", {}),
-                ("Runtime.addBinding", {"name": BINDING, "executionContextName": LISTENER_WORLD}),
+                ("Runtime.addBinding", {"name": self.binding, "executionContextName": self.listener_world}),
                 (
                     "Page.addScriptToEvaluateOnNewDocument",
-                    {"source": LISTENER, "worldName": LISTENER_WORLD, "runImmediately": True},
+                    {"source": self.listener, "worldName": self.listener_world, "runImmediately": True},
                 ),
                 ("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}),
             ):
