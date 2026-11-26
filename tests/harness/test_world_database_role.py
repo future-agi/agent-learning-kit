@@ -557,8 +557,8 @@ def test_a_reset_makes_the_worlds_reader_login_and_lets_it_in(isolate: bool):
 
     made = next(i for i, one in enumerate(statements) if 'CREATE ROLE "alk_r3" LOGIN IN ROLE "world_reader"' in one)
     assert statements[made + 1 : made + 3] == [
-        "ALTER ROLE \"alk_r3\" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS "
-        f"PASSWORD '{reader.password}'",
+        "ALTER ROLE \"alk_r3\" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION "
+        f"INHERIT CONNECTION LIMIT -1 VALID UNTIL 'infinity' PASSWORD '{reader.password}'",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_r3"',
     ]
     assert made > next(i for i, one in enumerate(statements) if one.startswith('CREATE DATABASE "w3"'))
@@ -3422,8 +3422,8 @@ def test_the_world_s_reader_is_made_like_every_other_world_role():
     statements = pr._reader_login_statements(reader, "w3")
 
     assert statements[1] == (
-        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
-        f"PASSWORD {pr._literal(reader.password)}"
+        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION '
+        f"INHERIT CONNECTION LIMIT -1 VALID UNTIL 'infinity' PASSWORD {pr._literal(reader.password)}"
     )
     assert statements[3:] == pr._only_member_of(reader.username, pr.READER_ROLE)
     assert any("RESET ALL" in one for one in statements)

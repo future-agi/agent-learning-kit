@@ -6306,7 +6306,7 @@ def migrator_credentials(
         # BYPASSRLS while the store's files run, as the superuser's load did: a table that forces row security still
         # takes the seed's rows. Taken away again before anything is checked (`seed_store_safely`).
         f'ALTER ROLE "{MIGRATOR_ROLE}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS '
-        f"PASSWORD '{password}'",
+        f"PASSWORD {_literal(password)}",
     )
     # The database and its `public` stay the superuser's (since Postgres 15 `public` belongs to whoever owns the
     # database): the migrations may create schemas, trusted extensions and objects in `public`, never drop or alter
@@ -6972,8 +6972,8 @@ def _reader_login_statements(reader: EngineCredentials | None, world_db: str) ->
         f'THEN CREATE ROLE "{READER_ROLE}" NOLOGIN; END IF; '
         f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {_literal(reader.username)}) "
         f'THEN CREATE ROLE "{reader.username}" LOGIN IN ROLE "{READER_ROLE}"; END IF; END $$',
-        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
-        f"PASSWORD {_literal(reader.password)}",
+        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION '
+        f"INHERIT CONNECTION LIMIT -1 VALID UNTIL 'infinity' PASSWORD {_literal(reader.password)}",
         f'GRANT CONNECT ON DATABASE "{world_db}" TO "{reader.username}"',
         *_only_member_of(reader.username, READER_ROLE),
     ]
@@ -7053,7 +7053,7 @@ def _reset_template_database(
             f"'{role.username}') THEN CREATE ROLE \"{role.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
-            f"PASSWORD '{role.password}'",
+            f"PASSWORD {_literal(role.password)}",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{role.username}"',
             *_only_member_of(role.username, WORLD_ROLE_GROUP),
         ]
@@ -7064,7 +7064,7 @@ def _reset_template_database(
             f"'{store.username}') THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{store.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
-            f"PASSWORD '{store.password}'",
+            f"PASSWORD {_literal(store.password)}",
             # The store role resets with the world's triggers suspended from its first statement, and can never
             # turn them back on: no right to set the mode, which its every session starts in.
             "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
@@ -7080,7 +7080,7 @@ def _reset_template_database(
             f"'{log.username}') THEN CREATE ROLE \"{log.username}\" LOGIN IN ROLE "
             f'"{LOG_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{log.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
-            f"PASSWORD '{log.password}'",
+            f"PASSWORD {_literal(log.password)}",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{log.username}"',
             *_only_member_of(log.username, LOG_ROLE_GROUP),
         ]
@@ -7090,7 +7090,7 @@ def _reset_template_database(
             f"'{door.username}') THEN CREATE ROLE \"{door.username}\" LOGIN IN ROLE "
             f'"{DOOR_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{door.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
-            f"PASSWORD '{door.password}'",
+            f"PASSWORD {_literal(door.password)}",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{door.username}"',
             *_only_member_of(door.username, DOOR_ROLE_GROUP),
         ]

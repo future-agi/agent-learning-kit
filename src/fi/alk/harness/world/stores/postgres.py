@@ -99,13 +99,9 @@ def attached_world_store(endpoint: Any) -> AttachedPostgresStore:
             # the log reader run only the harness's own, and their long-lived sessions (the door's fault reads) are
             # left alone.
             role_dsns=tuple(
-                address
-                for address in (
-                    endpoint.tool_address,
-                    endpoint.store_address,
-                    getattr(endpoint, "reader_address", None),
-                )
-                if address
+                one
+                for one in (endpoint.tool_address, endpoint.store_address, getattr(endpoint, "reader_address", None))
+                if one
             ),
         )
     return AttachedPostgresStore(system_first(endpoint.address), admin_dsn=endpoint.address)
@@ -296,16 +292,11 @@ class PostgresStore(ContainerStore):
             tables = [
                 (schema, table)
                 for schema, table in tables
-                if not (
-                    schema == "public"
-                    and (table.startswith("_alk_") or table == "harness_seed_sentinel")
-                )
+                if not (schema == "public" and (table.startswith("_alk_") or table == "harness_seed_sentinel"))
             ]
         return tables
 
-    def _column_kinds(
-        self, connection: Connection[Any], schema: str, table: str
-    ) -> dict[str, tuple[str, str, str]]:
+    def _column_kinds(self, connection: Connection[Any], schema: str, table: str) -> dict[str, tuple[str, str, str]]:
         """Each column's (type, identity, generated): a stored generated column is never written back, and an
         identity column that is always generated takes its value back only with OVERRIDING SYSTEM VALUE."""
         rows = connection.execute(
@@ -314,29 +305,16 @@ class PostgresStore(ContainerStore):
             "WHERE n.nspname = %s AND c.relname = %s AND a.attnum > 0 AND NOT a.attisdropped",
             (schema, table),
         ).fetchall()
-        return {
-            str(name): (str(kind), str(identity), str(generated))
-            for name, kind, identity, generated in rows
-        }
+        return {str(name): (str(kind), str(identity), str(generated)) for name, kind, identity, generated in rows}
 
-    def _put_back(
-        self,
-        connection: Connection[Any],
-        schema: str,
-        table: str,
-        rows: list[dict[str, Any]],
-    ) -> None:
+    def _put_back(self, connection: Connection[Any], schema: str, table: str, rows: list[dict[str, Any]]) -> None:
         """A table's rows as the snapshot held them, generated columns left to the table and identity values kept."""
         if not rows:
             return
         kinds = self._column_kinds(connection, schema, table)
         types = self._column_types(connection, table, schema)
-        columns = [
-            column for column in rows[0] if kinds.get(column, ("", "", ""))[2] != "s"
-        ]
-        overriding = any(
-            kinds.get(column, ("", "", ""))[1] == "a" for column in columns
-        )
+        columns = [column for column in rows[0] if kinds.get(column, ("", "", ""))[2] != "s"]
+        overriding = any(kinds.get(column, ("", "", ""))[1] == "a" for column in columns)
         quoted = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
         placeholders = ", ".join(["%s"] * len(columns))
         statement = (
@@ -351,13 +329,7 @@ class PostgresStore(ContainerStore):
         with connection.cursor() as cursor:
             cursor.executemany(
                 statement,
-                [
-                    tuple(
-                        _adapt(row.get(column), types.get(column, ""))
-                        for column in columns
-                    )
-                    for row in rows
-                ],
+                [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
             )
         # Only on success: a failed statement ends the transaction, and its own error is the one to report.
         connection.execute("SET LOCAL search_path = pg_catalog, pg_temp")
@@ -370,40 +342,24 @@ class PostgresStore(ContainerStore):
             _key(str(schema), str(sequence)): value
             for schema, sequence, value in rows
             if value is not None
-            and not (
-                getattr(self, "_restore_as_role", False)
-                and schema == "public"
-                and str(sequence).startswith("_alk_")
-            )
+            and not (getattr(self, "_restore_as_role", False) and schema == "public" and str(sequence).startswith("_alk_"))
         }
 
-    def _set_counters(
-        self, connection: Connection[Any], counters: dict[str, Any]
-    ) -> None:
+    def _set_counters(self, connection: Connection[Any], counters: dict[str, Any]) -> None:
         """Each of the world's sequences back where the snapshot found it; one the snapshot never saw used, to its
         start."""
         for schema, sequence, start in connection.execute(
             f"SELECT schemaname, sequencename, start_value FROM pg_sequences WHERE {_CUSTOMER_SCHEMA}"
         ).fetchall():
-            if (
-                getattr(self, "_restore_as_role", False)
-                and schema == "public"
-                and str(sequence).startswith("_alk_")
-            ):
+            if getattr(self, "_restore_as_role", False) and schema == "public" and str(sequence).startswith("_alk_"):
                 continue
             value = counters.get(_key(str(schema), str(sequence)))
             connection.execute(
                 "SELECT pg_catalog.setval(%s::regclass, %s, %s)",
-                (
-                    _ident(str(schema), str(sequence)),
-                    value if value is not None else start,
-                    value is not None,
-                ),
+                (_ident(str(schema), str(sequence)), value if value is not None else start, value is not None),
             )
 
-    def _primary_key(
-        self, connection: Connection[Any], table: str, schema: str = "public"
-    ) -> list[str]:
+    def _primary_key(self, connection: Connection[Any], table: str, schema: str = "public") -> list[str]:
         """The primary key columns, used only to read rows back in a stable order.
 
         Joined through ``pg_class``/``pg_namespace`` rather than a ``%s::regclass`` cast over an
@@ -425,9 +381,7 @@ class PostgresStore(ContainerStore):
         ).fetchall()
         return [_catalogue_text(row[0]) for row in rows]
 
-    def _column_types(
-        self, connection: Connection[Any], table: str, schema: str = "public"
-    ) -> dict[str, str]:
+    def _column_types(self, connection: Connection[Any], table: str, schema: str = "public") -> dict[str, str]:
         """Return declared column types so writes use the source schema's representation.
 
         New managed clusters are always UTF-8, but an externally attached or older SQL_ASCII
@@ -446,9 +400,7 @@ class PostgresStore(ContainerStore):
 
         return {_catalogue_text(row[0]): _catalogue_text(row[1]) for row in rows}
 
-    def _select_ordered(
-        self, connection: Connection[Any], table: str, schema: str = "public"
-    ) -> list[dict[str, Any]]:
+    def _select_ordered(self, connection: Connection[Any], table: str, schema: str = "public") -> list[dict[str, Any]]:
         """Every row of one table, ordered by its primary key where it has one.
 
         Without that order the same data comes back in whatever sequence the heap happens to
@@ -523,12 +475,8 @@ class PostgresStore(ContainerStore):
             catalog["world roles"] = roles
         return Snapshot(rows=rows, counters=counters, catalog=catalog)
 
-    def _verify_reset(
-        self,
-        connection: Connection[Any],
-        snapshot: Snapshot,
-        tables: list[tuple[str, str]],
-    ) -> None:
+
+    def _verify_reset(self, connection: Connection[Any], snapshot: Snapshot, tables: list[tuple[str, str]]) -> None:
         # Deferred checks of the world's fire now, before what they did is read, never at the commit after it.
         connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         """Before a reset commits: the world as its snapshot held it, every table's rows (their count, for rows read
@@ -537,11 +485,7 @@ class PostgresStore(ContainerStore):
         for schema, table in tables:
             held = snapshot.rows.get(_key(schema, table)) or []
             now = self._select_ordered(connection, table, schema)
-            same = (
-                _as_multiset(now) == _as_multiset(held)
-                if snapshot.catalog
-                else len(now) == len(held)
-            )
+            same = _as_multiset(now) == _as_multiset(held) if snapshot.catalog else len(now) == len(held)
             if not same:
                 raise WorldResetRefused(
                     f"the reset left {schema}.{table} other than its snapshot ({len(now)} rows, {len(held)} expected): "
@@ -549,15 +493,11 @@ class PostgresStore(ContainerStore):
                 )
         if snapshot.catalog:
             changed = sorted(
-                kind
-                for kind, digest in catalog_digest(connection).items()
-                if snapshot.catalog.get(kind) != digest
+                kind for kind, digest in catalog_digest(connection).items() if snapshot.catalog.get(kind) != digest
             )
             if changed:
                 raise WorldResetRefused(
-                    "the world's definitions changed since its snapshot ("
-                    + ", ".join(changed)
-                    + "): the reset is "
+                    "the world's definitions changed since its snapshot (" + ", ".join(changed) + "): the reset is "
                     "rolled back and the world is not reused"
                 )
 
@@ -599,12 +539,7 @@ class PostgresStore(ContainerStore):
                 # One statement, so Postgres resolves the dependency order between them itself.
                 connection.execute(f"TRUNCATE TABLE {listed} RESTART IDENTITY CASCADE")
                 for schema, table in tables:
-                    self._put_back(
-                        connection,
-                        schema,
-                        table,
-                        snapshot.rows.get(_key(schema, table)) or [],
-                    )
+                    self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
                 self._set_counters(connection, snapshot.counters)
                 self._verify_reset(connection, snapshot, tables)
 
@@ -625,16 +560,9 @@ class PostgresStore(ContainerStore):
                     + ", ".join(sorted(f"{table}.{trigger}" for table, trigger in firing))
                     + " are set to fire in replica mode (ENABLE ALWAYS or ENABLE REPLICA)"
                 )
-            parents: dict[tuple[str, str], set[tuple[str, str]]] = {
-                table: set() for table in tables
-            }
-            for child_schema, child, parent_schema, parent in connection.execute(
-                _FOREIGN_KEYS
-            ).fetchall():
-                one, other = (
-                    (str(child_schema), str(child)),
-                    (str(parent_schema), str(parent)),
-                )
+            parents: dict[tuple[str, str], set[tuple[str, str]]] = {table: set() for table in tables}
+            for child_schema, child, parent_schema, parent in connection.execute(_FOREIGN_KEYS).fetchall():
+                one, other = (str(child_schema), str(child)), (str(parent_schema), str(parent))
                 if one in parents and other in parents and one != other:
                     parents[one].add(other)
             order: list[tuple[str, str]] = []
@@ -647,39 +575,22 @@ class PostgresStore(ContainerStore):
                 if getattr(self, "_reader_dsn", None) and connection.execute(
                     "SELECT current_setting('session_replication_role')"
                 ).fetchone() != ("replica",):
-                    raise WorldResetRefused(
-                        "the store role does not start with the world's triggers suspended"
-                    )
+                    raise WorldResetRefused("the store role does not start with the world's triggers suspended")
                 for schema, table in reversed(order):
                     connection.execute(f"DELETE FROM {_ident(schema, table)}")  # noqa: S608 - a listed table
                 for schema, table in order:
-                    self._put_back(
-                        connection,
-                        schema,
-                        table,
-                        snapshot.rows.get(_key(schema, table)) or [],
-                    )
+                    self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
                 self._set_counters(connection, snapshot.counters)
                 self._verify_reset(connection, snapshot, tables)
         self._settle_world_roles(snapshot)
 
     def _store_role_name(self) -> str | None:
-        user = (
-            _psycopg()
-            .conninfo.conninfo_to_dict(getattr(self, "_reader_dsn", None) or "")
-            .get("user")
-        )
+        user = _psycopg().conninfo.conninfo_to_dict(getattr(self, "_reader_dsn", None) or "").get("user")
         return str(user) if user else None
 
     def _world_role_names(self) -> list[str]:
         conninfo = _psycopg().conninfo.conninfo_to_dict
-        return sorted(
-            {
-                str(conninfo(dsn).get("user"))
-                for dsn in self._role_dsns
-                if conninfo(dsn).get("user")
-            }
-        )
+        return sorted({str(conninfo(dsn).get("user")) for dsn in self._role_dsns if conninfo(dsn).get("user")})
 
     def _world_roles_state(self) -> str | None:
         """The world's own roles (the agent's and the store role) as the harness set them, each one's password
@@ -689,9 +600,7 @@ class PostgresStore(ContainerStore):
         if not self._roles_admin_dsn or not self._role_dsns:
             return None
         names = self._world_role_names()
-        with _psycopg().connect(
-            self._roles_admin_dsn, autocommit=True, options=PINNED_SEARCH_PATH
-        ) as connection:
+        with _psycopg().connect(self._roles_admin_dsn, autocommit=True, options=PINNED_SEARCH_PATH) as connection:
             rows = connection.execute(
                 "SELECT a.rolname, coalesce(a.rolpassword, ''), coalesce((SELECT string_agg(concat_ws(':', "
                 "s.setdatabase, s.setconfig::text), ',' ORDER BY s.setdatabase) FROM pg_db_role_setting s "
@@ -711,9 +620,7 @@ class PostgresStore(ContainerStore):
             return
         sql = _psycopg().sql
         names = self._world_role_names()
-        with _psycopg().connect(
-            self._roles_admin_dsn, autocommit=True, options=PINNED_SEARCH_PATH
-        ) as connection:
+        with _psycopg().connect(self._roles_admin_dsn, autocommit=True, options=PINNED_SEARCH_PATH) as connection:
             for name in names:
                 role = sql.Identifier(name)
                 connection.execute(sql.SQL("ALTER ROLE {} RESET ALL").format(role))
@@ -723,21 +630,15 @@ class PostgresStore(ContainerStore):
                     (name,),
                 ).fetchall():
                     connection.execute(
-                        sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(
-                            role, sql.Identifier(str(database))
-                        )
+                        sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(role, sql.Identifier(str(database)))
                     )
                 if name == self._store_role_name():
                     connection.execute(
-                        sql.SQL(
-                            "ALTER ROLE {} SET session_replication_role = replica"
-                        ).format(role)
+                        sql.SQL("ALTER ROLE {} SET session_replication_role = replica").format(role)
                     )
                 if self._verifiers.get(name):
                     connection.execute(
-                        sql.SQL("ALTER ROLE {} PASSWORD {}").format(
-                            role, sql.Literal(self._verifiers[name])
-                        )
+                        sql.SQL("ALTER ROLE {} PASSWORD {}").format(role, sql.Literal(self._verifiers[name]))
                     )
             connection.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ANY(%s) "
@@ -745,9 +646,7 @@ class PostgresStore(ContainerStore):
                 (names,),
             )
         if self._world_roles_state() != held:
-            raise WorldResetRefused(
-                "the world's own roles could not be put back as the harness set them"
-            )
+            raise WorldResetRefused("the world's own roles could not be put back as the harness set them")
 
     def save_to(self, path: str | Path) -> None:
         """Save both the records and the DDL a fresh Postgres store needs."""
