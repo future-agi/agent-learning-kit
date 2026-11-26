@@ -702,7 +702,10 @@ def test_an_end_screenshot_answered_after_the_seal_leaves_the_sealed_files_in_pl
         # The end screenshot's answer comes after the seal was written.
         [late] = fake.held
         fake.queue({"id": late["id"], "result": {"data": base64.b64encode(fake.shot).decode()}})
-        __import__("time").sleep(0.3)
+        # Answered after the late one, so the late one has been handled when this is.
+        handled = threading.Event()
+        recorder._command("Browser.getVersion", then=lambda _answer: handled.set())
+        assert handled.wait(5)
     finally:
         recorder.close()
     named = [one["file"] for one in body["screenshots"]]
@@ -1172,12 +1175,36 @@ def test_a_blocked_file_that_could_not_be_cut_is_unreadable_never_the_last_trial
 
 def test_a_kit_file_larger_than_its_limit_is_never_read_whole(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(browser_record, "KIT_FILE_BYTES", 64)
+    asked: list[int] = []
+    path_open = browser_record.Path.open
+
+    class _Counted:
+        def __init__(self, handle) -> None:
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> None:
+            self.handle.close()
+
+        def read(self, size: int = -1) -> bytes:
+            asked.append(size)
+            return self.handle.read(size)
+
+    def counted_open(path, mode="r", *args, **kwargs):
+        handle = path_open(path, mode, *args, **kwargs)
+        return _Counted(handle) if mode == "rb" else handle
+
+    monkeypatch.setattr(browser_record.Path, "open", counted_open)
     big = tmp_path / "w0-blocked.jsonl"
     big.write_text(json.dumps({"arguments": {"host": "a.example.com"}, "pad": "x" * 100}) + "\n")
     assert browser_record.blocked_from_file(big) is None
     record = tmp_path / "w0-record.json"
     record.write_text(json.dumps({"complete": True, "rows": [], "pad": "x" * 100}))
     assert browser_record.sealed_record(record, timeout=0.1) is None
+    # Never more than one byte past the limit is asked for, so a file of any size costs no more to refuse.
+    assert asked and all(0 <= size <= 65 for size in asked)
 
 
 def test_a_blocked_file_that_cannot_be_read_is_unreadable_never_empty(tmp_path) -> None:
