@@ -1740,6 +1740,29 @@ def _world_identifiers(state: dict[str, list[dict[str, Any]]]) -> set[str]:
 _AN_IDENTIFIER = re.compile(r"[a-z]{2,5}_[a-z0-9_]{2,40}")
 
 
+def _unrelated_order_lookup(scenario: Scenario) -> list[str]:
+    """A prospective policy inquiry can require past records only when the rule depends on them."""
+    case = scenario.fixture.get("reviewed_source")
+    if not isinstance(case, dict) or not case.get("policy_reference") or case.get("starting_facts"):
+        return []
+    policy = case["policy_reference"]
+    if re.search(r"\b(?:previous|prior|past|original|existing|originally|history|loyalty|tier|member(?:ship)?)\b", policy, re.I):
+        return []
+    prospective = re.search(
+        r"\b(?:consider(?:ing|s)?|thinking (?:about|of)|before) (?:purchasing|ordering|buying)\b"
+        r"|\b(?:future|prospective|potential|hypothetical|separate) (?:purchase|order)\b",
+        scenario.instruction, re.I,
+    )
+    if prospective and (
+        any(step.arguments.get("order_id") for step in scenario.solution)
+        or re.search(r"\b(?:look(?:s)? up|check(?:s)?|retrieve(?:s)?) (?:the |an? |their )?(?:existing )?order\b", scenario.tests, re.I)
+    ):
+        return ["This source policy question is about a prospective purchase. Looking up an unrelated "
+                "existing order does not establish the rule. Keep the prospective inquiry as the entire "
+                "situation, use a policy lookup if one exists, and test the actual policy outcome."]
+    return []
+
+
 def _reviewed_order_item_problems(scenario: Scenario, state: dict, contract) -> list[str]:
     """Compare the product a reviewed case assigns to an order with the row the tools can read."""
     fixture = scenario.fixture
@@ -2362,6 +2385,8 @@ def accept_scenario(
 
     if (recited := recited_sources(scenario, contract)) is not None:
         scenario = scenario.model_copy(update={"sources": [ScenarioSource.model_validate(one) for one in recited]})
+    if unrelated := _unrelated_order_lookup(scenario):
+        return _err("Not kept. " + " ".join(unrelated))
     if unlisted := _unlisted_actors(scenario, world_root):
         return _err("Not kept. " + " ".join(unlisted))
     if unknown := _budgets_for_unknown_workers(scenario, world_root):

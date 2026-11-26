@@ -702,3 +702,24 @@ def test_reviewed_hypothetical_reference_does_not_require_a_real_order_lookup():
     case.tests = "Explain the policy for future purchases."
     case.solution = [SimpleNamespace(arguments={"query":"returns policy"})]
     assert not _reviewed_order_item_problems(case, {"orders":[]}, None)
+
+
+def test_prospective_policy_question_does_not_test_an_unrelated_order_lookup():
+    from types import SimpleNamespace
+    from fi.alk.harness.scenario_tools import _unrelated_order_lookup
+
+    source = {"policy_reference":"Opened electronics are refundable with an 18 percent restocking fee."}
+    scenario = SimpleNamespace(
+        fixture={"reviewed_source":source},
+        instruction="Check my rain jacket order. In addition, I am considering purchasing an electronic item.",
+        solution=[SimpleNamespace(arguments={"order_id":"A1002"})],
+        tests="The agent looks up order A1002 and explains the 18 percent electronics fee.",
+    )
+    assert _unrelated_order_lookup(scenario)
+    scenario.solution = []
+    assert _unrelated_order_lookup(scenario)
+    scenario.tests = "The agent confirms refundability of opened electronics and the 18 percent fee."
+    assert not _unrelated_order_lookup(scenario)
+    source["policy_reference"] = "A past paid order qualifies a future purchase for a 15% discount."
+    scenario.solution = [SimpleNamespace(arguments={"order_id":"A1002"})]
+    assert not _unrelated_order_lookup(scenario)
