@@ -1396,20 +1396,27 @@ class HostedChatCallRunner:
         )
 
         if door_sees_tools:
-            from .call_runner import upload_end_state, worker_channels_held
+            from .call_runner import END_STATE_KEY, upload_end_state, worker_channels_held
 
             sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
             door_log = _trial_log(door, trial_started)
             # The browser's refusals come from one place only: the door's log where its database keeps them, else the
-            # kit-owned file the browser was given.
+            # kit-owned file the browser was given. Only the world's table holds the browser proxy's rows, so a table
+            # that cannot be read leaves the list unreadable, never empty.
             refused = (
-                await asyncio.to_thread(browser_blocked, runtime, door_log) if browser is not None else None
+                await asyncio.to_thread(
+                    browser_blocked, runtime, _readable_trial_log(door, trial_started, proxied=True)
+                )
+                if browser is not None
+                else None
             )
+            # Decided before the upload: an upload the platform refused is not a world whose end could not be read.
+            end_readable = sealed.get(END_STATE_KEY) is not None
             kept = await upload_end_state(
                 self._adapter, scenario.scenario_key, sealed, door_log,
                 browser=browser_file_body(browser, refused) if browser is not None else None,
             )
-            if browser is not None and not kept:
+            if browser is not None and not end_readable:
                 # The world's end could not be read: the browser's record is still kept, in a file saying so.
                 kept = await upload_browser_state(
                     self._adapter, scenario.scenario_key, browser, refused, why=WORLD_END_UNREADABLE,
@@ -1429,7 +1436,9 @@ class HostedChatCallRunner:
             if browser is not None and isinstance(world_record.get("state_changes"), list):
                 # The browser's refusals in the agent's blocked list, which the door's log gives, split into its
                 # navigations and its pages' requests and counted; the addresses are in the world_state file.
-                world_record["state_changes"] = sealed_browser_blocked(world_record["state_changes"], browser)
+                world_record["state_changes"] = sealed_browser_blocked(
+                    world_record["state_changes"], browser, refused
+                )
         else:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)

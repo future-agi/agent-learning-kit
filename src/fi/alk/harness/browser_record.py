@@ -896,19 +896,30 @@ def split_blocked(blocked: list[dict[str, Any]], record: dict[str, Any] | None) 
     return kept
 
 
-def sealed_browser_blocked(state_changes: Any, record: dict[str, Any] | None) -> Any:
+def sealed_browser_blocked(
+    state_changes: Any, record: dict[str, Any] | None, refused: list[dict[str, Any]] | None = None
+) -> Any:
     """The trial's sealed changes with the agent's browser refusals split as the record tells them apart, counted
     for each host and kind: the sealed record carries counts, and every address stays in the world_state file. With
-    no record the proxy's counts stand. Never changes its input."""
+    no record the proxy's counts stand. ``refused`` is the browser's refusals from the one source the world_state
+    file uses: given, they are the agent's browser rows, in place of whatever the door's own log held. Never changes
+    its input."""
     if not isinstance(state_changes, list) or not isinstance(record, dict):
         return state_changes
+    browser_rows = None if refused is None else [one for one in refused if one.get("via") == "browser"]
     sealed: list[Any] = []
     for entry in state_changes:
-        if not (isinstance(entry, dict) and entry.get("who") == "agent" and isinstance(entry.get("blocked"), list)):
+        if not (isinstance(entry, dict) and entry.get("who") == "agent"):
+            sealed.append(entry)
+            continue
+        blocked = entry.get("blocked")
+        if browser_rows is not None:
+            blocked = [one for one in blocked or [] if one.get("via") != "browser"] + browser_rows
+        if not isinstance(blocked, list) or (not blocked and "blocked" not in entry):
             sealed.append(entry)
             continue
         counted: list[dict[str, Any]] = []
-        for one in split_blocked(entry["blocked"], record):
+        for one in split_blocked(blocked, record):
             if one.get("what") != "navigation":
                 counted.append(one)
                 continue
