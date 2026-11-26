@@ -17,6 +17,7 @@ from fi.alk.bench._docker import docker_available
 from fi.alk.harness.actor_dispatch import ActorDispatcher, DoorActs
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor, actors_seed
 from fi.alk.harness.bundle_author_v2 import _TOOL_TRACE_DDL
+from fi.alk.harness.call_actor import logged_action
 
 pytestmark = pytest.mark.skipif(
     not docker_available(), reason="docker daemon unavailable"
@@ -154,6 +155,10 @@ def _agent(url: str, path: str, body: dict) -> int:
         return exc.code
 
 
+# The agent's tool and the route its service serves it on, as a contract records them.
+APPROVAL_ROUTE = {"tool_entrypoints": [{"tool": "request_approval", "endpoint": "/records/request_approval"}]}
+
+
 def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial_shows_both(
     world,
 ):
@@ -178,9 +183,11 @@ def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial
                     {
                         "action": "records.approve",
                         "arguments": {"item": "d1"},
+                        # The tool's name read as the world action the door logs, as `build_dispatcher` routes
+                        # every on_tool trigger in a real run (`logged_action`).
                         "trigger": {
                             "kind": "on_tool",
-                            "tool": "records.request_approval",
+                            "tool": logged_action(APPROVAL_ROUTE, "request_approval"),
                         },
                     }
                 ],
