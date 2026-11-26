@@ -3870,12 +3870,7 @@ def resolve_environment_plan(
     voice = str(contract_modality or "").strip().lower() == "voice"
     trace_environment: dict[str, str] = {}
     # Read from the planned control process: a Compose command or Dockerfile CMD can be all that makes it Node.
-    node_control = any(
-        isinstance(process, SourceProcess)
-        and process.name == control_name
-        and _NPM_INSTALL in process.build_commands
-        for process in processes
-    )
+    node_control = _node_control(processes, control_name)
     if (runtime_model.command or compose) and not voice and not node_control:
         trace_environment = _source_tool_trace_environment(
             root,
@@ -4011,6 +4006,17 @@ def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
     return any(
         {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"}
         & set(getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _node_control(processes: Sequence[Any], control_service: str) -> bool:
+    """Whether the control process is a Node one (its build runs ``npm ci``). The Python tool
+    tracer and the in-process door never reach it, whatever language the contract names."""
+    return any(
+        isinstance(process, SourceProcess)
+        and process.name == control_service
+        and _NPM_INSTALL in process.build_commands
         for process in processes
     )
 
@@ -4533,11 +4539,12 @@ def author_bundle_v2(
         tool_entrypoints=contract_body.get("tool_entrypoints"),
         dependencies=contract_body.get("dependencies"),
     )
+    node_control = _node_control(plan.processes, plan.control_service or "")
     trace_bindings = (
         _source_tool_trace_bindings(
             contract_body, watch_unreachable=not _observed_by_frameworks(plan.processes)
         )
-        if contract_modality == "chat"
+        if contract_modality == "chat" and not node_control
         else []
     )
     if trace_bindings and not _binds_source_tools(plan.processes):
@@ -4552,7 +4559,7 @@ def author_bundle_v2(
     plan = with_in_process_door(
         plan,
         contract_body.get("tool_entrypoints"),
-        str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+        "node" if node_control else str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
     )
     plan = with_in_process_workers(plan, contract_body)
     if contract_body:
@@ -5102,12 +5109,17 @@ def _carry_contract(
         and str(interface.get("kind") or "").strip().lower() == "command"
         and _binds_source_tools(processes)
     )
+    node_control = _node_control(processes, manifest.runtime.control_service or "")
     if (
         str(body.get("modality") or "").strip().lower() == "chat"
         and not traced_command
     ):
-        bindings = _source_tool_trace_bindings(
-            body, watch_unreachable=not _observed_by_frameworks(processes)
+        bindings = (
+            []
+            if node_control
+            else _source_tool_trace_bindings(
+                body, watch_unreachable=not _observed_by_frameworks(processes)
+            )
         )
         processes = list(
             _with_source_tool_trace(
@@ -5124,7 +5136,7 @@ def _carry_contract(
         processes,
         control_service=manifest.runtime.control_service or "",
         tool_entrypoints=body.get("tool_entrypoints"),
-        language=str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+        language="node" if node_control else str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
     )
     return True, processes, metadata
 
