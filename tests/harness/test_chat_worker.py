@@ -790,6 +790,17 @@ def test_the_transcript_names_the_end_state_by_the_id_it_was_stored_under():
     assert _with_stored_end_state(plain, {}) == plain
 
 
+def test_the_transcript_names_the_browser_s_file_by_the_id_it_was_stored_under():
+    import json as _json
+
+    from fi.alk.harness.chat_worker import _with_stored_end_state
+
+    transcript = _json.dumps({"messages": [], "world_actors": {"browser_state_artifact": "0"}}).encode()
+    stored = _json.loads(_with_stored_end_state(transcript, {"0": "sha256:" + "b" * 64}))
+    assert stored["world_actors"]["browser_state_artifact"] == "sha256:" + "b" * 64
+    assert "browser_state_artifact" not in _json.loads(_with_stored_end_state(transcript, {}))["world_actors"]
+
+
 @pytest.mark.parametrize("raises", [False, True])
 def test_a_screenshot_the_platform_did_not_keep_is_said_and_never_named(tmp_path, monkeypatch, raises):
     context = _context(tmp_path)

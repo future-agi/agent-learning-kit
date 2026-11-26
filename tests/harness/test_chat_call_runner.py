@@ -2864,8 +2864,10 @@ def test_a_browser_trial_with_no_door_keeps_a_world_state_file_saying_the_world_
     [(_, transcript)] = [one for one in adapter.stored if one[0] == "transcript"]
     world = json.loads(transcript)["world_actors"]
     # World changes names the file and keeps counts only, never rows; with no door it still says the agent's tools
-    # were not seen.
-    assert world["end_state_artifact"].startswith("artifact-")
+    # were not seen. A file with no tables has a name of its own: a reader of the world's end state never takes it
+    # for the world's records.
+    assert world["browser_state_artifact"].startswith("artifact-")
+    assert "end_state_artifact" not in world
     assert world["browser"] == {"state": "not_used"}
     if not include_tools:
         assert world["recorded"] is False
@@ -2981,6 +2983,19 @@ def test_a_door_log_that_cannot_be_read_leaves_the_browser_s_refusals_unreadable
     [(_, end)] = [one for one in adapter.stored if one[0] == "world_state"]
     body = json.loads(end)
     assert body.get("blocked_unreadable") is True and "blocked" not in body
+
+
+def test_a_readable_world_s_end_with_its_browser_is_named_as_the_end_state_alone(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # The world's end was read: its one file holds the tables and the browser's part, and is the end state.
+    adapter = _Stored()
+    _browser_trial(tmp_path, monkeypatch, adapter, kit_file=True, end_readable=True)
+    [(_, end)] = [one for one in adapter.stored if one[0] == "world_state"]
+    assert "browser" in json.loads(end)
+    world = adapter.world()
+    assert world["end_state_artifact"].startswith("artifact-")
+    assert "browser_state_artifact" not in world
 
 
 def test_an_end_state_upload_the_platform_refused_is_never_stored_as_a_world_that_failed(
