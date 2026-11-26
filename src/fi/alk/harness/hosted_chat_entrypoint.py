@@ -2294,7 +2294,19 @@ class HostedChatRuntime:
             print(f"seed contract: error; class: {type(exc).__name__}", file=sys.stderr, flush=True)
             print_trace(exc)
             return "error", []
-        return use_seed(seed, job, self.source, self.workspace)
+        try:
+            profile = _load_provider_import_profile(
+                job, None, self.source.parent / _PROVIDER_PROFILE
+            )
+        except (RuntimeError, OSError, ValueError) as exc:
+            print(
+                f"seed contract: profile unavailable; class: {type(exc).__name__}",
+                file=sys.stderr,
+                flush=True,
+            )
+            print_trace(exc)
+            profile = None
+        return use_seed(seed, job, self.source, self.workspace, profile)
 
     async def _handle(self, command: dict[str, Any]) -> None:
         if str(command["kind"]) != "nudge":

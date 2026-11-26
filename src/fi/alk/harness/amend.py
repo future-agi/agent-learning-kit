@@ -38,6 +38,7 @@ from .contract import (
 from .json_file import write_json_atomic
 
 CONTRACT = CONTRACT_FILE
+MAX_RULE_CHARS = 2000
 
 
 def _kept_shape(written: Any, before: Any) -> Any:
@@ -159,6 +160,8 @@ def add_rule(
     rule = rule.strip()
     if not rule:
         return False, "no rule given"
+    if len(rule) > MAX_RULE_CHARS:
+        return False, f"a rule can be at most {MAX_RULE_CHARS} characters; this one has {len(rule)}. Ask for a shorter rule"
     if bool(source_file.strip()) != bool(source_quote.strip()):
         return False, "a rule's source is a file and the line quoted from it: give both, or neither"
     if len(source_quote.strip()) > 500:
@@ -475,6 +478,8 @@ def fix_tool(
         spec.arg_types = {k: v for k, v in spec.arg_types.items() if k in spec.args}
         spec.arg_values = {k: v for k, v in spec.arg_values.items() if k in spec.args}
         spec.arg_units = {k: v for k, v in spec.arg_units.items() if k in spec.args}
+        spec.arg_required = [k for k in spec.arg_required if k in spec.args]
+        spec.arg_bounds = {k: v for k, v in spec.arg_bounds.items() if k in spec.args}
         changed.append(f"arguments are now {', '.join(args)}")
         if orphaned:
             changed.append(f"dropped values recorded for {', '.join(orphaned)}")
