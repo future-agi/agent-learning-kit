@@ -92,9 +92,10 @@ def test_a_world_s_database_opens_only_after_its_own_role_is_the_only_one_let_in
         'ALTER ROLE "alk_s3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
         f"PASSWORD '{pr.store_role(_CREDENTIALS, 3).password}'",
         "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
-        "EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"alk_s3\"'; END IF; END $$",
+        "EXECUTE 'REVOKE SET ON PARAMETER session_replication_role FROM \"alk_s3\"'; END IF; END $$",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_s3"',
         *pr._only_member_of("alk_s3", "alk_world_tools"),
+        pr.STORE_ROLE_DEFAULT.format(role="alk_s3"),
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_l3') THEN "
         'CREATE ROLE "alk_l3" LOGIN IN ROLE "alk_world_log"; END IF; END $$',
@@ -2328,14 +2329,16 @@ def test_what_an_agent_does_to_its_own_role_is_undone_by_the_next_reset(door_wor
         psycopg.connect(mine).close()
     with psycopg.connect(world, autocommit=True) as tools:
         assert tools.execute("SHOW statement_timeout").fetchone() == ("0",)
+    # The store role keeps its one setting through that, so the next reset runs with triggers suspended as before.
+    store.restore(snapshot)
 
 
 @real_postgres
 @pytest.mark.parametrize("deferred", ("changes the store role's password", "writes a row"))
-def test_a_deferred_check_of_the_world_s_runs_before_the_reset_is_verified(door_worlds, monkeypatch, deferred):
-    """A check the reset runs turns triggers back on, and a deferred constraint trigger of the world's would then run
-    at commit, after the reset was verified. It runs before the verify instead: a row it writes refuses the world, and
-    a password it gives the store role is put back once the reset commits."""
+def test_a_check_that_tries_to_turn_the_world_s_triggers_back_on_refuses_the_reset(door_worlds, monkeypatch, deferred):
+    """A check the reset runs tries to turn the world's triggers back on, so that a deferred trigger of the world's
+    would run at commit: the store role may not, so the reset is refused and rolled back, and neither the row nor the
+    password its trigger would have written survives."""
     from fi.alk.harness import privilege
     from fi.alk.harness.world.stores import WorldResetRefused
 
@@ -2364,17 +2367,103 @@ def test_a_deferred_check_of_the_world_s_runs_before_the_reset_is_verified(door_
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute("SET session_replication_role = replica; DELETE FROM public.notes")
-    if deferred.startswith("writes"):
-        with pytest.raises(WorldResetRefused, match="trail.seen"):
-            store.restore(snapshot)
-        return
-    store.restore(snapshot)
-    late = urlunsplit(urlsplit(store_url)._replace(
-        netloc=f"{urlsplit(store_url).username}:late@{urlsplit(store_url).hostname}:{urlsplit(store_url).port}"
-    ))
-    with pytest.raises(psycopg.OperationalError):
-        psycopg.connect(late).close()
+    with pytest.raises(WorldResetRefused, match="session_replication_role"):
+        store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT count(*) FROM trail.seen").fetchone() == (0,)
     psycopg.connect(store_url).close()
+
+
+@real_postgres
+def test_putting_the_world_s_roles_back_leaves_the_door_s_sessions_open(door_worlds, monkeypatch):
+    """The door runs only the harness's own code and keeps a long-lived session (its fault reads): a reset that puts
+    the agent's role back ends the agent's sessions, never the door's."""
+    from fi.alk.harness import privilege
+
+    superuser, world, door, _reset = door_worlds(True)
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    endpoint = SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url,
+                               log_address=door_worlds.log_url, door_address=door)
+    from fi.alk.harness.world.stores.postgres import attached_world_store
+
+    store = attached_world_store(endpoint)
+    snapshot = store.freeze()
+    with psycopg.connect(door, autocommit=True) as kept:
+        with psycopg.connect(world, autocommit=True) as agent:
+            agent.execute("ALTER ROLE CURRENT_USER SET statement_timeout = 1")
+        store.restore(snapshot)
+        assert kept.execute("SELECT 1").fetchone() == (1,)
+
+
+@real_postgres
+def test_no_trigger_of_the_world_s_fires_while_the_store_role_resets(door_worlds, monkeypatch):
+    """A check the reset runs tries to turn the world's triggers back on, so that a deferred trigger could re-defer
+    itself past the verify and, at commit, write a row and advance a sequence. The store role starts every session
+    with triggers suspended and may not change that: nothing fires, nothing drifts, and the reset holds."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    _owned_by_the_login(
+        superuser,
+        "CREATE SCHEMA trail; GRANT USAGE ON SCHEMA trail TO PUBLIC; "
+        "CREATE TABLE trail.seen (who text); GRANT SELECT, INSERT, UPDATE, DELETE ON trail.seen TO PUBLIC; "
+        "CREATE SEQUENCE trail.ticks; GRANT USAGE, SELECT, UPDATE ON SEQUENCE trail.ticks TO PUBLIC; "
+        "CREATE TABLE public.zz2 (id int PRIMARY KEY); INSERT INTO public.zz2 VALUES (1); "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON public.zz2 TO alk_world_tools; "
+        "CREATE FUNCTION public.wake() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
+        "BEGIN PERFORM set_config('session_replication_role', 'origin', true); EXCEPTION WHEN others THEN NULL; END; "
+        "RETURN true; END $$; "
+        "CREATE FUNCTION public.again() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "SET CONSTRAINTS ALL DEFERRED; UPDATE public.zz2 SET id = id; RETURN NULL; END $$; "
+        "CREATE FUNCTION public.drift() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "INSERT INTO trail.seen VALUES (current_user); PERFORM nextval('trail.ticks'); RETURN NULL; END $$; "
+        "CREATE TABLE public.notes (id int PRIMARY KEY); INSERT INTO public.notes VALUES (1); "
+        "CREATE CONSTRAINT TRIGGER first AFTER INSERT ON public.notes DEFERRABLE INITIALLY DEFERRED "
+        "FOR EACH ROW EXECUTE FUNCTION public.again(); "
+        "CREATE CONSTRAINT TRIGGER second AFTER UPDATE ON public.zz2 DEFERRABLE INITIALLY DEFERRED "
+        "FOR EACH ROW EXECUTE FUNCTION public.drift(); "
+        "ALTER TABLE public.notes ADD CONSTRAINT woken CHECK (wake()) NOT VALID; "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools; TRUNCATE trail.seen",
+    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("SET session_replication_role = replica; DELETE FROM public.notes")
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT count(*) FROM trail.seen").fetchone() == (0,)
+        assert connection.execute("SELECT is_called FROM trail.ticks").fetchone() == (False,)
+        assert connection.execute("SELECT id FROM public.notes").fetchall() == [(1,)]
+
+
+@real_postgres
+def test_a_world_with_an_ordinary_audit_trigger_resets_clean(door_worlds, monkeypatch):
+    """A world's ordinary trigger (an audit row on every insert) fires on no reset: the world resets clean, every
+    time, and is never refused for it."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    _owned_by_the_login(
+        superuser,
+        "CREATE TABLE public.audit (what text); GRANT SELECT, INSERT, UPDATE, DELETE ON public.audit TO PUBLIC; "
+        "CREATE FUNCTION public.audited() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "INSERT INTO public.audit VALUES (TG_OP); RETURN NEW; END $$; "
+        "CREATE TABLE public.orders (id int PRIMARY KEY); "
+        "CREATE TRIGGER audited AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.audited(); "
+        "INSERT INTO public.orders VALUES (1), (2); "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON public.orders TO alk_world_tools",
+    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    for _trial in range(3):
+        with psycopg.connect(superuser, autocommit=True) as connection:
+            connection.execute("DELETE FROM public.orders WHERE id = 2; INSERT INTO public.orders VALUES (3)")
+        store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute("SELECT id FROM public.orders ORDER BY id").fetchall() == [(1,), (2,)]
+        assert connection.execute("SELECT count(*) FROM public.audit").fetchone() == (2,)
 
 
 _SHOUTING = (
@@ -2784,7 +2873,10 @@ def test_a_reset_that_would_change_a_definition_is_rolled_back_and_refused(door_
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute("SELECT to_regproc('public.backdoor')").fetchone() == (None,)
         assert connection.execute(
-            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole", (store_role,)
+            # Only the one setting the harness gives the store role.
+            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole "
+            "AND setconfig <> ARRAY['session_replication_role=replica']",
+            (store_role,),
         ).fetchone() == (0,)
         assert connection.execute("SELECT id FROM public.secrets").fetchall() == [(1,)]
         connection.execute(f'REVOKE CREATE ON SCHEMA public FROM "{store_role}"')

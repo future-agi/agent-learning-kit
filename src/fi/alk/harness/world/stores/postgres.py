@@ -94,12 +94,9 @@ def attached_world_store(endpoint: Any) -> AttachedPostgresStore:
             reader_dsn=endpoint.store_address,
             log_dsn=endpoint.log_address,
             roles_admin_dsn=endpoint.address,
-            role_dsns=tuple(
-                one
-                for one in (endpoint.tool_address, endpoint.store_address, endpoint.log_address,
-                            getattr(endpoint, "door_address", None))
-                if one
-            ),
+            # The roles whose sessions run the agent's or the world's code. The door and the log reader run only
+            # the harness's own, and their long-lived sessions (the door's fault reads) are left alone.
+            role_dsns=(endpoint.tool_address, endpoint.store_address),
         )
     return AttachedPostgresStore(system_first(endpoint.address), admin_dsn=endpoint.address)
 
@@ -291,14 +288,13 @@ class PostgresStore(ContainerStore):
         # world's functions by their bare names after the system's own . Every statement of the harness's own
         # runs on the system's path alone, so none of them reaches a function of the world's.
         connection.execute(f"SET LOCAL search_path = {_WORLD_CODE_PATH}")
-        try:
-            with connection.cursor() as cursor:
-                cursor.executemany(
-                    statement,
-                    [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
-                )
-        finally:
-            connection.execute("SET LOCAL search_path = pg_catalog, pg_temp")
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                statement,
+                [tuple(_adapt(row.get(column), types.get(column, "")) for column in columns) for row in rows],
+            )
+        # Only on success: a failed statement ends the transaction, and its own error is the one to report.
+        connection.execute("SET LOCAL search_path = pg_catalog, pg_temp")
 
     def _counters(self, connection: Connection[Any]) -> dict[str, Any]:
         rows = connection.execute(
@@ -539,9 +535,12 @@ class PostgresStore(ContainerStore):
                 ready = [t for t in tables if t not in order and parents[t] <= set(order)]
                 order.extend(ready or [t for t in tables if t not in order])
             with connection.transaction():
-                if getattr(self, "_reader_dsn", None):
-                    # The store role may suspend the world's triggers and foreign-key checks for its own reset.
-                    connection.execute("SET LOCAL session_replication_role = replica")
+                # The store role's every session starts with the world's triggers suspended, and it may not change
+                # that: a role without the setting (made by an older harness) resets nothing.
+                if getattr(self, "_reader_dsn", None) and connection.execute(
+                    "SELECT current_setting('session_replication_role')"
+                ).fetchone() != ("replica",):
+                    raise WorldResetRefused("the store role does not start with the world's triggers suspended")
                 for schema, table in reversed(order):
                     connection.execute(f"DELETE FROM {_ident(schema, table)}")  # noqa: S608 - a listed table
                 for schema, table in order:
@@ -550,15 +549,19 @@ class PostgresStore(ContainerStore):
                 self._verify_reset(connection, snapshot, tables)
         self._settle_world_roles(snapshot)
 
+    def _store_role_name(self) -> str | None:
+        user = _psycopg().conninfo.conninfo_to_dict(getattr(self, "_reader_dsn", None) or "").get("user")
+        return str(user) if user else None
+
     def _world_role_names(self) -> list[str]:
         conninfo = _psycopg().conninfo.conninfo_to_dict
         return sorted({str(conninfo(dsn).get("user")) for dsn in self._role_dsns if conninfo(dsn).get("user")})
 
     def _world_roles_state(self) -> str | None:
-        """The world's own roles as the harness set them (each one's password verifier and settings), read as the
-        harness: any role may change its own password and settings, so the world's code (a check the reset ran, the
-        agent's own SQL) could have, and a reset that does not see it would carry it to the next trial. The verifiers
-        are kept here, never in the snapshot."""
+        """The world's own roles (the agent's and the store role) as the harness set them, each one's password
+        verifier and settings, read as the harness: any role may change its own password and settings, so the world's
+        code (a check the reset ran, the agent's own SQL) could have, and a reset that does not see it would carry it
+        to the next trial. The verifiers are kept here, never in the snapshot."""
         if not self._roles_admin_dsn or not self._role_dsns:
             return None
         names = self._world_role_names()
@@ -593,6 +596,10 @@ class PostgresStore(ContainerStore):
                 ).fetchall():
                     connection.execute(
                         sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(role, sql.Identifier(str(database)))
+                    )
+                if name == self._store_role_name():
+                    connection.execute(
+                        sql.SQL("ALTER ROLE {} SET session_replication_role = replica").format(role)
                     )
                 if self._verifiers.get(name):
                     connection.execute(

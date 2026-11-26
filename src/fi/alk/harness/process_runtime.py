@@ -6876,6 +6876,10 @@ def _grant_log_readers(run: Callable[[str, str], None], baseline_db: str) -> Non
         )
 
 
+# The one setting a store role keeps: every session of its starts with the world's triggers suspended.
+STORE_ROLE_DEFAULT = 'ALTER ROLE "{role}" SET session_replication_role = replica'
+
+
 def _literal(value: str) -> str:
     """A name as a SQL string literal, quoted by the driver: never pasted between quotes by hand."""
     from psycopg import sql
@@ -6998,10 +7002,13 @@ def _reset_template_database(
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{store.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
             f"PASSWORD '{store.password}'",
+            # The store role resets with the world's triggers suspended from its first statement, and can never
+            # turn them back on: no right to set the mode, which its every session starts in.
             "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
-            f"EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"{store.username}\"'; END IF; END $$",
+            f"EXECUTE 'REVOKE SET ON PARAMETER session_replication_role FROM \"{store.username}\"'; END IF; END $$",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{store.username}"',
             *_only_member_of(store.username, WORLD_ROLE_GROUP),
+            STORE_ROLE_DEFAULT.format(role=store.username),
         ]
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         reader = _log_role_of(credentials, role)
