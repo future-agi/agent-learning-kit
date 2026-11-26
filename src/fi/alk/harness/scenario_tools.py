@@ -3231,10 +3231,12 @@ def scenario_tools(
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
+        # A repair keeps whose result the sub-goal checks and its actor unless it says otherwise, as at every stage.
+        previous = catalogue.named(str(args.get("name") or ""))
         try:
             sub_goal, problems = authored_sub_goal(
                 args,
-                previous=None,
+                previous=previous,
                 worker_ids={one.id for one in contract.workers},
                 actor_ids=set(load_actors(world_root).by_id()),
             )
