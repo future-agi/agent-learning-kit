@@ -179,6 +179,7 @@ def open_stage(
                 require_setup_contract=require_setup_contract
                 and source.kind == "repo",
                 subfolder=source.subfolder if source.kind == "repo" else None,
+                provider_owned_state=source.kind == "provider",
                 provider_profile=profile_in_force(source),
             ),
         },

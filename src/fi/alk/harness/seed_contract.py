@@ -30,6 +30,7 @@ from .job import (
     HarnessStage,
     ProviderExecutionMode,
     SourceKind,
+    provider_profile_source,
 )
 from .reading_result import _CONTRACT_LIMIT_BYTES
 
@@ -125,17 +126,28 @@ def print_trace(exc: BaseException) -> None:
         pass
 
 
-def record_for(job: HarnessJob) -> dict[str, Any] | None:
+def record_for(
+    job: HarnessJob, profile: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """What a reading for ``job`` was made from, or None when nothing pins its source."""
-    # A provider's own definition can change behind the same job, so no reading of it is reused.
-    if job.agent.mode in {
-        ProviderExecutionMode.PROVIDER_IMPORT,
-        ProviderExecutionMode.CONNECT_ONLY,
-    }:
-        return None
     source = job.source
-    if source.kind is SourceKind.GITHUB and source.repository and source.commit_sha:
+    if job.agent.mode is ProviderExecutionMode.CONNECT_ONLY:
+        if (
+            profile is None
+            or source.kind is not SourceKind.PROVIDER
+            or provider_profile_source(job.agent) is None
+        ):
+            return None
         made_from: dict[str, Any] = {
+            "kind": "provider",
+            "connector": job.agent.connector.strip().lower(),
+            "profile_sha256": hashlib.sha256(_canon(profile)).hexdigest(),
+        }
+    # A provider's own definition can change behind the same job, so no reading of it is reused.
+    elif job.agent.mode is ProviderExecutionMode.PROVIDER_IMPORT:
+        return None
+    elif source.kind is SourceKind.GITHUB and source.repository and source.commit_sha:
+        made_from = {
             "kind": "github",
             "repository": source.repository,
             # The platform may send either case for the same commit.
@@ -194,12 +206,14 @@ def _splice(raw: bytes, record: dict[str, Any], *, empty: bool) -> bytes:
     return raw[:start] + entry + (b"" if empty else b", ") + raw[start:]
 
 
-def with_record(job: HarnessJob, raw: bytes) -> bytes | None:
+def with_record(
+    job: HarnessJob, raw: bytes, profile: dict[str, Any] | None = None
+) -> bytes | None:
     """The saved contract ``raw`` with what the reading was made from put in, or None to keep it."""
     # Sized before it is parsed: the reading's own size check refuses what is over.
     if len(raw) > SEED_LIMIT_BYTES:
         return None
-    record = record_for(job)
+    record = record_for(job, profile)
     if record is None:
         return None
     body = json.loads(raw.decode("utf-8"))
@@ -231,7 +245,9 @@ def replace_if_unchanged(path: Path, expected: bytes, new: bytes) -> bool:
     return True
 
 
-def differs(body: dict[str, Any], job: HarnessJob) -> list[str]:
+def differs(
+    body: dict[str, Any], job: HarnessJob, profile: dict[str, Any] | None = None
+) -> list[str]:
     """The names that keep this reading from being reused for ``job``; empty when it matches.
 
     Only ``_COMPARED`` is looked at: ``made_by`` (which kit build wrote the reading) never is.
@@ -242,7 +258,7 @@ def differs(body: dict[str, Any], job: HarnessJob) -> list[str]:
     version = record.get("version")
     if type(version) is not int or version != 1:
         return ["version"]
-    expected = record_for(job)
+    expected = record_for(job, profile)
     if expected is None:
         return ["source"]
     # Compared as JSON, so true and 1, or a missing name and null, never pass for each other.
@@ -407,7 +423,11 @@ def holds_seed(contract: Path, seed: str | Path) -> bool:
 
 
 def use_seed(
-    seed: str | Path, job: HarnessJob, source: Path, output: Path
+    seed: str | Path,
+    job: HarnessJob,
+    source: Path,
+    output: Path,
+    profile: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     """Install the seed as the build's contract when it matches ``job``, and say what happened:
     the outcome, and the names that differ when it is a mismatch.
@@ -431,7 +451,7 @@ def use_seed(
             # It was checked when it was accepted, so it changed since.
             result = "unreadable"
         else:
-            names = differs(body, job)
+            names = differs(body, job, profile)
             if names:
                 result = "mismatch"
             else:
