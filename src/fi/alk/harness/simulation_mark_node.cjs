@@ -129,11 +129,29 @@ class CallWindows {
 
   observe() {
     const before = BigInt(Date.now()) * 1000000n;
-    let stat = null;
+    // One open file: its identity and its call are read from the same descriptor, so a call file
+    // replaced between the two can never pair one call's identity with the next call's id.
+    let fd = null;
     try {
-      stat = fs.statSync(this.path, { bigint: true });
+      fd = fs.openSync(this.path, "r");
     } catch (_) {
       // Removed: the current call has ended.
+    }
+    try {
+      this.look(fd, before);
+    } finally {
+      if (fd !== null) fs.closeSync(fd);
+    }
+  }
+
+  look(fd, before) {
+    let stat = null;
+    if (fd !== null) {
+      try {
+        stat = fs.fstatSync(fd, { bigint: true });
+      } catch (_) {
+        return; // Look again on the next poll.
+      }
     }
     const after = BigInt(Date.now() + 1) * 1000000n;
     const seen = stat === null ? null : `${stat.ino}:${stat.mtimeNs}`;
@@ -147,7 +165,7 @@ class CallWindows {
     let call = null;
     if (stat !== null) {
       try {
-        call = fs.readFileSync(this.path, "utf8").trim() || null;
+        call = fs.readFileSync(fd, "utf8").trim() || null;
       } catch (_) {
         return; // Read again on the next look.
       }

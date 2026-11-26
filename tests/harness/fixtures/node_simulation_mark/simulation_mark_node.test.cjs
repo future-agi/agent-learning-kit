@@ -837,3 +837,58 @@ test("a fetch with its own dispatcher is not given the key", async (t) => {
   assert.deepEqual(JSON.parse(result.stdout.trim().split("\n").pop()), [["customer-key", null]]);
   assert.equal(collector.seen.length, 0);
 });
+
+test("a call file replaced while the hook reads it never gives one call's span to the next", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alk-call-"));
+  const callFile = path.join(dir, "simulation_call_execution_id");
+  // Call B replaces call A (as the scheduler does: a staged file renamed into place) right after
+  // the hook first finds A: after its stat, or after it opens the file, whichever it does first.
+  const script = `
+    import fs from "node:fs";
+    const file = ${JSON.stringify(callFile)};
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const ns = () => BigInt(Date.now()) * 1000000n;
+    const span = (name, start) => ({ traceId: "0af7651916cd43dd8448eb211c80319c", spanId: "b7ad6b7169203331", name,
+      startTimeUnixNano: String(start), endTimeUnixNano: String(start + 1000n), attributes: [] });
+    let armed = false;
+    const replaceWithB = () => {
+      armed = false;
+      fs.writeFileSync(file + ".tmp", "call-b");
+      fs.renameSync(file + ".tmp", file);
+    };
+    for (const name of ["statSync", "openSync"]) {
+      const original = fs[name];
+      fs[name] = function (target, ...rest) {
+        const result = original.call(this, target, ...rest);
+        if (armed && String(target) === file) replaceWithB();
+        return result;
+      };
+    }
+    fs.writeFileSync(file + ".tmp", "call-a");
+    fs.renameSync(file + ".tmp", file);
+    const startA = fs.statSync(file, { bigint: true }).mtimeNs;
+    armed = true;
+    await wait(250);
+    const duringB = ns();
+    await wait(250);
+    const spans = [span("a", startA + 1000n), span("b", duringB)];
+    await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }),
+    });
+  `;
+  const result = await run(script, envFor(collector, callFile));
+  assert.equal(result.code, 0, result.stderr);
+  const exported = JSON.parse(collector.seen[0].body.toString());
+  const calls = Object.fromEntries(
+    exported.resourceSpans[0].scopeSpans[0].spans.map((one) => [
+      one.name,
+      attributes(one.attributes)["fi.simulator.call_execution_id"] ?? null,
+    ]),
+  );
+  // A's span is A's or unstamped, never B's; B's span is B's.
+  assert.notEqual(calls.a, "call-b");
+  assert.equal(calls.b, "call-b");
+});
