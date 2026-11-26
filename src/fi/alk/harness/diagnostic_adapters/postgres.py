@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+from ..compile.postgres import PostgresApplyError
 from ..diagnostics import DiagnosticLocation, HarnessDiagnostic
 from ..job import HarnessStage
 
@@ -46,6 +47,9 @@ def diagnose_postgres_error(
 ) -> HarnessDiagnostic:
     """Produce a persistable diagnosis without retaining the raw exception."""
 
+    written_table = None
+    if isinstance(error, PostgresApplyError):
+        written_table, error = error.table, error.error
     sqlstate = _text(getattr(error, "sqlstate", None))
     diag = getattr(error, "diag", None)
     datatype = _text(getattr(diag, "datatype_name", None)) if diag else None
@@ -70,7 +74,7 @@ def diagnose_postgres_error(
         message=f"PostgreSQL {sqlstate or 'unknown SQLSTATE'}: {message}",
         location=DiagnosticLocation(
             table=(_text(getattr(diag, "table_name", None)) if diag else None)
-            or _text(getattr(error, "alk_table", None)),
+            or _text(written_table),
             column=_text(getattr(diag, "column_name", None)) if diag else None,
             constraint=_text(getattr(diag, "constraint_name", None)) if diag else None,
             datatype=datatype,
