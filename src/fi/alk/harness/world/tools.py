@@ -730,15 +730,6 @@ def world_actor_tools(
                 return _err(
                     'Not added: an actor needs a role, their part as a short singular title such as "Teammate".'
                 )
-            name = " ".join(
-                str(
-                    given.get("name") or (current.name if current is not None else "")
-                ).split()
-            )
-            if name and role.casefold() == name.casefold():
-                return _err(
-                    f'Not added: {role!r} is their name; `role` is their part, such as "Teammate".'
-                )
             # The same part is written the same way for everyone in it, so the cast reads by role. Only other
             # actors count, so an actor can correct its own role's casing.
             same = next(
@@ -753,6 +744,22 @@ def world_actor_tools(
             if same is not None and same != role:
                 unified = f" Role written as {same!r}, as for the others in that part."
             given["role"] = same if same is not None else role
+        if "role" in given or "name" in given:
+            # A role is the part, never the person: checked whichever of the two this call changes.
+            name = " ".join(
+                str(
+                    given.get("name") or (current.name if current is not None else "")
+                ).split()
+            )
+            role = " ".join(
+                str(
+                    given.get("role") or (current.role if current is not None else "")
+                ).split()
+            )
+            if name and role and role.casefold() == name.casefold():
+                return _err(
+                    f'Not added: {role!r} is their name; `role` is their part, such as "Teammate".'
+                )
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
             # A nested field merges the keys sent into what it has, as the top level does.

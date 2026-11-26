@@ -11851,7 +11851,13 @@ def test_a_role_matches_another_actor_s_whatever_its_spacing_and_never_the_actor
     assert roles["sarah"] == "Family member"
     assert "Role written as 'Family member'" in str(joined)
     assert roles["lena"] == "Family member" and "Not added" not in str(spaced)
+    renamed = asyncio.run(add({"id": "david", "name": "family member"}))
+
     assert "is their name" in str(named) and "omar" not in roles
+    assert "is their name" in str(renamed)
+    assert {one.id: one.name for one in load_actors(tmp_path).actors}[
+        "david"
+    ] == "David Chen"
 
 
 def test_a_stored_role_with_odd_spacing_still_matches_a_new_one(tmp_path):
