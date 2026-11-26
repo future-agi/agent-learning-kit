@@ -150,8 +150,8 @@ def copy_prompt(contract, source_root):
     return problems
 
 
-def model(contract, source_root):
-    problems = _real_model(contract, source_root)
+def model(contract, source_root, **options):
+    problems = _real_model(contract, source_root, **options)
     if _act("model", Path(source_root)) == "refuse":
         problems.append("stand-in: model refused")
     return problems

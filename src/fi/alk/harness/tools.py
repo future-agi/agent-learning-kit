@@ -465,7 +465,9 @@ def _checked_against_source(
                             "fewer than 16 letters"
                         )
             stage_ended("prompt_copy", "model")
-            if cited := model_problems(contract, source_root):
+            # Where the model's path resolved, so the check made again below costs no lookups.
+            resolved_paths: dict[str, Path | None] = {}
+            if cited := model_problems(contract, source_root, resolved_paths=resolved_paths):
                 model = contract.model
                 setting = model.setting.strip() if model is not None else ""
                 # Refused twice: the reader said the model comes from a setting, so the name is
@@ -479,7 +481,12 @@ def _checked_against_source(
                         # A name refused with the setting and written on the line as a value
                         # means the setting sits beside the model, so the setting goes too.
                         refused_name, model.name = model.name.strip(), ""
-                        if model_problems(contract, source_root, beside=refused_name):
+                        if model_problems(
+                            contract,
+                            source_root,
+                            beside=refused_name,
+                            resolved_paths=resolved_paths,
+                        ):
                             contract.model = None
                     else:
                         contract.model = None
