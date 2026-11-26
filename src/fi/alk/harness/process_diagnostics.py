@@ -6,7 +6,6 @@ import re
 import stat
 import sys
 import uuid
-from collections import Counter
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
@@ -389,25 +388,18 @@ def mask_source_secrets(text: str, masks: Iterable[str]) -> str:
     return text
 
 
-_DIGITS = str.maketrans("", "", "0123456789")
-# Times and addresses: volatile wherever they appear, digits next to letters included (a "T" or a "Z").
+# Only parts that are clearly volatile are ignored when comparing two records: times and durations, memory
+# addresses, uuids and hex ids, long letter-and-digit ids and long numbers. Short numbers (404, 500, a line number) and names (gpt-4) are
+# compared as written, so two different errors never count as copies.
 _VOLATILE = re.compile(
     r"\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"
-    r"|\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?\b"
-    r"|0x[0-9a-fA-F]+"
+    r"|\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b"
+    r"|\b0x[0-9a-fA-F]+\b"
+    r"|\b\d{5,}\b"
+    r"|\b\d+(?:\.\d+)?\s?(?:ms|s)\b"
 )
-# Numbers that tell two errors apart: a status, exit or signal code, an HTTP code.
-_MEANINGFUL = re.compile(
-    r"(?i)(?:status(?:_code)?|code|exit(?:\s+(?:code|status))?|returncode|signal|http(?:/\d\.\d)?)"
-    r"[\"'\s:=_]*\d+"
-    # A bare three-digit code (404, 500), standing alone, and where in a file a record was written.
-    r"|(?<![\w.:#-])[1-5]\d\d(?![\w.:#-])"
-    r"|\.[A-Za-z]{1,5}:\d+(?::\d+)?"
-)
-# Opaque ids, so two copies of one record with different ids match: hex runs that carry a digit
-# (uuids, hashes), and letter-and-digit runs of twelve or more (job, request and sandbox ids;
-# shorter names such as a module name stay as they are, so two different errors stay apart).
-# Each alternative starts only where a run starts, so a long run is scanned once, not once per
+# Opaque ids: hex runs that carry a digit (uuids, hashes), and letter-and-digit runs of twelve or more (job, request
+# and sandbox ids). Each alternative starts only where a run starts, so a long run is scanned once, not once per
 # position: the log is written by the tested agent and must not make this slow.
 _OPAQUE_ID = re.compile(
     r"(?<![0-9A-Za-z-])(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b"
@@ -452,70 +444,40 @@ def _records(lines: list[str]) -> list[list[str]]:
 
 
 def _shape(record: list[str]) -> str:
-    """A record with its volatile parts (times, ids, counters) removed and its meaningful numbers
-    (status, exit and HTTP codes) kept, so only real copies share a shape."""
+    """A record with its clearly volatile parts (times, durations, addresses, ids, long numbers) replaced, so only
+    real copies share a shape."""
 
-    # NUL brackets the placeholders below, so a NUL in the log itself must not reach them.
-    text = _VOLATILE.sub("#", _OPAQUE_ID.sub("#", "".join(record).replace("\0", "")))
-    kept: list[str] = []
-
-    def hold(match: re.Match[str]) -> str:
-        kept.append(match.group(0))
-        # A placeholder with no digits, so removing digits cannot touch it.
-        return "\0" + chr(0xE000 + len(kept) - 1) + "\0"
-
-    held = _MEANINGFUL.sub(hold, text).translate(_DIGITS)
-    return re.sub("\0(.)\0", lambda m: kept[ord(m.group(1)) - 0xE000], held)
-
-
-# The most records a repeating pattern spans, so a run of two or three kinds of polling still collapses but a
-# multi-record block (an error with its stack) that recurs is left where it was written.
-_RUN_PERIOD = 3
+    return _OPAQUE_ID.sub("#", _VOLATILE.sub("#", "".join(record)))
 
 
 def _collapse_repeated_lines(text: str) -> str:
-    """Drop the earlier copies of a log record that repeats in a run, and say above its last copy how
-    many were dropped.
+    """Collapse a record repeated back to back into its last copy, with the count of the copies before it
+    above it.
 
-    A healthy process repeats some lines all through its log (stream notices, polling, retries); left
-    in, they push the one line that explains a failure out of the retained tail. A record is a line with
-    its indented continuation, and a Python traceback stays whole. Records that differ only in volatile
-    parts (times, ids, counters) count as copies; a status, exit or HTTP code, or the file and line a
-    record names, keeps two records apart.
-
-    An earlier copy is dropped only inside a run: when the same record comes again within three records
-    and every record between repeats too. So a copy that sits among distinct lines, for example an exception line shared by
-    two different errors in any language's format, stays where it was written, and no line is ever shown
-    under a record it does not belong to. The kept copy is the last one, so its time is the latest.
+    A healthy process can repeat one line many times in a row (a stream notice, a poll, a retry); left in,
+    the copies push the line that explains a failure out of the retained tail. A record is a line with its
+    indented continuation, and a Python traceback stays whole. Only consecutive copies collapse, with
+    nothing in between: a record is never collapsed across another record, and no line is moved, so every
+    record stays next to what it was written with, in any language's log format. Two records are copies when
+    they differ only in clearly volatile parts: times and durations, memory addresses, uuids and hex ids,
+    long ids and numbers of five or more digits. Short numbers and names are compared as written. The kept copy is the
+    last one, so its time is the latest.
     """
 
     records = _records(text.splitlines(keepends=True))
     shapes = [_shape(record) for record in records]
-    last = {shape: index for index, shape in enumerate(shapes)}
-    earlier = [last[shape] != index for index, shape in enumerate(shapes)]
-    copies = Counter(shapes)
-    # In a run: the same record comes again within a few records, and everything between repeats too (one line repeated, or a few lines repeated in turn, like two kinds of polling).
-    dropped = [
-        copy
-        and any(
-            index + gap < len(shapes)
-            and shapes[index + gap] == shapes[index]
-            and all(copies[shape] > 1 for shape in shapes[index + 1 : index + gap])
-            for gap in range(1, _RUN_PERIOD + 1)
-        )
-        for index, copy in enumerate(earlier)
-    ]
-    omitted = Counter(shape for shape, gone in zip(shapes, dropped) if gone)
     kept: list[str] = []
-    for index, record in enumerate(records):
-        if dropped[index]:
-            continue
-        if last[shapes[index]] == index and omitted[shapes[index]]:
+    index = 0
+    while index < len(records):
+        end = index
+        while end + 1 < len(records) and shapes[end + 1] == shapes[index]:
+            end += 1
+        record = records[end]
+        if end > index:
             what = "line" if len(record) == 1 else f"{len(record)} lines"
-            kept.append(
-                f"[earlier copies of the next {what} omitted: {omitted[shapes[index]]}]\n"
-            )
+            kept.append(f"[earlier copies of the next {what} omitted: {end - index}]\n")
         kept.extend(record)
+        index = end + 1
     return "".join(kept)
 
 

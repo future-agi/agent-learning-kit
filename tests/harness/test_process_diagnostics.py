@@ -78,14 +78,12 @@ def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path)
     work = tmp_path / "work"
     work.mkdir()
     log = work / "process.log"
-    # Any framework's steady chatter, alternating and stamped with changing times.
-    chatter = (
-        "".join(
-            f"12:00:{second:02d} INFO stream {kind} not consumed\n"
-            for second in range(60)
-            for kind in ("byte", "text")
-        )
-        * 4
+    # A framework's steady chatter: two notices, each repeated back to back and stamped with changing times.
+    chatter = "".join(
+        f"12:{minute:02d}:{second:02d} INFO stream {kind} not consumed\n"
+        for kind in ("byte", "text")
+        for minute in range(4)
+        for second in range(60)
     )
     log.write_text(
         "starting worker\n"
@@ -105,9 +103,9 @@ def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path)
     assert "secret123" not in body
     assert body.endswith(
         "[earlier copies of the next line omitted: 239]\n"
-        "<redacted>2:00:59 INFO stream byte not consumed\n"
+        "<redacted>2:03:59 INFO stream byte not consumed\n"
         "[earlier copies of the next line omitted: 239]\n"
-        "<redacted>2:00:59 INFO stream text not consumed\n"
+        "<redacted>2:03:59 INFO stream text not consumed\n"
         "worker idle\n"
     )
     # A copy among distinct lines stays where it was written; a run of copies keeps its last, with the count.
@@ -123,26 +121,17 @@ def test_collapsing_keeps_each_traceback_whole_and_its_own_error():
     from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
 
     frames = 'Traceback (most recent call last):\n  File "/app/agent.py", line 10, in run\n    speak()\n'
-    log = (
-        "INFO start\n"
-        + frames
-        + "HTTPStatusError: 402 Payment Required\n"
-        + "INFO poll 1\n"
-        + frames
-        + "RuntimeError: session closed\n"
-        + "INFO poll 2\n"
-        + frames
-        + "RuntimeError: session closed\n"
-    )
+    first = frames + "HTTPStatusError: 402 Payment Required\n"
+    second = frames + "RuntimeError: session closed\n"
+    # Two tracebacks sharing frames are two records; the same traceback twice in a row is one, with its count.
+    log = "INFO start\n" + first + "INFO poll\n" + second + second
+
     assert _collapse_repeated_lines(log) == (
         "INFO start\n"
-        + frames
-        + "HTTPStatusError: 402 Payment Required\n"
-        + "[earlier copies of the next line omitted: 1]\n"
-        + "INFO poll 2\n"
+        + first
+        + "INFO poll\n"
         + "[earlier copies of the next 4 lines omitted: 1]\n"
-        + frames
-        + "RuntimeError: session closed\n"
+        + second
     )
 
 
@@ -1086,18 +1075,20 @@ def test_a_python_traceback_still_keeps_its_own_frames_and_error(tmp_path):
     assert first in body and second in body
 
 
-def test_a_counter_inside_a_name_collapses_in_a_run_of_retries(tmp_path):
-    """Digits inside a name count as volatile (attempt-1, worker-2), so retry and polling spam collapses. Two
-    such records are kept apart only by where they sit: outside a run, each stays."""
-    retries = "".join(f"WARN retry attempt-{n} for job-1234\n" for n in (1, 2, 3))
-
-    body = _retained(tmp_path, "INFO start\n" + retries + "ERROR gave up\n")
-
-    assert (
-        "[earlier copies of the next line omitted: 2]\nWARN retry attempt-3 for job-1234\n"
-        in body
+def test_names_with_digits_are_compared_as_written(tmp_path):
+    """Short numbers and names are not volatile: gpt-4 and gpt-5 stay two records, and so do attempt-1, -2 and -3,
+    while the same line repeated back to back collapses."""
+    retries = "".join(
+        f"WARN retry attempt-{n} for model gpt-{n + 3}\n" for n in (1, 2, 3)
     )
-    assert "attempt-1" not in body and "ERROR gave up" in body
+    repeated = "WARN still waiting for gpt-4\n" * 3
+
+    body = _retained(tmp_path, retries + repeated)
+
+    assert retries in body
+    assert body.endswith(
+        "[earlier copies of the next line omitted: 2]\nWARN still waiting for gpt-4\n"
+    )
 
 
 def test_a_logged_exception_stays_under_its_own_message(tmp_path):
