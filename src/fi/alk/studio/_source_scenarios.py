@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from fi.alk.studio._environment_input_parsers import _document_label
 from fi.alk.studio._environment_input_snapshots import _assert_reviewed_snapshot
 from fi.alk.studio._environment_input_types import (
     EnvironmentInputError,
@@ -174,34 +175,6 @@ def _distinct_source_drafts(generated: GeneratedScenarioDraftSet) -> tuple[Sourc
 
 def _sealed_source_case(case: dict[str, Any]) -> dict[str, Any]:
     return {**_canonical_value(case), "proof_digest": _content_digest(case)}
-
-
-_LIST_ITEM = re.compile(r"^\d+[.)]\s+")
-_DOCUMENT_LABEL = re.compile(
-    r"(?:(?:policy|document)\s+)?(?:version|edition|revision)\s*:?\s*[vV]?[0-9][0-9A-Za-z./_-]*"
-    r"|(?:training|draft|reference|sample) copy[.]?"
-    r"|(?:these (?:rules|policies|examples)|this (?:document|policy|data)) "
-    r"(?:are|is) (?:fictional|synthetic)(?: and (?:exist[s]?|(?:are|is) intended) "
-    r"(?:only )?for (?:scenario[- ]generation |simulation |training )?(?:testing|purposes))?[.]?"
-    r"|(?:for (?:testing|training|illustration|demonstration) (?:purposes )?only)[.]?",
-    re.IGNORECASE,
-)
-
-
-def _document_label(line: str) -> bool:
-    line = _LIST_ITEM.sub("", line.strip()).strip()
-    if _DOCUMENT_LABEL.fullmatch(line):
-        return True
-    # A short noun-phrase title is a label even outside a Markdown heading.
-    # Preserve factual sentences and instructions that happen to reference a policy.
-    title = line.lstrip("# ").rstrip(":").strip()
-    if title.casefold() in {"overview", "contents", "introduction", "disclaimer", "policy", "guidelines"}:
-        return True
-    return bool(
-        re.fullmatch(r"[\w '&/–-]+ (?:policy|rubric|manual|guidelines)", title, re.I)
-        and len(title.split()) <= 12
-        and not re.search(r"\b(?:is|are|must|may|shall|should|use|follow|apply|read|refer|see|per|according|under|if|when|escalate|verify|collect|process|reject|approve|deny|request|check|consult|enforce|respect)\b", title, re.I)
-    )
 
 
 def _reference_passages(statements: tuple[PolicyStatement, ...]) -> tuple[PolicyStatement, ...]:

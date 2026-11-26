@@ -80,9 +80,11 @@ from fi.alk.studio._environment_input_parsers import (
     MAX_DESIGN_BYTES,
     MAX_SOURCE_FILES,
     PARSER_REVISION,
+    POLICY_PARSER_REVISION,
     RawPolicyDocument,
     RawRecordDocument,
     SourceParseError,
+    _statement_spans,
     parse_environment_source,
 )
 from fi.alk.studio._scan import scan_content
@@ -149,7 +151,7 @@ def prepare_environment_inputs(
         pin = SourcePin(
             source_id=source.source_id,
             source_sha256="sha256:" + hashlib.sha256(source.content).hexdigest(),
-            parser_revision=PARSER_REVISION,
+            parser_revision=POLICY_PARSER_REVISION if source.role == "policy" else PARSER_REVISION,
             role=source.role,
         )
         try:
@@ -657,18 +659,16 @@ def _prepare_policy_source(
     diagnostics: list[SourceDiagnostic] = []
     statements: list[PolicyStatement] = []
     for raw_page, page in zip(parsed.pages, pages):
-        for index, match in enumerate(
-            re.finditer(r"\S(?:.*?\S)?(?=\n\s*\n|\Z)", page.text, re.DOTALL), start=1
-        ):
+        for index, (start, end) in enumerate(_statement_spans(page.text, source.role), start=1):
             statements.append(
                 PolicyStatement(
                     statement_id=f"{source.source_id}:page:{page.page}:statement:{index}",
-                    text=match.group(0),
+                    text=page.text[start:end],
                     span=SourceSpan(
                         source_id=source.source_id,
                         page=page.page,
-                        start=match.start(),
-                        end=match.end(),
+                        start=start,
+                        end=end,
                     ),
                 )
             )
@@ -1022,9 +1022,10 @@ def _propose_inputs(
 
 
 def _propose_policy_rule(statement: PolicyStatement) -> PolicyRuleProposal:
+    text = " ".join(line.strip() for line in statement.text.strip().splitlines())
     match = re.fullmatch(
         r"""(?:the )?(?:response|[A-Za-z]+ responses) must (not )?contain (?:(['"])(.+?)\2|([A-Za-z][\w-]*))\.?""",
-        statement.text.strip(),
+        text,
         re.IGNORECASE,
     )
     value = (match[3] or match[4]) if match else None
@@ -1033,7 +1034,7 @@ def _propose_policy_rule(statement: PolicyStatement) -> PolicyRuleProposal:
         # A literal wording check only applies when the policy explicitly covers every response.
         imperative = re.fullmatch(
             r"""(never |do not |always )?include (?:the (?:phrase|word) )?(["'])([^"']+)\2 in (every|any|all) (?:responses?|replies|reply)\.?""",
-            statement.text.strip(),
+            text,
             re.IGNORECASE,
         )
         if imperative:

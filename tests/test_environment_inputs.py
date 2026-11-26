@@ -2088,3 +2088,25 @@ def test_incremental_document_import_keeps_old_pages_and_removes_newly_hidden_pa
     narrowed = compile_environment_inputs(reviewed_hidden, prior_source_projection=merged).agent_environments
     assert [d["source"] for d in narrowed[0].data["documents"]] == ["second"]
     assert [d["source"] for d in initial[0].data["documents"]] == ["first"]
+
+
+def test_policy_pdf_extracts_distinct_rules_with_exact_page_offsets():
+    source = _policy_source(
+        'Refund policy\nThe response must\ncontain "Approved. Thank you". '
+        'The response must not contain "secret".\nIf a manager agrees,\n'
+        'the response must contain "override".'
+    )
+    draft = prepare_environment_inputs((source,))
+    parsed = draft.sources[0]
+    assert [r.check_type for r in draft.proposals.policy_rules] == [
+        None, "contains", "not_contains", None,
+    ]
+    assert [r.check_arguments.get("value") for r in draft.proposals.policy_rules] == [
+        None, "Approved. Thank you", "secret", None,
+    ]
+    for statement in parsed.statements:
+        assert statement.span.page == 1
+        assert parsed.pages[0].text[statement.span.start:statement.span.end] == statement.text
+    reference = prepare_environment_inputs((replace(source, role="reference"),))
+    assert not reference.proposals.policy_rules
+    assert len(reference.sources[0].statements) == 1

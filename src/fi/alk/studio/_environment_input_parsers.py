@@ -4,7 +4,9 @@ import csv
 import io
 import json
 import math
+import re
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Literal
@@ -17,6 +19,7 @@ MAX_EXTRACTED_TEXT_CHARS = 10 * 1024 * 1024
 MAX_RECORD_FIELDS = 500
 MAX_RECORD_ROWS = 100_000
 PARSER_REVISION = "environment-inputs-v1"
+POLICY_PARSER_REVISION = "environment-inputs-policy-v2"
 
 
 class SourceParseError(ValueError):
@@ -340,6 +343,58 @@ def _decode_text(content: bytes) -> str:
             "source_parse_failed",
             "CSV and JSON sources must use UTF-8 encoding",
         ) from exc
+
+
+_LIST_ITEM = re.compile(r"^\d+[.)]\s+")
+_DOCUMENT_LABEL = re.compile(
+    r"(?:(?:policy|document)\s+)?(?:version|edition|revision)\s*:?\s*[vV]?[0-9][0-9A-Za-z./_-]*"
+    r"|(?:training|draft|reference|sample) copy[.]?"
+    r"|(?:these (?:rules|policies|examples)|this (?:document|policy|data)) "
+    r"(?:are|is) (?:fictional|synthetic)(?: and (?:exist[s]?|(?:are|is) intended) "
+    r"(?:only )?for (?:scenario[- ]generation |simulation |training )?(?:testing|purposes))?[.]?"
+    r"|(?:for (?:testing|training|illustration|demonstration) (?:purposes )?only)[.]?",
+    re.IGNORECASE,
+)
+
+
+def _document_label(line: str) -> bool:
+    line = _LIST_ITEM.sub("", line.strip()).strip()
+    if _DOCUMENT_LABEL.fullmatch(line):
+        return True
+    # A short noun-phrase title is a label even outside a Markdown heading.
+    # Preserve factual sentences and instructions that happen to reference a policy.
+    title = line.lstrip("# ").rstrip(":").strip()
+    if title.casefold() in {"overview", "contents", "introduction", "disclaimer", "policy", "guidelines"}:
+        return True
+    return bool(
+        re.fullmatch(r"[\w '&/–-]+ (?:policy|rubric|manual|guidelines)", title, re.I)
+        and len(title.split()) <= 12
+        and not re.search(r"\b(?:is|are|must|may|shall|should|use|follow|apply|read|refer|see|per|according|under|if|when|escalate|verify|collect|process|reject|approve|deny|request|check|consult|enforce|respect)\b", title, re.I)
+    )
+
+
+# Ignore punctuation inside quoted literals when looking for sentence boundaries.
+_POLICY_BOUNDARY = re.compile(r"""("[^"\n]*"|'[^'\n]*')|(?<=[.!?])\s+(?=[A-Z])|\n+""")
+
+
+def _statement_spans(text: str, role: str) -> Iterator[tuple[int, int]]:
+    for paragraph in re.finditer(r"\S(?:.*?\S)?(?=\n\s*\n|\Z)", text, re.DOTALL):
+        start, end = paragraph.span()
+        if role == "policy":
+            # PDF extraction retains visual line wraps. A wrapped condition and its
+            # consequence must stay together or a conditional rule becomes unconditional.
+            for boundary in _POLICY_BOUNDARY.finditer(paragraph.group()):
+                if boundary[1] is not None:
+                    continue
+                left = paragraph.start() + boundary.start()
+                if left - start <= 10 and re.fullmatch(r"\d+\.", text[start:left]):
+                    continue
+                if text[left - 1] in ".!?" or (
+                    left - start <= 160 and _document_label(text[start:left])
+                ):
+                    yield start, left
+                    start = paragraph.start() + boundary.end()
+        yield start, end
 
 
 def _normalize_text(value: str) -> str:
