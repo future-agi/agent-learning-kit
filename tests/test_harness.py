@@ -1209,6 +1209,10 @@ def test_runtime_replaces_a_placeholder_google_credential_mount(tmp_path, monkey
     """
     from fi.alk.harness import provision as provisioning
 
+    from fi.alk.harness.secrets import RUNTIME_CONFIGURATION_NAMES_ENV
+
+    monkeypatch.delenv(RUNTIME_CONFIGURATION_NAMES_ENV, raising=False)
+    monkeypatch.delenv("ALK_HOSTED_EXECUTION", raising=False)
     credential = tmp_path / "platform-service-account.json"
     credential.write_text('{"type":"service_account"}', encoding="utf-8")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credential))
