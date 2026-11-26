@@ -652,6 +652,15 @@ class BrowserRecorder:
         session = message.get("sessionId")
         if method == "Target.attachedToTarget":
             self._attached(params, session)
+        elif method == "Target.detachedFromTarget":
+            # A closed tab is forgotten; the end's screenshot is of the last page still open, if any is.
+            gone = str(params.get("sessionId") or "")
+            self._tabs.pop(gone, None)
+            self._urls.pop(gone, None)
+            if self._last_session == gone:
+                self._last_session = next(
+                    (one for one in reversed(list(self._urls)) if self._tabs.get(one, ("", ""))[1]), None
+                )
         elif method == "Page.frameNavigated":
             frame = params.get("frame") or {}
             tab = self._tabs.get(session or "")

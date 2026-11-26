@@ -538,6 +538,28 @@ def test_a_closed_tab_is_never_photographed_at_the_end(tmp_path, devtools_port) 
     assert recorder._tabs == {} and recorder._urls == {}
 
 
+def test_with_the_last_tab_closed_the_end_is_photographed_on_a_tab_still_open(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    try:
+        for message in _loaded("http://shop.test/"):
+            fake.queue(message)
+        fake.queue(
+            {
+                "method": "Target.attachedToTarget",
+                "params": {"sessionId": "S2", "targetInfo": {"type": "page", "targetId": "T2"}, "waitingForDebugger": True},
+            }
+        )
+        fake.queue({"method": "Page.frameNavigated", "sessionId": "S2", "params": {"frame": {"id": "T2", "url": "http://shop.test/cart"}}})
+        fake.queue({"method": "Target.detachedFromTarget", "params": {"sessionId": "S2", "targetId": "T2"}})
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [(one["when"], one["url"]) for one in body["screenshots"]] == [
+        ("load", "http://shop.test/"),
+        ("end", "http://shop.test/"),
+    ]
+
+
 def test_each_page_and_the_trial_s_end_are_photographed(tmp_path, devtools_port) -> None:
     fake, recorder = _recording(tmp_path, devtools_port)
     try:
