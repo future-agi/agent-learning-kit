@@ -362,6 +362,31 @@ def test_closing_a_browser_whose_stop_fails_still_closes_its_relay_and_proxy(tmp
             socket.create_connection(("127.0.0.1", port), timeout=1).close()
 
 
+def test_a_closed_relay_stops_listening_while_its_accept_is_still_waiting(tmp_path) -> None:
+    # On Linux a listening socket closed while another thread waits in accept() goes on listening until that wait
+    # ends; shutting it down first ends the wait. (macOS ends it on close alone, so the port check above passes
+    # there either way; this pins the shutdown.)
+    relay = DevToolsRelay(tmp_path / "browser.json")
+    listener = relay._listener
+    calls: list[str] = []
+
+    class _Watched:
+        def __getattr__(self, name):
+            return getattr(listener, name)
+
+        def shutdown(self, how):
+            calls.append(f"shutdown {how}")
+            return listener.shutdown(how)
+
+        def close(self):
+            calls.append("close")
+            return listener.close()
+
+    relay._listener = _Watched()
+    relay.close()
+    assert calls[:1] == [f"shutdown {socket.SHUT_RDWR}"] and calls[-1] == "close"
+
+
 def test_each_start_is_a_new_empty_profile_and_the_last_one_is_gone(tmp_path) -> None:
     profiles: list = []
     kit = _kit(tmp_path, profiles)
