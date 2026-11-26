@@ -1,0 +1,114 @@
+{
+  "name": "chat_self_correction_dates_submission",
+  "scenario_key": "chat-self-correction-dates-submission",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "The employee enters initial dates and immediately corrects them to a revised date range, requiring the assistant to act on the corrected values.",
+  "tests": "Handles self-correction in date inputs and submits leave request with corrected dates 2026-12-15 to 2026-12-17.",
+  "instruction": "You want to submit annual leave for three days. You initially type Dec 14 to Dec 16, but immediately correct yourself in the same exchange to Dec 15 to Dec 17, 2026. You want the assistant to use your corrected dates (2026-12-15 to 2026-12-17), verify your balance, and submit the request to manager Mei Lin.\n\nYour details:\n- Employee ID: HR03\n- Name: Priya Sharma\n- Region: APAC\n- Leave Type: annual\n- Corrected Start Date: 2026-12-15\n- Corrected End Date: 2026-12-17\n- Reason: Year-end personal downtime",
+  "keywords": [
+    "leave_submission",
+    "leave_balance",
+    "working_days",
+    "manager_approval"
+  ],
+  "persona": {
+    "name": "Priya Sharma",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "I would like to book annual leave from Dec 14 to Dec 16... wait, sorry, I actually mean Dec 15 to Dec 17, 2026. Can you check balance and submit?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "working_days": 3,
+    "requested_span": "2026-12-15 to 2026-12-17",
+    "manager_id": "M04",
+    "employee_id": "HR03",
+    "region": "APAC",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "HR03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: HR03"
+      }
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "employee_id": "HR03",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: HR03",
+        "leave_type": "caller: annual"
+      }
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "end_date": "2026-12-17",
+        "region": "APAC",
+        "start_date": "2026-12-15"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "leave_type": "annual",
+        "end_date": "2026-12-17",
+        "start_date": "2026-12-15",
+        "reason": "Year-end personal downtime",
+        "employee_id": "HR03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "end_date": "caller: 2026-12-17",
+        "leave_type": "caller: annual",
+        "start_date": "caller: 2026-12-15",
+        "employee_id": "caller: HR03"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "self_correction",
+    "overlay_vector": "none",
+    "counterparty": "employee_apac",
+    "task": "submit_leave_request",
+    "disposition": "overlapping_schedule",
+    "overlay": "none",
+    "interaction": "correction_after_reply",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly",
+    "truthful_status_and_approval_workflow_explained",
+    "details_confirmed_before_submission"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

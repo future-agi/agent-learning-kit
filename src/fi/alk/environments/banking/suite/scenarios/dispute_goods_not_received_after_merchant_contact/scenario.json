@@ -1,0 +1,98 @@
+{
+  "name": "dispute_goods_not_received_after_merchant_contact",
+  "scenario_key": "dispute-goods-not-received-after-merchant-contact",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "An online order from October 2 never arrived and the merchant stopped replying. The charge is 24 days old, inside the 60-day window. One dispute, reason goods_not_received.",
+  "tests": "passes when the agent verifies and files exactly one dispute with reason goods_not_received for TX323.",
+  "instruction": "You ordered a lamp from Lumen Home Goods online on October 2 for $249.00 on your debit card ending 7271. It never arrived and the merchant has ignored two emails. You want to dispute the charge because the goods were not received. Provide passcode 2093 when asked.\n\nYour details:\n- Name: Noah Fischer\n- Customer ID: C323\n- Session ID: SESS323\n- Card: CARD323 (ending 7271)\n- Transaction: TX323 (Lumen Home Goods, $249.00, October 2)\n- Passcode: 2093",
+  "keywords": [
+    "dispute_filing",
+    "goods_not_received"
+  ],
+  "persona": {
+    "name": "Noah Fischer",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "I paid $249 to Lumen Home Goods on October 2 with my card ending 7271 and nothing arrived. I want to dispute it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C323",
+    "session_id": "SESS323",
+    "transaction_id": "TX323",
+    "passcode": "2093",
+    "dispute_reason": "goods_not_received"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C323",
+        "session_id": "SESS323",
+        "challenge_type": "passcode",
+        "challenge_response": "2093"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C323",
+        "session_id": "record: SESS323",
+        "challenge_response": "caller: 2093",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C323",
+        "session_id": "SESS323",
+        "transaction_id": "TX323",
+        "dispute_reason": "goods_not_received",
+        "request_key": "REQ-C323-TX323",
+        "customer_notes": "Lamp ordered 2026-10-02 never delivered; merchant unresponsive"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C323",
+        "session_id": "record: SESS323",
+        "transaction_id": "record: TX323",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "goods_not_received",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

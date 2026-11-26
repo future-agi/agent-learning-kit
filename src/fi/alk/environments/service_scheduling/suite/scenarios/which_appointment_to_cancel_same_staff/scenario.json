@@ -1,0 +1,99 @@
+{
+  "name": "which_appointment_to_cancel_same_staff",
+  "scenario_key": "which-appointment-to-cancel-same-staff",
+  "scenario_id": "",
+  "use_case": "Reschedule or cancel an appointment",
+  "branch": "Which appointment? CU01 Ana Morales says 'cancel my appointment with Lucia'. She has two: A001 (Initial Consultation, Tuesday 27 October 10:00) and A011 (Haircut, Friday 6 November 15:30), both with Lucia and both outside the 24-hour window.",
+  "tests": "the desk lists both appointments with Lucia, asks which one to cancel, and cancels only A011 without fee",
+  "instruction": "You want to cancel your upcoming appointment with Lucia Fernandez. When the desk checks your account and notices you have two appointments with Lucia (Initial Consultation on Tuesday 27 October and Haircut on Friday 6 November), clarify that you want to cancel the Haircut on Friday 6 November (A011). When the desk confirms there is no late cancellation fee and asks for confirmation to cancel, confirm.\n\nYour details:\n- Name: Ana Morales\n- Email: ana.morales@example.com\n- Phone: +1 212 555 0101\n- Preferred Language: Spanish (es)\n- Appointment to cancel: Haircut with Lucia on Friday 6 November (A011)",
+  "keywords": [
+    "cancellation",
+    "disambiguation",
+    "cancellation_policy",
+    "haircut"
+  ],
+  "persona": {
+    "name": "Ana Morales",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hola, I would like to cancel my appointment with Lucia Fernandez. My email is ana.morales@example.com and phone is +1 212 555 0101.",
+    "languages": [
+      "Spanish"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "customer": "CU01"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "ana.morales@example.com",
+        "phone": "+1 212 555 0101"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_customer_appointments",
+      "arguments": {
+        "status": "booked",
+        "customer_id": "CU01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_cancellation_policy",
+      "arguments": {
+        "customer_id": "CU01",
+        "appointment_id": "A011"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "appointment_id": "A011",
+        "customer_id": "CU01",
+        "acknowledged_fee": false,
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "record: appointments[A011].appointment_id"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "returning",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "task": "reschedule_or_cancel_an_appointment",
+    "interface": "clean_prose",
+    "disposition": "disambiguate_appointment",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_cancelled_with_fee_disclosed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -17,6 +17,7 @@ Three habits throughout, for the same reason:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -68,7 +69,7 @@ from ..call_actor import (
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
-from ..seed_rows import only_seed_rows
+from ..seed_rows import only_seed_rows, primary_key
 from ..source_folder import agent_scope, contract_folder, in_agent_scope
 from ..simulator import (
     load_simulator_prompt,
@@ -79,7 +80,7 @@ from ..tools import brief as _brief
 from ..tools import schema
 from .kinds import for_contract
 from .mutate import UNDAMAGED, blind, unnoticed, unnoticed_in_place
-from .probe import dirty_state, probe
+from .probe import ProbeReport, dirty_state, probe
 from ..scenario import Step
 from .runtime import Call, GeneratedWorld
 from .snapshot import MANIFEST, read_manifest, restore, save
@@ -116,6 +117,8 @@ DB_API = (
 # converges on roughly this bar, and rejects a quarter to a third of what it generates.
 ACCEPTABLE = 0.85
 DRAFT = "build-draft.json"
+# What a design's template already failed of the gates on saving a world (`template_gaps`).
+TEMPLATE_GAPS = "template-gaps.json"
 
 # What a world check is, said where the mistake surfaces. A check that inspects nothing is
 # the failure this whole mechanism exists to catch, so the answer says what "inspects
@@ -902,6 +905,61 @@ def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None
     return tool_server(name=ACTOR_SERVER, version="0.1.0", tools=tools)
 
 
+def _digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
+def _blind_checks(
+    root: Path, world_checks: dict[str, str]
+) -> tuple[list[str], dict[str, list[str]]]:
+    """Which of these checks cannot fail on the world saved at `root`, and what each kind of
+    damage left green."""
+    survived = unnoticed(
+        root,
+        sorted(world_checks.items()),
+        run=lambda source, broken: run_world_check(source, broken, name="check"),
+        restore=restore,
+    )
+    return blind(survived), survived
+
+
+def template_gaps(contract: AgentContract, root: Path) -> dict[str, Any]:
+    """Which of the gates on saving a world the template's own world at `root` does not meet. A
+    template is a sealed release: a customization answers for what it changes, not for these."""
+    manifest = read_manifest(root)
+    sequences = list(manifest.get("sequences") or [])
+    world_checks = dict(manifest.get("world_checks") or {})
+    world = restore(root)
+    world.isolated = True
+    try:
+        report = probe(world, contract, sequences=sequences, kind=for_contract(contract))
+        handlers, state = _digest(world.handlers), _digest(world.state())
+    finally:
+        world.close()
+    blinded, _survived = _blind_checks(root, world_checks) if world_checks else ([], {})
+    return {
+        "probes": sorted(f"{one.name}: {one.detail}" for one in report.failures),
+        "world_checks": {name: world_checks[name] for name in blinded},
+        # The tools it declares no sequence over, and the data it has no check of.
+        "unsequenced": "" if sequences else handlers,
+        "unchecked": "" if world_checks else state,
+    }
+
+
+def _only_template_rows(
+    world: GeneratedWorld, name: str, template: list[dict[str, Any]]
+) -> bool:
+    """Whether every row of a table is one of the template's, by primary key (by the whole row in
+    a table without one)."""
+    key = primary_key(world.connection, name)
+    if key is not None:
+        known = {row.get(key) for row in template}
+        return all(row.get(key) in known for row in world.state()[name])
+    return all(row in template for row in world.state()[name])
+
+
 def world_tools(
     contract: AgentContract,
     destination: Path,
@@ -909,6 +967,7 @@ def world_tools(
     source_root: str = "",
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    implementation: str | None = None,
     catalogue: Catalogue | None = None,
     native_runtime: bool = False,
 ) -> Any:
@@ -916,7 +975,8 @@ def world_tools(
 
     ``source_root`` is where the agent's own code lives. With it, a tool can be bound to the
     agent's own implementation; without it the agent was given as a specification and its
-    tools have to be written here.
+    tools have to be written here. ``implementation`` is what `save_world` records as the
+    world's `tool_implementation` (a designed environment's handlers are its own).
 
     ``catalogue`` shares one catalogue object with the session's other servers; without it the
     catalogue is read from disk.
@@ -1002,6 +1062,8 @@ def world_tools(
         getattr(world, "external_runtime", False)
     )
     world.refusal_signature = contract.refusal_signature
+    # A designed environment's handlers are its own, model-written: they run isolated.
+    world.isolated = getattr(world, "isolated", False) or implementation == "environment"
     if source_root:
         world.reach(
             source_root, contract_folder(contract)
@@ -1054,6 +1116,22 @@ def world_tools(
             world.runtime_tools = set(contract.tool_names())
         return set(getattr(world, "runtime_tools", set()))
 
+    gaps = (
+        json.loads((destination / TEMPLATE_GAPS).read_text(encoding="utf-8"))
+        if (destination / TEMPLATE_GAPS).is_file()
+        else {}
+    )
+
+    def _probed() -> ProbeReport:
+        report = probe(world, contract, sequences=sequences, kind=kind)
+        inherited = set(gaps.get("probes") or [])
+        report.results = [
+            one
+            for one in report.results
+            if one.passed or f"{one.name}: {one.detail}" not in inherited
+        ]
+        return report
+
     def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:
         """How the world's own checks fare, and which of them cannot fail.
 
@@ -1087,15 +1165,14 @@ def world_tools(
             # damage. The world being built is never touched.
             held = Path(tempfile.mkdtemp())
             save(world, held, notes="mutation", sequences=sequences)
-            survived = unnoticed(
-                held,
-                checks,
-                run=lambda source, broken: run_world_check(
-                    source, broken, name="check"
-                ),
-                restore=restore,
-            )
-        return failing, blind(survived), survived
+            _blinded, survived = _blind_checks(held, world_checks)
+        inherited = gaps.get("world_checks") or {}
+        cannot_fail = [
+            name
+            for name in blind(survived)
+            if inherited.get(name) != world_checks[name]
+        ]
+        return failing, cannot_fail, survived
 
     @tool(
         "create_schema",
@@ -1986,7 +2063,7 @@ def world_tools(
                 "DEFERRED: native state, tool behavior and fixture readiness require live validation."
             )
         _runtime_owned()
-        report = probe(world, contract, sequences=sequences, kind=kind)
+        report = _probed()
         scores.append(report.score)
         # Saying the score is going nowhere, rather than leaving it to be noticed. A stage that
         # has misdiagnosed something will otherwise keep applying the same non-fix, and every
@@ -2093,7 +2170,7 @@ def world_tools(
         report = (
             None
             if native_runtime
-            else probe(world, contract, sequences=sequences, kind=kind)
+            else _probed()
         )
         if not native_runtime and report.score < ACCEPTABLE and not data_free:
             return _err(
@@ -2106,7 +2183,11 @@ def world_tools(
         # agents can still have baseline data (for example provider dynamic variables), so
         # ``data_free`` alone is not enough to identify them.  Keep requiring world checks for
         # that data, but do not deadlock authoring on a proof that cannot exist.
-        requires_sequence = bool(contract.tools) and not runtime_only
+        requires_sequence = (
+            bool(contract.tools)
+            and not runtime_only
+            and gaps.get("unsequenced") != _digest(world.handlers)
+        )
         if not sequences and requires_sequence and not data_free:
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
@@ -2125,7 +2206,11 @@ def world_tools(
         # The world has to prove itself, and the proof has to be capable of failing. Both halves
         # matter: checks nobody wrote verify nothing, and checks that pass a world with no data
         # and no working tools verify nothing either.
-        if not world_checks and not data_free:
+        if (
+            not world_checks
+            and not data_free
+            and gaps.get("unchecked") != _digest(world.state())
+        ):
             return _err(
                 "Not saved. This world has no checks of its own yet. Add them with "
                 "add_world_check: what has to be true for this world to be worth testing "
@@ -2180,6 +2265,15 @@ def world_tools(
                 for name in dirty
                 if not only_seed_rows(connection, Path(source_root), name, folder)
             ]
+        if implementation == "environment":
+            # A designed environment's base rows are its template's: its starting state.
+            dirty = [
+                name
+                for name in dirty
+                if not _only_template_rows(
+                    world, name, contract.base_environment.get(name) or []
+                )
+            ]
         if dirty:
             counts = world.state()
             listed = ", ".join(f"{name} ({len(counts[name])} rows)" for name in dirty)
@@ -2217,6 +2311,7 @@ def world_tools(
             # Written out with the world. They are judgement about this agent, and a world reopened
             # without them would have to have them rewritten before it could be saved again.
             world_checks=world_checks,
+            implementation=implementation,
         )
         draft_path.unlink(missing_ok=True)
         tables = world.state()

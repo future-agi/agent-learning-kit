@@ -1,0 +1,76 @@
+{
+  "name": "policy_footwear_window_policy_tool",
+  "scenario_key": "policy-footwear-window-policy-tool",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Customer asks about the return policy for SKU SH01; the agent looks up the product catalog and retrieves the Footwear return policy using the policy tool.",
+  "tests": "Verifies the agent checks product SKU SH01 category and calls get_return_policy for Footwear to provide the return terms with policy citation.",
+  "instruction": "Ask Northgate Outfitters customer support about the return policy for the Road Running Shoes (SKU SH01). You want to know the return window and whether there is any restocking fee.",
+  "keywords": [
+    "policy_inquiry"
+  ],
+  "persona": {
+    "name": "Sophie Dubois",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi! I'm interested in buying SKU SH01 (Road Running Shoes). What is your return policy and window for that item?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "category": "Footwear",
+    "sku": "SH01"
+  },
+  "solution": [
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "SH01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_return_policy",
+      "arguments": {
+        "category": "Footwear"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "category": "caller: product category Footwear"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "prospective_buyer",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "disposition": "cooperative",
+    "task": "answer_policy_questions"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

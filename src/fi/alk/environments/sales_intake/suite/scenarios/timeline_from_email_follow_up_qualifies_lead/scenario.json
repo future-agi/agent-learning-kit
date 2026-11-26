@@ -1,0 +1,82 @@
+{
+  "name": "timeline_from_email_follow_up_qualifies_lead",
+  "scenario_key": "timeline-from-email-follow-up-qualifies-lead",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Kestrel Mobility's lead L07 was missing its timeline; Jonas Becker's follow-up email gives 0-3 months, and rep Lena Fischer asks the desk to update the lead, which now qualifies",
+  "tests": "the agent reads the follow-up email and qualifies L07 with the timeline Jonas stated, adding no other fact",
+  "instruction": "You are Lena Fischer, BrightDesk's account executive for Germany, Austria and Switzerland. Jonas Becker at Kestrel Mobility (lead L07) said he would email the desk his go-live timeline. Ask the desk to pick it up and update the lead. You do not know what he wrote.\n\nYour details:\n- Name: Lena Fischer\n- Role: Account executive, A04\n- Lead: L07",
+  "keywords": [
+    "email",
+    "missing information"
+  ],
+  "persona": {
+    "name": "Lena Fischer",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Account Executive",
+    "location": "Germany",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Jonas from Kestrel was going to email his timeline. Can you check and update L07?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L07",
+    "thread_id": "th_s02_kestrel_timeline",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s02_kestrel_timeline"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: Jonas Becker's thread"
+      }
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "lead_id": "L07",
+        "facts": {
+          "timeline": "0-3 months"
+        }
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Kestrel's lead L07",
+        "facts": "email: 0-3 months"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "qualify_lead",
+    "disposition": "eligible",
+    "interaction": "multi_turn",
+    "counterparty": "colleague",
+    "interface": "email_thread",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

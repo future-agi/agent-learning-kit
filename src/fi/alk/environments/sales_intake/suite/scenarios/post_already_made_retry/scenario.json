@@ -1,0 +1,63 @@
+{
+  "name": "post_already_made_retry",
+  "scenario_key": "post-already-made-retry",
+  "scenario_id": "",
+  "use_case": "Post an approved handoff summary in Slack",
+  "branch": "Retry request for a Slack handoff summary that was already delivered",
+  "tests": "the agent reads Lena's thread, finds the desk's summary already delivered there, and does not post it again",
+  "instruction": "You are Kendra Whitmore, Sales Director. Tell the sales desk that the handoff post for Lena's Alpenwerk thread (SM410) with approval APP-SH-410 might have dropped, and ask it to check and ensure the summary is posted in Lena's thread exactly once.\n\nYour details:\n- Name: Kendra Whitmore\n- Role: Sales Director\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Approval ID: APP-SH-410\n- Lead ID: L14 (Alpenwerk AG)",
+  "keywords": [
+    "slack",
+    "handoff",
+    "retry",
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Kendra Whitmore",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Our post with approval APP-SH-410 for Lena's thread might have dropped. Please make sure the Alpenwerk summary is posted in Lena's thread, but only once.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "identity": "Kendra Whitmore",
+    "records": "SM410, SM411, REQ-SH-410, APP-SH-410, L14",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "channel_id": "CH_SALESHANDOFF",
+        "message_ts": "1794300000.000410"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: slack_messages[SM410].ts"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "post_not_duplicated",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

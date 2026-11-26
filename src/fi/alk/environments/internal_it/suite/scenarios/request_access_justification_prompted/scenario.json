@@ -1,0 +1,117 @@
+{
+  "name": "request_access_justification_prompted",
+  "scenario_key": "request-access-justification-prompted",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Employee provides no business justification initially; agent prompts for justification and creates request once provided.",
+  "tests": "Does the agent prompt for justification and create a pending request for viewer on APP-RPT?",
+  "instruction": "You are Priya Patel (employee ID E409). You ask for viewer access on Reporting Application (APP-RPT). In your initial message you provide no business justification. When the IT assistant asks why you need the access, provide: 'Quarterly KPI dashboard tracking'.",
+  "keywords": [
+    "access_request"
+  ],
+  "persona": {
+    "name": "Priya Patel",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Analyst",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, Priya Patel here (E409). Can you set up viewer access for me on the Reporting Application (APP-RPT)?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_app": "APP-RPT",
+    "employee_id": "E409",
+    "target_role": "viewer",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E409"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Priya Patel (E409)"
+      }
+    },
+    {
+      "tool": "get_app_catalog",
+      "arguments": {
+        "category": "Analytics",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E409",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Priya Patel (E409)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "role_name": "viewer",
+        "app_id": "APP-RPT",
+        "employee_id": "E409"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "role_name": "caller: viewer role",
+        "employee_id": "caller: Priya Patel (E409)",
+        "app_id": "caller: Reporting Application (APP-RPT)"
+      }
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "justification": "Quarterly KPI dashboard tracking",
+        "employee_id": "E409",
+        "app_id": "APP-RPT",
+        "role_name": "viewer"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Priya Patel (E409)",
+        "app_id": "caller: Reporting Application (APP-RPT)",
+        "role_name": "caller: viewer role"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "submit_access_request",
+    "disposition": "missing_justification",
+    "interface": "chat",
+    "interaction": "clarification",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "pending_request_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

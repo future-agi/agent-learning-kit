@@ -1,0 +1,83 @@
+{
+  "name": "zero_annual_leave_balance_inquiry",
+  "scenario_key": "zero-annual-leave-balance-inquiry",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "A UK employee with zero remaining annual leave checks their leave balance.",
+  "tests": "Verifies that the assistant checks E07's leave balance and reports 0 available annual days.",
+  "instruction": "You want to check how many annual leave days you have remaining this year.\n\nYour details:\n- Employee ID: E07\n- Name: George Clark\n- Leave Type: annual\n- Question: How many annual leave days do I have available?",
+  "keywords": [
+    "leave_balance",
+    "zero_balance",
+    "annual_leave"
+  ],
+  "persona": {
+    "name": "George Clark",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, could you check my current available annual leave balance for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "allocated_days": 25,
+    "used_days": 25,
+    "available_days": 0,
+    "reserved_days": 0,
+    "leave_type": "annual",
+    "origin": "seed",
+    "employee_id": "E07"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E07"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "leave_type": "annual",
+        "employee_id": "E07"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E07",
+        "leave_type": "caller: annual"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "employee_uk",
+    "overlay_vector": "none",
+    "disposition": "insufficient_balance",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "task": "calculate_working_days"
+  },
+  "sub_goals": [
+    "leave_balance_checked"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

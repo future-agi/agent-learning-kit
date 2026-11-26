@@ -1,0 +1,83 @@
+{
+  "name": "clinic_directory_dr_liu_working_days",
+  "scenario_key": "clinic-directory-dr-liu-working-days",
+  "scenario_id": "",
+  "use_case": "Provider availability questions from Calendar",
+  "branch": "Patient asks which days Dr. Grace Liu works and at which clinics; the desk checks the provider directory for neurology and reports her weekly schedule",
+  "tests": "the agent queries get_provider_directory for neurology and reports Dr. Liu's session days and locations",
+  "instruction": "You are asking on behalf of a family member about Dr. Grace Liu's working days and clinic locations. Inquire which days of the week Dr. Liu holds neurology clinics and at which locations. When the assistant informs you of her weekly session schedule and clinic locations, thank the assistant and let them know that information is very helpful.\n\nYour details:\n- Caller: Hannah Schmidt (family member)\n- Provider: Dr. Grace Liu (Neurology)\n- Topic: Working days and clinic locations",
+  "keywords": [
+    "preparation",
+    "availability"
+  ],
+  "persona": {
+    "name": "Hannah Schmidt",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Teacher",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, which days of the week does Dr. Grace Liu hold clinics, and at which locations?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_provider_directory",
+      "arguments": {
+        "specialty": "neurology"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "specialty": "record: Dr. Grace Liu's specialty"
+      }
+    }
+  ],
+  "alternatives": [
+    [
+      {
+        "tool": "list_calendars",
+        "arguments": {},
+        "environment_arguments": {},
+        "fixed": {}
+      },
+      {
+        "tool": "get_provider_directory",
+        "arguments": {
+          "specialty": "neurology"
+        },
+        "environment_arguments": {},
+        "fixed": {}
+      }
+    ]
+  ],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "disposition": "happy_path",
+    "task": "preparation",
+    "overlay_intensity": "absent",
+    "counterparty": "third_party",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "clinic_information_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
