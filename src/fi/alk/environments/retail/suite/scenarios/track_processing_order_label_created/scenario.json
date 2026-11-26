@@ -1,0 +1,79 @@
+{
+  "name": "track_processing_order_label_created",
+  "scenario_key": "track-processing-order-label-created",
+  "scenario_id": "",
+  "use_case": "Track an order, report a damaged delivery",
+  "branch": "Tracking inquiry for a processing order where only the shipping label has been created",
+  "tests": "the agent verifies ownership, retrieves shipment tracking showing label created, and does not invent a delivery date",
+  "instruction": "You placed order O14 recently and want to know its shipping status.\n\nYour details:\nName: Noah Taylor\nEmail: noah.taylor@example.com\nPostal code: 80202\nOrder ID: O14",
+  "keywords": [
+    "track_order"
+  ],
+  "persona": {
+    "name": "Noah Taylor",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Designer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi there, I placed order O14 a little while ago and was wondering what its shipping status is right now?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "customer_id": "C14",
+    "order_id": "O14"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O14",
+        "postal_code": "80202"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_shipment_tracking",
+      "arguments": {
+        "order_id": "O14",
+        "customer_id": "C14"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O14",
+        "customer_id": "record: customer C14"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "counterparty": "verified_owner",
+    "disposition": "pending_fulfillment",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "task": "track_order_report_damage",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "tracking_reported",
+    "subgoal_verify_ownership_first"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

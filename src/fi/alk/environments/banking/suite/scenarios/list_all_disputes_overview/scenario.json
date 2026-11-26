@@ -1,0 +1,89 @@
+{
+  "name": "list_all_disputes_overview",
+  "scenario_key": "list-all-disputes-overview",
+  "scenario_id": "",
+  "use_case": "Follow up a dispute: status, list, withdrawal",
+  "branch": "Kevin asks where all his disputes stand. He has two open ones (D04, D05); the agent lists them with their statuses and makes no changes.",
+  "tests": "passes when the agent verifies Kevin and lists his disputes, reporting D04 and D05 as open.",
+  "instruction": "You want an overview of every dispute you currently have open on your account and their status; you remember one about a Dick's Sporting Goods order and one about Books-A-Million. Ask for the list; do not ask for any changes. Provide passcode 5820 when asked.\n\nYour details:\n- Name: Kevin Thomas\n- Customer ID: C11\n- Session ID: SESS211b\n- Passcode: 5820",
+  "keywords": [
+    "list_disputes"
+  ],
+  "persona": {
+    "name": "Kevin Thomas",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Impatient and direct",
+    "communication_style": "Assertive",
+    "initial_message": "Can you tell me where all my open disputes stand?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C11",
+    "session_id": "SESS211b",
+    "disputes": [
+      "D04",
+      "D05"
+    ]
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C11",
+        "session_id": "SESS211b",
+        "challenge_type": "passcode",
+        "challenge_response": "5820"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C11",
+        "session_id": "record: SESS211b",
+        "challenge_response": "caller: 5820",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "list_disputes",
+      "arguments": {
+        "customer_id": "C11",
+        "session_id": "SESS211b"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "follow_up_dispute",
+    "disposition": "overview",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_status_retrieved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

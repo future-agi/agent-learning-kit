@@ -1,0 +1,78 @@
+{
+  "name": "remove_everything_partly_already_gone",
+  "scenario_key": "remove-everything-partly-already-gone",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Employee requests revocation of all access for multiple applications, but one entitlement is already revoked so desk revokes only the active one",
+  "tests": "Does the agent inspect current entitlements, identify that CRM is already revoked while Reporting is active, revoke ENT-447, and avoid attempting to revoke the already-revoked CRM entitlement?",
+  "instruction": "You are Evelyn Sinclair (employee ID E447). You are rolling off a joint analytics-sales project and ask the IT access desk to remove all your access across both Reporting Application (APP-RPT) and CRM System (APP-CRM).\n\nYour details:\n- Name: Evelyn Sinclair\n- Employee ID: E447\n- Applications to remove: Reporting Application and CRM System",
+  "keywords": [
+    "entitlement_revocation",
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Evelyn Sinclair",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am rolling off my project (Evelyn Sinclair, E447). Please revoke all my viewer access to both Reporting Application and CRM System.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "revoked_entitlement_id": "ENT-448",
+    "origin": "generated",
+    "employee_id": "E447",
+    "active_entitlement_id": "ENT-447"
+  },
+  "solution": [
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E447"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "revoke_synthetic_access",
+      "arguments": {
+        "entitlement_id": "ENT-447",
+        "reason": "Offboarding from project"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "entitlement_id": "record: entitlements.entitlement_id where employee_id='E447' and status='active'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_ask",
+    "overlay": "none",
+    "task": "manage_existing_access_and_idempotency",
+    "counterparty": "transferred_employee",
+    "disposition": "partial_revocation",
+    "interface": "chat",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "entitlement_revoked"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

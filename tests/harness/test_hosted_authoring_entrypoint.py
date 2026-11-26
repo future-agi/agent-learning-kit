@@ -501,7 +501,7 @@ def test_authoring_masks_every_value_in_spans_but_the_platform_settings(
         encoding="utf-8",
     )
     # The gateway's default values: credentials among models and the Observe project, some under
-    # the same names as the customer's, and the guest-booking PIN and target number.
+    # the same names as the customer's, and a short code and a phone number.
     gateway.write_text(
         json.dumps(
             {
@@ -511,8 +511,8 @@ def test_authoring_masks_every_value_in_spans_but_the_platform_settings(
                 "ALK_HARNESS_MODEL": "vertex_ai/claude-sonnet-4-5",
                 "FI_HARNESS_PROJECT": "hosted-harness-prod",
                 "GOOGLE_CLOUD_PROJECT": "platform-project-1",
-                "ALK_CAB_GUEST_POC_PIN": "4821",
-                "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER": "+15550104477",
+                "SOME_SHORT_GATEWAY_CODE": "4821",
+                "SOME_GATEWAY_PHONE_NUMBER": "+15550104477",
                 "SOME_NEW_GATEWAY_VALUE": "unlisted-gateway-value-42",
             }
         ),

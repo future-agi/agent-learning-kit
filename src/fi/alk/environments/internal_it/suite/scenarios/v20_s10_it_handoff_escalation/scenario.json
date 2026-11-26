@@ -1,0 +1,92 @@
+{
+  "name": "v20_s10_it_handoff_escalation",
+  "scenario_key": "v20-s10-it-handoff-escalation",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "HR manager requests access to unlisted custom application; agent inspects catalog, discovers application is not supported, and creates IT handoff escalation.",
+  "tests": "Does the agent inspect the catalog, identify that the requested system is unregistered, and create an IT handoff escalation ticket?",
+  "instruction": "You are Julia Roberts (employee ID E10), an HR manager. You want access to an external candidate screening platform called 'APP-RECRUIT-EXT' which is not part of the standard enterprise applications. Ask the IT service desk to check the catalog and escalate to IT operations if it is not supported.",
+  "keywords": [
+    "it_handoff",
+    "escalation",
+    "access_request"
+  ],
+  "persona": {
+    "name": "Julia Roberts",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Good morning, I am Julia Roberts (E10). I am looking for access to our external screening platform APP-RECRUIT-EXT. Could you verify if it is in our system or open an IT support ticket for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E10",
+    "target_app": "APP-RECRUIT-EXT",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Julia Roberts (E10)"
+      }
+    },
+    {
+      "tool": "get_app_catalog",
+      "arguments": {
+        "category": "ALL",
+        "app_id": "ALL"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_it_handoff",
+      "arguments": {
+        "details": "Employee requested access to unlisted external screening platform APP-RECRUIT-EXT not in catalog",
+        "issue_type": "policy_exception",
+        "employee_id": "E10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Julia Roberts (E10)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "manage_existing_access_and_idempotency",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "counterparty": "manager_requester",
+    "interaction": "inquisitive",
+    "disposition": "unregistered_entity",
+    "interface": "chat"
+  },
+  "sub_goals": [
+    "employee_verified_before_action",
+    "it_escalation_created",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

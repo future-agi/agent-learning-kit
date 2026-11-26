@@ -1,0 +1,77 @@
+{
+  "name": "temporary_policy_inquiry",
+  "scenario_key": "temporary-policy-inquiry",
+  "scenario_id": "",
+  "use_case": "enforce_privilege_boundaries",
+  "branch": "Employee E423 asks about the policy rules for temporary access; agent consults the effective Temporary Access Policy on Drive and cites the document and version.",
+  "tests": "Does the agent read the effective Temporary Access Policy from Drive and cite its document name and version?",
+  "instruction": "You are Devin Hayes (employee ID E423). You want to know what the rules and duration limits are for temporary application access. Ask the IT access desk about the policy rules and maximum duration for temporary access.",
+  "keywords": [
+    "policy"
+  ],
+  "persona": {
+    "name": "Devin Hayes",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, what are the official policy rules and duration limits for requesting temporary access? My employee ID is E423.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "version": "1.1",
+    "employee_id": "E423",
+    "file_id": "temp_access_policy",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E423"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "temp_access_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files temp_access_policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interface": "chat",
+    "counterparty": "standard_employee",
+    "task": "enforce_privilege_boundaries",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "disposition": "policy_inquiry",
+    "interaction": "inquisitive"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

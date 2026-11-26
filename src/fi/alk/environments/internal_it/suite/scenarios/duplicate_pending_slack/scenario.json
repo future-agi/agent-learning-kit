@@ -1,0 +1,108 @@
+{
+  "name": "duplicate_pending_slack",
+  "scenario_key": "duplicate-pending-slack",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Duplicate pending from Slack (IM07, Sarah): no second temporary request. Read-only.",
+  "tests": "Does the agent read the Slack thread, verify ticket status in the access system, and inform the user their request is already pending without creating a duplicate?",
+  "instruction": "You are Sarah Connor (employee ID E19). You previously posted a message on Slack in #it-access (timestamp 1792857900.000007) asking about your temporary 14-day access request for Security Monitoring Portal (APP-SEC). Ask the IT access desk for the status of your request AR-106 and whether you need to submit another one.",
+  "keywords": [
+    "slack",
+    "duplicate_access"
+  ],
+  "persona": {
+    "name": "Sarah Connor",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am Sarah Connor (E19). I posted in #it-access (ts: 1792857900.000007) regarding my temporary 14-day access to APP-SEC (AR-106). Can you check its status and let me know if I should submit another request?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_app": "APP-SEC",
+    "message_ts": "1792857900.000007",
+    "request_id": "AR-106",
+    "origin": "seed",
+    "employee_id": "E19",
+    "channel_id": "CH_ITACCESS"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E19"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "limit": 10,
+        "oldest": null,
+        "channel_id": "CH_ITACCESS",
+        "latest": null,
+        "cursor": null,
+        "message_ts": "1792857900.000007",
+        "response_format": null
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: message ts 1792857900.000007",
+        "channel_id": "caller: #it-access channel"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E19",
+        "app_id": "APP-SEC"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Sarah Connor (E19)"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-106"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "record: access_requests.request_id for Sarah Connor"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "pending_approval",
+    "interaction": "collaborative",
+    "task": "manage_existing_access_and_idempotency",
+    "interface": "chat",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "standard_employee"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "duplicate_access_handled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "inbound",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

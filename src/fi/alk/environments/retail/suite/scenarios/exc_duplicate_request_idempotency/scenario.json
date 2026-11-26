@@ -1,0 +1,120 @@
+{
+  "name": "exc_duplicate_request_idempotency",
+  "scenario_key": "exc-duplicate-request-idempotency",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer C414 confirms an exchange of SH09 for SH06 on order O414 and then repeats the request due to connection drop, requiring idempotent handling with the same request_key",
+  "tests": "the agent handles repeated exchange request for SH09 on order O414 idempotently using request_key",
+  "instruction": "You purchased Slip-On Walking Shoes (SKU SH09) in order O414. You want to exchange them for Suede Casual Loafers (SKU SH06). You confirm the exchange. If the call cuts out and reconnects, you confirm the exchange again.\n\nYour details:\n- Name: Wanda Maximoff\n- Email: wanda.maximoff@example.com\n- Postal Code: 07030\n- Order ID: O414\n- Original SKU: SH09 (Quantity 1)\n- Replacement SKU: SH06 (Quantity 1)",
+  "keywords": [
+    "duplicate_prevention",
+    "idempotent_exchange"
+  ],
+  "persona": {
+    "name": "Wanda Maximoff",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Accountant",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to exchange my walking shoes (SH09) on order O414 for the suede loafers (SH06). I confirm.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "replacement_sku": "SH06",
+    "origin": "generated",
+    "customer_id": "C414",
+    "original_sku": "SH09",
+    "order_id": "O414"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O414",
+        "postal_code": "07030"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O414"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "SH06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_exchange",
+      "arguments": {
+        "request_key": "REQ-EXC-O414-SH09",
+        "replacement_sku": "SH06",
+        "confirmed": true,
+        "order_id": "O414",
+        "original_sku": "SH09",
+        "customer_id": "C414",
+        "quantity": 1
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "original_sku": "record: item SH09",
+        "replacement_sku": "caller: replacement SH06",
+        "order_id": "caller: order O414",
+        "customer_id": "record: customer C414",
+        "quantity": "caller: quantity 1",
+        "confirmed": "caller: customer confirmation"
+      }
+    },
+    {
+      "tool": "create_exchange",
+      "arguments": {
+        "confirmed": true,
+        "replacement_sku": "SH06",
+        "request_key": "REQ-EXC-O414-SH09",
+        "customer_id": "C414",
+        "quantity": 1,
+        "original_sku": "SH09",
+        "order_id": "O414"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "task": "exchange_item",
+    "disposition": "duplicate_request",
+    "counterparty": "verified_owner",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "exchange_created_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

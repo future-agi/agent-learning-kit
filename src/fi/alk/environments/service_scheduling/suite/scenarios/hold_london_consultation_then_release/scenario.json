@@ -1,0 +1,89 @@
+{
+  "name": "hold_london_consultation_then_release",
+  "scenario_key": "hold-london-consultation-then-release",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Isabel Reyes holds a consultation with Priya on Wednesday 4 November at 3 pm London time while she checks her travel, then asks to let it go",
+  "tests": "the agent holds the slot, says when the hold expires, then releases it when asked",
+  "instruction": "You will be in London next week. Ask the desk to hold a consultation with Priya at Shoreditch on Wednesday 4 November at 3 pm London time while you check your flights. Then say your flights don't work and ask them to let the slot go.\n\nYour details:\n- Name: Isabel Reyes\n- Email: isabel.reyes@example.com\n- Phone: +1 212 555 0109",
+  "keywords": [],
+  "persona": {
+    "name": "Isabel Reyes",
+    "gender": "female",
+    "age_group": "18-25",
+    "occupation": "Student",
+    "location": "United States",
+    "personality": "Anxious",
+    "communication_style": "Passive",
+    "initial_message": "Hi, could you hold a consultation with Priya in London next Wednesday at 3 pm for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "isabel.reyes@example.com",
+        "phone": "+1 212 555 0109"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "hold_slot",
+      "arguments": {
+        "customer_id": "CU09",
+        "service_id": "SV1",
+        "staff_id": "ST04",
+        "location_id": "L2",
+        "start_time": "2026-11-04T15:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "caller",
+        "staff_id": "the staff member",
+        "start_time": "the local time"
+      }
+    },
+    {
+      "tool": "release_hold",
+      "arguments": {
+        "hold_id": "H600",
+        "customer_id": "CU09"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "hold_id": "the hold just placed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "hold",
+    "disposition": "release",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "hold_released"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

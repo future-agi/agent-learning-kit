@@ -1,0 +1,88 @@
+{
+  "name": "book_primary_care_first_available_tomorrow_afternoon",
+  "scenario_key": "book-primary-care-first-available-tomorrow-afternoon",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P151 takes the first free primary-care slot on Tuesday 27 October afternoon (14:30 at Central).",
+  "tests": "the agent verifies Lauren Becker, finds available primary care slots for tomorrow afternoon, and books the earliest available slot (14:30)",
+  "instruction": "You need to see any primary care doctor tomorrow afternoon (Tuesday 27 October 2026). When offered the available afternoon slots, choose the earliest available one (14:30 at Riverbank Central with Dr. Rohan Patel) and confirm the booking when asked.\n\nYour details:\n- Full name: Lauren Becker\n- Date of birth: 1988-09-09\n- Email: lauren.becker@example.com\n- Phone: +447700900151\n- Insurance: Bupa (member BU-100245)",
+  "keywords": [
+    "book_appointment",
+    "primary_care",
+    "first_available",
+    "afternoon"
+  ],
+  "persona": {
+    "name": "Lauren Becker",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I need to see any primary care doctor tomorrow afternoon please.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "dob": "1988-09-09",
+    "patient_id": "P151",
+    "full_name": "Lauren Becker",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Lauren Becker",
+        "dob": "1988-09-09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_from": "2026-10-27",
+        "patient_id": "P151",
+        "specialty": "primary_care",
+        "date_to": "2026-10-27"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "reason": "Primary care appointment",
+        "patient_id": "P151",
+        "slot_id": "SL-D02-20261027-1430",
+        "self_pay": false,
+        "confirmed": true,
+        "request_key": "req-p151-d02-1027"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P151",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

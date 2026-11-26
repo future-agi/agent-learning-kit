@@ -1,0 +1,99 @@
+{
+  "name": "duplicate_pending_request_handled",
+  "scenario_key": "duplicate-pending-request-handled",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Marketing author requests role when AR-105 is already pending; agent inspects access and pending requests and avoids creating duplicate.",
+  "tests": "Does the agent check current access and pending requests and report existing pending request AR-105 without creating a duplicate?",
+  "instruction": "You are Ryan Howard (employee ID E18). You want author access on Marketing Campaign Hub (APP-MKT). You already have pending request AR-105 submitted earlier. In chat, ask the IT desk to request author access for you. When the agent checks and informs you that AR-105 is already pending approval from Evan Wright, ask when it will be approved.",
+  "keywords": [
+    "duplicate_check"
+  ],
+  "persona": {
+    "name": "Ryan Howard",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United Kingdom",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hey IT, Ryan Howard (E18). I need author access to Marketing Campaign Hub (APP-MKT) right now for our campaign launch. Can you request it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "E18",
+    "target_app": "APP-MKT",
+    "origin": "seed",
+    "existing_request_id": "AR-105"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E18"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Ryan Howard (E18)"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "app_id": "APP-MKT",
+        "employee_id": "E18"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Ryan Howard (E18)"
+      }
+    },
+    {
+      "tool": "list_access_requests",
+      "arguments": {
+        "status": "pending",
+        "employee_id": "E18"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-105"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "record: access_requests.request_id for E18"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "standard_employee",
+    "disposition": "pending_duplicate",
+    "task": "manage_existing_access_and_idempotency",
+    "overlay_intensity": "absent",
+    "interaction": "collaborative",
+    "overlay": "none",
+    "interface": "chat",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "duplicate_access_handled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

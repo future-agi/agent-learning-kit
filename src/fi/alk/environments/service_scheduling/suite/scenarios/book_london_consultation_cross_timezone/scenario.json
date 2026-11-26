@@ -1,0 +1,110 @@
+{
+  "name": "book_london_consultation_cross_timezone",
+  "scenario_key": "book-london-consultation-cross-timezone",
+  "scenario_id": "",
+  "use_case": "Book an appointment by service, staff, language, location and time zone",
+  "branch": "a New York customer travelling to London books a morning consultation with Priya at Shoreditch stating both London and New York local times",
+  "tests": "the agent confirms the London local time and Europe/London time zone and books 09:00 on 2 November with Priya at Shoreditch",
+  "instruction": "You live in New York and will be travelling to London. You want to book an Initial Consultation with Priya Desai at the Shoreditch studio for Monday 2 November 2026 at 9:00 am London time (09:00 GMT / +00:00), which corresponds to 4:00 am New York time.\nWhen the agent asks for your details or reads back the booking confirmation, confirm them.\n\nYour details:\n- Name: Clara Vance\n- Email: clara.vance@example.com\n- Phone: +1 212 555 0403\n- Service: Initial Consultation\n- Staff: Priya Desai\n- Location: Shoreditch Studio (22 Rivington St, London)\n- Date and time: Monday 2 November 2026 at 9:00 am London time (09:00) / 4:00 am New York time (04:00)\n- Location Time Zone: Europe/London (+00:00)",
+  "keywords": [
+    "book_appointment",
+    "cross_timezone",
+    "consultation"
+  ],
+  "persona": {
+    "name": "Clara Vance",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I'm based in New York but will be in London next week. I'd like to book an Initial Consultation with Priya at the Shoreditch studio on Monday 2 November at 9:00 am London time (which is 4:00 am New York time).",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "service_id": "SV1",
+    "phone": "+1 212 555 0403",
+    "time": "2026-11-02T09:00",
+    "email": "clara.vance@example.com",
+    "staff_id": "ST04",
+    "origin": "mixed",
+    "name": "Clara Vance",
+    "location_id": "L2",
+    "customer_id": "CU403"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "clara.vance@example.com",
+        "phone": "+1 212 555 0403"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV1",
+        "staff_id": "ST04",
+        "location_id": "L2",
+        "language": "en",
+        "date": "2026-11-02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "service_id": "SV1",
+        "hold_id": null,
+        "utc_offset": "+00:00",
+        "location_id": "L2",
+        "customer_id": "CU403",
+        "staff_id": "ST04",
+        "confirmed": true,
+        "request_key": "REQ-SC3",
+        "start_time": "2026-11-02T09:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: CU403",
+        "location_id": "record: L2",
+        "staff_id": "record: ST04",
+        "utc_offset": "caller: +00:00",
+        "start_time": "caller: 2026-11-02T09:00",
+        "service_id": "record: SV1"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "task": "book_appointment",
+    "counterparty": "returning_customer",
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "overlay": "none",
+    "disposition": "cross_timezone",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "timezone_and_instant_confirmed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

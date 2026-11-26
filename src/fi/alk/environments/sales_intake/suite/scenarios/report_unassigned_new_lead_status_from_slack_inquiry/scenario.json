@@ -1,0 +1,80 @@
+{
+  "name": "report_unassigned_new_lead_status_from_slack_inquiry",
+  "scenario_key": "report-unassigned-new-lead-status-from-slack-inquiry",
+  "scenario_id": "",
+  "use_case": "Qualify an inbound enquiry against the rubric",
+  "branch": "Colin Davies asks the desk to check Jordan Ellis's Slack message SM03 in #sales-handoffs regarding Northwind Support's lead (L01); desk reads SM03, checks L01, and reports L01 is still new / unassigned",
+  "tests": "the agent reads Slack message SM03, checks L01 status, and reports it is new and not yet assigned",
+  "instruction": "You are Colin Davies, SDR at BrightDesk. You want the sales intake desk to look up the Slack inquiry in #sales-handoffs (ts: 1794232800.000003) regarding the Northwind Support lead (L01) and report back whether L01 has been qualified or assigned yet.\n\nYour details:\n- Name: Colin Davies\n- Role: Sales Development Representative\n- Channel: #sales-handoffs (CH_SALESHANDOFF)\n- Message ts: 1794232800.000003\n- Lead ID: L01",
+  "keywords": [
+    "qualify_lead"
+  ],
+  "persona": {
+    "name": "Colin Davies",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, could you check the inquiry in #sales-handoffs (ts: 1794232800.000003) about Northwind Support (L01) and let me know its status?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "lead_id": "L01",
+    "message_ts": "1794232800.000003",
+    "channel_id": "CH_SALESHANDOFF"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1794232800.000003",
+        "channel_id": "CH_SALESHANDOFF"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "record: 1794232800.000003",
+        "channel_id": "record: CH_SALESHANDOFF"
+      }
+    },
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interface": "slack_thread",
+    "counterparty": "colleague",
+    "task": "qualify_lead",
+    "overlay_vector": "none",
+    "disposition": "unassigned",
+    "overlay": "none",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "lead_status_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
