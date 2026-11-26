@@ -154,8 +154,11 @@ each time (the browser's own retries within 2 s, in one tab, are one attempt), a
 page made off the list, counted for each host. Both lists are capped with the rows. A DevTools client is
 not told of the clicks and keys another client sends, so a small listener runs in each page, in a
 script world of its own, and reports only trusted events through a binding; the page's own
-scripts can neither write to the record nor read it. The world's and the binding's names are new
-for each browser, so a world the agent makes cannot call the binding. Only trusted events are rows:
+scripts can neither write to the record nor read it. The world's and the binding's names are
+random, say nothing of what they are, and are new at each attach; the listener takes the binding into
+its own closure and off the world's globals before the page loads, so neither a world the agent
+makes nor a look through every world of the page over DevTools finds anything to call. A client that
+debugs the listener itself through DevTools is the limit below. Only trusted events are rows:
 an agent that acts by script (an element's `click()` run in the page, or a value set and an `input`
 event made up) leaves no click or typing row, though its pages, screenshots and refusals are still
 kept; typing sent as input (`Input.insertText`, as a Playwright-style fill does) is kept. Text typed
@@ -164,8 +167,11 @@ whose autofill names a password, a card's number, security code or expiry, or a 
 (`current-password`, `new-password`, `cc-number`, `cc-csc`, `cc-exp*`, `one-time-code`), including
 a field whose kind or autofill is changed after the page loads. A card field with no autofill name
 is not known to be one. The job's declared secrets are masked wherever the record holds them, as
-it is made. A value is masked whole: a secret left half-typed, or cut by the 200-character limit on
-typed text, is not matched. Screenshots show whatever the page shows. Every text passes the kit's
+it is made. A value is masked whole, and only one of 8 characters or more: a shorter one, a secret left
+half-typed, or one cut by the 200-character limit on typed text, is not matched. Text the page shows
+back (a click's element text, up to 80 characters) is kept as the page shows it, at any level, and
+a secret field inside a custom element's shadow tree is judged by the custom element, which may not
+say it is one. Screenshots show whatever the page shows. Every text passes the kit's
 cleaner. Rows are capped (the record then says `truncated`), and a
 screenshot is taken at each page load and at the trial's end, capped in count and bytes with one
 place kept free for the end's, each named by the id it is stored under. The end's is not kept when it
@@ -183,7 +189,8 @@ The record is the world's, never the agent's tool calls: it lives in the trial's
 file, apart from the action log, and the sealed world record carries its counts only. There the
 agent's `blocked` list has the browser's refusals split by the record into navigations and page
 requests, counted for each host (`what: navigation` or `page_request`); their addresses are in the
-file. For a host the record saw, its count stands in for the proxy's, which counts each of the
+file. Where the browser's refusals could not be read, the agent's entry holds none of them and says
+`browser_blocked_unreadable`; where their file reached its cap, it says `browser_blocked_truncated`. For a host the record saw, its count stands in for the proxy's, which counts each of the
 browser's retries; a host only the proxy refused (a worker's request, a tab watched late) stays as
 the proxy counted it. A world
 with a door adds it to the end state it stores; a world with no door still stores the file, under
