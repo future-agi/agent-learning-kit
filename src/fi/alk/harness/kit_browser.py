@@ -412,9 +412,13 @@ class KitBrowser:
         self.binary = binary
         self.directory = directory
         self.relay = DevToolsRelay(state_path)
-        self.proxy = BrowserProxy(
-            sites, log, attached=self.relay.attached, connect=connect
-        )
+        try:
+            self.proxy = BrowserProxy(
+                sites, log, attached=self.relay.attached, connect=connect
+            )
+        except BaseException:
+            self.relay.close()
+            raise
         self._launch = launch
         self._stop = stop
         self._prepare = prepare
@@ -459,9 +463,13 @@ class KitBrowser:
             self._stop(handle)
 
     def close(self) -> None:
-        self.stop()
-        self.relay.close()
-        self.proxy.close()
+        try:
+            self.stop()
+        finally:
+            try:
+                self.relay.close()
+            finally:
+                self.proxy.close()
 
     def _devtools_port(self, profile: Path) -> int:
         """The port Chromium chose, from the file it writes in its profile once its DevTools port is open. A browser

@@ -348,9 +348,10 @@ def test_closing_a_browser_whose_stop_fails_still_closes_its_relay_and_proxy(tmp
         raise OSError("the browser would not stop")
 
     kit._stop = broken
+    ports = (kit.relay.port, int(kit.proxy.url.rsplit(":", 1)[1].strip("/")))
     with pytest.raises(OSError, match="would not stop"):
         kit.close()
-    for port in (kit.relay.port, int(kit.proxy.url.rsplit(":", 1)[1].strip("/"))):
+    for port in ports:
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", port), timeout=1).close()
 
