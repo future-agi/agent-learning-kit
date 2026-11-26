@@ -53,7 +53,7 @@ from ..world.tools import DRAFT
 from .contract import write_contract
 from .handlers import ALLOWED_IMPORTS, behaviour_problems, source_problems
 from .proof import ViewProof
-from ..source_grounding import SOURCE_OUTCOME_GUIDANCE, action_code_guidance, record_role_problem, reveals_source_answer
+from ..source_grounding import INDEPENDENT_SCENARIO_GUIDANCE, SOURCE_OUTCOME_GUIDANCE, action_code_guidance, record_role_problem, reveals_source_answer
 from .reviewed_sources import REVIEW_REQUIRED, load_evidence
 from .workspace import (
     Design,
@@ -311,7 +311,7 @@ class DesignTools:
             f"Scenarios: {len(read_all(self.workspace))}."
         )
         if evidence := load_evidence(self.workspace, design):
-            lines.append(SOURCE_OUTCOME_GUIDANCE + action_code_guidance(evidence["cases"]))
+            lines.append(SOURCE_OUTCOME_GUIDANCE + action_code_guidance(evidence["cases"]) + INDEPENDENT_SCENARIO_GUIDANCE)
             lines.append(
                 "Approved source evidence is available through read_source: "
                 + ", ".join(

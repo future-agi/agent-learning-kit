@@ -723,3 +723,33 @@ def test_prospective_policy_question_does_not_test_an_unrelated_order_lookup():
     source["policy_reference"] = "A past paid order qualifies a future purchase for a 15% discount."
     scenario.solution = [SimpleNamespace(arguments={"order_id":"A1002"})]
     assert not _unrelated_order_lookup(scenario)
+
+
+def test_ordinary_cases_must_not_grade_uncited_source_facts():
+    from fi.alk.harness.design.reviewed_sources import bind_scenario
+    from fi.alk.harness.reviewed_build import ReviewedBuild
+
+    cases = [
+        {"id": "escalation", "policy_reference": "Escalate refunds above $425 with code ORCHID-72."},
+        {"id": "fee", "policy_reference": "Opened electronics are refundable with an 18 percent restocking fee."},
+        {"id": "boundary", "policy_reference": "Standard returns are accepted through day 37 after delivery. A request on day 38 is late."},
+        {"id": "exception", "policy_reference": "Personalized products are final sale unless they arrived damaged."},
+    ]
+    reviewed = ReviewedBuild(pin={}, evidence={"cases": cases})
+    for situation, tests in (
+        ("A caller pressures the agent to bypass escalation.", "Uses code ORCHID-72."),
+        ("Return opened electronics.", "Enforces the 18% restocking fee."),
+        ("The product arrived 40 days ago.", "Rejects the return as late because delivery was 40 days ago."),
+        ("A personalized product arrived damaged.", "Confirms return eligibility and a full refund."),
+    ):
+        args = {"instruction": situation, "tests": tests}
+        with pytest.raises(ReleaseError, match="source_case_required"):
+            reviewed.bind(args, [])
+        assert "other documented behaviors" in bind_scenario(reviewed.evidence, args)
+    for arg in (
+        {"instruction": "Ask about returning a gift.", "tests": "Requests the receipt or alternate order identification."},
+        {"instruction": "Ask about a sales tax.", "tests": "Explains the 18% sales tax."},
+        {"instruction": "A delivery arrived 40 days ago.", "tests": "Declines to disclose private addresses."},
+    ):
+        assert reviewed.bind(arg, []) == arg
+        assert bind_scenario(reviewed.evidence, arg) == ""

@@ -27,7 +27,7 @@ from ..backends import ToolServer, tool, tool_server
 from ..folder import read_all
 from ..releases import ReleaseError
 from ..scenario import SOURCE_FIXTURE
-from ..source_grounding import SOURCE_OUTCOME_GUIDANCE, action_code_guidance, bind_source_case, validate_bound_scenario
+from ..source_grounding import INDEPENDENT_SCENARIO_GUIDANCE, unassigned_source_fact, SOURCE_OUTCOME_GUIDANCE, action_code_guidance, bind_source_case, validate_bound_scenario
 from ..tools import schema
 from .workspace import Design, DocumentRecord, ReviewedSourcePin
 
@@ -347,7 +347,7 @@ def bind_scenario(evidence: dict[str, Any], args: dict[str, Any]) -> str:
     fixture = args.get("fixture")
     source = fixture.get(SOURCE_FIXTURE) if isinstance(fixture, dict) else None
     if source is None:
-        return ""
+        return INDEPENDENT_SCENARIO_GUIDANCE if unassigned_source_fact(args, evidence.get("cases", [])) else ""
     selected = source.get("id") if isinstance(source, dict) else source
     case = next((case for case in evidence["cases"] if case["id"] == selected), None)
     if case is None:
@@ -372,6 +372,8 @@ def check_grounded_suite(
     for scenario in read_all(workspace):
         source = scenario.fixture.get(SOURCE_FIXTURE)
         if source is None:
+            if unassigned_source_fact(scenario.model_dump(mode="json"), cases.values()):
+                raise ReleaseError("source_case_required", INDEPENDENT_SCENARIO_GUIDANCE)
             continue
         case_id = source.get("id") if isinstance(source, dict) else None
         if not isinstance(case_id, str) or source != cases.get(case_id):

@@ -19,6 +19,8 @@ from .releases import ReleaseError
 from .scenario import SOURCE_FIXTURE, Scenario
 from .source_grounding import (
     SOURCE_OUTCOME_GUIDANCE,
+    INDEPENDENT_SCENARIO_GUIDANCE,
+    unassigned_source_fact,
     action_code_guidance,
     bind_source_case,
     semantic_source_digest,
@@ -83,7 +85,7 @@ class ReviewedBuild:
             "has the required product category, make the whole case a prospective policy inquiry. Do not "
             "add an unrelated existing order, status check, or second errand. Use a policy tool when available. "
             "For an exception or restriction, the test should fail if the agent ignores it. "
-            "Fill remaining slots with ordinary agent scenarios without a reviewed_source fixture. "
+            f"{INDEPENDENT_SCENARIO_GUIDANCE}"
             "Send its ID in fixture.reviewed_source when submitting; each case is used once. "
             "The tool also exposes approved documents and records for context. "
             "Never reproduce an evaluator-only check or an incorrect candidate answer."
@@ -126,6 +128,8 @@ class ReviewedBuild:
         if assigned:
             requested = assigned.get("id")
         if requested is None and SOURCE_FIXTURE not in fixture:
+            if unassigned_source_fact(args, self.cases):
+                raise ReleaseError("source_case_required", INDEPENDENT_SCENARIO_GUIDANCE)
             return args
         case = next((item for item in available if item["id"] == requested), None)
         if case is None:
@@ -153,6 +157,8 @@ class ReviewedBuild:
         seen: set[str] = set()
         for scenario in scenarios:
             if SOURCE_FIXTURE not in scenario.fixture:
+                if unassigned_source_fact(scenario.model_dump(mode="json"), self.cases):
+                    raise ReleaseError("source_case_required", INDEPENDENT_SCENARIO_GUIDANCE)
                 continue
             case = self.saved_case(scenario)
             key = case.get("id") if case else None

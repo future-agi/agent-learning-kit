@@ -64,6 +64,84 @@ def _tokens(value: object) -> set[str]:
     return terms
 
 
+INDEPENDENT_SCENARIO_GUIDANCE = (
+    "Use the agent's other documented behaviors for the remaining scenarios. "
+    "Keep their situations, tests and solutions independent of the attached source's "
+    "rules, record values, identifiers, thresholds, and exceptions. If an assigned "
+    "case already tests that rule, choose a different behavior. "
+)
+
+_CASE_CODE = re.compile(r"(?<![\w-])[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+(?![\w-])", re.I)
+_PERCENT = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*[- ]?\s*(?:%|percent(?:age)?\b|per cent\b)", re.I
+)
+
+
+def unassigned_source_fact(args: Mapping[str, Any], cases) -> bool:
+    """Reject distinctive evidence reused without a fixture; shared topics alone are fine."""
+    authored = " ".join(
+        str(args.get(k) or "")
+        for k in (
+            "name",
+            "use_case",
+            "instruction",
+            "tests",
+            "solution",
+            "setup_code",
+            "ready_code",
+        )
+    )
+    codes = {code.casefold() for code in _CASE_CODE.findall(authored)}
+    for case in cases:
+        reference = " ".join(str(case.get("policy_reference") or "").split())
+        values = [
+            str(fact.get("value") or "") for fact in case.get("starting_facts") or ()
+        ]
+        if codes.intersection(
+            code.casefold()
+            for code in _CASE_CODE.findall(" ".join([reference, *values]))
+        ):
+            return True
+        situation = str(args.get("instruction") or "").casefold()
+        assertion = str(args.get("tests") or "").casefold()
+        if (
+            re.search(r"through day \d+.*?day \d+ is late", reference, re.I | re.S)
+            and re.search(r"\bday \d+|\b\d+ days? (?:ago|after|since)", situation)
+            and "return" in assertion
+            and (re.search(_APPROVAL, assertion) or re.search(_REFUSAL, assertion))
+            and re.search(
+                r"late|timely|window|after delivery|days? ago|day \d+", assertion
+            )
+        ):
+            return True
+        exception = re.search(r"(.+?) (?:are|is) final sale unless", reference, re.I)
+        if exception:
+            subject = _tokens(exception[1]) - {"item", "product"}
+            if (
+                subject & _tokens(situation)
+                and re.search(r"damag|final sale", authored, re.I)
+                and re.search(r"eligib|full refund|final sale", assertion)
+            ):
+                return True
+        for match in _PERCENT.finditer(reference):
+            # Require the same rate and a nearby subject, rather than an equal number elsewhere.
+            context = _tokens(reference[match.end() :].split(".")[0].split(",")[0])
+            context -= {"fee", "rate", "percent", "charge", "apply", "applied"}
+            if not context:
+                context = _tokens(" ".join(reference[: match.start()].split()[-3:])) - {
+                    "fee",
+                    "rate",
+                    "percent",
+                    "charge",
+                }
+            for rate in _PERCENT.finditer(authored):
+                if rate[1] == match[1] and context.intersection(
+                    _tokens(authored[max(0, rate.start() - 55) : rate.end() + 55])
+                ):
+                    return True
+    return False
+
+
 def _case_terms(case: Mapping[str, Any]) -> tuple[set[str], set[str]]:
     strong: set[str] = set()
     topic: set[str] = set()
