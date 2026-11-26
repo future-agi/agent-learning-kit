@@ -149,7 +149,8 @@ DevTools address.
 on the browser's own port, which never counts as the agent's attach. It keeps, in order and with
 times, the pages the agent's tabs opened, what it clicked and typed (the element in words), and
 the sites it was refused, in two lists: a page the agent tried to open off the list, kept whole
-each time, and a request a page made off the list, counted for each host. A DevTools client is
+each time (the browser's own retries within 2 s, in one tab, are one attempt), and a request a
+page made off the list, counted for each host. Both lists are capped with the rows. A DevTools client is
 not told of the clicks and keys another client sends, so a small listener runs in each page, in a
 script world of its own, and reports only trusted events through a binding; the page's own
 scripts can neither write to the record nor read it. Text typed into a password field is never
@@ -164,14 +165,18 @@ The record is the world's, never the agent's tool calls: it lives in the trial's
 file, apart from the action log, and the sealed world record carries its counts only. There the
 agent's `blocked` list has the browser's refusals split by the record into navigations and page
 requests, counted for each host (`what: navigation` or `page_request`); their addresses are in the
-file. A world
+file. For a host the record saw, its count stands in for the proxy's, which counts each of the
+browser's retries; a host only the proxy refused (a worker's request, a tab watched late) stays as
+the proxy counted it. A world
 with a door adds it to the end state it stores; a world with no door still stores the file, under
 `futureagi.browser-world-state.v1`, saying the world's records were not recorded (`not_held`)
 rather than carrying empty tables. Where a door stood but the world's end could not be read, the
 same file holds the door's action log and says only the tables are missing. With no client
 attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. Screenshots are uploaded last, as
-the `screenshot` kind, kept from `traces-and-recordings` up; one the platform does not keep, or
-past what an isolated worker's result can carry, never fails the trial: the trial says so.
+the `screenshot` kind, kept from `traces-and-recordings` up; at a lower level none is sent and the
+trial says the level is why. One the platform does not keep, or past what an isolated worker's
+result can carry, never fails the trial: the trial says so. Once the pages' screenshots are full
+(one place stays for the end's), no page is photographed; a closed tab is never the end's.
 
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the

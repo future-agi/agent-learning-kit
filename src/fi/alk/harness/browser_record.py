@@ -814,7 +814,8 @@ def _write_text(path: Path, text: str) -> None:
 
 def split_blocked(blocked: list[dict[str, Any]], record: dict[str, Any] | None) -> list[dict[str, Any]]:
     """The trial's blocked list with the browser's refusals split in two: each page the agent tried to open, whole,
-    and the requests pages made, counted for each host. The proxy is the record of what was refused, so a host it
+    and the requests pages made, counted for each host. For a host the record saw, its count stands in for the
+    proxy's, which counts each of the browser's own retries. The proxy is the record of what was refused, so a host it
     refused that the record never saw stays as the proxy counted it; with no record its counts stand."""
     if not isinstance(record, dict):
         return list(blocked)
