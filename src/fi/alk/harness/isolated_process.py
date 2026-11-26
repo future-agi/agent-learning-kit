@@ -227,19 +227,18 @@ async def _communicate(
                 await exchange
 
 
-def _private_directory(directory: Path) -> None:
-    """Make ``directory`` this process's own (0700), or refuse one that is not: a worker's result is written inside
-    it, so a directory another account owns or may write in, or a link to one, could be made to hand back another
-    result."""
+def _private_directory(directory: Path) -> Path:
+    """``directory`` made this process's own (0700), or, where it is not (another account owns it or may write in it,
+    or it is a link), a new private one in its place: a worker's result is written inside it, so such a directory
+    could be made to hand back another result."""
     directory.parent.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(FileExistsError):
         directory.mkdir(mode=0o700)
     found = os.lstat(directory)
-    if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.geteuid() or found.st_mode & 0o022:
-        raise IsolatedWorkerError(
-            f"refusing worker directory {directory}: it must be a directory of this account's that no other "
-            "account may write in"
-        )
+    if stat.S_ISDIR(found.st_mode) and found.st_uid == os.geteuid() and not found.st_mode & 0o022:
+        return directory
+    logging.getLogger(__name__).warning("worker directory %s is not this account's alone; using a private one instead", directory)
+    return Path(tempfile.mkdtemp(prefix="alk-workers-"))
 
 
 async def run_json_worker(
@@ -262,7 +261,7 @@ async def run_json_worker(
     """
     if os.name != "posix":
         raise IsolatedWorkerError("isolated workers require POSIX process groups")
-    _private_directory(work_directory)
+    work_directory = _private_directory(work_directory)
     parent_end, child_end = socket.socketpair() if serve is not None else (None, None)
     try:
         return await _run_json_worker(
