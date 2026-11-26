@@ -849,6 +849,7 @@ def sealed_browser_blocked(state_changes: Any, record: dict[str, Any] | None) ->
 
 SCREENSHOTS_CAPPED = "screenshots_capped"
 SCREENSHOTS_NOT_KEPT = "screenshots_not_kept"
+SCREENSHOTS_NOT_SENT_AT_LEVEL = "screenshots_not_sent_at_level"
 
 
 def browser_evidence(runtime: Any, *, timeout: float = 5.0) -> dict[str, Any] | None:
@@ -879,6 +880,9 @@ async def upload_screenshots(
     notices: list[dict[str, str]] = []
     if not isinstance(evidence, dict):
         return (), notices
+    listed = evidence.get("screenshots") or []
+    if listed and not screenshots_kept(adapter):
+        return (), [level_keeps_no_screenshots_notice(len(listed))]
     if evidence.get("screenshots_capped"):
         notices.append(
             {
@@ -888,7 +892,7 @@ async def upload_screenshots(
         )
     ids: list[str] = []
     lost = 0
-    for one in evidence.get("screenshots") or []:
+    for one in listed:
         row = one if isinstance(one, dict) else {}
         data = _listed_shot(shots_dir, row)
         if data is None:
@@ -937,6 +941,21 @@ def _listed_shot(shots_dir: Path, row: dict[str, Any]) -> bytes | None:
     if isinstance(named, str) and named != "sha256:" + hashlib.sha256(data).hexdigest():
         return None
     return data
+
+
+def screenshots_kept(adapter: Any) -> bool:
+    """Whether the run's artifact level keeps screenshots; an adapter that does not say keeps them."""
+    from .outbound import ArtifactKind
+
+    keeps = getattr(adapter, "keeps_artifact", None)
+    return not callable(keeps) or bool(keeps(ArtifactKind.SCREENSHOT))
+
+
+def level_keeps_no_screenshots_notice(count: int) -> dict[str, str]:
+    return {
+        "code": SCREENSHOTS_NOT_SENT_AT_LEVEL,
+        "message": f"The run's artifact level keeps no screenshots, so the browser's {count} were not sent.",
+    }
 
 
 def not_kept_notice(lost: int) -> dict[str, str]:

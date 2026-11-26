@@ -163,8 +163,12 @@ class IsolatedChatCallRunner:
         # The worker sealed the call: what follows delivers it, and a stop no longer cuts that.
         call_sealed()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
+        from .browser_record import level_keeps_no_screenshots_notice, not_kept_notice, screenshots_kept
+
         artifact_ids = {}
         artifacts = list(result.get("artifacts", []))
+        # A run whose level keeps no screenshots sends none: they are said as the level's, never as lost.
+        shots_kept = screenshots_kept(self._adapter)
         # A transcript names the trial's end state by the worker's own id, so the end state is stored before it.
         ends = [one for one in artifacts if one["kind"] == ArtifactKind.WORLD_STATE.value]
         for artifact in ends + [one for one in artifacts if one not in ends]:
@@ -172,6 +176,9 @@ class IsolatedChatCallRunner:
             if artifact["kind"] == "transcript":
                 data = _with_stored_end_state(data, artifact_ids)
             if artifact["kind"] == ArtifactKind.SCREENSHOT.value:
+                if not shots_kept:
+                    artifact_ids[artifact["id"]] = None
+                    continue
                 # A screenshot that could not be stored never fails the trial: it is said below.
                 try:
                     artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
@@ -195,9 +202,8 @@ class IsolatedChatCallRunner:
                 1 for one in artifacts if one["kind"] == ArtifactKind.SCREENSHOT.value and not artifact_ids.get(one["id"])
             )
             if lost:
-                from .browser_record import not_kept_notice
-
-                raw_outcome["notices"] = (*(raw_outcome.get("notices") or ()), not_kept_notice(lost))
+                said = not_kept_notice(lost) if shots_kept else level_keeps_no_screenshots_notice(lost)
+                raw_outcome["notices"] = (*(raw_outcome.get("notices") or ()), said)
             raw_outcome["recording_artifacts"] = tuple(
                 artifact_ids[item]
                 for item in raw_outcome.get("recording_artifacts", [])
