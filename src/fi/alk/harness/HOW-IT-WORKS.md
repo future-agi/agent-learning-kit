@@ -145,7 +145,8 @@ the sandbox's firewall. It covers what the browser is asked to load over the net
 files the agent's user can read, nor a client that changes the browser's own settings through its
 DevTools address.
 
-**The browser record** (`browser_record.py`). Beside each world's browser the kit runs a recorder
+**The browser record** (`browser_record.py`; its WebSocket client is `devtools_socket.py`, and the
+refusals file of a world with no door is `browser_blocked_log.py`). Beside each world's browser the kit runs a recorder
 on the browser's own port, which never counts as the agent's attach. It keeps, in order and with
 times, the pages the agent's tabs opened, what it clicked and typed (the element in words), and
 the sites it was refused, in two lists: a page the agent tried to open off the list, kept whole
@@ -153,9 +154,19 @@ each time (the browser's own retries within 2 s, in one tab, are one attempt), a
 page made off the list, counted for each host. Both lists are capped with the rows. A DevTools client is
 not told of the clicks and keys another client sends, so a small listener runs in each page, in a
 script world of its own, and reports only trusted events through a binding; the page's own
-scripts can neither write to the record nor read it. Text typed into a password field is never
-kept, only that typing happened, including a field whose kind is changed after the page loads.
-Every text passes the kit's cleaner. Rows are capped (the record then says `truncated`), and a
+scripts can neither write to the record nor read it. The world's and the binding's names are new
+for each browser, so a world the agent makes cannot call the binding. Only trusted events are rows:
+an agent that acts by script (an element's `click()` run in the page, or a value set and an `input`
+event made up) leaves no click or typing row, though its pages, screenshots and refusals are still
+kept; typing sent as input (`Input.insertText`, as a Playwright-style fill does) is kept. Text typed
+into a secret field is never kept as text, only that typing happened: a password field, or a field
+whose autofill names a password, a card's number, security code or expiry, or a one-time code
+(`current-password`, `new-password`, `cc-number`, `cc-csc`, `cc-exp*`, `one-time-code`), including
+a field whose kind or autofill is changed after the page loads. A card field with no autofill name
+is not known to be one. The job's declared secrets are masked wherever the record holds them, as
+it is made. A value is masked whole: a secret left half-typed, or cut by the 200-character limit on
+typed text, is not matched. Screenshots show whatever the page shows. Every text passes the kit's
+cleaner. Rows are capped (the record then says `truncated`), and a
 screenshot is taken at each page load and at the trial's end, capped in count and bytes with one
 place kept free for the end's, each named by the id it is stored under. The end's is not kept when it
 is larger than all of them together may be, or is answered after the record is sealed. A page is
@@ -178,10 +189,17 @@ the proxy counted it. A world
 with a door adds it to the end state it stores; a world with no door still stores the file, under
 `futureagi.browser-world-state.v1`, saying the world's records were not recorded (`not_held`)
 rather than carrying empty tables. Where a door stood but the world's end could not be read, the
-same file holds the door's action log and says only the tables are missing. With no client
-attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. Screenshots are uploaded last, as
+same file holds the door's action log and says only the tables are missing. The sealed record names the
+world's end state under `end_state_artifact` only when the file holds the world's tables; a file
+holding the browser's record without them is named under `browser_state_artifact`. With no client
+attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. Typed text
+leaves with the run from `traces-and-recordings` up, as screenshots do; at a lower level each
+typing row keeps where and that it happened, its text is left out, and the file says
+`typed_text: not_kept_at_level` (one setting, `TYPED_TEXT_NEEDS_RECORDINGS`, keeps it at `traces`
+too). Screenshots are uploaded last, as
 the `screenshot` kind, kept from `traces-and-recordings` up; at a lower level the browser still
-takes them in the world, none is sent, and the trial says the level is why. One the kit cannot send
+takes them in the world, none is sent, and the trial says the level is why. Together they take at
+most half of the job's upload budget, so traces uploaded after them keep room. One the kit cannot send
 whole, one the platform does not keep, or one past what an isolated worker's result can carry never
 fails the trial: the trial says so. Once the pages' screenshots are full (one place stays for the
 end's), no page is photographed; a page screenshot not kept, or one whose tab closed before it was
