@@ -1297,11 +1297,30 @@ def test_typed_text_leaves_with_a_run_whose_level_keeps_recordings() -> None:
     assert "typed_text" not in body["browser"]
 
 
-def test_a_run_whose_level_keeps_no_recordings_keeps_no_typed_text_and_says_so() -> None:
+def test_typed_text_leaves_with_the_trace_at_a_level_that_keeps_no_recordings() -> None:
     import asyncio
 
     from fi.alk.harness.chat_worker import _ArtifactCollector
 
+    # What the agent typed is the evidence of what it did, so it goes wherever the world_state file goes; secret
+    # fields were never kept as text, at any level.
+    adapter = _ArtifactCollector(screenshots_kept=False)
+    body = browser_record.browser_file_body(_typed_evidence(), [], adapter=adapter)
+    assert [row.get("text") for row in body["browser"]["rows"]] == [None, "red shoes", None]
+    assert "typed_text" not in body["browser"]
+
+    asyncio.run(browser_record.upload_browser_state(adapter, "one", _typed_evidence(), []))
+    stored = json.loads(base64.b64decode(adapter.artifacts[0]["data"]))
+    assert [row.get("text") for row in stored["browser"]["rows"]] == [None, "red shoes", None]
+    assert "typed_text" not in stored["browser"]
+
+
+def test_the_one_setting_holds_typed_text_to_recordings_and_says_so(monkeypatch) -> None:
+    import asyncio
+
+    from fi.alk.harness.chat_worker import _ArtifactCollector
+
+    monkeypatch.setattr(browser_record, "TYPED_TEXT_NEEDS_RECORDINGS", True)
     adapter = _ArtifactCollector(screenshots_kept=False)
     evidence = _typed_evidence()
     body = browser_record.browser_file_body(evidence, [], adapter=adapter)
