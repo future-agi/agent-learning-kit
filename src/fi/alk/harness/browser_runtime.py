@@ -156,7 +156,12 @@ def kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
             stop=lambda handle: _terminate_and_wait(handle),
             prepare=prepare,
             retain_log=context.retain_process_log,
-            recorder=BrowserRecorder(context.browser_allowed_sites or (), state.with_name(f"w{world_index}-record.json")),
+            recorder=BrowserRecorder(
+                context.browser_allowed_sites or (),
+                state.with_name(f"w{world_index}-record.json"),
+                # A secret of the job's the agent types into a page is masked before the record is written.
+                secret_values=tuple(context.secret_values.values()),
+            ),
         )
 
     return make

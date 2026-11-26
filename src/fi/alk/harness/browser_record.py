@@ -60,12 +60,21 @@ KIT_FILE_BYTES = 64 * 1024 * 1024
 _ACTIONS = frozenset({"click", "typing"})
 _TARGET_FIELDS = ("tag", "role", "label", "text")
 
+# Autofill names of fields whose text is never kept (https://html.spec.whatwg.org/#autofill-field).
+SECRET_AUTOFILL = frozenset(
+    {
+        "current-password", "new-password", "one-time-code",
+        "cc-number", "cc-csc", "cc-exp", "cc-exp-month", "cc-exp-year",
+    }
+)
+
 # The page's listener runs in this world and only this world can call the binding.
 LISTENER_WORLD = "alk-browser-record"
 BINDING = "alkBrowserRecord"
 
-# A field is a password field for the rest of the page's life once it has been one. Nothing here reads a field's
-# value except to report typing into a field that is not one.
+# A field is a secret field for the rest of the page's life once it has been one: a password, or a field whose
+# autofill names a password, a card's number, code or expiry, or a one-time code. Nothing here reads a field's value
+# except to report typing into a field that is not one.
 LISTENER = r"""
 (() => {
   if (globalThis.__alkBrowserRecord) return;
@@ -74,11 +83,15 @@ LISTENER = r"""
   if (typeof send !== 'function') return;
   const say = (row) => { try { send(JSON.stringify(row)); } catch (e) {} };
   const secret = new WeakSet();
+  const secretFill = new Set(%(fill)s);
+  const secretAuto = (value) => {
+    const auto = String(value || '').toLowerCase();
+    return auto.includes('password') || auto.split(/\s+/).some((token) => secretFill.has(token));
+  };
   const isSecret = (el) => {
     if (!el || el.nodeType !== 1) return false;
     const type = String(el.getAttribute('type') || '').toLowerCase();
-    const auto = String(el.getAttribute('autocomplete') || '').toLowerCase();
-    if (type === 'password' || auto.includes('password')) secret.add(el);
+    if (type === 'password' || secretAuto(el.getAttribute('autocomplete'))) secret.add(el);
     return secret.has(el);
   };
   // Marked as the page is built and as it changes, so a field the page turns from password to text stays one.
@@ -91,7 +104,7 @@ LISTENER = r"""
     for (const change of changes) {
       if (change.type === 'attributes') {
         const was = String(change.oldValue || '').toLowerCase();
-        if (was === 'password' || (change.attributeName === 'autocomplete' && was.includes('password'))) {
+        if (change.attributeName === 'type' ? was === 'password' : secretAuto(was)) {
           secret.add(change.target);
         }
         isSecret(change.target);
@@ -132,11 +145,11 @@ LISTENER = r"""
     say({kind: 'typing', url: location.href, target: describe(el), secret: hidden, text: typed});
   }, true);
 })();
-""" % {"binding": BINDING, "text": _TEXT}
+""" % {"binding": BINDING, "text": _TEXT, "fill": json.dumps(sorted(SECRET_AUTOFILL))}
 
 
-def _clean(text: Any, limit: int = _TEXT) -> str:
-    return redact_outbound_text(str(text))[:limit]
+def _clean(text: Any, limit: int = _TEXT, secret_values: tuple[str, ...] = ()) -> str:
+    return redact_outbound_text(str(text), secret_values)[:limit]
 
 
 def _host(url: str) -> str:
@@ -154,10 +167,17 @@ class BrowserRecord:
     """One trial's record of the browser. Safe to feed from the recorder's thread and read from another."""
 
     def __init__(
-        self, sites: Iterable[str], *, cap: int = RECORD_ROWS, clock: Callable[[], float] = time.time
+        self,
+        sites: Iterable[str],
+        *,
+        cap: int = RECORD_ROWS,
+        clock: Callable[[], float] = time.time,
+        secret_values: Iterable[str] = (),
     ) -> None:
         self.sites = tuple(sites)
         self.cap = cap
+        # The job's declared secrets: masked in everything the record holds, wherever a page let one be typed.
+        self._secrets = tuple(one for one in secret_values if isinstance(one, str) and one)
         self.clock = clock
         self._lock = threading.Lock()
         self._rows: list[dict[str, Any]] = []
@@ -197,6 +217,9 @@ class BrowserRecord:
                 self._shots_capped = True
             return True, dropped
 
+    def _kept(self, text: Any, limit: int = _TEXT) -> str:
+        return _clean(text, limit, self._secrets)
+
     def shots_kept(self) -> int:
         with self._lock:
             return len(self._shots)
@@ -218,7 +241,7 @@ class BrowserRecord:
         screenshot can be matched."""
         with self._lock:
             self._shots.append(
-                {"file": file, "when": when, "url": _clean(url, 2048), "tab": self._tab(tab), "at": self.clock(),
+                {"file": file, "when": when, "url": self._kept(url, 2048), "tab": self._tab(tab), "at": self.clock(),
                  "bytes": size, **({"artifact_id": artifact_id} if artifact_id else {})}
             )
 
@@ -241,7 +264,7 @@ class BrowserRecord:
         if not self.opened(url):
             return
         with self._lock:
-            self._add({"kind": "navigation", "url": _clean(url, 2048)}, tab)
+            self._add({"kind": "navigation", "url": self._kept(url, 2048)}, tab)
 
     def requested(self, tab: str, url: str, *, document: bool, main_frame: bool) -> None:
         """A request the browser made; kept only when its host is off the list, the rule its proxy keeps."""
@@ -267,7 +290,7 @@ class BrowserRecord:
                 self._truncated = True
                 return
             self._last_refused[place] = now
-            self._navigations.append({"url": _clean(url, 2048), "at": now, "tab": self._tab(tab)})
+            self._navigations.append({"url": self._kept(url, 2048), "at": now, "tab": self._tab(tab)})
 
     def acted(self, tab: str, payload: str) -> None:
         """A click or typing the page's listener saw. Anything else the page sends is dropped."""
@@ -280,14 +303,14 @@ class BrowserRecord:
         target = raw.get("target") if isinstance(raw.get("target"), dict) else {}
         row: dict[str, Any] = {
             "kind": raw["kind"],
-            "url": _clean(raw["url"], 2048),
-            "target": {key: _clean(target[key], 80) for key in _TARGET_FIELDS if target.get(key)},
+            "url": self._kept(raw["url"], 2048),
+            "target": {key: self._kept(target[key], 80) for key in _TARGET_FIELDS if target.get(key)},
         }
         if raw["kind"] == "typing":
             secret = raw.get("secret") is True
             row["secret"] = secret
             text = raw.get("text")
-            row["text"] = None if secret or not isinstance(text, str) else _clean(text)
+            row["text"] = None if secret or not isinstance(text, str) else self._kept(text)
         with self._lock:
             last = self._rows[-1] if self._rows else None
             if (
@@ -482,9 +505,11 @@ class BrowserRecorder:
         shots: int = SHOTS,
         shot_bytes: int = SHOT_BYTES,
         shot_seconds: float = 3.0,
+        secret_values: Iterable[str] = (),
     ) -> None:
         self._shot_seconds = shot_seconds
         self.sites = tuple(sites)
+        self._secrets = tuple(secret_values)
         self.record_path = record_path
         self.shots_dir = shots_dir_for(record_path)
         self._shot_limits = {"shots": shots, "shot_bytes": shot_bytes}
@@ -495,7 +520,7 @@ class BrowserRecorder:
         self._urls: dict[str, str] = {}  # session -> its tab's page now
         self._connect = connect
         self._clock = clock
-        self.record = BrowserRecord(self.sites, clock=clock)
+        self.record = BrowserRecord(self.sites, clock=clock, secret_values=self._secrets)
         self._socket: CdpSocket | None = None
         self._socket_lock = threading.Lock()
         self._ids = 0
@@ -512,7 +537,7 @@ class BrowserRecorder:
     def attach(self, port: int) -> None:
         """Start a new record and attach to the browser on ``port``: a browser that knows no client yet."""
         self.detach()
-        self.record = BrowserRecord(self.sites, clock=self._clock)
+        self.record = BrowserRecord(self.sites, clock=self._clock, secret_values=self._secrets)
         self._tabs = {}
         self._urls = {}
         self._leaving = False
@@ -1156,10 +1181,35 @@ def browser_counts(evidence: dict[str, Any]) -> dict[str, Any]:
     return counts
 
 
-def browser_file_body(evidence: dict[str, Any], blocked: list[dict[str, Any]] | None) -> dict[str, Any]:
-    """The browser's part of the trial's world_state file: its record, and the trial's blocked list split by it, or
-    that the list could not be read."""
-    body: dict[str, Any] = {"browser": dict(evidence)}
+# Typed text is kept where the run's level keeps recordings, as the browser's screenshots are. The one setting: with
+# False, a run at `traces` keeps it too. Secrets are masked either way, as the record is made.
+TYPED_TEXT_NEEDS_RECORDINGS = True
+TYPED_TEXT_NOT_KEPT_AT_LEVEL = "not_kept_at_level"
+
+
+def typed_text_kept(adapter: Any) -> bool:
+    """Whether what the agent typed into the browser leaves with the run."""
+    return screenshots_kept(adapter) or not TYPED_TEXT_NEEDS_RECORDINGS
+
+
+def _level_typing(evidence: dict[str, Any], adapter: Any) -> dict[str, Any]:
+    """The record as the run's level keeps it: where typed text is not kept, each typing row keeps where and that it
+    happened, and the record says its text was left out for the level, never that nothing was typed."""
+    rows = evidence.get("rows")
+    if typed_text_kept(adapter) or not isinstance(rows, list):
+        return dict(evidence)
+    kept = [
+        {**row, "text": None} if isinstance(row, dict) and row.get("kind") == "typing" else row for row in rows
+    ]
+    return {**evidence, "rows": kept, "typed_text": TYPED_TEXT_NOT_KEPT_AT_LEVEL}
+
+
+def browser_file_body(
+    evidence: dict[str, Any], blocked: list[dict[str, Any]] | None, *, adapter: Any
+) -> dict[str, Any]:
+    """The browser's part of the trial's world_state file: its record as the run's level keeps it, and the trial's
+    blocked list split by it, or that the list could not be read."""
+    body: dict[str, Any] = {"browser": _level_typing(evidence, adapter)}
     if blocked is None:
         body["blocked_unreadable"] = True
     else:
@@ -1187,7 +1237,7 @@ async def upload_browser_state(
         if action_log is None
         else {"not_held": ["tables"], "action_log": [dict(row) for row in action_log]}
     )
-    body = {"schema": BROWSER_STATE_SCHEMA, "why": why, **held, **browser_file_body(evidence, blocked)}
+    body = {"schema": BROWSER_STATE_SCHEMA, "why": why, **held, **browser_file_body(evidence, blocked, adapter=adapter)}
     try:
         return await adapter.upload_artifact(
             json.dumps(body, sort_keys=True, default=str).encode("utf-8"),

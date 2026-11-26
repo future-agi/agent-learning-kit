@@ -1414,7 +1414,7 @@ class HostedChatCallRunner:
             end_readable = sealed.get(END_STATE_KEY) is not None
             kept = await upload_end_state(
                 self._adapter, scenario.scenario_key, sealed, door_log,
-                browser=browser_file_body(browser, refused) if browser is not None else None,
+                browser=browser_file_body(browser, refused, adapter=self._adapter) if browser is not None else None,
             )
             if browser is not None and not end_readable:
                 # The world's end could not be read: the browser's record is still kept, in a file saying so.
