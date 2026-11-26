@@ -86,6 +86,8 @@ class IsolatedChatCallRunner:
         *,
         world: World | None = None,
     ) -> CallOutcome:
+        from .browser_record import level_keeps_no_screenshots_notice, not_kept_notice, screenshots_kept
+
         context = self._context
         environ = _allowlisted_ambient_env(dict(os.environ))
         environ.update(
@@ -145,6 +147,8 @@ class IsolatedChatCallRunner:
                     ),
                     "scenario_id": scenario.scenario_id,
                     "start": self._records.start_of(id(runtime)),
+                    # So the worker takes no screenshot the run's level keeps none of, and says the level itself.
+                    "screenshots_kept": screenshots_kept(self._adapter),
                 },
                 environ=environ,
                 work_directory=context.work_directory / "chat-workers",
@@ -163,8 +167,6 @@ class IsolatedChatCallRunner:
         # The worker sealed the call: what follows delivers it, and a stop no longer cuts that.
         call_sealed()
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
-        from .browser_record import level_keeps_no_screenshots_notice, not_kept_notice, screenshots_kept
-
         artifact_ids = {}
         artifacts = list(result.get("artifacts", []))
         # A run whose level keeps no screenshots sends none: they are said as the level's, never as lost.
@@ -284,9 +286,14 @@ class _UsageCollector:
 
 
 class _ArtifactCollector:
-    def __init__(self) -> None:
+    def __init__(self, *, screenshots_kept: bool = True) -> None:
         self.artifacts: list[dict[str, Any]] = []
         self._carried = 0
+        self._screenshots_kept = screenshots_kept
+
+    def keeps_artifact(self, kind: ArtifactKind) -> bool:
+        """What the parent's run keeps, as it told the worker: a screenshot only where its level keeps one."""
+        return self._screenshots_kept or kind is not ArtifactKind.SCREENSHOT
 
     async def upload_artifact(
         self, data: bytes, *, kind: ArtifactKind, **_kwargs: Any
@@ -308,7 +315,7 @@ async def main() -> None:
     from .retell_chat_call_runner import RetellChatCallRunner
 
     payload = json.load(sys.stdin)
-    collector = _ArtifactCollector()
+    collector = _ArtifactCollector(screenshots_kept=payload.get("screenshots_kept") is not False)
     usage = _UsageCollector()
     try:
         isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value
