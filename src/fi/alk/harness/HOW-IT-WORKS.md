@@ -156,9 +156,8 @@ not told of the clicks and keys another client sends, so a small listener runs i
 script world of its own, and reports only trusted events through a binding; the page's own
 scripts can neither write to the record nor read it. The world's and the binding's names are
 random, say nothing of what they are, and are new at each attach; the listener takes the binding into
-its own closure and off the world's globals before the page loads, so neither a world the agent
-makes nor a look through every world of the page over DevTools finds anything to call. A client that
-debugs the listener itself through DevTools is the limit below. Only trusted events are rows:
+its own closure and off the world's globals before the page loads. A client holding the browser's
+DevTools address is the limit below. Only trusted events are rows:
 an agent that acts by script (an element's `click()` run in the page, or a value set and an `input`
 event made up) leaves no click or typing row, though its pages, screenshots and refusals are still
 kept; typing sent as input (`Input.insertText`, as a Playwright-style fill does) is kept. Text typed
