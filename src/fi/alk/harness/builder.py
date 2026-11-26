@@ -375,6 +375,12 @@ def suite_server(
                     "<an amount field> -> <its minor unit and currency>; timeout -> milliseconds; "
                     "due -> ISO 8601 date.",
                 },
+                "arg_required": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": 'Arguments the tool cannot be called without, from the code (a parameter with no default) or the provider\'s schema (its `required` list): ["order_id"]. Leave out an argument that has a default.',
+                },
+                "arg_bounds": {"type": "object", "description": 'The lowest and highest value a number argument accepts, where the code or the provider\'s schema states one (a check, `ge`/`le`, `minimum`/`maximum`): {"quantity": {"min": 1, "max": 10}}. Only the sides that are stated.'},
                 "returns": {
                     "type": "object",
                     "description": "Each field the tool hands back, with its type and unit: "
@@ -433,6 +439,8 @@ def suite_server(
                 "arg_types": dict(args.get("arg_types") or {}),
                 "arg_values": dict(args.get("arg_values") or {}),
                 "arg_units": {str(k): str(v) for k, v in dict(args.get("arg_units") or {}).items()},
+                "arg_required": [str(one) for one in args.get("arg_required") or []],
+                "arg_bounds": dict(args.get("arg_bounds") or {}),
                 "returns": {str(k): str(v) for k, v in dict(args.get("returns") or {}).items()},
             }
         )

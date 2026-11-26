@@ -209,6 +209,18 @@ def build_authored_agent(
         raise AgentBuildError("agent_invalid", _error_path(error)) from None
 
 
+def _parameter(values: Any, bound: Any) -> dict[str, Any]:
+    parameter: dict[str, Any] = {}
+    if isinstance(values, list):
+        parameter["enum"] = values
+    if isinstance(bound, Mapping):
+        if "min" in bound:
+            parameter["minimum"] = bound["min"]
+        if "max" in bound:
+            parameter["maximum"] = bound["max"]
+    return parameter
+
+
 def _authored_tool(
     spec: Mapping[str, Any], entrypoints: list[Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -218,17 +230,16 @@ def _authored_tool(
     )
     args = spec.get("args") or []
     arg_values = spec.get("arg_values") or {}
+    arg_bounds = spec.get("arg_bounds") or {}
+    required = [arg for arg in spec.get("arg_required") or [] if arg in args]
     parameters = None
     if args:
         parameters = {
             "type": "object",
             "properties": {
-                arg: {"enum": arg_values[arg]}
-                if isinstance(arg_values.get(arg), list)
-                else {}
-                for arg in args
+                arg: _parameter(arg_values.get(arg), arg_bounds.get(arg)) for arg in args
             },
-            "required": list(args),
+            "required": required or list(args),
         }
     return {
         "name": name,

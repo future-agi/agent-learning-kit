@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from dataclasses import replace
@@ -98,15 +99,46 @@ def _completion_messages(
                 }
             )
         elif role == "tool_call_result":
-            responses.append(
-                {
-                    "tool_call_id": str(item.get("tool_call_id") or ""),
-                    "content": item.get("content"),
-                    "success": not bool(item.get("error")),
-                    "error": item.get("error"),
-                }
-            )
+            responses.append(_tool_result(item))
     return answer, calls, responses
+
+
+_HTTP_STATUS = re.compile(
+    r"^\s*(?:HTTP|response status:)\s*(\d{3})\b", re.IGNORECASE | re.MULTILINE
+)
+_ERROR_LIMIT = 200
+
+
+def _failed_status(content: Any) -> int | None:
+    if not isinstance(content, str):
+        return None
+    for match in _HTTP_STATUS.finditer(content):
+        status = int(match.group(1))
+        if status >= 400:
+            return status
+    return None
+
+
+def _tool_result(item: Mapping[str, Any]) -> dict[str, Any]:
+    content = item.get("content")
+    reported = item.get("error")
+    status = _failed_status(content)
+    failed = bool(reported) or item.get("successful") is False or status is not None
+    error = ""
+    if reported:
+        error = str(reported)
+    elif status is not None:
+        first = str(content).strip().splitlines()[0]
+        error = first if first.upper().startswith("HTTP") else f"HTTP {status}"
+    elif failed:
+        error = "tool call failed"
+    return {
+        "tool_call_id": str(item.get("tool_call_id") or ""),
+        "content": content,
+        "success": not failed,
+        "error": " ".join(error.split())[:_ERROR_LIMIT] if failed else None,
+        **({"status": status} if status is not None else {}),
+    }
 
 
 class RetellChatWrapper(AgentWrapper):
