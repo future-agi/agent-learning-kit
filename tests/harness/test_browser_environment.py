@@ -146,6 +146,10 @@ def test_each_site_must_be_one_the_egress_allows():
         ("*.example.com", ["example.com"], False),
         ("*.example.com", ["*.docs.example.com"], False),
         ("*.example.com", ["*.ample.com"], False),
+        # An entry is read in one form: case and a trailing dot change nothing, and an empty one covers nothing.
+        ("*.example.com", ["*.Example.com."], True),
+        ("shop.example.com", ["SHOP.example.com."], True),
+        ("*.example.com", ["", "*.", "  "], False),
     ],
 )
 def test_a_site_is_in_the_egress_when_an_entry_there_covers_it_as_the_firewall_reads_one(site, egress, covered):

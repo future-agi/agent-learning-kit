@@ -90,7 +90,15 @@ def world_browser_environment(
             else BlockedFileLog(context.work_directory / "browser-state" / f"w{world_index}-blocked.jsonl")
         )
         make = context.browser_factory or kit_browser_factory(context)
-        browser = make(world_index, log)
+        try:
+            browser = make(world_index, log)
+        except OSError as exc:
+            from .process_runtime import ProcessRuntimeError
+
+            raise ProcessRuntimeError(
+                "browser", "spawn_failed", f"the environment's browser could not be made: {exc}",
+                domain=FailureDomain.INFRASTRUCTURE,
+            ) from exc
         context.browsers[world_index] = browser
     try:
         browser.start()

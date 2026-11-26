@@ -11,6 +11,7 @@ import json
 import socket
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import request
 from urllib.parse import urlsplit
@@ -236,6 +237,28 @@ def test_an_idle_browser_asks_for_nothing_the_agent_would_be_blamed_for(
         (row["arguments"]["host"], row["arguments"]["method"])
         for row in log.rows()[before:]
     ] == []
+
+
+def test_a_browser_no_client_holds_asks_for_nothing_on_its_own(tmp_path) -> None:
+    # With no client, nothing reaches the proxy but the browser's own housekeeping, so a refusal while the browser
+    # runs is always the work of a client, however it reached the browser.
+    log = MemoryLog()
+    kit = KitBrowser(
+        binary=BINARY,
+        sites=["shop.test"],
+        log=log,
+        directory=tmp_path / "w0",
+        state_path=tmp_path / "w0.json",
+        launch=_launch,
+        stop=_stop,
+        connect=lambda host, port: (_ for _ in ()).throw(OSError(f"no route to {host}")),
+    )
+    kit.start()
+    try:
+        time.sleep(15)
+    finally:
+        kit.close()
+    assert log.rows() == []
 
 
 def test_each_start_is_a_browser_that_remembers_nothing_at_the_same_address(

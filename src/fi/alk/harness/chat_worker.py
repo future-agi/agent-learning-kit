@@ -105,9 +105,24 @@ class IsolatedChatCallRunner:
         mode = isolation_mode()
         # Under per-user isolation the tool handlers, and the agent code they import, run in a
         # child of their own; the worker gets its socket and never the source.
-        handlers = await asyncio.to_thread(handler_child_for, context, runtime)
-        handler_fd = handlers.sock.fileno() if handlers is not None else None
+        startup = asyncio.create_task(asyncio.to_thread(handler_child_for, context, runtime))
         try:
+            handlers = await asyncio.shield(startup)
+        except asyncio.CancelledError:
+            # Cancelling this call cannot stop the thread. Retain ownership even if
+            # another cancellation arrives while waiting to close its child.
+            while not startup.done():
+                try:
+                    await asyncio.wait({startup})
+                except asyncio.CancelledError:
+                    continue
+            if not startup.cancelled() and startup.exception() is None:
+                handlers = startup.result()
+                if handlers is not None:
+                    handlers.close()
+            raise
+        try:
+            handler_fd = handlers.sock.fileno() if handlers is not None else None
             result = await run_json_worker(
                 "fi.alk.harness.chat_worker",
                 {

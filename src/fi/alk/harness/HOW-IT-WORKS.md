@@ -118,21 +118,26 @@ when a wildcard there covers it.
 **The environment's browser** (`kit_browser.py`). Where the job has sites and the contract needs a
 browser, the kit starts one headless Chromium for each world (`alk-chromium` from the image, or
 `ALK_CHROMIUM` for a local run), as the agent's user with a bare environment, on an empty profile
-at each spawn of the world, so a reset never keeps the agent's process. The agent's process alone
+at each spawn of the world. A reset in a browser environment is therefore a full respawn: every
+process of the world starts again and each store is resealed from its baseline, never reset in
+place, so the agent never holds a connection to the last trial's browser. That costs a world's
+start-up on every trial. The agent's process alone
 gets its DevTools address in `ALK_BROWSER_CDP_URL`: a relay in front of the browser's port, fixed
 for the world's life, which counts the clients that attach. The browser's requests go through a
 refusing proxy of its own whose list is the sites and nothing else, each read as above and never
 wider than the firewall (the agent's proxy still reads a name as covering the hosts under it): never
 loopback, and never a
-site whose name resolves to loopback; Chromium sends loopback through it too, and QUIC and WebRTC
-are off. A refusal is logged as the agent's `egress_blocked` attempt marked `via: browser`, once a
-client has attached to the browser running now and until that browser stops: at the world's door
-where its database keeps the log, else in a kit-owned file cut at each trial, capped, cleaned, with
-the query part of an address removed. Before that, and for the browser's own service traffic
-(pointed at `kit-browser.invalid`), nothing is logged. The proxy sees a host, not who in the browser
+site any of whose addresses is loopback or unspecified (an IPv4 one written as IPv6 included);
+each address of a site is tried in turn within 30 seconds. Chromium sends loopback through it too,
+and QUIC and WebRTC are off. A refusal is logged as the agent's `egress_blocked` attempt marked
+`via: browser` while a browser runs, whoever in it asked and however that client reached it: at the
+world's door where its database keeps the log, else in a kit-owned file cut at each trial, capped,
+cleaned, with the query part of an address removed. With no client the browser asks only for its own
+service name (`kit-browser.invalid`, never logged), so a refusal while it runs is a client's. Nothing
+is logged between a browser's stop and the next one's start. The proxy sees a host, not who in the browser
 asked, so its count holds a page's own requests (scripts, fonts, a favicon) as well as the agent's
 navigations; the browser record tells them apart. A trial says `browser_not_used` when no client
-attached, and `browser_not_started` when the job has sites for an agent not read as needing a
+attached through the relay and the browser's proxy was asked for nothing, and `browser_not_started` when the job has sites for an agent not read as needing a
 browser; both are reported, not graded. The relay serves as many clients as the egress proxy does
 and lets a connection idle both ways go after as long as the longest call allowed. That bound holds
 for the environment's browser only: the agent's own code, or a browser it starts itself, is bound by

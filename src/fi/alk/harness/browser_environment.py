@@ -89,7 +89,7 @@ def _egress_covers(egress: list[str], site: str) -> bool:
     if site.startswith("*."):
         name = site[2:]
         return any(
-            entry.strip().lower() == site or entry_admits(entry, name)
+            entry.strip().lower().rstrip(".") == site.rstrip(".") or entry_admits(entry, name)
             for entry in egress
             if entry.strip().lower().startswith("*.")
         )

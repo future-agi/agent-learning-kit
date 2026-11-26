@@ -66,6 +66,8 @@ HOUSEKEEPING_HOST = "kit-browser.invalid"
 # How long Chromium may take to open its DevTools port, and how often to look.
 _START_SECONDS = 30.0
 _START_POLL_SECONDS = 0.05
+# How long the browser's proxy tries a site's addresses, all of them together.
+_CONNECT_SECONDS = 30.0
 # How much of a browser's output a start failure quotes.
 _FAILURE_TAIL = 1024
 
@@ -166,17 +168,36 @@ def browser_environment(*, home: Path) -> dict[str, str]:
     }
 
 
-def _resolve(host: str) -> str:
-    return socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)[0][4][0]
+def _resolve(host: str) -> list[str]:
+    """Every address of a name, in the resolver's order, each once."""
+    addresses: list[str] = []
+    for *_, place in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
+        if place[0] not in addresses:
+            addresses.append(place[0])
+    return addresses
+
+
+def _housekeeping(host: str) -> bool:
+    name = host.strip().strip("[]").lower().rstrip(".")
+    return name == HOUSEKEEPING_HOST or name.endswith("." + HOUSEKEEPING_HOST)
+
+
+def _leads_back(address: str) -> bool:
+    found = ipaddress.ip_address(address.split("%", 1)[0])
+    # An IPv4 address written as IPv6 is read as the IPv4 one, whatever the Python release says of it.
+    mapped = getattr(found, "ipv4_mapped", None)
+    found = mapped if mapped is not None else found
+    return found.is_loopback or found.is_unspecified
 
 
 class BrowserProxy(EgressProxy):
     """The browser's own refusing proxy: the environment's sites, never loopback, and nothing else.
 
-    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, once a client
-    has attached to the browser now running, and until it stops: before that only the browser itself can
-    have asked. It is logged by host, whoever in the browser asked. A request for the housekeeping name is
-    never logged.
+    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, while a browser runs,
+    whether or not its client attached through the relay: with no client the browser asks only for the housekeeping
+    name, which is never logged. Nothing is logged between a browser's stop and the next one's start, so what a
+    stopping browser still asks for is never the next trial's. It is logged by host, whoever in the browser asked.
+    Every request but the housekeeping one, let through or refused, says the browser was used.
     """
 
     via = "browser"
@@ -186,11 +207,13 @@ class BrowserProxy(EgressProxy):
         sites: Iterable[str],
         log: ActionLog | None,
         *,
-        attached: Callable[[], bool],
+        running: Callable[[], bool] = lambda: True,
+        used: Callable[[], None] = lambda: None,
         connect: Callable[[str, int], socket.socket] | None = None,
-        resolve: Callable[[str], str] = _resolve,
+        resolve: Callable[[str], list[str]] = _resolve,
     ) -> None:
-        self._attached = attached
+        self._running = running
+        self._used = used
         self._connect = connect
         self._resolve = resolve
         super().__init__(sites, log)
@@ -201,23 +224,35 @@ class BrowserProxy(EgressProxy):
         return any(entry_admits(site, host) for site in self.allowed)
 
     def open(self, host: str, port: int) -> socket.socket:
+        if self._running() and not _housekeeping(host):
+            self._used()
         if self._connect is not None:
             return self._connect(host, port)
-        address = self._resolve(host)
-        found = ipaddress.ip_address(address.split("%", 1)[0])
-        if found.is_loopback or found.is_unspecified:
-            # A site's name that leads back to this machine would reach the world itself.
+        addresses = self._resolve(host)
+        if not addresses:
+            raise OSError(f"{host} resolves to no address")
+        if any(_leads_back(address) for address in addresses):
+            # A site's name that leads back to this machine would reach the world itself, whichever address is used.
             raise RefusedAddress(
                 f"{host} resolves to a loopback address, outside the test world"
             )
-        return socket.create_connection((address, port), timeout=30)
+        # Each address in turn, as a direct connection would, all within one time limit.
+        deadline = time.monotonic() + _CONNECT_SECONDS
+        failed: OSError | None = None
+        for address in addresses:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                return socket.create_connection((address, port), timeout=left)
+            except OSError as error:
+                failed = error
+        raise failed or OSError(f"{host} could not be reached in {_CONNECT_SECONDS} seconds")
 
     def refuse(self, host: str, method: str) -> None:
-        name = host.strip().strip("[]").lower().rstrip(".")
-        if name == HOUSEKEEPING_HOST or name.endswith("." + HOUSEKEEPING_HOST):
+        if _housekeeping(host) or not self._running():
             return
-        if not self._attached():
-            return
+        self._used()
         super().refuse(host, method)
 
 
@@ -230,7 +265,8 @@ def _write_json(path: Path, value: Any) -> None:
 class DevToolsRelay:
     """The browser's DevTools address as the agent is given it: fixed for the world's life, relayed to
     whichever browser runs now. It counts the clients that attach (a websocket to ``/devtools/``) since the
-    browser last started, in ``state_path``, for the trial to say whether the browser was used.
+    browser last started, and whether the browser's proxy was asked for anything, in ``state_path``, for the trial
+    to say whether the browser was used.
 
     Chromium names the address it was asked on in the websocket address it hands back, so a client that
     asked here attaches here too.
@@ -241,6 +277,7 @@ class DevToolsRelay:
         self._lock = threading.Lock()
         self._upstream: int | None = None
         self._attached = 0
+        self._requested = False
         # The same bounds as the egress proxy beside it: so many clients at once, and a connection idle both ways
         # as long as the longest call the runner allows.
         self._slots = threading.BoundedSemaphore(_max_clients())
@@ -263,6 +300,7 @@ class DevToolsRelay:
         with self._lock:
             self._upstream = port
             self._attached = 0
+            self._requested = False
             self._write()
 
     def release(self) -> None:
@@ -275,6 +313,19 @@ class DevToolsRelay:
         with self._lock:
             return self._upstream is not None and self._attached > 0
 
+    def running(self) -> bool:
+        """Whether a browser is behind the relay now."""
+        with self._lock:
+            return self._upstream is not None
+
+    def used(self) -> None:
+        """The browser now running was asked for something through its proxy: written once, until the next one."""
+        with self._lock:
+            if self._upstream is None or self._requested:
+                return
+            self._requested = True
+            self._write()
+
     def close(self) -> None:
         self._closed = True
         try:
@@ -284,7 +335,7 @@ class DevToolsRelay:
 
     def _write(self) -> None:
         try:
-            _write_json(self.state_path, {"attached": self._attached})
+            _write_json(self.state_path, {"attached": self._attached, "requested": self._requested})
         except OSError:
             logger.warning(
                 "browser: its state could not be written to %s", self.state_path
@@ -389,9 +440,13 @@ class KitBrowser:
         self.recorder = recorder
         self.directory = directory
         self.relay = DevToolsRelay(state_path)
-        self.proxy = BrowserProxy(
-            sites, log, attached=self.relay.attached, connect=connect
-        )
+        try:
+            self.proxy = BrowserProxy(
+                sites, log, running=self.relay.running, used=self.relay.used, connect=connect
+            )
+        except BaseException:
+            self.relay.close()
+            raise
         self._launch = launch
         self._stop = stop
         self._prepare = prepare
@@ -442,8 +497,7 @@ class KitBrowser:
         self.relay.target(port)
 
     def stop(self) -> None:
-        """Stop the browser. From here no refusal is the agent's until the next browser has started and a client
-        attached to it."""
+        """Stop the browser. From here no refusal is the agent's until the next browser has started."""
         self.relay.release()
         if self.recorder is not None:
             self.recorder.detach()
@@ -452,11 +506,17 @@ class KitBrowser:
             self._stop(handle)
 
     def close(self) -> None:
-        self.stop()
-        if self.recorder is not None:
-            self.recorder.close()
-        self.relay.close()
-        self.proxy.close()
+        try:
+            self.stop()
+        finally:
+            try:
+                if self.recorder is not None:
+                    self.recorder.close()
+            finally:
+                try:
+                    self.relay.close()
+                finally:
+                    self.proxy.close()
 
     def _devtools_port(self, profile: Path) -> int:
         """The port Chromium chose, from the file it writes in its profile once its DevTools port is open. A browser
@@ -465,10 +525,7 @@ class KitBrowser:
         deadline = time.monotonic() + _START_SECONDS
         exited = False
         while time.monotonic() < deadline:
-            try:
-                first = written.read_text(encoding="utf-8").split("\n", 1)[0].strip()
-            except OSError:
-                first = ""
+            first = _first_line(written)
             if first.isdigit():
                 return int(first)
             running = getattr(self._handle, "is_running", None)
@@ -500,6 +557,24 @@ def _exit_code(handle: Any) -> int | None:
     return code if isinstance(code, int) else None
 
 
+def _first_line(path: Path) -> str:
+    """The first line of a file the browser's own user can write: a regular file only, never followed through a
+    link, never waited on, read for a bounded size."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        raw = os.read(fd, 256)
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+    return raw.decode("utf-8", errors="replace").split("\n", 1)[0].strip()
+
+
 def _log_tail(path: Path) -> str:
     """The end of the browser's output, which its own user can write: a regular file only, never followed through a
     link, read for a bounded size, and cleaned as the kit cleans what it sends."""
@@ -528,7 +603,8 @@ def _log_tail(path: Path) -> str:
 
 def browser_notices(runtime: Any) -> list[dict[str, Any]]:
     """What a trial says of its world's browser: not started for sites the agent was not read to need, and not
-    used when no client attached to it. A state that can't be read is never taken for an attached client."""
+    used when no client attached to it and its proxy was asked for nothing. A state that can't be read is never
+    taken for a used browser."""
     browser = (getattr(runtime, "metadata", None) or {}).get("browser")
     if not isinstance(browser, dict):
         return []
@@ -542,21 +618,23 @@ def browser_notices(runtime: Any) -> list[dict[str, Any]]:
         ]
     if browser.get("state") != "started":
         return []
-    attached = 0
+    state: Any = None
     path = Path(str(browser.get("state_path") or ""))
     try:
         if path.is_file():
             with open(path, "rb") as handle:
                 state = json.loads(handle.read(4096))
-            attached = state.get("attached", 0) if isinstance(state, dict) else 0
     except (OSError, ValueError):
-        attached = 0
-    if isinstance(attached, int) and attached > 0:
+        state = None
+    state = state if isinstance(state, dict) else {}
+    attached = state.get("attached", 0)
+    if (isinstance(attached, int) and attached > 0) or state.get("requested") is True:
         return []
     return [
         {
             "code": BROWSER_NOT_USED,
-            "message": "The environment's browser was not used in this trial: no client attached to it. An agent "
+            "message": "The environment's browser was not used in this trial: no client attached to it, and it was "
+            "asked for no site. An agent "
             f"drives it by attaching to the address in {BROWSER_CDP_URL_ENV}. A browser the agent starts itself is "
             "bound only by the sandbox's firewall, not by the environment's sites.",
         }

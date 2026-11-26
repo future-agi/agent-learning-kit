@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,21 +71,13 @@ def _through(proxy, url: str) -> tuple[int, bytes]:
         return exc.code, exc.read()
 
 
-class _Attached:
-    def __init__(self, attached: bool) -> None:
-        self.attached = attached
-
-    def __call__(self) -> bool:
-        return self.attached
-
-
 # The browser's proxy
 
 
 def test_the_browser_reaches_its_sites_and_nothing_else(site) -> None:
     log = MemoryLog()
     proxy = BrowserProxy(
-        ["shop.test"], log, attached=_Attached(True), connect=_to(site)
+        ["shop.test"], log, connect=_to(site)
     )
     try:
         assert _through(proxy, "http://shop.test/cart")[0] == 200
@@ -116,11 +109,13 @@ def test_the_browser_reaches_its_sites_and_nothing_else(site) -> None:
         ("*.shop.test", "a.b.shop.test", True),
         ("*.shop.test", "shop.test", False),
         ("*.shop.test", "evilshop.test", False),
+        # A host under a wildcard has a name of its own before the wildcard's.
+        ("*.shop.test", ".shop.test", False),
     ],
 )
 def test_the_browser_s_proxy_reads_each_site_as_the_sandbox_firewall_does(site, host, admitted) -> None:
     # A host the proxy let through and the firewall dropped would be in no blocked list.
-    proxy = BrowserProxy([site], MemoryLog(), attached=_Attached(True))
+    proxy = BrowserProxy([site], MemoryLog())
     try:
         assert proxy.allows(host) is admitted
     finally:
@@ -130,8 +125,8 @@ def test_the_browser_s_proxy_reads_each_site_as_the_sandbox_firewall_does(site, 
 def test_the_agent_s_proxy_still_reads_a_name_as_covering_the_hosts_under_it() -> None:
     from fi.alk.harness.egress_proxy import host_allowed
 
-    assert host_allowed("www.shop.test", ["shop.test"], loopback=False)
-    assert host_allowed("shop.test", ["*.shop.test"], loopback=False)
+    assert host_allowed("www.shop.test", ["shop.test"])
+    assert host_allowed("shop.test", ["*.shop.test"])
 
 
 @pytest.mark.parametrize(
@@ -143,7 +138,7 @@ def test_the_browser_s_proxy_does_not_admit_loopback(host) -> None:
         raise AssertionError(f"{name} was let through by name")
 
     log = MemoryLog()
-    proxy = BrowserProxy(["shop.test"], log, attached=_Attached(True), resolve=resolve)
+    proxy = BrowserProxy(["shop.test"], log, resolve=resolve)
     try:
         assert _through(proxy, f"http://{host}:5432/")[0] == 403
     finally:
@@ -155,8 +150,7 @@ def test_a_site_whose_name_resolves_to_loopback_is_refused() -> None:
     proxy = BrowserProxy(
         ["shop.test"],
         MemoryLog(),
-        attached=_Attached(True),
-        resolve=lambda host: "127.0.0.1",
+        resolve=lambda host: ["127.0.0.1"],
     )
     try:
         status, body = _through(proxy, "http://shop.test/")
@@ -166,11 +160,22 @@ def test_a_site_whose_name_resolves_to_loopback_is_refused() -> None:
     assert b"loopback" in body
 
 
-@pytest.mark.parametrize("address", ["127.0.0.1", "0.0.0.0", "::"])
-def test_a_site_whose_name_leads_back_to_this_machine_is_refused_and_logged(address) -> None:
+@pytest.mark.parametrize(
+    "addresses",
+    [
+        ["127.0.0.1"],
+        ["0.0.0.0"],
+        ["::"],
+        # An IPv4 loopback written as IPv6 is loopback whatever the Python release says of it.
+        ["::ffff:127.0.0.1"],
+        # A name with a public address and a loopback one leads back as surely as one with loopback alone.
+        ["203.0.113.7", "127.0.0.1"],
+    ],
+)
+def test_a_site_whose_name_leads_back_to_this_machine_is_refused_and_logged(addresses) -> None:
     # 0.0.0.0 connects to a listener on 127.0.0.1, so an unspecified address is loopback too.
     log = MemoryLog()
-    proxy = BrowserProxy(["shop.test"], log, attached=_Attached(True), resolve=lambda host: address)
+    proxy = BrowserProxy(["shop.test"], log, resolve=lambda host: addresses)
     try:
         assert _through(proxy, "http://shop.test/")[0] == 403
     finally:
@@ -178,9 +183,46 @@ def test_a_site_whose_name_leads_back_to_this_machine_is_refused_and_logged(addr
     assert [row["arguments"] for row in log.rows()] == [{"host": "shop.test", "method": "GET", "via": "browser"}]
 
 
+def test_each_address_of_a_site_is_tried_in_turn_within_one_time_limit(monkeypatch) -> None:
+    # An address that cannot be reached (an IPv6 one where the sandbox has no IPv6 route) gives way to the next.
+    tried: list[tuple[str, int, float]] = []
+    reached = object()
+
+    def dial(address, timeout):
+        tried.append((*address, timeout))
+        if address[0] == "2001:db8::1":
+            raise OSError("no route")
+        return reached
+
+    monkeypatch.setattr(kit_browser.socket, "create_connection", dial)
+    proxy = BrowserProxy(
+        ["shop.test"], MemoryLog(), resolve=lambda host: ["2001:db8::1", "203.0.113.7"]
+    )
+    try:
+        assert proxy.open("shop.test", 443) is reached
+    finally:
+        proxy.close()
+    assert [(host, port) for host, port, _ in tried] == [("2001:db8::1", 443), ("203.0.113.7", 443)]
+    assert all(0 < timeout <= 30 for *_, timeout in tried)
+
+
+def test_a_site_none_of_whose_addresses_answers_fails_with_the_last_error(monkeypatch) -> None:
+    def dial(address, timeout):
+        raise OSError(f"{address[0]} refused")
+
+    monkeypatch.setattr(kit_browser.socket, "create_connection", dial)
+    for addresses, said in ((["203.0.113.7", "203.0.113.8"], "203.0.113.8 refused"), ([], "no address")):
+        proxy = BrowserProxy(["shop.test"], MemoryLog(), resolve=lambda host: addresses)
+        try:
+            with pytest.raises(OSError, match=said):
+                proxy.open("shop.test", 80)
+        finally:
+            proxy.close()
+
+
 def test_the_browser_s_own_housekeeping_is_never_the_agent_s_attempt() -> None:
     log = MemoryLog()
-    proxy = BrowserProxy(["shop.test"], log, attached=_Attached(True))
+    proxy = BrowserProxy(["shop.test"], log)
     try:
         assert _through(proxy, f"http://{HOUSEKEEPING_HOST}/ListAccounts")[0] == 403
     finally:
@@ -188,18 +230,30 @@ def test_the_browser_s_own_housekeeping_is_never_the_agent_s_attempt() -> None:
     assert log.rows() == []
 
 
-def test_a_refusal_while_no_client_holds_the_browser_is_not_the_agent_s() -> None:
-    # Before any client attaches, only the browser itself can have asked.
+def test_a_refusal_is_the_agent_s_whether_or_not_a_client_attached_through_the_relay() -> None:
+    # With no client, the browser asks only for its housekeeping name (the real-Chromium test measures it), so a
+    # refusal while it runs is a client's, however that client reached the browser.
     log = MemoryLog()
-    attached = _Attached(False)
-    proxy = BrowserProxy(["shop.test"], log, attached=attached)
+    proxy = BrowserProxy(["shop.test"], log)
     try:
-        _through(proxy, "http://www.google.com/")
-        attached.attached = True
         _through(proxy, "http://www.example.com/")
     finally:
         proxy.close()
     assert [row["arguments"]["host"] for row in log.rows()] == ["www.example.com"]
+
+
+def test_every_request_through_the_browser_s_proxy_but_its_housekeeping_says_the_browser_was_used(site) -> None:
+    used: list[str] = []
+    proxy = BrowserProxy(["shop.test"], MemoryLog(), used=lambda: used.append("used"), connect=_to(site))
+    try:
+        _through(proxy, f"http://{HOUSEKEEPING_HOST}/ListAccounts")
+        assert used == []
+        _through(proxy, "http://www.example.com/")
+        assert used == ["used"]
+        _through(proxy, "http://shop.test/")
+        assert used == ["used", "used"]
+    finally:
+        proxy.close()
 
 
 def test_a_blocked_browser_request_is_reported_and_never_counted_as_an_attempt(
@@ -207,7 +261,7 @@ def test_a_blocked_browser_request_is_reported_and_never_counted_as_an_attempt(
 ) -> None:
     log = MemoryLog()
     proxy = BrowserProxy(
-        ["shop.test"], log, attached=_Attached(True), connect=_to(site)
+        ["shop.test"], log, connect=_to(site)
     )
     try:
         _through(proxy, "http://www.example.com/")
@@ -270,6 +324,42 @@ def _kit(tmp_path, profiles):
         launch=launch,
         stop=lambda handle: None,
     )
+
+
+def test_a_browser_whose_proxy_cannot_be_made_leaves_no_relay_open(tmp_path, monkeypatch) -> None:
+    made: list[DevToolsRelay] = []
+    real = kit_browser.DevToolsRelay
+
+    def relay(state_path):
+        made.append(real(state_path))
+        return made[-1]
+
+    def no_proxy(*args, **kwargs):
+        raise OSError("no port for the proxy")
+
+    monkeypatch.setattr(kit_browser, "DevToolsRelay", relay)
+    monkeypatch.setattr(kit_browser, "BrowserProxy", no_proxy)
+    with pytest.raises(OSError, match="no port for the proxy"):
+        _kit(tmp_path, [])
+    [opened] = made
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", opened.port), timeout=1).close()
+
+
+def test_closing_a_browser_whose_stop_fails_still_closes_its_relay_and_proxy(tmp_path) -> None:
+    kit = _kit(tmp_path, [])
+    kit.start()
+
+    def broken(handle):
+        raise OSError("the browser would not stop")
+
+    kit._stop = broken
+    ports = (kit.relay.port, int(kit.proxy.url.rsplit(":", 1)[1].strip("/")))
+    with pytest.raises(OSError, match="would not stop"):
+        kit.close()
+    for port in ports:
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
 
 
 def test_each_start_is_a_new_empty_profile_and_the_last_one_is_gone(tmp_path) -> None:
@@ -381,7 +471,7 @@ def test_the_relay_counts_a_client_that_attaches_and_not_one_that_only_asks(
         assert not relay.attached()
         assert b" 101 " in _upgrade(relay.port)
         assert relay.attached()
-        assert json.loads((tmp_path / "browser.json").read_text()) == {"attached": 1}
+        assert json.loads((tmp_path / "browser.json").read_text()) == {"attached": 1, "requested": False}
     finally:
         relay.close()
 
@@ -397,7 +487,27 @@ def test_the_relay_keeps_its_address_when_the_browser_starts_again_and_forgets_e
         relay.target(devtools.server_port)
         assert relay.url == url
         assert not relay.attached()
-        assert json.loads((tmp_path / "browser.json").read_text()) == {"attached": 0}
+        assert json.loads((tmp_path / "browser.json").read_text()) == {"attached": 0, "requested": False}
+    finally:
+        relay.close()
+
+
+def test_the_relay_records_a_request_through_the_browser_s_proxy_once_until_the_next_browser(
+    devtools, tmp_path
+) -> None:
+    state = tmp_path / "browser.json"
+    relay = DevToolsRelay(state)
+    try:
+        relay.used()
+        assert json.loads(state.read_text()) == {"attached": 0, "requested": False}
+        relay.target(devtools.server_port)
+        relay.used()
+        relay.used()
+        assert json.loads(state.read_text()) == {"attached": 0, "requested": True}
+        relay.release()
+        relay.used()
+        relay.target(devtools.server_port)
+        assert json.loads(state.read_text()) == {"attached": 0, "requested": False}
     finally:
         relay.close()
 
@@ -436,6 +546,12 @@ def test_a_trial_whose_agent_attached_says_nothing_of_the_browser(tmp_path) -> N
         )
         == []
     )
+
+
+def test_a_trial_whose_browser_asked_for_a_site_with_no_client_on_the_relay_was_used(tmp_path) -> None:
+    state = tmp_path / "browser.json"
+    state.write_text(json.dumps({"attached": 0, "requested": True}))
+    assert browser_notices(_runtime({"browser": {"state": "started", "state_path": str(state)}})) == []
 
 
 def test_a_browser_state_that_cannot_be_read_is_not_taken_for_an_attached_client(
@@ -529,7 +645,7 @@ def test_a_stopped_browser_s_refusals_are_never_the_next_trial_s(devtools, tmp_p
         kit.close()
     assert log.rows() == []
     # The trial that ended keeps its count until the next browser is ready, so it can still be read.
-    assert json.loads((tmp_path / "state.json").read_text()) == {"attached": 1}
+    assert json.loads((tmp_path / "state.json").read_text()) == {"attached": 1, "requested": False}
 
 
 def test_a_browser_that_never_opens_its_port_is_stopped(tmp_path, monkeypatch) -> None:
@@ -546,6 +662,47 @@ def test_a_browser_that_never_opens_its_port_is_stopped(tmp_path, monkeypatch) -
         # Stopped by the failed start itself, before anything closes the kit.
         assert stopped == [handle]
     finally:
+        kit.close()
+
+
+@pytest.mark.parametrize("kind", ["fifo", "link"])
+def test_a_port_file_that_is_not_a_plain_file_is_never_read(tmp_path, monkeypatch, kind) -> None:
+    # The browser's own user can write its profile: a pipe there must not hold the start past its time limit, and a
+    # link must not point the relay at a port of that user's choosing.
+    monkeypatch.setattr(kit_browser, "_START_SECONDS", 0.3)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("9333\n/devtools/browser/x\n")
+
+    def launch(argv, cwd, env, log_path):
+        if kind == "fifo":
+            os.mkfifo(cwd / "DevToolsActivePort")
+        else:
+            (cwd / "DevToolsActivePort").symlink_to(elsewhere)
+        return _Handle()
+
+    kit = KitBrowser(
+        binary="/opt/alk-chromium", sites=["shop.test"], log=MemoryLog(), directory=tmp_path / "browser",
+        state_path=tmp_path / "state.json", launch=launch, stop=lambda handle: None,
+    )
+    outcome: list = []
+
+    def start() -> None:
+        try:
+            kit.start()
+        except RuntimeError as error:
+            outcome.append(error)
+
+    worker = threading.Thread(target=start, daemon=True)
+    worker.start()
+    worker.join(10)
+    try:
+        assert not worker.is_alive(), "the start waited on the port file"
+        assert outcome and "within" in str(outcome[0])
+    finally:
+        if worker.is_alive():
+            # Free the reader the start left waiting, so the test leaves nothing behind.
+            fifo = next((tmp_path / "browser").glob("profile-*/DevToolsActivePort"))
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
         kit.close()
 
 

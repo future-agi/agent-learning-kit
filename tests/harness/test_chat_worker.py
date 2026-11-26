@@ -246,6 +246,41 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     assert dict(os.environ) == original
 
 
+def test_cancel_during_handler_startup_closes_child(tmp_path, monkeypatch):
+    from threading import Event
+    from unittest.mock import Mock
+
+    child = Mock()
+    release = Event()
+    runner = chat_worker.IsolatedChatCallRunner(_Adapter(), _context(tmp_path))
+
+    async def cancel_during_startup():
+        started = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def acquire(*_args):
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(5)
+            return child
+
+        monkeypatch.setattr(chat_worker, "handler_child_for", acquire)
+        call = asyncio.create_task(runner.run(SimpleNamespace(), _ready_runtime()))
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            for _ in range(2):
+                call.cancel()
+                await asyncio.sleep(0)
+                assert not call.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(call, 5)
+        child.close.assert_called_once_with()
+        child.sock.fileno.assert_not_called()
+
+    asyncio.run(cancel_during_startup())
+
+
 def test_isolated_chat_runner_preserves_structured_worker_failure(
     tmp_path, monkeypatch
 ):

@@ -56,11 +56,10 @@ def no_proxy(allowed: Iterable[str], hosts: Iterable[str] = ()) -> str:
     return ",".join(dict.fromkeys(one for one in entries if one))
 
 
-def host_allowed(host: str, allowed: Iterable[str], *, loopback: bool = True) -> bool:
-    """Whether a host is one the run allows, matched the way clients read `NO_PROXY`; loopback too unless
-    `loopback` is False."""
+def host_allowed(host: str, allowed: Iterable[str]) -> bool:
+    """Whether a host is one the run allows, matched the way clients read `NO_PROXY`."""
     host = host.strip().strip("[]").lower().rstrip(".")
-    for entry in (*(LOOPBACK if loopback else ()), *allowed):
+    for entry in (*LOOPBACK, *allowed):
         name = no_proxy_entry(entry).lstrip(".")
         if name and (host == name or host.endswith("." + name)):
             return True
@@ -73,7 +72,7 @@ def entry_admits(entry: str, host: str) -> bool:
     host = host.strip().strip("[]").lower().rstrip(".")
     entry = entry.strip().lower().rstrip(".")
     if entry.startswith("*."):
-        return bool(entry[2:]) and host.endswith(entry[1:])
+        return bool(entry[2:]) and host.endswith(entry[1:]) and len(host) > len(entry) - 1
     return bool(entry) and host == entry
 
 
