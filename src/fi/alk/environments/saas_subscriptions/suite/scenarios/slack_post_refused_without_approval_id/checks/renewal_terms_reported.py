@@ -111,5 +111,6 @@ if __name__ == "__main__":
         _calls = [_Call(**_one) for _one in _json.loads(_Path(_sys.argv[2]).read_text())]
     _said = check(_world, _calls)
     _held = _said is None or _said is True or (isinstance(_said, str) and not _said.strip())
-    print("held" if _held else f"FAILED: {_said}")
+    # Only the verdict: a failure names the records it read, so it is not written to the console.
+    print("held" if _held else "FAILED")
     raise SystemExit(0 if _held else 1)
