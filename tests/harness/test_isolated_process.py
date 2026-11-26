@@ -4,12 +4,13 @@ import asyncio
 import os
 import shutil
 import signal
+import stat
 import sys
 from pathlib import Path
 
 import pytest
 
-from fi.alk.harness.isolated_process import _reap, run_json_worker
+from fi.alk.harness.isolated_process import IsolatedWorkerError, _reap, run_json_worker
 
 
 @pytest.mark.parametrize("interpreter", [sys.executable, shutil.which("python3.10")])
@@ -295,3 +296,25 @@ def test_a_stopped_worker_exits_without_waiting_on_a_call_stuck_in_a_thread(tmp_
     result, elapsed = asyncio.run(run())
     assert result == {"sealed": "stopped"}
     assert elapsed < 20
+
+
+def test_a_new_work_directory_is_this_account_s_alone(tmp_path, worker_env):
+    work = tmp_path / "workers"
+    result = asyncio.run(run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=work))
+    assert result["marker"] == "parent"
+    assert stat.S_IMODE(os.lstat(work).st_mode) == 0o700
+
+
+@pytest.mark.parametrize("made", ["writable by others", "a link"])
+def test_a_work_directory_another_account_could_change_is_refused(tmp_path, worker_env, made):
+    """A worker's result is written in its work directory: one others may write in, or a link to one, is refused
+    before any worker starts."""
+    work = tmp_path / "workers"
+    if made == "a link":
+        (tmp_path / "elsewhere").mkdir(mode=0o700)
+        work.symlink_to(tmp_path / "elsewhere")
+    else:
+        work.mkdir()
+        work.chmod(0o777)
+    with pytest.raises(IsolatedWorkerError, match="refusing worker directory"):
+        asyncio.run(run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=work))

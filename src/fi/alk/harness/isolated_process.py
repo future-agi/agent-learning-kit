@@ -9,6 +9,7 @@ import logging
 import os
 import signal
 import socket
+import stat
 import struct
 import sys
 import tempfile
@@ -226,6 +227,21 @@ async def _communicate(
                 await exchange
 
 
+def _private_directory(directory: Path) -> None:
+    """Make ``directory`` this process's own (0700), or refuse one that is not: a worker's result is written inside
+    it, so a directory another account owns or may write in, or a link to one, could be made to hand back another
+    result."""
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileExistsError):
+        directory.mkdir(mode=0o700)
+    found = os.lstat(directory)
+    if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.geteuid() or found.st_mode & 0o022:
+        raise IsolatedWorkerError(
+            f"refusing worker directory {directory}: it must be a directory of this account's that no other "
+            "account may write in"
+        )
+
+
 async def run_json_worker(
     module: str,
     payload: Mapping[str, Any],
@@ -246,7 +262,7 @@ async def run_json_worker(
     """
     if os.name != "posix":
         raise IsolatedWorkerError("isolated workers require POSIX process groups")
-    work_directory.mkdir(parents=True, exist_ok=True)
+    _private_directory(work_directory)
     parent_end, child_end = socket.socketpair() if serve is not None else (None, None)
     try:
         return await _run_json_worker(
