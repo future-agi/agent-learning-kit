@@ -786,27 +786,44 @@ def split_blocked(blocked: list[dict[str, Any]], record: dict[str, Any] | None) 
     return kept
 
 
+# Not told the browser's refusals from their one source: the agent's own list is split as it stands.
+_NOT_GIVEN: Any = object()
+
+
 def sealed_browser_blocked(
-    state_changes: Any, record: dict[str, Any] | None, refused: list[dict[str, Any]] | None = None
+    state_changes: Any, record: dict[str, Any] | None, refused: list[dict[str, Any]] | None = _NOT_GIVEN
 ) -> Any:
     """The trial's sealed changes with the agent's browser refusals split as the record tells them apart, counted
     for each host and kind: the sealed record carries counts, and every address stays in the world_state file. With
     no record the proxy's counts stand. ``refused`` is the browser's refusals from the one source the world_state
-    file uses: given, they are the agent's browser rows, in place of whatever the door's own log held. Never changes
-    its input."""
+    file uses: given, they are the agent's browser rows, in place of whatever the door's own log held; None, that
+    source could not be read, so the agent's entry holds none of the browser's rows and says they are unreadable; a
+    capped list says it was capped. Never changes its input."""
     if not isinstance(state_changes, list) or not isinstance(record, dict):
         return state_changes
-    browser_rows = None if refused is None else [one for one in refused if one.get("via") == "browser"]
+    given = refused is not _NOT_GIVEN
+    rows = refused if isinstance(refused, list) else []
+    browser_rows = [one for one in rows if one.get("via") == "browser"]
+    capped = any(one.get("truncated") is True for one in rows)
     sealed: list[Any] = []
     for entry in state_changes:
         if not (isinstance(entry, dict) and entry.get("who") == "agent"):
             sealed.append(entry)
             continue
         blocked = entry.get("blocked")
-        if browser_rows is not None:
+        said: dict[str, Any] = {}
+        if given:
             blocked = [one for one in blocked or [] if one.get("via") != "browser"] + browser_rows
-        if not isinstance(blocked, list) or (not blocked and "blocked" not in entry):
+            if refused is None:
+                said["browser_blocked_unreadable"] = True
+            elif capped:
+                said["browser_blocked_truncated"] = True
+        if not isinstance(blocked, list) or (not blocked and "blocked" not in entry and not said):
             sealed.append(entry)
+            continue
+        if refused is None:
+            # As the file holds no list in that case, no browser row stands in for the unread ones.
+            sealed.append({**entry, "blocked": blocked, **said})
             continue
         counted: list[dict[str, Any]] = []
         for one in split_blocked(blocked, record):
@@ -821,7 +838,7 @@ def sealed_browser_blocked(
                 counted.append({"host": one["host"], "via": "browser", "what": "navigation", "count": 1})
             else:
                 same["count"] += 1
-        sealed.append({**entry, "blocked": counted})
+        sealed.append({**entry, "blocked": counted, **said})
     return sealed
 
 
