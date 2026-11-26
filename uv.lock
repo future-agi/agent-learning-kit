@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -63,6 +63,8 @@ dependencies = [
     { name = "gepa" },
     { name = "google-adk" },
     { name = "httpx" },
+    { name = "jinja2" },
+    { name = "jmespath" },
     { name = "jsonschema" },
     { name = "levenshtein" },
     { name = "litellm" },
@@ -100,12 +102,20 @@ all = [
     { name = "chromadb" },
     { name = "livekit-agents", extra = ["cartesia", "deepgram", "google", "openai", "silero"] },
     { name = "livekit-plugins-elevenlabs" },
+    { name = "pypdf" },
     { name = "sentence-transformers" },
     { name = "torch" },
     { name = "transformers" },
 ]
+documents = [
+    { name = "openpyxl" },
+    { name = "pypdf" },
+]
 embeddings = [
     { name = "sentence-transformers" },
+]
+environment-inputs = [
+    { name = "pypdf" },
 ]
 feedback = [
     { name = "chromadb" },
@@ -190,6 +200,8 @@ requires-dist = [
     { name = "google-adk", specifier = ">=2.7.1,<2.8" },
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=6" },
+    { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "jmespath", specifier = ">=1.1.0" },
     { name = "jsonschema", specifier = ">=4.25.1,<5" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.4.6,<2" },
     { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=1.2.4,<2" },
@@ -207,6 +219,7 @@ requires-dist = [
     { name = "nltk", specifier = ">=3.9.0" },
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "openai", specifier = ">=1.109.1,<4" },
+    { name = "openpyxl", marker = "extra == 'documents'", specifier = ">=3.1.5,<4" },
     { name = "opentelemetry-api", specifier = ">=1.39.1,<2" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.39.1,<2" },
     { name = "opentelemetry-sdk", specifier = ">=1.39.1,<2" },
@@ -215,6 +228,9 @@ requires-dist = [
     { name = "pipecat-ai", marker = "extra == 'pipecat'", specifier = ">=0.0.108" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'harness-stores'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.0,<3" },
+    { name = "pypdf", marker = "extra == 'all'", specifier = ">=7.0.1,<8" },
+    { name = "pypdf", marker = "extra == 'documents'", specifier = ">=7.0.1,<8" },
+    { name = "pypdf", marker = "extra == 'environment-inputs'", specifier = ">=7.0.1,<8" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.32.5,<3" },
@@ -233,7 +249,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.9.0,<1.0.0" },
     { name = "uvicorn", marker = "extra == 'harness-ui'", specifier = ">=0.30,<1" },
 ]
-provides-extras = ["simulate", "evaluation", "optimize", "livekit", "langchain", "pipecat", "mcp", "a2a", "nli", "embeddings", "harness-ui", "harness-stores", "hosted-tracing", "feedback", "notebook", "trinity", "all"]
+provides-extras = ["simulate", "evaluation", "optimize", "livekit", "langchain", "pipecat", "mcp", "a2a", "nli", "embeddings", "harness-ui", "harness-stores", "documents", "hosted-tracing", "feedback", "environment-inputs", "notebook", "trinity", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1364,6 +1380,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9d/a4/e44218c2b394e31a6dd0d6b095c4e1f32d0be54c2a4b250032d717647bab/durationpy-0.10.tar.gz", hash = "sha256:1fa6893409a6e739c9c72334fc65cca1f355dbdd93405d30f726deb5bde42fba", size = 3335, upload-time = "2025-05-17T13:52:37.26Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b0/0d/9feae160378a3553fa9a339b0e9c1a048e147a4127210e286ef18b730f03/durationpy-0.10-py3-none-any.whl", hash = "sha256:3b41e1b601234296b4fb368338fdcd3e13e0b4fb5b67345948f4f2bf9868b286", size = 3922, upload-time = "2025-05-17T13:52:36.463Z" },
+]
+
+[[package]]
+name = "et-xmlfile"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54", size = 17234, upload-time = "2024-10-25T17:25:40.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
 ]
 
 [[package]]
@@ -2551,6 +2576,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/95/a06692b29e77473f286e1ec1f426d3ca44d7b5843be8ad21d7a5f3fcdcc0/jiter-0.15.0-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:b6c0ffae686c39bf3737be60793783267628783ea42545632c10b291105aee45", size = 305128, upload-time = "2026-05-19T10:09:43.657Z" },
     { url = "https://files.pythonhosted.org/packages/23/85/7270d7ad41d6061a25b950c6bf91d638bd9aacb113200a8c8d57a055fd67/jiter-0.15.0-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1d54fb5b31dea401a41af3f8a7d2512e9b6a6a005491e6166c7e4ffab9639a9c", size = 340459, upload-time = "2026-05-19T10:09:45.452Z" },
     { url = "https://files.pythonhosted.org/packages/c8/8d/302cb2057b7513327b4d575cff6b1d066ee6431a5357fc3f8867cd684406/jiter-0.15.0-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:54d5d6090cdc1b7c9e780dfb04949a990adb1e301a2fc0bbcee7de4638d33f9a", size = 344469, upload-time = "2026-05-19T10:09:46.864Z" },
+]
+
+[[package]]
+name = "jmespath"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
 ]
 
 [[package]]
@@ -4233,6 +4267,18 @@ wheels = [
 ]
 
 [[package]]
+name = "openpyxl"
+version = "3.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "et-xmlfile" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", size = 186464, upload-time = "2024-06-28T14:03:44.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", size = 250910, upload-time = "2024-06-28T14:03:41.161Z" },
+]
+
+[[package]]
 name = "opentelemetry-api"
 version = "1.39.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5658,6 +5704,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1a/51/27a5ad5f939d08f690a326ef9582cda7140555180db71695f6fb747d6a36/pyopenssl-26.2.0.tar.gz", hash = "sha256:8c6fcecd1183a7fc897548dfe388b0cdb7f37e018200d8409cf33959dbe35387", size = 182195, upload-time = "2026-05-04T23:06:09.72Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/73/b8/a0e2790ae249d6f38c9f66de7a211621a7ab2650217bcd04e1262f578a56/pyopenssl-26.2.0-py3-none-any.whl", hash = "sha256:4f9d971bc5298b8bc1fab282803da04bf000c755d4ad9d99b52de2569ca19a70", size = 55823, upload-time = "2026-05-04T23:06:08.395Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "7.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/00/c2/4c34b3229abae3e2fcc7809e6cf80fdea159771a37142f475fbf1009c809/pypdf-7.0.1.tar.gz", hash = "sha256:0a78bb99efb41e9088260e9a8e5da134a5cbb9a322014744177bf29b5267ea6d", size = 7206748, upload-time = "2026-11-10T11:47:22.582Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/a9/ae11deef21eaac5113f8c3848da1c42423b7abeca0abc349bfec7abf4c4e/pypdf-7.0.1-py3-none-any.whl", hash = "sha256:6131b764b046282357037309e7ef2a1b7679d4a5c53eed3db2bfbf7c673ddc2b", size = 416136, upload-time = "2026-11-10T11:47:20.716Z" },
 ]
 
 [[package]]

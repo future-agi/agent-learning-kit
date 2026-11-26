@@ -55,6 +55,12 @@ def _save(destination: Path, proofs: Mapping[str, ProofEntry]) -> None:
     write_json_atomic(Path(destination) / PROOFS, proofs)
 
 
+def discard_proofs(destination: Path, keys: set[str]) -> None:
+    proofs = load_proofs(destination)
+    if keys.intersection(proofs):
+        _save(destination, {key: value for key, value in proofs.items() if key not in keys})
+
+
 def utc_stamp() -> str:
     """Now, in UTC to the second and one fixed form, so two stamps compare as text the way the times do."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -98,6 +104,7 @@ def proof_entry(proof: Proof, solution_steps: int) -> ProofEntry:
         ),
         "blocked_reason": blocked,
         "refused": refuses_keeping(proof),
+        **({"reviewed_source_digest": proof.reviewed_source_digest} if proof.reviewed_source_digest else {}),
         **({"trial": proof.trial} if proof.trial else {}),
     }
 

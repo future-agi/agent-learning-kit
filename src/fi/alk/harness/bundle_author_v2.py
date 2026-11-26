@@ -114,6 +114,7 @@ from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
+from .reviewed_build import PIN_FILE, load_review_pin
 from .world.tools import _binding
 from .world_door import (
     DOOR_CAPABILITIES,
@@ -142,6 +143,8 @@ class EnvironmentPlanV2:
     processes: tuple[ManagedProcess | SourceProcess, ...]
     capabilities: dict[str, CapabilityV2]
     readiness: tuple[ReadinessProbeV2, ...]
+    deferred_agent_settings: tuple[str, ...] = ()
+    target_runtime_unavailable: str = ""
 
     def __post_init__(self) -> None:
         names = [process.name for process in self.processes]
@@ -211,6 +214,16 @@ def _catalog_image(image: str) -> tuple[str, str]:
     repository = image.rsplit("/", 1)[-1].split("@", 1)[0]
     name, separator, tag = repository.partition(":")
     return name.lower(), tag if separator else ""
+
+
+# Every hosted world store starts with these: the readiness sentinel and the table the
+# `tool_trace` evidence seam reads (`call_runner._collect_tool_trace_calls`).
+WORLD_SEED_PREFIX = (
+    "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
+    "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
+    + _TOOL_TRACE_DDL
+)
+WORLD_SEED_SENTINEL_QUERY = "SELECT id FROM harness_seed_sentinel WHERE id='ready'"
 
 
 def _reuse_certified_bundle(
@@ -2846,6 +2859,7 @@ def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
     *,
+    scenario_build: bool = False,
     contract_modality: str | None = None,
     contract_interface_kind: str | None = None,
     contract_runtime: dict[str, Any] | None = None,
@@ -3120,9 +3134,20 @@ def resolve_environment_plan(
                 readiness.append(ReadinessProbeV2(capability=f"{service_name}_redis"))
                 continue
             if image and not service.get("build"):
-                raise BundleAuthorError(
-                    f"engine_unsupported: image-only service {service_name!r} ({image!r}) is not in the snapshot catalog"
+                message = (
+                    f"engine_unsupported: image-only service {service_name!r} "
+                    f"({image!r}) is not in the snapshot catalog"
                 )
+                if scenario_build:
+                    return EnvironmentPlanV2(
+                        packaging="scenarios_only",
+                        control_service=None,
+                        processes=(_managed_world_db(),),
+                        capabilities={"world_db": capabilities["world_db"]},
+                        readiness=(ReadinessProbeV2(capability="world_db", timeout_seconds=180),),
+                        target_runtime_unavailable=message,
+                    )
+                raise BundleAuthorError(message)
 
         source_services = [name for name in services if name not in managed_names]
         control_name = declared_control or (
@@ -3759,6 +3784,16 @@ def resolve_environment_plan(
         admission = assess_configuration(
             runtime=runtime_model, selected=selected, supplied_by_process=bindings
         )
+        deferred_agent_settings = ()
+        if scenario_build and not isinstance(selected, ComposeSelection):
+            # Only the target agent is idle during reviewed scenario generation.
+            deferred_agent_settings = tuple(sorted({
+                item.environment_name for item in admission.missing
+                if item.process == control_name and item.origin == "runtime_declaration"
+            }))
+            admission = admission.model_copy(update={"missing": [
+                item for item in admission.missing if item.process != control_name
+            ]})
         admission.require_no_missing_declarations()
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
@@ -3827,6 +3862,7 @@ def resolve_environment_plan(
         ]
 
     return EnvironmentPlanV2(
+        deferred_agent_settings=deferred_agent_settings,
         packaging=packaging,
         control_service=control_name,
         processes=tuple(processes),
@@ -4310,12 +4346,16 @@ def author_bundle_v2(
     authoring: str | Path,
     output: str | Path,
     include_scenarios: bool = True,
+    reviewed_scenarios_only: bool = False,
 ) -> EnvironmentBundleV2:
     source_root = Path(source).resolve()
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     output_root.parent.mkdir(parents=True, exist_ok=True)
-    if include_scenarios and job.metadata.get("generic_harness_v1") is True:
+    reviewed_source = load_review_pin(authoring_root)
+    if reviewed_scenarios_only and (reviewed_source is None or not include_scenarios):
+        raise BundleAuthorError("reviewed_scenarios_only_requires_source_pin")
+    if include_scenarios and reviewed_source is None and job.metadata.get("generic_harness_v1") is True:
         certified = _reuse_certified_bundle(
             source=source_root,
             job=job,
@@ -4461,6 +4501,7 @@ def author_bundle_v2(
     plan = resolve_environment_plan(
         source_root,
         job,
+        scenario_build=reviewed_scenarios_only,
         contract_modality=contract_modality,
         contract_interface_kind=contract_interface_kind,
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
@@ -4562,6 +4603,12 @@ def author_bundle_v2(
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
+        if reviewed_source is not None:
+            (temporary / PIN_FILE).write_text(
+                json.dumps(reviewed_source, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            adopted_chat_files.append(PIN_FILE)
         if "contract.json" in adopted_chat_files and contract_body:
             (temporary / "contract.json").write_text(
                 json.dumps(_tools_behind_the_proxy(plan, contract_body), indent=2, sort_keys=True) + "\n",
@@ -4717,9 +4764,9 @@ def author_bundle_v2(
             digest="sha256:" + "0" * 64,
             name=str(job.metadata.get("name") or source_root.name),
             runtime=BundleRuntimeV2(
-                kind=RuntimeKindV2.PROCESS,
+                kind=RuntimeKindV2.SCENARIOS_ONLY if plan.target_runtime_unavailable else RuntimeKindV2.PROCESS,
                 control_service=plan.control_service,
-                evidence_seam=EvidenceSeam.TOOL_TRACE,
+                evidence_seam=None if plan.target_runtime_unavailable else EvidenceSeam.TOOL_TRACE,
             ),
             processes=list(plan.processes),
             seed=Seed(stores=[store]),
@@ -4750,6 +4797,7 @@ def author_bundle_v2(
             ),
             metadata={
                 "packaging": plan.packaging,
+                **({"target_runtime_unavailable": plan.target_runtime_unavailable} if plan.target_runtime_unavailable else {}),
                 "environment_plan_version": "2",
                 # A build's seal, told apart from a chat's reseal, which stamps the tree it sealed from instead.
                 "sealed_from": BUILD_SEAL,
@@ -4762,6 +4810,8 @@ def author_bundle_v2(
                 ),
                 **server_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
+                **({"deferred_agent_settings": list(plan.deferred_agent_settings)} if plan.deferred_agent_settings else {}),
+                **({"reviewed_source": reviewed_source} if reviewed_source is not None else {}),
                 **(
                     {
                         "provider_connect_only": {
@@ -4815,6 +4865,7 @@ def author_bundle_v2(
         preflight_bundle(
             temporary,
             loaded,
+            for_authoring=reviewed_scenarios_only,
             parallelism=job.runtime.parallelism,
             secret_refs={
                 alias: reference.purpose
@@ -4861,7 +4912,7 @@ def scenario_seal_problems(authoring: str | Path) -> dict[str, str]:
     return problems
 
 
-def reseal_scenarios(authoring: str | Path, *, skip: Iterable[str] = ()) -> str | None:
+def reseal_scenarios(authoring: str | Path, *, skip: Iterable[str] = (), reviewed_source_pin: dict[str, str | None] | None = None) -> str | None:
     """Carry an edited scenario set into the sealed bundle and seal it again.
 
     Runs replay the bundle, never the authoring folders, so a scenario added or rewritten after
@@ -4878,6 +4929,12 @@ def reseal_scenarios(authoring: str | Path, *, skip: Iterable[str] = ()) -> str 
     if not (bundle / BUNDLE_V2_MANIFEST).is_file():
         return None
     manifest = load_bundle_v2(bundle)
+    reviewed_source = load_review_pin(authoring_root)
+    if (
+        reviewed_source_pin is None
+        and reviewed_source != (manifest.metadata or {}).get("reviewed_source")
+    ):
+        raise BundleAuthorError("source_snapshot_changed: the approved source pin changed")
     count = sum(1 for path in (authoring_root / "scenarios").iterdir() if path.is_dir())
     staging = Path(tempfile.mkdtemp(prefix=".environment-bundle.", dir=authoring_root))
     try:
@@ -4896,6 +4953,12 @@ def reseal_scenarios(authoring: str | Path, *, skip: Iterable[str] = ()) -> str 
             for key, value in metadata.items()
             if key not in {"sealed_from", "contract_compiled"}
         }
+        if reviewed_source_pin is not None:
+            (staging / PIN_FILE).write_text(
+                json.dumps(reviewed_source_pin, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            metadata["reviewed_source"] = reviewed_source_pin
         if compiled and _carries_world(authoring_root, staging):
             # Unstamped, the platform never replays this bundle for an edit.
             metadata["sealed_from"] = sealed_from(authoring_root)
@@ -5091,7 +5154,7 @@ def _carry_contract(
 
 
 # What a reseal carries from the authoring folders into the bundle.
-RESEAL_INPUTS = ("contract.json", CATALOGUE, "world.sqlite")
+RESEAL_INPUTS = ("contract.json", CATALOGUE, "world.sqlite", PIN_FILE)
 
 
 # What a build stamps as `sealed_from`; a reseal stamps the digest of the tree it sealed from.
@@ -5288,6 +5351,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--authoring", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reviewed-scenarios-only", action="store_true")
     args = parser.parse_args(argv)
     from .grounding import publish_source_root
 
@@ -5306,6 +5370,7 @@ def main(argv: list[str] | None = None) -> int:
         job=job,
         authoring=args.authoring,
         output=args.output,
+        reviewed_scenarios_only=args.reviewed_scenarios_only,
     )
     return 0
 

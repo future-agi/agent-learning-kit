@@ -19,7 +19,7 @@ import os
 import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .backends import (
     DELEGATE_TOOL,
@@ -28,8 +28,10 @@ from .backends import (
     SessionSpec,
     ToolServer,
     WorkerSpec,
+    tool,
+    tool_server,
 )
-from .catalogue import CATALOGUE
+from .catalogue import CATALOGUE, load_catalogue
 from .config import (
     artifact_dir,
     chosen_model,
@@ -40,16 +42,22 @@ from .config import (
 from .contract import AgentContract
 from .job import HarnessJob
 from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
-from .scenario import Scenario, used_keys, voicemail_enabled, with_unique_keys
+from .scenario import Scenario, suite_diversity_problems, used_keys, voicemail_enabled, with_unique_keys
 from .scenario_tools import (
     SCENARIO_SERVER,
     TOOL_NAMES,
     _is_spoken,
+    journalled,
     load_scenarios,
     scenario_tools,
     world_summary,
+    write_scenarios,
 )
 from .session import Stage
+from .tools import schema
+
+if TYPE_CHECKING:
+    from .reviewed_build import ReviewedBuild
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +110,7 @@ def writer_worker(
     server: ToolServer,
     budget: int,
     authoring_guidance: str = "",
+    reviewed: ReviewedBuild | None = None,
 ) -> dict[str, WorkerSpec]:
     """The worker this stage may run to write part of the suite."""
     return {
@@ -126,6 +135,7 @@ def writer_worker(
                     voicemail="on" if voicemail_enabled() else "off",
                     conversational="yes" if contract.conversational else "no",
                 )
+                + (reviewed.brief() if reviewed is not None else "")
                 + (
                     f"\n\n## Run-specific authoring policy\n\n{authoring_guidance}"
                     if authoring_guidance
@@ -230,6 +240,7 @@ def writer_worker(
                 "leaves the next round guessing at what is still missing."
             ),
             servers={
+                **(reviewed.tool_servers() if reviewed is not None else {}),
                 SCENARIO_SERVER: ToolServer(
                     name=server.name,
                     version=server.version,
@@ -254,6 +265,7 @@ def open_stage(
     authoring_guidance: str = "",
     can_grow: bool = False,
     job: HarnessJob | None = None,
+    reviewed: ReviewedBuild | None = None,
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -265,6 +277,7 @@ def open_stage(
     server, kept = scenario_tools(
         contract, destination, destination, wanted=wanted, can_grow=can_grow,
         scenario_problem=scenario_problem,
+        reviewed=reviewed,
     )
     budget = max_turns or turns_for(wanted)
     affordable = max(budget // WRITER_TURNS, 1)
@@ -338,12 +351,12 @@ def open_stage(
                 else ""
             )
             + (
-            f"Every writer comes back with a report: what it wrote, and what of its brief it "
-            f"could not cover. Read those, then call suite_progress, which names the cells still "
-            f"empty without returning a scenario body. The next round goes out the same way, in "
-            f"one message, for what is still missing. Repeat until suite_progress reports the "
-            f"count. Never say work is running on the strength of a brief you did not see "
-            f"accepted, and check suite_progress before you believe your own count.")
+            "Every writer comes back with a report: what it wrote, and what of its brief it "
+            "could not cover. Read those, then call suite_progress, which names the cells still "
+            "empty without returning a scenario body. The next round goes out the same way, in "
+            "one message, for what is still missing. Repeat until suite_progress reports the "
+            "count. Never say work is running on the strength of a brief you did not see "
+            "accepted, and check suite_progress before you believe your own count.")
             + (
                 f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
                 f"including the calls your writers make: a writer reads the world in its own "
@@ -360,11 +373,12 @@ def open_stage(
                 + ", ".join(scenario.name for scenario in kept)
                 + ". Submitting one under an existing name replaces it."
             )
+            + (reviewed.brief() if reviewed is not None else "")
         ),
-        servers={SCENARIO_SERVER: loop_server},
+        servers={SCENARIO_SERVER: loop_server, **(reviewed.tool_servers() if reviewed is not None else {})},
         builtins=("AskUserQuestion", DELEGATE_TOOL),
         workers=writer_worker(
-            contract, destination, server, budget, authoring_guidance
+            contract, destination, server, budget, authoring_guidance, reviewed=reviewed
         ),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=budget,
@@ -567,6 +581,7 @@ class Slice:
     angle: str = ""
     count: int = 1
     why: str = ""
+    choose_heading: bool = False
 
     def named(self) -> str:
         return f"{self.use_case}: {self.angle}" if self.angle else self.use_case
@@ -767,8 +782,12 @@ def brief_for(
             if others
             else ""
         )
-        + "Every scenario carries this use case verbatim in `use_case`, and its own one-line "
-        "`branch` saying what makes it different from the others you write here. Branches are "
+        + (
+            "Choose the matching existing use case, or a specific new heading if none covers the activity. Include a one-line "
+            if mine.choose_heading
+            else "Every scenario carries this use case verbatim in `use_case`, and its own one-line "
+        )
+        + "`branch` saying what makes it different from the others you write here. Branches are "
         "where the variety lives: the branch that cannot be completed, the rule under pressure, "
         "state that has to carry across turns, the same request against a differently seeded "
         "world.\n\n"
@@ -821,6 +840,7 @@ async def _write_slice(
     destination: Path,
     on_event: Callable[..., Any] | None,
     ask: Callable[..., Any] | None,
+    reviewed: ReviewedBuild | None = None,
 ) -> list[Scenario]:
     """One slice, written by its own session. Returns what it proved, unsaved."""
     server, kept = scenario_tools(
@@ -828,8 +848,10 @@ async def _write_slice(
         destination,
         destination,
         wanted=mine.count,
+        protect_catalogue=mine.choose_heading,
         can_save=False,
         start_from=[],
+        reviewed=reviewed,
     )
     logger.info("slice starting: %s (wants %s)", mine.named(), mine.count)
     seen = 0
@@ -863,8 +885,10 @@ async def _write_slice(
                 voicemail="on" if voicemail_enabled() else "off",
             )
             + f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
+            + (reviewed.brief() if reviewed is not None else "")
         ),
         servers={
+            **(reviewed.tool_servers() if reviewed is not None else {}),
             SCENARIO_SERVER: ToolServer(
                 name=server.name,
                 version=server.version,
@@ -915,7 +939,7 @@ async def _write_slice(
 
 
 def merged(
-    written: list[list[Scenario]], used: set[str] | None = None
+    written: list[list[Scenario]], used: set[str] | None = None, *, preserve_keys: bool = False,
 ) -> list[Scenario]:
     """One suite out of several writers, with folder-name collisions renamed rather than dropped.
 
@@ -936,7 +960,7 @@ def merged(
                 while f"{stem}-{suffix}" in taken:
                     suffix += 1
                 one = one.model_copy(
-                    update={"name": f"{stem}-{suffix}", "scenario_key": ""}
+                    update={"name": f"{stem}-{suffix}", "scenario_key": one.scenario_key if preserve_keys else ""}
                 )
                 logger.info("renamed a duplicate folder name to %s", one.name)
             taken.add(one.name)
@@ -1087,6 +1111,7 @@ async def write_in_parallel(
     rounds: int = TOP_UP_ROUNDS,
     on_event: Callable[..., Any] | None = None,
     ask: Callable[..., Any] | None = None,
+    reviewed: ReviewedBuild | None = None,
 ) -> list[Scenario]:
     """Write a suite with one session per slice, review it, fill what it missed, and save once.
 
@@ -1099,15 +1124,21 @@ async def write_in_parallel(
     remove the others' work.
     """
     destination = out or artifact_dir(contract.agent)
+    if reviewed is not None:
+        reviewed.persist_pin(destination)
     cases = [case for case in (use_cases or contract.real_use_cases) if case.strip()]
     if not cases and not slices:
         # Nothing to partition on. One writer, the ordinary path, rather than no scenarios.
         return await write(
-            contract, out=destination, wanted=wanted, on_event=on_event, ask=ask
+            contract, out=destination, wanted=wanted, on_event=on_event, ask=ask, reviewed=reviewed
         )
 
     at_once = max(1, min(at_once or AT_ONCE, MOST_AT_ONCE))
-    allocation = planned(wanted, cases, slices)
+    prior = load_scenarios(destination)
+    pending = reviewed.remaining(prior) if reviewed is not None else []
+    allocation = planned(max(len(pending), wanted - len(prior)) if reviewed is not None else wanted, cases, slices)
+    if reviewed is not None and (unallocated := len(pending) - sum(one.count for one in allocation)) > 0:
+        allocation.extend(even_slices(unallocated, cases or ["Approved source cases"]))
     logger.info(
         "writing %s scenarios across %s slices, %s at a time: %s",
         wanted,
@@ -1126,7 +1157,9 @@ async def write_in_parallel(
 
     limit = asyncio.Semaphore(at_once)
 
-    async def guarded(mine: Slice, siblings: list[Slice], index: int) -> list[Scenario]:
+    async def guarded(
+        mine: Slice, siblings: list[Slice], index: int, approved: ReviewedBuild | None
+    ) -> list[Scenario]:
         async with limit:
             return await _write_slice(
                 contract,
@@ -1136,19 +1169,28 @@ async def write_in_parallel(
                 destination=destination,
                 on_event=on_event,
                 ask=ask,
+                reviewed=approved,
             )
 
+    def assigned(pieces: list[Slice], pending_cases: list[dict], start: int = 0):
+        offset = 0
+        for index, one in enumerate(pieces):
+            approved = reviewed.subset(pending_cases[offset:offset + one.count]) if reviewed is not None else None
+            yield guarded(one, pieces, start + index, approved)
+            offset += one.count
+
     written = await asyncio.gather(
-        *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
+        *assigned(allocation, pending),
         return_exceptions=False,
     )
-    proved = merged([load_scenarios(destination), *written], used_keys(destination))
+    proved = merged([prior, *written], used_keys(destination), preserve_keys=reviewed is not None)
     # What a writer proved but never handed back, because its session died after proving it. Matched
     # by name so a scenario already in hand is not added twice under a numbered name.
     recovered = [
         one
         for one in journalled(destination)
-        if one.name not in {x.name for x in proved}
+        if (one.scenario_key if reviewed is not None else one.name)
+        not in {x.scenario_key if reviewed is not None else x.name for x in proved}
     ]
     if recovered:
         logger.warning(
@@ -1158,22 +1200,26 @@ async def write_in_parallel(
         )
         if on_event:
             on_event({"type": "recovered", "kept": len(recovered)})
-    suite = merged([proved, recovered], used_keys(destination))
+    suite = merged([proved, recovered], used_keys(destination), preserve_keys=reviewed is not None)
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
     for _ in range(max(0, rounds)):
-        if len(suite) >= wanted:
+        if len(suite) >= wanted and (reviewed is None or not reviewed.remaining(suite)):
             break
-        missing = await gaps_in(
-            contract,
-            suite,
-            destination=destination,
-            wanted=wanted,
-            on_event=on_event,
-            ask=ask,
-        )
-        missing = missing[: max(0, wanted - len(suite))]
+        if reviewed is not None:
+            pending = reviewed.remaining(suite)
+            missing = even_slices(max(len(pending), wanted - len(suite)), cases or ["Approved source cases"])
+        else:
+            missing = await gaps_in(
+                contract,
+                suite,
+                destination=destination,
+                wanted=wanted,
+                on_event=on_event,
+                ask=ask,
+            )
+            missing = missing[: max(0, wanted - len(suite))]
         if not missing:
             break
         if on_event:
@@ -1186,18 +1232,17 @@ async def write_in_parallel(
             ", ".join(f"{one.named()} x{one.count}" for one in missing),
         )
         more = await asyncio.gather(
-            *(
-                guarded(one, missing, len(allocation) + index)
-                for index, one in enumerate(missing)
-            ),
+            *assigned(missing, pending, len(allocation)),
             return_exceptions=False,
         )
         before = len(suite)
-        suite = merged([suite, *more], used_keys(destination))
+        suite = merged([suite, *more], used_keys(destination), preserve_keys=reviewed is not None)
         allocation = [*allocation, *missing]
         if len(suite) == before:
             break
 
+    if reviewed is not None:
+        reviewed.check_complete(suite, destination)
     write_scenarios(suite, destination, load_catalogue(destination))
     logger.info("suite saved: %s of %s asked for", len(suite), wanted)
     if on_event:
@@ -1214,10 +1259,11 @@ async def write(
     on_event: Callable[..., Any] | None = None,
     ask: Callable[..., Any] | None = None,
     max_turns: int = 0,
+    reviewed: ReviewedBuild | None = None,
 ) -> list[Scenario]:
     """Run the stage start to finish. Returns whatever scenarios were saved."""
     stage, destination = open_stage(
-        contract, out=out, wanted=wanted, ask=ask, max_turns=max_turns
+        contract, out=out, wanted=wanted, ask=ask, max_turns=max_turns, reviewed=reviewed
     )
     async with stage:
         # The planning turn is the expensive one to lose: a refusal here costs the whole suite, not

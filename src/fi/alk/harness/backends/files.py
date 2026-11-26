@@ -47,7 +47,9 @@ def _resolved(raw: str, cwd: Path) -> Path:
 # gets the same list as Read deny rules (`secret_read_rules`), which its Grep and Glob turn into
 # exclusions. A glob uses only letters, digits and `.-_*/`: the CLI skips a rule holding `[`, and
 # the SDK splits its rules on commas and spaces.
+PRIVATE_SOURCE_FILES = ("reviewed-source-job.json", "reviewed-source-snapshot.json")
 SECRET_GLOBS: tuple[str, ...] = (
+    *(f"**/{name}" for name in PRIVATE_SOURCE_FILES),
     "**/.env*",
     "**/*.env",
     "**/*.env.*",
@@ -200,7 +202,9 @@ def secret_text(text: str, *, env_allowed: bool = False) -> bool:
 def secret_read_rules() -> list[str]:
     """Claude Code's Read deny rules for the list, anchored at the file system's root (`//`), so
     they hold wherever a search starts and whatever the session's folder is."""
-    return [f"Read(//{glob})" for glob in ALL_SECRET_GLOBS]
+    return [f"Read(//{glob})" for glob in ALL_SECRET_GLOBS] + [
+        "Read(//run/futureagi/**)"
+    ]
 
 
 # A search rooted here would reach into where credentials live.

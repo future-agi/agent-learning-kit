@@ -19,6 +19,15 @@ from urllib import error, request
 
 # The agent under test in the action log; no actor takes this id.
 AGENT = "agent"
+# `<trial>:<actor>:h<n>`, matched at its end only so an actor id starting with `h` is never read as one.
+_PRE_RUN_KEY = re.compile(r":h[0-9]+$")
+
+
+def is_pre_run(key: object) -> bool:
+    """Whether an action-log row was written before the run started (a pre-run session's message)."""
+    return bool(_PRE_RUN_KEY.search(str(key or "")))
+
+
 OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 # The HTTP answer a committed key gave, replayed as it was to a retry: status, content type and the raw body (base64).
 Response = dict[str, Any]

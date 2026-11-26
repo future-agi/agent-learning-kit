@@ -56,6 +56,10 @@ _WRITE_VERBS = frozenset({"put", "change", "drop", "call"})
 MCP_ROUTE = "mcp:"
 
 
+def _catalogue_text(value: Any) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
 class HostedWorld(HttpObservationHandle):
     """The `World` surface, backed by this scenario's own logical postgres database.
 
@@ -64,6 +68,10 @@ class HostedWorld(HttpObservationHandle):
     `world_index` and `rng` are plain data: the index is for diagnostics only, and the generator
     is the only sanctioned source of randomness scenario code may use.
     """
+
+    # A hosted world comes from a sealed environment release. Its scenario code is authored with
+    # that environment, so setup, ready, and checks use the same isolation boundary as handlers.
+    isolated = True
 
     def __init__(
         self,
@@ -546,9 +554,8 @@ class HostedWorld(HttpObservationHandle):
         rows = self._store.query(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
         )
-        return [
-            row["tablename"] for row in rows if row["tablename"] != CONFORMANCE_TABLE
-        ]
+        names = [_catalogue_text(row["tablename"]) for row in rows]
+        return [name for name in names if name != CONFORMANCE_TABLE]
 
     def _table_columns(self, table: str) -> set[str]:
         rows = self._store.query(
@@ -556,7 +563,7 @@ class HostedWorld(HttpObservationHandle):
             "WHERE table_schema = 'public' AND table_name = %s",
             (table,),
         )
-        return {row["column_name"] for row in rows}
+        return {_catalogue_text(row["column_name"]) for row in rows}
 
     def _primary_key_order(self, table: str) -> list[str]:
         """This table's primary key columns, in index order.
@@ -578,7 +585,7 @@ class HostedWorld(HttpObservationHandle):
             """,
             (table,),
         )
-        return [row["attname"] for row in rows]
+        return [_catalogue_text(row["attname"]) for row in rows]
 
     def _resolve_by(self, table: str) -> str:
         """The column to key `change`/`drop` on when scenario code did not name one.

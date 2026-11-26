@@ -20,7 +20,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Sequence
 
 from fi.simulate.simulation.call_actors import (
     EVALUATED_BY,
@@ -78,8 +78,10 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check, same_id
-from .proofs import load_proofs, proof_key, record_proof, record_unprovable
+from .proofs import discard_proofs, load_proofs, proof_key, record_proof, record_unprovable
 from .understand import load as load_contract
+from .source_grounding import reviewed_action_arguments
+from .releases import ReleaseError
 from .prove import (
     RECORDED_NOT_RUN,
     BlockedReason,
@@ -110,6 +112,7 @@ from .actors import (
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
+    SOURCE_FIXTURE,
     VOICEMAIL_STYLES,
     Scenario,
     ScenarioSource,
@@ -141,6 +144,9 @@ from .simulator import load_simulator_prompt
 from .tools import brief, schema
 from .world_door import ToolCall, call_effect, fault_action, route_action
 from .world.snapshot import read_manifest, restore
+
+if TYPE_CHECKING:
+    from .reviewed_build import ReviewedBuild
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +211,17 @@ def _is_spoken(contract: Any) -> bool:
     return str(getattr(contract, "modality", "") or "").strip().lower() != "chat"
 
 
+def attached_tools(world_root: Path) -> frozenset[str]:
+    """The attached MCP servers' tools a world offers as `<id>__<tool>`: only the PostgreSQL proof
+    runs them, so the SQLite gates check readiness and leave the rest to it."""
+    from .releases import ReleaseError, attached_tool_names
+
+    try:
+        return frozenset(attached_tool_names(Path(world_root)))
+    except ReleaseError:
+        return frozenset()
+
+
 def _no_longer_hold(
     destination: Path, catalogue: Catalogue, names: list[str], world_root: Path
 ) -> list[tuple[str, str]]:
@@ -219,7 +236,7 @@ def _no_longer_hold(
             continue
         try:
             proof = prove(
-                scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite), as_written=True
+                scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite), as_written=True, postgres_only=attached_tools(world_root)
             )
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             record_unprovable(destination, proof_key(scenario), type(exc).__name__)
@@ -1723,6 +1740,103 @@ def _world_identifiers(state: dict[str, list[dict[str, Any]]]) -> set[str]:
 _AN_IDENTIFIER = re.compile(r"[a-z]{2,5}_[a-z0-9_]{2,40}")
 
 
+def _unrelated_order_lookup(scenario: Scenario) -> list[str]:
+    """A prospective policy inquiry can require past records only when the rule depends on them."""
+    case = scenario.fixture.get("reviewed_source")
+    if not isinstance(case, dict) or not case.get("policy_reference") or case.get("starting_facts"):
+        return []
+    policy = case["policy_reference"]
+    if re.search(r"\b(?:previous|prior|past|original|existing|originally|history|loyalty|tier|member(?:ship)?)\b", policy, re.I):
+        return []
+    prospective = re.search(
+        r"\b(?:consider(?:ing|s)?|thinking (?:about|of)|before) (?:purchasing|ordering|buying)\b"
+        r"|\b(?:future|prospective|potential|hypothetical|separate) (?:purchase|order)\b",
+        scenario.instruction, re.I,
+    )
+    if prospective and (
+        any(step.arguments.get("order_id") for step in scenario.solution)
+        or re.search(r"\b(?:look(?:s)? up|check(?:s)?|retrieve(?:s)?) (?:the |an? |their )?(?:existing )?order\b", scenario.tests, re.I)
+    ):
+        return ["This source policy question is about a prospective purchase. Looking up an unrelated "
+                "existing order does not establish the rule. Keep the prospective inquiry as the entire "
+                "situation, use a policy lookup if one exists, and test the actual policy outcome."]
+    return []
+
+
+def _reviewed_order_item_problems(scenario: Scenario, state: dict, contract) -> list[str]:
+    """Compare the product a reviewed case assigns to an order with the row the tools can read."""
+    fixture = scenario.fixture
+    if not fixture.get("reviewed_source"):
+        return []
+    records = state.get("orders")
+    base_orders = (contract.base_environment or {}).get("orders") if contract else None
+    if records is None or (contract and contract.data_store and contract.data_store.kind == "in_process"):
+        records = base_orders if base_orders is not None else records
+    if isinstance(records, list):
+        records = {
+            str(value): row for row in records if isinstance(row, dict)
+            for key in ("id", "order_id", "key") if (value := row.get(key)) is not None
+        }
+    if not isinstance(records, dict):
+        return []
+    # Resolve transaction references in both the structured fixture and the caller's words.
+    # A grading solution that only reads a policy can still give its caller a nonexistent order.
+    id_fields = ("order_id", "order_number", "order_ref", "order_reference")
+    ids = {str(fixture[key]) for key in id_fields if fixture.get(key) is not None}
+    ids.update(str(step.arguments[key]) for step in scenario.solution for key in id_fields if step.arguments.get(key) is not None)
+    for match in re.finditer(
+        r"\border(?:[ _-]?(?:id|no\.?|number|ref(?:erence)?))?\s*(?:is\s+)?"
+        r"(?P<marker>[:=#]?)\s*#?[\x22\x27`]?(?P<ref>[a-z0-9][a-z0-9_-]{0,63})\b",
+        scenario.instruction, re.I,
+    ):
+        reference = match["ref"]
+        if reference.isdecimal() and not match["marker"] and re.match(
+            r"\s+(?:hours?|days?|weeks?|months?|years?)\b", scenario.instruction[match.end():], re.I
+        ):
+            continue
+        if match["marker"] or reference.isupper() or any(ch.isdigit() for ch in reference):
+            ids.add(reference)
+    by_id = {str(key).casefold(): value for key, value in records.items()}
+    missing = sorted(key for key in ids if key.casefold() not in by_id)
+    if missing and not re.search(
+        r"\border\b[^.\n]{0,45}\b(?:not found|does not exist|is missing)\b|"
+        r"\b(?:no such|no matching|unknown|missing|nonexistent) order\b",
+        scenario.tests, re.I,
+    ):
+        available = ", ".join(sorted(str(key) for key in records)[:12]) or "(none)"
+        return [f"The caller or reference names order {', '.join(missing)}, which the agent cannot find after setup. "
+                f"Available orders include {available}. For a general policy inquiry omit the order number "
+                "entirely. Use a real matching order when testing an existing purchase."]
+    order_id = str(fixture["order_id"]) if fixture.get("order_id") is not None else None
+    if not order_id and len(ids) == 1:
+        order_id = next(iter(ids))
+    order = by_id.get(order_id.casefold()) if order_id else None
+    if not isinstance(order, dict):
+        return []
+    item_fields = ("item", "product", "item_name", "product_name")
+    category_fields = ("item_category", "product_category", "category")
+    claims = {key: str(fixture[key]) for key in (*item_fields, *category_fields) if fixture.get(key)}
+    for key, value in re.findall(
+        r"(?im)^\s*[-*]\s*(item|product|item category|product category)\s*:\s*([^\n]+)",
+        scenario.instruction,
+    ):
+        claims.setdefault(key.casefold().replace(" ", "_"), value.strip())
+    products = [str(order[key]).strip().casefold() for key in item_fields if order.get(key)]
+    categories = [str(order[key]).strip().casefold() for key in category_fields if order.get(key)]
+    if not products and not categories:
+        return []
+    for key, value in claims.items():
+        actual = categories + products if key in category_fields else products
+        value = value.strip().casefold()
+        if value not in actual and not (key in category_fields and any(
+            re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", item) for item in products
+        )):
+            return [f"The caller assigns {key}={value!r} to order {order_id}, but the agent's "
+                    f"order contains {', '.join(products + categories)}. Use a verified matching "
+                    "order or ask a general policy question without claiming the order contains this item."]
+    return []
+
+
 def _only_looked_up(scenario: Scenario, world_root: Path | None) -> set[str]:
     """Every argument value the reference names only in steps of read-only tools (`_read_tools`): a record it looks up
     and never acts on, which an adversarial case may expect to be missing."""
@@ -1970,7 +2084,7 @@ def _budgets_for_unknown_workers(scenario: Scenario, world_root: Path) -> str:
 
 
 def _steps_the_contract_refuses(
-    scenario: Scenario, world_root: Path, *, steps: Sequence[Step] | None = None
+    scenario: Scenario, world_root: Path, attached: frozenset[str] = frozenset(), *, steps: Sequence[Step] | None = None
 ) -> list[str]:
     """Solution steps (or `steps`) that call a tool, argument or declared value the agent's contract lacks."""
     try:
@@ -1982,6 +2096,8 @@ def _steps_the_contract_refuses(
         return []
     wrong = []
     for step in scenario.solution if steps is None else steps:
+        if step.tool in attached:
+            continue
         spec = tools.get(step.tool)
         if spec is None:
             wrong.append(f"{step.tool} is not one of the agent's tools")
@@ -2003,12 +2119,12 @@ def _steps_the_contract_refuses(
     ]
 
 
-def _controls_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
+def _controls_the_contract_refuses(scenario: Scenario, world_root: Path, attached: frozenset[str] = frozenset()) -> list[str]:
     """The same contract check over each negative control's steps, each problem naming its control."""
     return [
         f"negative control {control.name}: {problem}"
         for control in scenario.negative_controls
-        for problem in _steps_the_contract_refuses(scenario, world_root, steps=control.steps)
+        for problem in _steps_the_contract_refuses(scenario, world_root, attached, steps=control.steps)
     ]
 
 
@@ -2032,7 +2148,9 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
     said = plain(f"{scenario.instruction} {json.dumps(scenario.fixture, default=str)}")
     known = plain(instructions)
     wrong = []
+    case = scenario.fixture.get("reviewed_source") or {}
     for step in scenario.solution:
+        approved = reviewed_action_arguments(case, step.arguments) if isinstance(case, dict) else set()
         for name, source in (step.fixed.items() if isinstance(step.fixed, dict) else ()):
             value = step.arguments.get(name)
             if not isinstance(value, str) or not value.strip():
@@ -2043,7 +2161,7 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
             holds = {
                 "caller": plain(value) in said,
                 # A tool can take a record's value wrapped in a format it names (`kind:id`, `a/b`).
-                "record": plain(value) in stored or (len(parts) > 1 and all(part in stored for part in parts[1:])),
+                "record": name in approved or plain(value) in stored or (len(parts) > 1 and all(part in stored for part in parts[1:])),
                 "rule": any(plain(one) in known and plain(value) in plain(one) for one in quoted),
             }.get(kind)
             if not holds:
@@ -2183,6 +2301,38 @@ def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+async def _attached_unproved(
+    payload: dict[str, Any],
+    attached: frozenset[str],
+    catalogue: Catalogue,
+    postgres_proof: Callable[[Scenario, Catalogue], str] | None,
+) -> str:
+    """Why a scenario whose solution calls an attached tool does not hold on PostgreSQL, "" when
+    it does or calls none. Off the event loop: it starts servers and queries a database."""
+    calling = sorted(
+        {
+            str(step.get("tool"))
+            for step in payload.get("solution") or []
+            if isinstance(step, dict) and step.get("tool") in attached
+        }
+    )
+    if not calling:
+        return ""
+    if postgres_proof is None:
+        return (
+            f"Not kept. Its solution calls {', '.join(calling)}, which only a PostgreSQL proof "
+            "runs, and this session has none."
+        )
+    try:
+        scenario = Scenario.model_validate(payload)
+    except Exception:  # noqa: BLE001 - the validator reports a malformed scenario
+        return ""
+    said = await asyncio.to_thread(postgres_proof, scenario, catalogue)
+    return (
+        f"Not kept. On PostgreSQL, where {', '.join(calling)} run: {said}" if said else ""
+    )
+
+
 def _a_read_that_declines(scenario: Scenario, proof: Any, world_root: Path) -> bool:
     """Whether a one-call reference is a refusal: its call ran, left the world exactly as doing nothing does, and its
     tool is not one the contract says writes."""
@@ -2222,12 +2372,16 @@ def accept_scenario(
     renaming: bool = False,
     service_tools: set[str] | None = None,
     read_tools: set[str] | None = None,
+    attached: frozenset[str] = frozenset(),
+    case_key: bool = False,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
     ``renaming`` keeps a proved scenario under a new name without proving it again: what it tests
     is unchanged. ``used`` is every key the environment has given a scenario, so a new one never
-    takes a dropped scenario's key and inherits its run history.
+    takes a dropped scenario's key and inherits its run history. ``attached`` names the attached
+    servers' tools: a scenario calling one is checked here for readiness only, because its caller
+    proves it on PostgreSQL before keeping it.
 
     ``persist`` is off for a writer that shares the destination with siblings: writing the suite
     removes every folder not in the writer's own list, so persisting here would delete whatever
@@ -2250,6 +2404,8 @@ def accept_scenario(
 
     if (recited := recited_sources(scenario, contract)) is not None:
         scenario = scenario.model_copy(update={"sources": [ScenarioSource.model_validate(one) for one in recited]})
+    if unrelated := _unrelated_order_lookup(scenario):
+        return _err("Not kept. " + " ".join(unrelated))
     if unlisted := _unlisted_actors(scenario, world_root):
         return _err("Not kept. " + " ".join(unlisted))
     if unknown := _budgets_for_unknown_workers(scenario, world_root):
@@ -2293,8 +2449,10 @@ def accept_scenario(
                 spoken=spoken,
             )
             problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
-            problems.extend(_steps_the_contract_refuses(scenario, world_root))
-            problems.extend(_controls_the_contract_refuses(scenario, world_root))
+            if contract and contract.data_store and contract.data_store.kind == "in_process":
+                problems.extend(_reviewed_order_item_problems(scenario, {}, contract))
+            problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
+            problems.extend(_controls_the_contract_refuses(scenario, world_root, attached))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
             problems.extend(
@@ -2307,21 +2465,23 @@ def accept_scenario(
             # table a check reads is not reported as referring to something that does not exist.
             trial, _applied, _ready = prepared(scenario, world_root)
             try:
+                starting_state = trial.state()
                 problems = validate_scenario(
                     scenario,
                     catalogue,
-                    trial.state(),
+                    starting_state,
                     simulator_prompt,
                     allow_empty_solution=allow_empty_solution,
                     spoken=spoken,
                 )
                 problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+                problems.extend(_reviewed_order_item_problems(scenario, starting_state, contract))
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial, world_root))
                 problems.extend(_records_only_a_context_file_holds(scenario, trial, world_root))
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
-                problems.extend(_steps_the_contract_refuses(scenario, world_root))
-                problems.extend(_controls_the_contract_refuses(scenario, world_root))
+                problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
+                problems.extend(_controls_the_contract_refuses(scenario, world_root, attached))
                 problems.extend(_records_the_agent_cannot_see(scenario, world_root, trial))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
@@ -2346,7 +2506,7 @@ def accept_scenario(
         suite = [
             one for one in kept if not (named_key and one.scenario_key == named_key) and one.name != scenario.name
         ] + [scenario]
-        proof = prove(scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite))
+        proof = prove(scenario, catalogue, world_root, case_goals=distinctive_goals(scenario, suite), postgres_only=attached)
         if single_call and not _a_read_that_declines(scenario, proof, world_root):
             return _err("Not kept. Fix these and submit again:\n  - " + "\n  - ".join(single_call))
         if refuses_keeping(proof):
@@ -2405,6 +2565,10 @@ def accept_scenario(
     elif restored:
         # A case this environment had and lost comes back as itself, under its own key, so its history is its own.
         scenario.scenario_key = restored
+    elif case_key and proof is not None:
+        scenario.scenario_key = unused_key(
+            "reviewed-" + proof.reviewed_source_digest.removeprefix("sha256:")[:24], keys,
+        )
     else:
         scenario.scenario_key = unused_key(
             scenario_slug(scenario.name) if named else scenario.scenario_key, keys
@@ -2542,6 +2706,8 @@ def accept_scenario(
             "The world is ready for it, and its sub-goals will be judged from the call: the "
             "recording, the transcript, every action with its arguments and the records left."
         )
+    elif proof.postgres_only:
+        proof_summary = "On PostgreSQL the reference solution passes and its checks fail when nothing is done."
     else:
         proof_summary = (
             "All three gates pass: the world is ready for it, the reference solution passes "
@@ -2775,9 +2941,12 @@ def scenario_tools(
     can_save: bool = True,
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
+    protect_catalogue: bool = False,
     can_grow: bool = False,
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     catalogue: Catalogue | None = None,
+    postgres_proof: Callable[[Scenario, Catalogue], str] | None = None,
+    reviewed: ReviewedBuild | None = None,
     removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
@@ -2808,6 +2977,7 @@ def scenario_tools(
         list(start_from) if start_from is not None else load_scenarios(destination)
     )
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
+    protected_goals = catalogue.names() if protect_catalogue else set()
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     # The job's actors switch: off, no scenario takes actors, a pre-run, a first speaker or faults.
@@ -2918,6 +3088,7 @@ def scenario_tools(
     refused: dict[tuple[str, int], int] = {}
     external_runtime_target = _is_external_runtime(world_root)
     tool_free_target = not bool(contract.tools) or external_runtime_target
+    attached = attached_tools(world_root)
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -3152,6 +3323,8 @@ def scenario_tools(
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
+        if args.get("name") in protected_goals:
+            return _err("The existing suite uses this sub-goal. Reuse it or define a distinct new sub-goal.")
         try:
             sub_goal = SubGoal(
                 name=str(args.get("name") or ""),
@@ -3568,7 +3741,12 @@ def scenario_tools(
             # The actors write their pre-run conversations now, once, so every trial replays the same thread.
             args = await written(dict(args), world_root)
         async with admitting:
-            return admit(args, _refuse)
+            if reviewed is not None:
+                try:
+                    args = reviewed.bind(args, kept)
+                except ReleaseError as exc:
+                    return _refuse(str(exc))
+            return await admit(args, _refuse)
 
     def _round_out() -> list[str]:
         """The deals still being written: open, with cases left to write."""
@@ -3651,7 +3829,7 @@ def scenario_tools(
             f"{deal} with room left. Place it on one that is: " + ("; ".join(free) or "none is left")
         )
 
-    def admit(args: dict[str, Any], _refuse: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+    async def admit(args: dict[str, Any], _refuse: Callable[..., dict[str, Any]]) -> dict[str, Any]:
         """Everything after the slow preparation, checked and kept as one step while `admitting` is held."""
         # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,
         # so the checks below never count it against itself.
@@ -3802,6 +3980,8 @@ def scenario_tools(
                     "for in output tokens. Submitting again under "
                     "an existing name is the only submission left to you, for fixing one of yours."
                 )
+        if said := await _attached_unproved(args, attached, catalogue, postgres_proof):
+            return _refuse(said)
         result = accept_scenario(
             args,
             world_root=world_root,
@@ -3809,7 +3989,15 @@ def scenario_tools(
             kept=kept,
             simulator_prompt=simulator_prompt,
             hard_constraints=contract.hard_constraints,
-            allow_empty_solution=tool_free_target,
+            allow_empty_solution=tool_free_target or (
+                reviewed is not None
+                and SOURCE_FIXTURE in (args.get("fixture") or {})
+                and bool(args.get("sub_goals"))
+                and all(
+                    (goal := catalogue.named(name)) and goal.conversation_only()
+                    for name in args["sub_goals"]
+                )
+            ),
             persist=can_save,
             rename_on_collision=rename_on_collision,
             vocabulary=target.get("keywords"),
@@ -3822,6 +4010,8 @@ def scenario_tools(
             used=used,
             service_tools=_service_tools(contract),
             read_tools=_read_tools(contract),
+            attached=attached,
+            case_key=reviewed is not None,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -4558,6 +4748,7 @@ def scenario_tools(
                     "Dropping every scenario needs everything=true. Do that only when the "
                     "person asked to start the suite over; otherwise drop scenarios by name."
                 )
+            discard_proofs(destination, {proof_key(one) for one in kept})
             kept.clear()
             return _ok(_EMPTIED)
         key = next((one.scenario_key for one in kept if one.name == name), "")
@@ -4565,6 +4756,7 @@ def scenario_tools(
         kept[:] = [one for one in kept if one.name != name]
         if len(kept) == before:
             return _err(f"no scenario called {name!r}")
+        discard_proofs(destination, {key})
         if not kept:
             return _ok(_EMPTIED)
         write_scenarios(kept, destination, catalogue)
@@ -4942,6 +5134,51 @@ def _fields_of(world: Any, collection: str) -> list[str]:
     return [str(row[1]) for row in rows]
 
 
+def _attached_summary(world_root: Path) -> list[str]:
+    """The attached servers' tools, what they reach and what they take. Nothing here can call
+    them (try_calls included); a scenario using one is proved on PostgreSQL when submitted."""
+    from .mcp_servers import REGISTRY
+    from .releases import ATTACHED, ReleaseError, load_servers
+
+    try:
+        servers = load_servers(Path(world_root))
+    except ReleaseError:
+        return []
+    if not servers:
+        return []
+    lines = [
+        (
+            "\nATTACHED SERVERS (the agent calls these tools by these names; try_calls cannot, "
+            "and a scenario whose solution calls one is proved on PostgreSQL when you submit it):"
+        )
+    ]
+    for server in servers:
+        registered = REGISTRY.get(server.server)
+        reach = (
+            f"tables {', '.join(server.attach.database_reader.tables)}"
+            if server.attach.database_reader is not None
+            else ""
+        )
+        if server.attach.directory is not None:
+            folder = Path(world_root) / server.attach.directory
+            files = sorted(
+                str(path.relative_to(folder))
+                for path in folder.rglob("*")
+                if path.is_file()
+            ) if folder.is_dir() else []
+            reach = f"the folder {server.attach.directory} ({', '.join(files[:30]) or 'empty'})"
+        lines.append(
+            f"  {', '.join(server.tool_names())}: {reach}."
+            + (f" {registered.about}." if registered is not None else "")
+        )
+    lines.append(
+        f"  Read what they return from the release's own files ({ATTACHED}/, the world's rows): a "
+        "check reads it from the call's result (`call.result`), and an attached call never "
+        "changes the world."
+    )
+    return lines
+
+
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
     if native_runtime(world_root):
@@ -5015,6 +5252,7 @@ def world_summary(world_root: Path) -> str:
                 )
                 for one in acting
             ]
+        lines += _attached_summary(world_root)
         external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:

@@ -33,6 +33,7 @@ from .simulator import variables_in
 # What a fixture's `origin` may say, and which of those claim the scenario creates data itself.
 FIXTURE_ORIGINS = ("seed", "generated", "mixed")
 ORIGINS_THAT_CREATE = ("generated", "mixed")
+SOURCE_FIXTURE = "reviewed_source"
 
 # For an outbound call, how much the person already knows about why they are being rung. The order
 # is the axis: told to expect it, half remembers, no idea at all. Named once so the schema a writer

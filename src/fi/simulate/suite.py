@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -63,6 +64,69 @@ _JSON_PATH_ASSERTIONS = (
     | _JSON_PATH_CONTAINS_ASSERTIONS
     | _JSON_PATH_NOT_CONTAINS_ASSERTIONS
 )
+
+DETERMINISTIC_ASSERTION_TYPES = frozenset(
+    {
+        "contains",
+        "not_contains",
+        "equals",
+        "json_path_equals",
+        "json_path_exists",
+        "json_path_gte",
+        "json_path_lte",
+        "json_path_contains",
+        "json_path_not_contains",
+    }
+)
+
+
+def validate_deterministic_assertion(assertion: Mapping[str, Any]) -> Dict[str, Any]:
+    """Validate a literal deterministic check without code, regex or hosted calls."""
+    item = dict(assertion)
+    kind = item.get("type")
+    if not isinstance(kind, str) or kind not in DETERMINISTIC_ASSERTION_TYPES:
+        raise ManifestError(f"unsupported deterministic assertion type: {kind}")
+    path_check = kind in _JSON_PATH_ASSERTIONS
+    allowed = {"type", "path", "value"} if path_check else {"type", "value"}
+    if set(item) - allowed:
+        raise ManifestError("unexpected deterministic assertion arguments")
+    path = item.get("path")
+    if path_check and (
+        not isinstance(path, str)
+        or (path.startswith("$") and not path.startswith(("$.", "$[")))
+        or not re.fullmatch(r"\$?(?:\.?[A-Za-z_][A-Za-z_0-9]*|\[\d+\])+", path)
+    ):
+        raise ManifestError("deterministic assertion requires a simple JSON path")
+    if kind == "json_path_exists":
+        if "value" in item:
+            raise ManifestError("existence assertions do not accept a value")
+        return item
+    value = item.get("value")
+    if "value" not in item or not isinstance(
+        value, (str, int, float, bool, type(None))
+    ):
+        raise ManifestError("deterministic assertion requires a scalar value")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ManifestError("deterministic assertion requires a finite value")
+    if kind in {
+        "contains",
+        "not_contains",
+        "json_path_contains",
+        "json_path_not_contains",
+    }:
+        if not isinstance(value, str) or not value:
+            raise ManifestError("contains assertions require a nonempty string")
+    if kind in {"json_path_gte", "json_path_lte"}:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ManifestError("numeric assertions require a number")
+        try:
+            finite_value = math.isfinite(float(value))
+        except (TypeError, ValueError, OverflowError):
+            finite_value = False
+        if not finite_value:
+            raise ManifestError("numeric assertions require a finite number")
+    return item
+
 
 # Assertion tokens that score the case output with a hosted FutureAGI eval
 # template via ``fi.evals.evaluate`` (platform/turing engine by default,
@@ -297,9 +361,9 @@ def optimize_eval_suite(
     if opts.threshold is not None:
         runtime_suite.setdefault("optimization", {})["threshold"] = opts.threshold
     if opts.max_candidates is not None:
-        runtime_suite.setdefault("optimization", {}).setdefault(
-            "optimizer", {}
-        )["max_candidates"] = opts.max_candidates
+        runtime_suite.setdefault("optimization", {}).setdefault("optimizer", {})[
+            "max_candidates"
+        ] = opts.max_candidates
 
     prepared = _prepare_eval_suite(runtime_suite, base_dir=suite_path.parent)
     cli = _cli()
@@ -401,7 +465,9 @@ def run_eval_suite(
     base_dir = Path(suite_path).expanduser().resolve().parent
     prepared = _prepare_eval_suite(dict(suite), base_dir=base_dir)
     name = str(opts.name or prepared.get("name") or "agent-learning-eval")
-    threshold = float(opts.threshold if opts.threshold is not None else prepared.get("threshold", 1.0))
+    threshold = float(
+        opts.threshold if opts.threshold is not None else prepared.get("threshold", 1.0)
+    )
     if opts.dry_run:
         return _suite_result(
             name=name,
@@ -439,8 +505,13 @@ def run_eval_suite(
 
 
 def _prepare_eval_suite(suite: Dict[str, Any], *, base_dir: Path) -> Dict[str, Any]:
-    providers = [_as_dict(item) for item in _as_list(suite.get("providers") or suite.get("provider"))]
-    prompts = [_as_dict(item) for item in _as_list(suite.get("prompts") or suite.get("prompt"))]
+    providers = [
+        _as_dict(item)
+        for item in _as_list(suite.get("providers") or suite.get("provider"))
+    ]
+    prompts = [
+        _as_dict(item) for item in _as_list(suite.get("prompts") or suite.get("prompt"))
+    ]
     tests = _suite_tests(suite, base_dir=base_dir)
     if not providers:
         raise ManifestError("eval suite requires at least one provider")
@@ -448,9 +519,16 @@ def _prepare_eval_suite(suite: Dict[str, Any], *, base_dir: Path) -> Dict[str, A
         raise ManifestError("eval suite requires at least one prompt")
     if not tests:
         raise ManifestError("eval suite requires at least one test")
-    suite["providers"] = [_normalize_provider(item, index) for index, item in enumerate(providers, start=1)]
-    suite["prompts"] = [_normalize_prompt(item, index) for index, item in enumerate(prompts, start=1)]
-    suite["tests"] = [_normalize_test(item, index) for index, item in enumerate(tests, start=1)]
+    suite["providers"] = [
+        _normalize_provider(item, index)
+        for index, item in enumerate(providers, start=1)
+    ]
+    suite["prompts"] = [
+        _normalize_prompt(item, index) for index, item in enumerate(prompts, start=1)
+    ]
+    suite["tests"] = [
+        _normalize_test(item, index) for index, item in enumerate(tests, start=1)
+    ]
     suite.pop("tests_file", None)
     suite.pop("data_file", None)
     suite.pop("data", None)
@@ -477,7 +555,9 @@ def _load_test_records(path: Path) -> List[Dict[str, Any]]:
         raise ManifestError(f"eval suite tests file not found: {source}")
     if source.suffix.lower() == ".jsonl":
         records = []
-        for line_number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_number, line in enumerate(
+            source.read_text(encoding="utf-8").splitlines(), start=1
+        ):
             if not line.strip():
                 continue
             try:
@@ -502,7 +582,9 @@ def _normalize_provider(provider: Mapping[str, Any], index: int) -> Dict[str, An
 def _normalize_prompt(prompt: Mapping[str, Any], index: int) -> Dict[str, Any]:
     item = dict(prompt)
     item["id"] = str(item.get("id") or item.get("name") or f"prompt_{index}")
-    item["template"] = str(item.get("template") or item.get("content") or item.get("prompt") or "")
+    item["template"] = str(
+        item.get("template") or item.get("content") or item.get("prompt") or ""
+    )
     if not item["template"]:
         raise ManifestError(f"prompt `{item['id']}` requires a template")
     return item
@@ -512,8 +594,13 @@ def _normalize_test(test: Mapping[str, Any], index: int) -> Dict[str, Any]:
     item = dict(test)
     item["id"] = str(item.get("id") or item.get("name") or f"test_{index}")
     item["vars"] = _as_dict(item.get("vars") or item.get("variables"))
-    assertions = _as_list(item.get("assert") or item.get("assertions") or item.get("checks"))
-    item["assertions"] = [_normalize_assertion(assertion, item["id"], offset) for offset, assertion in enumerate(assertions, start=1)]
+    assertions = _as_list(
+        item.get("assert") or item.get("assertions") or item.get("checks")
+    )
+    item["assertions"] = [
+        _normalize_assertion(assertion, item["id"], offset)
+        for offset, assertion in enumerate(assertions, start=1)
+    ]
     if not item["assertions"]:
         raise ManifestError(f"test `{item['id']}` requires at least one assertion")
     return item
@@ -524,7 +611,11 @@ def _normalize_assertion(assertion: Any, test_id: str, index: int) -> Dict[str, 
         item = {"type": "contains", "value": assertion}
     else:
         item = _as_dict(assertion)
-    item["type"] = str(item.get("type") or item.get("kind") or "contains").lower().replace("-", "_")
+    item["type"] = (
+        str(item.get("type") or item.get("kind") or "contains")
+        .lower()
+        .replace("-", "_")
+    )
     if "path" not in item:
         for alias in ("json_path", "field"):
             if alias in item:
@@ -536,7 +627,12 @@ def _normalize_assertion(assertion: Any, test_id: str, index: int) -> Dict[str, 
     if assertion_type in _JSON_PATH_ASSERTIONS and not item.get("path"):
         raise ManifestError(f"assertion {index} in test `{test_id}` requires a path")
     if assertion_type in _FI_EVAL_ASSERTIONS:
-        if not (item.get("eval") or item.get("metric") or item.get("name") or item.get("value")):
+        if not (
+            item.get("eval")
+            or item.get("metric")
+            or item.get("name")
+            or item.get("value")
+        ):
             raise ManifestError(
                 f"assertion {index} in test `{test_id}` requires an `eval` "
                 "(hosted template name)"
@@ -571,7 +667,11 @@ def _run_eval_case(
     ]
     failures = [item for item in assertion_results if not item.get("passed")]
     case_id = f"{provider.get('id')}::{prompt.get('id')}::{test.get('id')}"
-    score = 1.0 if not assertion_results else (len(assertion_results) - len(failures)) / len(assertion_results)
+    score = (
+        1.0
+        if not assertion_results
+        else (len(assertion_results) - len(failures)) / len(assertion_results)
+    )
     findings = [
         {
             "type": "eval_assertion_failed",
@@ -624,11 +724,18 @@ def _provider_output(
     if provider_type == "echo":
         return prompt
     if provider_type == "scripted":
-        template = str(provider.get("response") or provider.get("output") or provider.get("template") or "")
+        template = str(
+            provider.get("response")
+            or provider.get("output")
+            or provider.get("template")
+            or ""
+        )
         if not template:
             responses = _as_list(provider.get("responses"))
             template = str(responses[0]) if responses else prompt
-        return _render_template(template, {**variables, "prompt": prompt, "input": prompt})
+        return _render_template(
+            template, {**variables, "prompt": prompt, "input": prompt}
+        )
     if provider_type in {"artifact", "artifact_json", "artifact_file"}:
         return _artifact_provider_output(
             provider=provider,
@@ -641,7 +748,12 @@ def _provider_output(
         if not target:
             raise ManifestError(f"provider `{provider.get('id')}` requires target")
         callback = _load_callable(target, base_dir)
-        value = callback(prompt=prompt, vars=dict(variables), test=dict(test), provider=dict(provider))
+        value = callback(
+            prompt=prompt,
+            vars=dict(variables),
+            test=dict(test),
+            provider=dict(provider),
+        )
         if inspect.isawaitable(value):
             value = asyncio.run(value)
         return str(value)
@@ -691,7 +803,10 @@ def _litellm_provider_output(
     system_prompt = provider.get("system") or provider.get("system_prompt")
     if system_prompt:
         messages.append(
-            {"role": "system", "content": _render_template(str(system_prompt), render_ctx)}
+            {
+                "role": "system",
+                "content": _render_template(str(system_prompt), render_ctx),
+            }
         )
     messages.append({"role": "user", "content": prompt})
 
@@ -745,8 +860,7 @@ def _artifact_provider_output(
     if not fields:
         return json.dumps(artifact, indent=2, sort_keys=True, default=str)
     extracted = {
-        label: _extract_artifact_path(artifact, path)
-        for label, path in fields
+        label: _extract_artifact_path(artifact, path) for label, path in fields
     }
     return json.dumps(
         {
@@ -811,6 +925,8 @@ def _artifact_path_tokens(path: str) -> List[str]:
         raise ManifestError("artifact path cannot be empty")
     if normalized.startswith("$."):
         normalized = normalized[2:]
+    elif normalized.startswith("$["):
+        normalized = normalized[1:]
     elif normalized == "$":
         return []
     tokens: List[str] = []
@@ -995,7 +1111,9 @@ def _evaluate_json_path_assertion(
     result: Dict[str, Any] = {
         "type": assertion_type,
         "path": path,
-        "expected": True if assertion_type in _JSON_PATH_EXISTS_ASSERTIONS else expected,
+        "expected": True
+        if assertion_type in _JSON_PATH_EXISTS_ASSERTIONS
+        else expected,
         "actual": None,
         "passed": False,
     }
@@ -1043,11 +1161,13 @@ def _json_path_numeric_compare(
     try:
         actual_number = float(actual)
         expected_number = float(expected)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return (
             False,
             f"expected numeric JSON path values, got actual={actual!r} expected={expected!r}",
         )
+    if not math.isfinite(actual_number) or not math.isfinite(expected_number):
+        return False, "expected finite numeric JSON path values"
     if operator == "gte":
         return actual_number >= expected_number, None
     return actual_number <= expected_number, None
@@ -1079,7 +1199,11 @@ def _suite_result(
         for assertion in _as_list(case.get("assertions"))
         if not _as_dict(assertion).get("passed")
     )
-    score = 1.0 if not assertion_count else (assertion_count - failed_assertion_count) / assertion_count
+    score = (
+        1.0
+        if not assertion_count
+        else (assertion_count - failed_assertion_count) / assertion_count
+    )
     passed = (score >= threshold) and (passed_count == case_count)
     if dry_run:
         passed = True
@@ -1153,7 +1277,9 @@ def _load_json_or_yaml(path: Path) -> Any:
         try:
             import yaml  # type: ignore
         except Exception as exc:  # pragma: no cover - optional dependency clarity
-            raise ManifestError("YAML eval suites require PyYAML; use JSON or install PyYAML.") from exc
+            raise ManifestError(
+                "YAML eval suites require PyYAML; use JSON or install PyYAML."
+            ) from exc
         with path.open("r", encoding="utf-8") as handle:
             return yaml.safe_load(handle)
     with path.open("r", encoding="utf-8") as handle:
@@ -1163,7 +1289,9 @@ def _load_json_or_yaml(path: Path) -> Any:
 def _load_callable(target: str, base_dir: Path) -> Callable[..., Any]:
     module_name, _, function_name = target.partition(":")
     if not module_name or not function_name:
-        raise ManifestError("python callable must use 'module:function' or 'path.py:function'")
+        raise ManifestError(
+            "python callable must use 'module:function' or 'path.py:function'"
+        )
     if module_name.endswith(".py") or "/" in module_name:
         module_path = Path(module_name)
         if not module_path.is_absolute():
@@ -1208,7 +1336,9 @@ def _merge_eval_suite_optimization_options(
     return EvalSuiteOptimizationOptions(
         name=opts.name if name is None else name,
         threshold=opts.threshold if threshold is None else threshold,
-        max_candidates=opts.max_candidates if max_candidates is None else max_candidates,
+        max_candidates=opts.max_candidates
+        if max_candidates is None
+        else max_candidates,
         dry_run=opts.dry_run if dry_run is None else dry_run,
     )
 

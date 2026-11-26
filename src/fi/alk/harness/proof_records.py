@@ -136,6 +136,7 @@ class _ProofFields(TypedDict):
 class ProofEntry(_ProofFields, total=False):
     """One case's latest proof in ``proofs.json`` (format 2)."""
 
+    reviewed_source_digest: str
     trial: dict[str, Any]
     # Whether the case was played on the live runtime (a certification's proving).
     live: bool

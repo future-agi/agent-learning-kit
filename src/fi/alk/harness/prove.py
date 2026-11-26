@@ -54,7 +54,8 @@ from .folder import apply_setup, check_ready
 from .grounding import agent_source_root, policy_conflicts, resolve_sources, unresolved
 from .leaks import leaks
 from .proof_records import ControlResult, LeakRecord, PolicyCheck, SourceResult
-from .scenario import Scenario
+from .scenario import SOURCE_FIXTURE, Scenario
+from .source_grounding import reviewed_action_arguments, semantic_source_digest
 from .understand import load
 from .world.runtime import (
     REQUEST_NOT_ACCEPTED,
@@ -152,6 +153,7 @@ class Proof:
     """Whether a scenario holds up, and what happened when it was tried."""
 
     deferred: bool = False
+    reviewed_source_digest: str = ""
     ready: bool = False
     solvable: bool = False
     vacuous: bool = True
@@ -252,6 +254,12 @@ class Proof:
     # The reference solution's trial, for comparing tools' declared tables with what changed: the calls the world took
     # in order, the tables that ended different from the start, and why it cannot say which tool changed them.
     trial: dict[str, Any] = field(default_factory=dict)
+    # The reference solution calls an attached MCP server, which only the PostgreSQL proof runs,
+    # so this pass checked setup and readiness and left the other gates to it.
+    postgres_only: bool = False
+    # Checks that still hold when every successful state-changing call keeps its `ok` but loses
+    # its effect and its result: they credit the call rather than the world.
+    no_effect: list[str] = field(default_factory=list)
     # Checks the reference failed only because a step it took was assumed: each reads the world alone, which an
     # assumed step never changes (`excused_by_assumed_steps`).
     excused: list[str] = field(default_factory=list)
@@ -270,6 +278,8 @@ class Proof:
 
     @property
     def holds(self) -> bool:
+        if self.postgres_only:
+            return self.ready and not self.broken
         return (
             self.ready
             and self.solvable
@@ -279,6 +289,7 @@ class Proof:
             and not self.broken
             and not self.too_strict
             and not self.unchecked
+            and not self.no_effect
         )
 
     @property
@@ -503,6 +514,13 @@ class Proof:
                 + "\n\nMake each check assert the relevant attempt or observation as well as the "
                 "final state. For a refusal, require that the call was attempted and refused; "
                 "an untouched world is not evidence that the agent refused correctly."
+            )
+        if self.no_effect:
+            return (
+                "these checks still hold when every state-changing call succeeds but changes "
+                "nothing and returns nothing, so they credit the call rather than its effect:\n  - "
+                + "\n  - ".join(self.no_effect)
+                + "\n\nRead the world for the change the call should have made."
             )
         if self.controls:
             passed = [
@@ -1497,6 +1515,23 @@ def native_source_problem(source: str, entry: str) -> str:
     return ""
 
 
+def crashed(calls: Sequence[Call]) -> list[Call]:
+    """Each call failed with no result, the way an execution failure leaves it."""
+    return [
+        replace(call, ok=False, result=None, error="execution failed", refused=False, refusal_code="")
+        for call in calls
+    ]
+
+
+def without_effect(calls: Sequence[Call], state_changing: frozenset[str]) -> list[Call]:
+    """Each successful state-changing call still `ok` but with no result: graded against an
+    untouched world, what a check sees when it credits the call rather than its effect."""
+    return [
+        replace(call, result=None) if call.ok and call.name in state_changing else call
+        for call in calls
+    ]
+
+
 def _declared_options(world_root: Path) -> set[str]:
     """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
     try:
@@ -1648,9 +1683,15 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     sets that argument again (a draft the solution itself corrects)."""
     steps = list(getattr(scenario, "solution", None) or ())
     wrong = []
+    case = (getattr(scenario, "fixture", None) or {}).get(SOURCE_FIXTURE) or {}
     for at, step in enumerate(steps):
+        approved = reviewed_action_arguments(case, step.arguments) if isinstance(case, dict) else set()
         for name in step.fixed or ():
-            other = _other_value(step.arguments.get(name))
+            value = step.arguments.get(name)
+            if name in approved and isinstance(value, str) and value and value[-1].isascii() and value[-1].isdigit():
+                other = value[:-1] + str((int(value[-1]) + 1) % 10)
+            else:
+                other = _other_value(value)
             if other is None:
                 continue
             changed = _with_value(step, name, other)
@@ -1713,6 +1754,8 @@ def prove(
     catalogue: Catalogue,
     world_root: Path,
     *,
+    postgres_only: frozenset[str] = frozenset(),
+    state_changing: frozenset[str] = frozenset(),
     contract: AgentContract | None = None,
     actors: list[dict[str, Any]] | None = None,
     judge: ControlJudge | None = None,
@@ -1728,7 +1771,9 @@ def prove(
     case's controls; None uses the harness judge. `conflict_judge(expected, rule) -> (conflict, why)`
     decides whether a cited rule contradicts the expected outcome; None uses the harness judge.
     `agent_tools` are the tools the agent version under test has, when known; None skips that check."""
-    proof = Proof(case_goals=list(case_goals), as_written=as_written)
+    case = (getattr(scenario, "fixture", None) or {}).get(SOURCE_FIXTURE)
+    proof = Proof(case_goals=list(case_goals), as_written=as_written,
+                  reviewed_source_digest=semantic_source_digest(case, scenario) if isinstance(case, dict) else "")
     if agent_tools is not None:
         proof.missing_tools = sorted({str(step.tool) for step in scenario.solution} - set(agent_tools))
     if contract is None:
@@ -1819,6 +1864,9 @@ def prove(
             proof.broken = [ready.said]
         return proof
     proof.ready = True
+    if postgres_only and postgres_only & {str(step.tool) for step in scenario.solution}:
+        proof.postgres_only = True
+        return proof
 
     # Gate 2: does the reference solution pass this scenario's own checks?
     world, calls, refused, assumed = run(scenario, world_root, with_solution=True)
@@ -1973,18 +2021,25 @@ def prove(
         # A call-presence check can pass the no-op gate yet credit failed operations.
         # Keep the arguments, remove all results/effects, and inject an execution failure.
         # This is not a business refusal: a timeout does not prove correct refusal either.
-        crashed = [
-            replace(
-                call, ok=False, result=None, error="execution failed", refused=False, refusal_code=""
-            )
-            for call in calls
-        ]
-        if crashed:
+        if calls:
+            failed = crashed(calls)
             proof.failed_attempts = [
                 name
                 for name, source in checks
                 if not any(one.name == name and one.held for one in proof.with_nothing)
-                and run_check(source, untouched, crashed, name=name, reference=reference).held
+                and run_check(source, untouched, failed, name=name, reference=reference).held
+            ]
+        # Gate 4: the same calls on the untouched world, each successful state-changing one
+        # still `ok` but without its effect or its result. A check that holds credits the call.
+        if any(call.ok and call.name in state_changing for call in calls):
+            withheld = without_effect(calls, state_changing)
+            proof.no_effect = [
+                name
+                for name, source in checks
+                if any(one.name == name and one.held for one in proof.with_solution)
+                and not any(one.name == name and one.held for one in proof.with_nothing)
+                and name not in proof.failed_attempts
+                and run_check(source, untouched, withheld, name=name, reference=reference).held
             ]
     finally:
         untouched.close()

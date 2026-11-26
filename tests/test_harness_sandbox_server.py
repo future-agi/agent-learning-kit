@@ -10,10 +10,12 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import uuid
 
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
+import httpx
 from pydantic import Field, ValidationError
 import pytest
 
@@ -322,7 +324,9 @@ def test_local_connect_only_provider_requires_no_source_upload(tmp_path) -> None
     assert response.job.source.kind.value == "provider"
     assert (sandbox.jobs_root / response.job.job_id / "provider-source").is_dir()
 
-    with pytest.raises(ValueError, match="provider_only_requires_connect_only_provider"):
+    with pytest.raises(
+        ValueError, match="provider_only_requires_connect_only_provider"
+    ):
         LocalSandboxRequest(provider_only=True, connector="auto")
 
 
@@ -2018,6 +2022,96 @@ def test_tokenless_server_serves_jobs_under_the_flag(tmp_path):
     client = TestClient(create_app(tmp_path / "state"))
 
     assert client.get("/v1/jobs").status_code == 200
+
+
+def test_environment_source_transport_runs_inside_the_trusted_server(tmp_path):
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/environment-sources",
+        json={
+            "version": "environment-sources.request.v1",
+            "operation": "prepare",
+            "sources": [],
+            "destination_schema": {"fields": [{"name": "id", "data_type": "string"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["result"]["draft"]["sources"] == []
+
+
+def test_environment_source_transport_rejects_oversized_content_length(
+    tmp_path, monkeypatch
+):
+    from fi.alk.studio import environment_sources
+
+    monkeypatch.setattr(environment_sources, "MAX_REQUEST_BYTES", 8)
+    monkeypatch.setattr(
+        environment_sources,
+        "execute_request",
+        lambda payload: pytest.fail("oversized body reached the processor"),
+    )
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/environment-sources",
+        content=b"{}",
+        headers={"content-length": "9"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == "source_too_large"
+
+
+def test_environment_source_transport_bounds_streamed_bodies(tmp_path, monkeypatch):
+    from fi.alk.studio import environment_sources
+
+    monkeypatch.setattr(environment_sources, "MAX_REQUEST_BYTES", 8)
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/environment-sources",
+        content=(chunk for chunk in (b"1234", b"56789")),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == "source_too_large"
+
+
+def test_environment_source_processing_does_not_block_health(tmp_path, monkeypatch):
+    from fi.alk.studio import environment_sources
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_processor(payload):
+        started.set()
+        assert release.wait(timeout=2)
+        return {
+            "version": "environment-sources.response.v1",
+            "ok": True,
+            "operation": "prepare",
+            "result": {},
+        }
+
+    monkeypatch.setattr(environment_sources, "execute_request", slow_processor)
+
+    async def exercise():
+        transport = httpx.ASGITransport(app=create_app(tmp_path / "state"))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            source_request = asyncio.create_task(
+                client.post("/v1/environment-sources", content=b"{}")
+            )
+            assert await asyncio.to_thread(started.wait, 1)
+            assert (await client.get("/health")).json()["status"] == "ok"
+            release.set()
+            assert (await source_request).status_code == 200
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("flag", ["1", None])

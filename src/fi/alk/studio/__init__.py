@@ -46,7 +46,10 @@ _EXPORTS = {
     "expand_scenarios": ("fi.alk.studio._coverage", "expand_scenarios"),
     "synthesize_next_scenario": ("fi.alk.studio._coverage", "synthesize_next_scenario"),
     "coverage_report": ("fi.alk.studio._coverage", "coverage_report"),
-    "residual_uncovered_estimate": ("fi.alk.studio._coverage", "residual_uncovered_estimate"),
+    "residual_uncovered_estimate": (
+        "fi.alk.studio._coverage",
+        "residual_uncovered_estimate",
+    ),
     "bias_lint": ("fi.alk.studio._bias", "bias_lint"),
     "import_vendor_persona": ("fi.alk.studio._vendor", "import_vendor_persona"),
     "render_vendor_text": ("fi.alk.studio._vendor", "render_vendor_text"),
@@ -59,6 +62,107 @@ _EXPORTS = {
     "ensure_platform_agent": ("fi.alk.studio._generate", "ensure_platform_agent"),
     "generate_scenario": ("fi.alk.studio._generate", "generate_scenario"),
     "fetch_scenario": ("fi.alk.studio._generate", "fetch_scenario"),
+    "AgentEnvironmentSpec": (
+        "fi.alk.studio._environment_inputs",
+        "AgentEnvironmentSpec",
+    ),
+    "CompiledEnvironmentInputs": (
+        "fi.alk.studio._environment_inputs",
+        "CompiledEnvironmentInputs",
+    ),
+    "DestinationField": ("fi.alk.studio._environment_inputs", "DestinationField"),
+    "DestinationSchema": ("fi.alk.studio._environment_inputs", "DestinationSchema"),
+    "ProposedSimulationSchema": (
+        "fi.alk.studio._environment_input_types",
+        "ProposedSimulationSchema",
+    ),
+    "SimulationSchemaRepair": (
+        "fi.alk.studio._environment_input_types",
+        "SimulationSchemaRepair",
+    ),
+    "SchemaRepairChoice": (
+        "fi.alk.studio._environment_input_types",
+        "SchemaRepairChoice",
+    ),
+    "EnvironmentInputDraft": (
+        "fi.alk.studio._environment_inputs",
+        "EnvironmentInputDraft",
+    ),
+    "EnvironmentInputError": (
+        "fi.alk.studio._environment_inputs",
+        "EnvironmentInputError",
+    ),
+    "EnvironmentInputReview": (
+        "fi.alk.studio._environment_inputs",
+        "EnvironmentInputReview",
+    ),
+    "EnvironmentSource": ("fi.alk.studio._environment_inputs", "EnvironmentSource"),
+    "EvaluatorInputSet": ("fi.alk.studio._environment_inputs", "EvaluatorInputSet"),
+    "FieldMapping": ("fi.alk.studio._environment_inputs", "FieldMapping"),
+    "PolicyReview": ("fi.alk.studio._environment_inputs", "PolicyReview"),
+    "PolicyRuleProposal": ("fi.alk.studio._environment_inputs", "PolicyRuleProposal"),
+    "PolicyRuleReview": ("fi.alk.studio._environment_inputs", "PolicyRuleReview"),
+    "RecordRelationship": ("fi.alk.studio._environment_inputs", "RecordRelationship"),
+    "SourceAudience": ("fi.alk.studio._environment_inputs", "SourceAudience"),
+    "ReferenceReview": ("fi.alk.studio._environment_inputs", "ReferenceReview"),
+    "ReviewedReferenceSource": (
+        "fi.alk.studio._environment_inputs",
+        "ReviewedReferenceSource",
+    ),
+    "RecordReview": ("fi.alk.studio._environment_inputs", "RecordReview"),
+    "ReviewedEnvironmentInputs": (
+        "fi.alk.studio._environment_inputs",
+        "ReviewedEnvironmentInputs",
+    ),
+    "compile_environment_inputs": (
+        "fi.alk.studio._environment_inputs",
+        "compile_environment_inputs",
+    ),
+    "prepare_environment_inputs": (
+        "fi.alk.studio._environment_inputs",
+        "prepare_environment_inputs",
+    ),
+    "review_environment_inputs": (
+        "fi.alk.studio._environment_inputs",
+        "review_environment_inputs",
+    ),
+    "EnvironmentRequirements": (
+        "fi.alk.studio._source_scenarios",
+        "EnvironmentRequirements",
+    ),
+    "EvaluatorScenarioSpec": (
+        "fi.alk.studio._source_scenarios",
+        "EvaluatorScenarioSpec",
+    ),
+    "GeneratedScenarioDraftSet": (
+        "fi.alk.studio._source_scenarios",
+        "GeneratedScenarioDraftSet",
+    ),
+    "ScenarioDiagnostic": ("fi.alk.studio._source_scenarios", "ScenarioDiagnostic"),
+    "generate_source_scenarios": (
+        "fi.alk.studio._source_scenarios",
+        "generate_source_scenarios",
+    ),
+    "SourceRecordReference": (
+        "fi.alk.studio._source_scenarios",
+        "SourceRecordReference",
+    ),
+    "SourceScenarioDraft": ("fi.alk.studio._source_scenarios", "SourceScenarioDraft"),
+    "StartingFact": ("fi.alk.studio._source_scenarios", "StartingFact"),
+    "MappingProposal": ("fi.alk.studio._environment_inputs", "MappingProposal"),
+    "RelationshipProposal": (
+        "fi.alk.studio._environment_inputs",
+        "RelationshipProposal",
+    ),
+    "SourceProposals": ("fi.alk.studio._environment_inputs", "SourceProposals"),
+    "serialize_environment_snapshot": (
+        "fi.alk.studio._environment_inputs",
+        "serialize_environment_snapshot",
+    ),
+    "deserialize_environment_snapshot": (
+        "fi.alk.studio._environment_inputs",
+        "deserialize_environment_snapshot",
+    ),
     "load_persona": ("fi.alk.studio._library", "load_persona"),
     "save_persona": ("fi.alk.studio._library", "save_persona"),
     "load_scenario": ("fi.alk.studio._library", "load_scenario"),

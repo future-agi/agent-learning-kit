@@ -36,7 +36,7 @@ ENV PIP_DEFAULT_TIMEOUT=300 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
-      '.[livekit,harness-ui,harness-stores]' \
+      '.[livekit,harness-ui,harness-stores,documents,environment-inputs]' \
       'livekit-agents==1.8.3' \
       'livekit-plugins-cartesia==1.8.3' \
       'livekit-plugins-deepgram==1.8.3' \

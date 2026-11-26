@@ -60,7 +60,7 @@ def test_proof_requires_outcome_not_just_attempt(
     )
     proof = module.prove(
         SimpleNamespace(
-            sub_goals=["selected"], solution=(), setup_code="", ready_code=""
+            fixture={}, sub_goals=["selected"], solution=(), setup_code="", ready_code=""
         ),
         catalogue,
         tmp_path,
@@ -70,3 +70,16 @@ def test_proof_requires_outcome_not_just_attempt(
     if not accepted:
         assert "every tool attempt crashes" in proof.why()
     assert call.error == ""  # Mutation never edits the original evidence.
+
+
+def test_record_code_mutation_preserves_format_and_other_arguments():
+    from fi.alk.harness.scenario import SOURCE_FIXTURE, Step
+
+    case = {"starting_facts": [{"field": "expected_action", "value": "escalate_ACORN-59"}]}
+    step = Step(tool="escalate_case", arguments={"case_id": "R-1", "code": "ACORN-59"},
+                fixed={"code": "record: approved expected_action"})
+    scenario = SimpleNamespace(fixture={SOURCE_FIXTURE: case}, solution=[step])
+    [(label, [mutated], corrected)] = module._with_one_wrong(scenario)
+    assert (label, corrected) == ("escalate_case.code", False)
+    assert mutated.arguments == {"case_id": "R-1", "code": "ACORN-50"}
+    assert step.arguments["code"] == "ACORN-59"

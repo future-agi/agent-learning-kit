@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 from dataclasses import replace
 import json
 import os
@@ -8,6 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -33,7 +36,7 @@ from fi.alk.harness.bundle_author_v2 import (
 from fi.alk.harness import framework_servers
 from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
-from fi.alk.harness.bundle_v2 import ProcessUser, load_bundle_v2
+from fi.alk.harness.bundle_v2 import ProcessUser, load_bundle_v2, seal_bundle_v2
 from fi.alk.harness.certification import (
     CertificationAuthoring,
     CertificationChecks,
@@ -59,6 +62,7 @@ from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
 from fi.alk.harness.world.runtime import GeneratedWorld
 from fi.alk.harness.world_ir import WorldIR
+from fi.alk.studio import environment_sources as source_transport
 
 
 def test_source_tool_handler_preserves_safe_display_name(tmp_path: Path) -> None:
@@ -1224,6 +1228,76 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
             authoring=authoring,
             output=tmp_path / "bundle",
         )
+
+
+def test_reviewed_scenario_bundle_defers_target_configuration_until_run(tmp_path: Path) -> None:
+    from fi.alk.harness.hosted_entrypoint import require_deferred_agent_settings
+    from fi.alk.harness.process_preflight import PreflightError
+    from fi.alk.harness.reviewed_build import PIN_FILE
+
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    path = authoring / "contract.json"
+    contract = json.loads(path.read_text())
+    names = ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"]
+    contract.setdefault("runtime", {})["required_environment"] = {"agent": names}
+    path.write_text(json.dumps(contract))
+    kwargs = dict(source=source, job=_job(connector="auto", with_secrets=True),
+                  authoring=authoring, output=tmp_path / "bundle")
+    with pytest.raises(BundleAuthorError, match="requires_source_pin"):
+        author_bundle_v2(**kwargs, reviewed_scenarios_only=True)
+    digest = "sha256:" + "4" * 64
+    (authoring / PIN_FILE).write_text(json.dumps({
+        "id": "source_snapshot_" + "4" * 16, "digest": digest, "schema_digest": digest
+    }))
+    with pytest.raises(BundleAuthorError, match="target_runtime_configuration_missing"):
+        author_bundle_v2(**kwargs)
+    bundle = author_bundle_v2(**kwargs, reviewed_scenarios_only=True)
+    assert bundle.metadata["deferred_agent_settings"] == names
+    with pytest.raises(PreflightError, match="OPENAI_API_KEY"):
+        require_deferred_agent_settings(bundle, {"OPENAI_API_KEY": " "})
+    require_deferred_agent_settings(bundle, {name: "test-value" for name in names})
+
+
+def test_reviewed_scenarios_keep_unsupported_target_out_of_executable_bundle(tmp_path: Path) -> None:
+    import asyncio
+
+    from fi.alk.harness.bundle_v2 import RuntimeKindV2
+    from fi.alk.harness.process_preflight import PreflightError, preflight_bundle
+    from fi.alk.harness.process_runtime import ProcessRuntimeError, ProcessRuntimeProvider
+    from fi.alk.harness.reviewed_build import PIN_FILE
+
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "docker-compose.yml").write_text(
+        "services:\n  ollama:\n    image: ollama/ollama\n"
+        "  agent:\n    build: .\n    depends_on: [ollama]\n"
+    )
+    (source / "agent.py").write_text("raise AssertionError('target must not execute')\n")
+    authoring = _authoring(tmp_path)
+    _write_callable_contract(authoring)
+    digest = "sha256:" + "4" * 64
+    (authoring / PIN_FILE).write_text(json.dumps({
+        "id": "source_snapshot_" + "4" * 16, "digest": digest, "schema_digest": digest
+    }))
+    output = tmp_path / "bundle"
+    kwargs = dict(source=source, job=_job(connector="auto"), authoring=authoring, output=output)
+    with pytest.raises(BundleAuthorError, match="engine_unsupported"):
+        author_bundle_v2(**kwargs)
+    manifest = author_bundle_v2(**kwargs, reviewed_scenarios_only=True)
+    assert manifest.runtime.kind is RuntimeKindV2.SCENARIOS_ONLY
+    assert [process.name for process in manifest.processes] == ["world-db"]
+    assert (output / "scenarios/one/scenario.json").is_file()
+    with pytest.raises(PreflightError, match="ollama"):
+        preflight_bundle(output, manifest, parallelism=1, secret_refs={})
+    with pytest.raises(ProcessRuntimeError, match="runtime_unsupported"):
+        asyncio.run(ProcessRuntimeProvider().provision(
+            manifest, source=source, bundle_dir=output, work_directory=tmp_path / "run",
+        ))
+    assert not (tmp_path / "run").exists()
 
 
 def test_bundle_accepts_post_checkout_runtime_configuration_names(
@@ -2482,6 +2556,34 @@ def test_bundle_limits_authoring_scenarios_to_requested_count(tmp_path: Path) ->
         output=output,
     )
     assert [path.name for path in (output / "scenarios").iterdir()] == ["one"]
+
+
+def test_reviewed_source_pin_is_hashed_into_bundle_and_reseal(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    output = authoring / "environment-bundle"
+    job = _job(connector="http")
+    snapshot = authoring / "reviewed-source.json"
+    results = []
+    for character in ("a", "b"):
+        pin = {
+            "id": "source_snapshot_" + character * 16,
+            "digest": "sha256:" + character * 64,
+            "schema_digest": "sha256:" + "c" * 64,
+        }
+        snapshot.write_text(json.dumps(pin))
+        bundle = author_bundle_v2(source=source, job=job, authoring=authoring, output=output)
+        assert load_bundle_v2(output).metadata["reviewed_source"] == pin
+        assert json.loads((output / snapshot.name).read_bytes()) == pin
+        assert any(item.path == snapshot.name for item in bundle.files)
+        results.append((bundle.digest, sealed_from(authoring)))
+
+    assert all(left != right for left, right in zip(*results, strict=True))
+    snapshot.unlink()
+    with pytest.raises(BundleAuthorError, match="source_snapshot_changed"):
+        reseal_scenarios(authoring)
 
 
 def test_bundle_preserves_sqlite_scalar_types_and_boolean_values(
@@ -6221,6 +6323,299 @@ def test_a_certified_bundle_is_reused_only_while_it_seeds_world_sqlite(
 
 def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
+
+
+@pytest.mark.parametrize("authored", [False, True])
+def test_source_transport_reseals_generated_scenarios_in_current_archive(
+    tmp_path: Path, authored: bool,
+) -> None:
+    from test_genuine_agent_source_scenarios import _reviewed_order_knowledge
+
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.folder import read_folder, write_folder
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.studio import serialize_environment_snapshot
+
+    reviewed = _reviewed_order_knowledge("Tuesday", infer_schema=True)
+    snapshot = json.loads(serialize_environment_snapshot(reviewed))
+    generated = source_transport.execute_request(
+        json.dumps(
+            {
+                "version": source_transport.REQUEST_VERSION,
+                "operation": "generate_scenarios",
+                "snapshot": snapshot,
+                "requested_count": 3,
+                "environment_requirements": {"task": "Track an order"},
+            }
+        ).encode()
+    )["result"]
+    pin = {
+        "id": reviewed.snapshot_id,
+        "digest": reviewed.snapshot_digest,
+        "schema_digest": reviewed.simulation_schema_digest,
+    }
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    inherited = read_folder(authoring, "one")
+    assert inherited is not None
+    write_folder(inherited, Catalogue(), authoring)
+    bundle = authoring / "environment-bundle"
+    previous = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto"),
+        authoring=authoring,
+        output=bundle,
+    )
+    assert "reviewed_source" not in previous.metadata
+    inherited_root = bundle / "scenarios" / "one"
+    inherited_before = {
+        path.relative_to(inherited_root).as_posix(): path.read_bytes()
+        for path in inherited_root.rglob("*")
+        if path.is_file()
+    }
+    old_archive = _workspace_archive(authoring)
+    natives = [
+        Scenario.model_validate(item["native"]) for item in generated["scenarios"]
+    ]
+    wording_args = {}
+    if authored:
+        from fi.alk.harness.source_grounding import semantic_source_digest
+        natives = [item.model_copy(update={"name": f"track_order_status_{index}", "instruction":"Ask about delivery of order 4821.", "use_case":"Track a delivery."}) for index,item in enumerate(natives)]
+        wording_args = {"source_task":"Track an order", "writer_proved":True}
+        (authoring/"proofs.json").write_text(json.dumps({item.scenario_key:{"holds":True,"ready":True,"solvable":True,"not_vacuous":True,"reviewed_source_digest":semantic_source_digest(item.fixture["reviewed_source"], item)} for item in natives}))
+    for native in natives:
+        write_folder(native, Catalogue(), authoring)
+        if not authored:
+            (authoring / "scenarios" / native.name / "setup.py").unlink()
+            (authoring / "scenarios" / native.name / "ready.py").unlink()
+    pin_body = json.dumps(pin, sort_keys=True, separators=(",", ":"))
+    (authoring / "reviewed-source.json").write_text(pin_body, encoding="utf-8")
+    native = natives[0]
+    archive = _workspace_archive(authoring)
+
+    response = source_transport.execute_request(
+        json.dumps(
+            {
+                "version": source_transport.REQUEST_VERSION,
+                "operation": "reseal_scenarios",
+                "snapshot": snapshot,
+                "authoring_archive_base64": base64.b64encode(archive).decode(),
+                "mode": "existing_environment",
+                **wording_args,
+                "generated_scenario_keys": [item.scenario_key for item in natives],
+            }
+        ).encode()
+    )
+
+    assert response["ok"], response
+    result = response["result"]
+    assert result["reviewed_source"] == pin
+    assert result["bundle_digest"] != previous.digest
+    sealed = base64.b64decode(result["authoring_archive_base64"], validate=True)
+    with tarfile.open(fileobj=io.BytesIO(sealed), mode="r:gz") as contents:
+        names = contents.getnames()
+        manifest = json.load(contents.extractfile("environment-bundle/manifest.json"))
+        scenario = json.load(
+            contents.extractfile(f"environment-bundle/scenarios/{native.name}/scenario.json")
+        )
+        assert contents.extractfile(
+            f"environment-bundle/scenarios/{native.name}/setup.py"
+        ).read().startswith(b"def setup(world):")
+        assert contents.extractfile(
+            f"environment-bundle/scenarios/{native.name}/ready.py"
+        ).read().startswith(b"def ready(world):")
+        assert contents.extractfile(
+            "environment-bundle/reviewed-source.json"
+        ).read() == pin_body.encode()
+        archived_bodies = [
+            contents.extractfile(member).read()
+            for member in contents.getmembers()
+            if member.isfile()
+        ]
+    assert manifest["digest"] == result["bundle_digest"]
+    assert scenario["fixture"]["reviewed_source"] == native.fixture["reviewed_source"]
+    with tarfile.open(fileobj=io.BytesIO(sealed), mode="r:gz") as contents:
+        assert contents.extractfile("reviewed-source.json").read() == pin_body.encode()
+        future_save = tmp_path / "future-save"
+        contents.extractall(future_save)
+    assert reseal_scenarios(future_save) == result["bundle_digest"]
+    with tarfile.open(fileobj=io.BytesIO(sealed), mode="r:gz") as contents:
+        inherited_after = {
+            name.removeprefix("environment-bundle/scenarios/one/"): contents.extractfile(
+                name
+            ).read()
+            for name in contents.getnames()
+            if name.startswith("environment-bundle/scenarios/one/")
+            and contents.getmember(name).isfile()
+        }
+    assert inherited_after == inherited_before
+    assert "private_replacement_receipt" not in json.dumps(response)
+    assert "ORDER_GRADER_SECRET_9X" not in json.dumps(response)
+    assert "negative_control_output" not in json.dumps(response)
+    assert "Use this deliberately incorrect candidate response" not in json.dumps(response)
+    assert all(b"private_replacement_receipt" not in body for body in archived_bodies)
+    assert all(b"ORDER_GRADER_SECRET_9X" not in body for body in archived_bodies)
+    assert all(b"negative_control_output" not in body for body in archived_bodies)
+    assert all("reviewed-source-snapshot.json" not in name for name in names)
+
+    def reseal(candidate_snapshot, candidate_archive, keys=None):
+        return source_transport.execute_request(
+            json.dumps(
+                {
+                    "version": source_transport.REQUEST_VERSION,
+                    "operation": "reseal_scenarios",
+                    "snapshot": candidate_snapshot,
+                    "authoring_archive_base64": base64.b64encode(
+                        candidate_archive
+                    ).decode(),
+                    "mode": "existing_environment",
+                    **wording_args,
+                    "generated_scenario_keys": keys
+                    or [item.scenario_key for item in natives],
+                }
+            ).encode()
+        )
+
+    old = reseal(snapshot, old_archive)
+    assert old["error"]["code"] == "source_suite_invalid"
+
+    changed = _reviewed_order_knowledge("Thursday", infer_schema=True)
+    wrong_pin = reseal(
+        json.loads(serialize_environment_snapshot(changed)), archive
+    )
+    assert wrong_pin["error"]["code"] == "source_suite_invalid"
+
+    wrong_keys = reseal(snapshot, archive, [native.scenario_key])
+    assert wrong_keys["error"]["code"] == "source_suite_invalid"
+
+    inherited_path = authoring / "scenarios" / "one" / "scenario.json"
+    changed_inherited = json.loads(inherited_path.read_text(encoding="utf-8"))
+    changed_inherited["instruction"] = "Changed inherited task"
+    inherited_path.write_text(json.dumps(changed_inherited), encoding="utf-8")
+    changed = reseal(snapshot, _workspace_archive(authoring))
+    assert changed["error"]["code"] == "source_suite_invalid"
+    shutil.rmtree(authoring / "scenarios" / "one")
+    shutil.copytree(bundle / "scenarios" / "one", authoring / "scenarios" / "one")
+
+    shutil.rmtree(authoring / "scenarios" / "one")
+    dropped = reseal(snapshot, _workspace_archive(authoring))
+    assert dropped["error"]["code"] == "source_suite_invalid"
+    shutil.copytree(bundle / "scenarios" / "one", authoring / "scenarios" / "one")
+
+    forged = native.model_copy(update={"name": "forged", "scenario_key": "forged"})
+    write_folder(forged, Catalogue(), authoring)
+    forged_result = reseal(snapshot, _workspace_archive(authoring))
+    assert forged_result["error"]["code"] == "source_suite_invalid"
+    shutil.rmtree(authoring / "scenarios" / "forged")
+
+    prior_pin = {
+        "id": "source_snapshot_" + "a" * 16,
+        "digest": "sha256:" + "a" * 64,
+        "schema_digest": "sha256:" + "b" * 64,
+    }
+    prior = load_bundle_v2(bundle)
+    prior = prior.model_copy(
+        update={"metadata": {**prior.metadata, "reviewed_source": prior_pin}}
+    )
+    prior = prior.model_copy(update={"digest": seal_bundle_v2(prior)})
+    (bundle / "manifest.json").write_text(
+        json.dumps(prior.model_dump(mode="json")), encoding="utf-8"
+    )
+    replaced_pin = reseal(snapshot, _workspace_archive(authoring))
+    assert replaced_pin["ok"], replaced_pin
+    assert replaced_pin["result"]["reviewed_source"] == pin
+
+    shutil.rmtree(authoring / "scenarios" / natives[-1].name)
+    missing = reseal(snapshot, _workspace_archive(authoring))
+    assert missing["error"]["code"] == "source_suite_invalid"
+    write_folder(natives[-1], Catalogue(), authoring)
+
+    scenario_path = authoring / "scenarios" / native.name / "scenario.json"
+    unrelated_document = json.loads(scenario_path.read_text(encoding="utf-8"))
+    unrelated_document["instruction"] = "Book a flight to Paris."
+    scenario_path.write_text(json.dumps(unrelated_document), encoding="utf-8")
+    unrelated = reseal(snapshot, _workspace_archive(authoring))
+    assert unrelated["error"]["code"] == "source_suite_invalid"
+    write_folder(native, Catalogue(), authoring)
+
+    setup_path = authoring / "scenarios" / native.name / "setup.py"
+    setup_path.write_text("def setup(world):\n    world.delete_everything()\n")
+    tampered_script = reseal(snapshot, _workspace_archive(authoring))
+    assert tampered_script["error"]["code"] == "source_suite_invalid"
+    write_folder(native, Catalogue(), authoring)
+
+    manifest_path = bundle / "manifest.json"
+    tampered_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tampered_manifest["digest"] = "sha256:" + "0" * 64
+    manifest_path.write_text(json.dumps(tampered_manifest), encoding="utf-8")
+    tampered = reseal(snapshot, _workspace_archive(authoring))
+    assert tampered["error"]["code"] == "source_bundle_invalid"
+
+
+def test_source_transport_reseals_strict_reviewed_build_archive(tmp_path: Path) -> None:
+    from test_genuine_agent_source_scenarios import _reviewed_order_knowledge
+
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.folder import write_folder
+    from fi.alk.harness.hosted_conversation import _workspace_archive
+    from fi.alk.harness.reviewed_build import PIN_FILE
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.studio import serialize_environment_snapshot
+
+    reviewed = _reviewed_order_knowledge("Tuesday", infer_schema=True)
+    snapshot = json.loads(serialize_environment_snapshot(reviewed))
+    generated = source_transport.execute_request(
+        json.dumps(
+            {
+                "version": source_transport.REQUEST_VERSION,
+                "operation": "generate_scenarios",
+                "snapshot": snapshot,
+                "requested_count": 3,
+                "environment_requirements": {"task": "Track an order"},
+            }
+        ).encode()
+    )["result"]
+    pin = {
+        "id": reviewed.snapshot_id,
+        "digest": reviewed.snapshot_digest,
+        "schema_digest": reviewed.simulation_schema_digest,
+    }
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    shutil.rmtree(authoring / "scenarios")
+    natives = [
+        Scenario.model_validate(item["native"]) for item in generated["scenarios"]
+    ]
+    for native in natives:
+        write_folder(native, Catalogue(), authoring)
+    (authoring / PIN_FILE).write_text(json.dumps(pin), encoding="utf-8")
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", scenario_count=3),
+        authoring=authoring,
+        output=authoring / "environment-bundle",
+    )
+    response = source_transport.execute_request(
+        json.dumps(
+            {
+                "version": source_transport.REQUEST_VERSION,
+                "operation": "reseal_scenarios",
+                "snapshot": snapshot,
+                "authoring_archive_base64": base64.b64encode(
+                    _workspace_archive(authoring)
+                ).decode(),
+                "mode": "reviewed_build",
+                "generated_scenario_keys": [item.scenario_key for item in natives],
+            }
+        ).encode()
+    )
+    assert response["ok"], response
+    assert response["result"]["reviewed_source"] == pin
 
 
 def _places(tmp_path: Path, *, ir_seed: bool, contract: bool = False):

@@ -7,7 +7,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 from collections.abc import Callable, Collection
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -16,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .call_actor import NAME_MAX_LENGTH, ROLE_MAX_LENGTH
 from .job import ActorsSwitch, actors_on, current_actors_switch
+from .world_door import is_pre_run as is_pre_run
 
 _logger = logging.getLogger(__name__)
 
@@ -25,13 +25,6 @@ ACTORS_SCHEMA = "futureagi.actors.v1"
 AGENT = "agent"
 # The environment's caller, an actor like any other; each scenario still writes its persona for itself.
 CALLER = "caller"
-# `<trial>:<actor>:h<n>`, matched at its end only so an actor id starting with `h` is never read as one.
-_PRE_RUN_KEY = re.compile(r":h[0-9]+$")
-
-
-def is_pre_run(key: object) -> bool:
-    """Whether an action-log row was written before the run started (a pre-run session's message)."""
-    return bool(_PRE_RUN_KEY.search(str(key or "")))
 
 
 class Constraints(BaseModel):

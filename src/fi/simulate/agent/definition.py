@@ -235,6 +235,10 @@ class VapiTargetConfig(BaseModel):
         "VAPI_API_KEY",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
+    # Attached to every call this target places: `assistantOverrides.metadata` and
+    # `assistantOverrides.variableValues` (Vapi's create-call body has no top-level metadata).
+    call_metadata: dict[str, str] = Field(default_factory=dict)
+    call_variables: dict[str, str] = Field(default_factory=dict)
 
 
 RETELL_WEB_CALL_URL = "https://api.retellai.com/v3/create-web-call"
@@ -272,6 +276,9 @@ class RetellTargetConfig(BaseModel):
         "RETELL_API_KEY",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
+    # Attached to every web call: `metadata` and `retell_llm_dynamic_variables`.
+    call_metadata: dict[str, str] = Field(default_factory=dict)
+    call_variables: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("api_url", mode="before")
     @classmethod
