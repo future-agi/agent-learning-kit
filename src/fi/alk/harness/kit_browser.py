@@ -177,6 +177,11 @@ def _resolve(host: str) -> list[str]:
     return addresses
 
 
+def _housekeeping(host: str) -> bool:
+    name = host.strip().strip("[]").lower().rstrip(".")
+    return name == HOUSEKEEPING_HOST or name.endswith("." + HOUSEKEEPING_HOST)
+
+
 def _leads_back(address: str) -> bool:
     found = ipaddress.ip_address(address.split("%", 1)[0])
     # An IPv4 address written as IPv6 is read as the IPv4 one, whatever the Python release says of it.
@@ -188,10 +193,11 @@ def _leads_back(address: str) -> bool:
 class BrowserProxy(EgressProxy):
     """The browser's own refusing proxy: the environment's sites, never loopback, and nothing else.
 
-    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, once a client
-    has attached to the browser now running, and until it stops: before that only the browser itself can
-    have asked. It is logged by host, whoever in the browser asked. A request for the housekeeping name is
-    never logged.
+    A refusal is logged as the agent's ``egress_blocked`` attempt, marked ``via: browser``, while a browser runs,
+    whether or not its client attached through the relay: with no client the browser asks only for the housekeeping
+    name, which is never logged. Nothing is logged between a browser's stop and the next one's start, so what a
+    stopping browser still asks for is never the next trial's. It is logged by host, whoever in the browser asked.
+    Every request but the housekeeping one, let through or refused, says the browser was used.
     """
 
     via = "browser"
@@ -201,11 +207,13 @@ class BrowserProxy(EgressProxy):
         sites: Iterable[str],
         log: ActionLog | None,
         *,
-        attached: Callable[[], bool],
+        running: Callable[[], bool] = lambda: True,
+        used: Callable[[], None] = lambda: None,
         connect: Callable[[str, int], socket.socket] | None = None,
         resolve: Callable[[str], list[str]] = _resolve,
     ) -> None:
-        self._attached = attached
+        self._running = running
+        self._used = used
         self._connect = connect
         self._resolve = resolve
         super().__init__(sites, log)
@@ -216,6 +224,8 @@ class BrowserProxy(EgressProxy):
         return any(entry_admits(site, host) for site in self.allowed)
 
     def open(self, host: str, port: int) -> socket.socket:
+        if self._running() and not _housekeeping(host):
+            self._used()
         if self._connect is not None:
             return self._connect(host, port)
         addresses = self._resolve(host)
@@ -240,11 +250,9 @@ class BrowserProxy(EgressProxy):
         raise failed or OSError(f"{host} could not be reached in {_CONNECT_SECONDS} seconds")
 
     def refuse(self, host: str, method: str) -> None:
-        name = host.strip().strip("[]").lower().rstrip(".")
-        if name == HOUSEKEEPING_HOST or name.endswith("." + HOUSEKEEPING_HOST):
+        if _housekeeping(host) or not self._running():
             return
-        if not self._attached():
-            return
+        self._used()
         super().refuse(host, method)
 
 
@@ -257,7 +265,8 @@ def _write_json(path: Path, value: Any) -> None:
 class DevToolsRelay:
     """The browser's DevTools address as the agent is given it: fixed for the world's life, relayed to
     whichever browser runs now. It counts the clients that attach (a websocket to ``/devtools/``) since the
-    browser last started, in ``state_path``, for the trial to say whether the browser was used.
+    browser last started, and whether the browser's proxy was asked for anything, in ``state_path``, for the trial
+    to say whether the browser was used.
 
     Chromium names the address it was asked on in the websocket address it hands back, so a client that
     asked here attaches here too.
@@ -268,6 +277,7 @@ class DevToolsRelay:
         self._lock = threading.Lock()
         self._upstream: int | None = None
         self._attached = 0
+        self._requested = False
         # The same bounds as the egress proxy beside it: so many clients at once, and a connection idle both ways
         # as long as the longest call the runner allows.
         self._slots = threading.BoundedSemaphore(_max_clients())
@@ -290,6 +300,7 @@ class DevToolsRelay:
         with self._lock:
             self._upstream = port
             self._attached = 0
+            self._requested = False
             self._write()
 
     def release(self) -> None:
@@ -302,6 +313,19 @@ class DevToolsRelay:
         with self._lock:
             return self._upstream is not None and self._attached > 0
 
+    def running(self) -> bool:
+        """Whether a browser is behind the relay now."""
+        with self._lock:
+            return self._upstream is not None
+
+    def used(self) -> None:
+        """The browser now running was asked for something through its proxy: written once, until the next one."""
+        with self._lock:
+            if self._upstream is None or self._requested:
+                return
+            self._requested = True
+            self._write()
+
     def close(self) -> None:
         self._closed = True
         try:
@@ -311,7 +335,7 @@ class DevToolsRelay:
 
     def _write(self) -> None:
         try:
-            _write_json(self.state_path, {"attached": self._attached})
+            _write_json(self.state_path, {"attached": self._attached, "requested": self._requested})
         except OSError:
             logger.warning(
                 "browser: its state could not be written to %s", self.state_path
@@ -414,7 +438,7 @@ class KitBrowser:
         self.relay = DevToolsRelay(state_path)
         try:
             self.proxy = BrowserProxy(
-                sites, log, attached=self.relay.attached, connect=connect
+                sites, log, running=self.relay.running, used=self.relay.used, connect=connect
             )
         except BaseException:
             self.relay.close()
@@ -455,8 +479,7 @@ class KitBrowser:
         self.relay.target(self._devtools_port(profile))
 
     def stop(self) -> None:
-        """Stop the browser. From here no refusal is the agent's until the next browser has started and a client
-        attached to it."""
+        """Stop the browser. From here no refusal is the agent's until the next browser has started."""
         self.relay.release()
         handle, self._handle = self._handle, None
         if handle is not None:
@@ -541,7 +564,8 @@ def _log_tail(path: Path) -> str:
 
 def browser_notices(runtime: Any) -> list[dict[str, Any]]:
     """What a trial says of its world's browser: not started for sites the agent was not read to need, and not
-    used when no client attached to it. A state that can't be read is never taken for an attached client."""
+    used when no client attached to it and its proxy was asked for nothing. A state that can't be read is never
+    taken for a used browser."""
     browser = (getattr(runtime, "metadata", None) or {}).get("browser")
     if not isinstance(browser, dict):
         return []
@@ -555,21 +579,23 @@ def browser_notices(runtime: Any) -> list[dict[str, Any]]:
         ]
     if browser.get("state") != "started":
         return []
-    attached = 0
+    state: Any = None
     path = Path(str(browser.get("state_path") or ""))
     try:
         if path.is_file():
             with open(path, "rb") as handle:
                 state = json.loads(handle.read(4096))
-            attached = state.get("attached", 0) if isinstance(state, dict) else 0
     except (OSError, ValueError):
-        attached = 0
-    if isinstance(attached, int) and attached > 0:
+        state = None
+    state = state if isinstance(state, dict) else {}
+    attached = state.get("attached", 0)
+    if (isinstance(attached, int) and attached > 0) or state.get("requested") is True:
         return []
     return [
         {
             "code": BROWSER_NOT_USED,
-            "message": "The environment's browser was not used in this trial: no client attached to it. An agent "
+            "message": "The environment's browser was not used in this trial: no client attached to it, and it was "
+            "asked for no site. An agent "
             f"drives it by attaching to the address in {BROWSER_CDP_URL_ENV}. A browser the agent starts itself is "
             "bound only by the sandbox's firewall, not by the environment's sites.",
         }
