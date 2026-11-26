@@ -318,7 +318,7 @@ class PostgresStore(ContainerStore):
             + f"VALUES ({placeholders})"
         )
         # The one statement of a reset that runs the world's own code (a check, an index expression): it finds the
-        # world's functions by their bare names after the system's own (R6-1). Every statement of the harness's own
+        # world's functions by their bare names after the system's own . Every statement of the harness's own
         # runs on the system's path alone, so none of them reaches a function of the world's.
         connection.execute(f"SET LOCAL search_path = {_WORLD_CODE_PATH}")
         try:

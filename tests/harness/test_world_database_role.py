@@ -1584,7 +1584,7 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
     assert [row["name"] for row in store.records("riders")] == ["ada"]
     with psycopg.connect(superuser, autocommit=True) as connection:
         ran = connection.execute("SELECT who FROM audit.ran_as").fetchall()
-    # A2: the reset put back the `audit` schema too (empty, as the snapshot found it), and fired no trigger itself.
+    # The reset put back the `audit` schema too (empty, as the snapshot found it), and fired no trigger itself.
     assert ran == []
     with pytest.raises(StoreError, match="no_world_role"):
         attached_world_store(SimpleNamespace(address=superuser, tool_address=None, store_address=None))
@@ -1943,7 +1943,7 @@ def test_a_sentinel_is_read_as_the_login_at_the_baseline_and_the_log_reader_at_a
     postgres = pr.ManagedEngine.POSTGRES
 
     assert pr.sentinel_credentials(postgres, harness, login=login) is login
-    # S1/S2: the log reader runs only the harness's own query; a bundle's own sentinel runs as the store role.
+    # The log reader runs only the harness's own query; a bundle's own sentinel runs as the store role.
     own = pr.SEED_SENTINEL_QUERY
     assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=True, query=own) == pr.log_role(harness, 2)
     assert pr.sentinel_credentials(
@@ -2282,7 +2282,7 @@ def test_the_restricted_login_cannot_log_in_once_retired():
 
 
 _BUNDLE_SQL = {
-    # Every way past the old psql filter (Auditors A and B), and the ones psql itself would have run: with no psql,
+    # Every way past the old psql filter, and the ones psql itself would have run: with no psql,
     # each is a build that fails, and the shell never runs.
     "estring": ("SELECT E'\\'';\n\\! touch {marker}\n", False),
     "copy desync": ("COPY public.items (id) FROM stdin /* x;\n*/ \\! touch {marker}\n", False),
@@ -2302,7 +2302,7 @@ _BUNDLE_SQL = {
 @real_postgres
 @pytest.mark.parametrize("case", sorted(_BUNDLE_SQL))
 def test_a_bundle_s_sql_runs_only_as_sql_and_never_as_a_psql_command(tmp_path: Path, case):
-    """R2-1: bundle SQL runs in the harness's own process as the restricted login (psycopg), never through psql, so
+    """Bundle SQL runs in the harness's own process as the restricted login (psycopg), never through psql, so
     no line of it is a client command: one that would be fails the build, and its shell never runs."""
     text, builds = _BUNDLE_SQL[case]
     marker = tmp_path / "ran"
@@ -2344,7 +2344,7 @@ def test_bundle_sql_never_reaches_psql_or_a_child_s_environment(tmp_path: Path, 
 
 @real_postgres
 def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_reset(door_worlds):
-    """S3: roles outlive a build, so a membership an older harness granted (a store role in a group that read the
+    """Roles outlive a build, so a membership an older harness granted (a store role in a group that read the
     log) would make every later build refuse; each reset leaves every per-world role in its one group."""
     superuser, _world, _door, reset = door_worlds(True)
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -2371,7 +2371,7 @@ def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_
 
 @real_postgres
 def test_a_bundle_s_own_sentinel_reading_a_world_table_passes_at_reset_and_no_world_role_can_notify(door_worlds):
-    """S1/S2: a bundle's own sentinel reads a world table as the store role at a reset (the log reader may not), and
+    """A bundle's own sentinel reads a world table as the store role at a reset (the log reader may not), and
     no world role can call pg_notify to signal another session."""
     superuser, world, _door, _reset = door_worlds(True)
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -2388,7 +2388,7 @@ def test_a_bundle_s_own_sentinel_reading_a_world_table_passes_at_reset_and_no_wo
 
 @real_postgres
 def test_a_seed_that_fails_midway_leaves_the_login_unable_to_log_in(tmp_path: Path):
-    """R2-3: on every exit path after the login is made, it is left with no login, no bypass and no password."""
+    """On every exit path after the login is made, it is left with no login, no bypass and no password."""
     build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n",
                                    "INSERT INTO public.nowhere VALUES (1);\n")
     try:
@@ -2472,7 +2472,7 @@ def _world_store(door_worlds, superuser, world, roles: bool = True):
 
 @real_postgres
 def test_a_row_in_another_customer_schema_never_outlives_a_reset(door_worlds, monkeypatch):
-    """A2: the reset puts back every schema of the world's own, not only public."""
+    """The reset puts back every schema of the world's own, not only public."""
     from fi.alk.harness import privilege
 
     superuser, world, _door, _reset = door_worlds(True)
@@ -2508,11 +2508,11 @@ def _owned_by_the_login(superuser: str, setup: str) -> None:
         connection.execute(pr._NO_CREATE_IN_WORLD)
 
 
-# Auditor A's arm and probe: a CHECK the reset runs, calling the world's function by its bare name, that tries to
+# An armed CHECK the reset runs, calling the world's function by its bare name, that tries to
 # plant a function of its own, switch a trigger to fire even in replica mode, and give its role a setting.
 _ARMED_CHECK = (
     "CREATE FUNCTION public.helper() RETURNS int LANGUAGE sql AS 'SELECT 1'; "
-    # Its body names the world's own helper unqualified, as most customer code does (R6-1).
+    # Its body names the world's own helper unqualified, as most customer code does.
     "CREATE FUNCTION public.plant() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN PERFORM helper(); "
     "BEGIN EXECUTE 'CREATE FUNCTION public.backdoor() RETURNS int LANGUAGE sql AS ''SELECT 1'''; "
     "EXCEPTION WHEN others THEN NULL; END; "
@@ -2534,8 +2534,8 @@ _ARMED_CHECK = (
 
 @real_postgres
 def test_the_world_s_code_a_reset_runs_has_the_store_role_s_rights_and_plants_nothing(door_worlds, monkeypatch):
-    """Auditor A's arm/probe: the reset runs as the store role (never the tables' owner), on `pg_catalog, public` so
-    the world's own function is found by its bare name (R6-1). The CHECK's plant (a new function, an ALWAYS trigger)
+    """The reset runs as the store role (never the tables' owner), on `pg_catalog, public` so
+    the world's own function is found by its bare name . The CHECK's plant (a new function, an ALWAYS trigger)
     fails for want of rights; rows row security hides come back; FORCE is still set."""
     from fi.alk.harness import privilege
 
@@ -2626,7 +2626,7 @@ def test_a_reset_that_leaves_a_row_its_snapshot_did_not_hold_is_refused(door_wor
 
 @real_postgres
 def test_a_relation_a_world_role_made_after_the_snapshot_refuses_the_reset(door_worlds, monkeypatch):
-    """R6-2: a table a world role owns that the snapshot never held (made where CREATE was still granted) is no
+    """A table a world role owns that the snapshot never held (made where CREATE was still granted) is no
     store role's to empty or drop: the reset refuses the world rather than leave the trial's changes in place."""
     from fi.alk.harness import privilege
     from fi.alk.harness.world.stores import WorldResetRefused
@@ -2647,7 +2647,7 @@ def test_a_relation_a_world_role_made_after_the_snapshot_refuses_the_reset(door_
 
 @real_postgres
 def test_after_a_build_no_world_schema_takes_a_create_from_anyone_but_a_superuser(tmp_path: Path):
-    """R6-2: a customer schema that granted CREATE to PUBLIC (and `public`, which the login may create in) take
+    """A customer schema that granted CREATE to PUBLIC (and `public`, which the login may create in) take
     CREATE from no one but a superuser once the build is done."""
     build, run, baseline = _seeded(
         tmp_path,
@@ -2669,7 +2669,7 @@ def test_after_a_build_no_world_schema_takes_a_create_from_anyone_but_a_superuse
 
 @real_postgres
 def test_the_login_s_settings_an_earlier_build_made_are_gone_before_files_run():
-    """H2: `ALTER ROLE alk_migrator SET ...` (globally or in one database) from an earlier build's files does not
+    """`ALTER ROLE alk_migrator SET ...` (globally or in one database) from an earlier build's files does not
     shape the next build's session."""
     parts = urlsplit(_REAL)
     credentials = pr.EngineCredentials(parts.username, parts.password)
@@ -2689,7 +2689,7 @@ def test_the_login_s_settings_an_earlier_build_made_are_gone_before_files_run():
 @real_postgres
 @pytest.mark.parametrize("roles", (True, False))
 def test_identity_and_generated_columns_come_back_on_either_reset(door_worlds, monkeypatch, roles):
-    """A's I5: a GENERATED ALWAYS identity column takes its values back with OVERRIDING SYSTEM VALUE, and a stored
+    """A GENERATED ALWAYS identity column takes its values back with OVERRIDING SYSTEM VALUE, and a stored
     generated column is left to the table, on the store role's reset and the harness's own (one fixed user)."""
     from fi.alk.harness import privilege
 
@@ -2717,7 +2717,7 @@ def test_identity_and_generated_columns_come_back_on_either_reset(door_worlds, m
 
 
 _CUSTOMER_SQL = {
-    # Auditor B's splitter regressions: normal customer SQL that must build as psql would run it.
+    # Normal customer SQL that must build as psql would run it.
     "upper-case STDIN": ("CREATE TABLE public.t (a int);", "COPY public.t (a) FROM STDIN;\n1\n\\.\n"),
     "COPY with CSV and HEADER": (
         "CREATE TABLE public.t (a int, b text);",
@@ -2804,7 +2804,7 @@ _CUSTOMER_SQL = {
 @real_postgres
 @pytest.mark.parametrize("case", sorted(_CUSTOMER_SQL))
 def test_normal_customer_sql_builds_statement_by_statement(tmp_path: Path, case):
-    """Auditor B: the driver runs a file statement by statement as psql does, so normal migrations and seeds (COPY
+    """The driver runs a file statement by statement as psql does, so normal migrations and seeds (COPY
     with options, CONCURRENTLY, VACUUM, enum values added then used, real framework output) build."""
     schema, seed = _CUSTOMER_SQL[case]
     build, run, baseline = _seeded(tmp_path, schema + "\n", seed)
@@ -2816,7 +2816,7 @@ def test_normal_customer_sql_builds_statement_by_statement(tmp_path: Path, case)
 
 @real_postgres
 def test_a_membership_an_older_harness_left_is_gone_before_the_build_checks_anything(tmp_path: Path):
-    """S3 at the start of a build: a store role an older harness put in another group no longer refuses the build."""
+    """At the start of a build, a store role an older harness put in another group no longer refuses the build."""
     build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.t (a int);\n", "")
     run("postgres", "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_s9') THEN "
         "CREATE ROLE alk_s9 NOLOGIN; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_store') "
