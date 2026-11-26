@@ -1740,6 +1740,61 @@ def _world_identifiers(state: dict[str, list[dict[str, Any]]]) -> set[str]:
 _AN_IDENTIFIER = re.compile(r"[a-z]{2,5}_[a-z0-9_]{2,40}")
 
 
+def _reviewed_order_item_problems(scenario: Scenario, state: dict, contract) -> list[str]:
+    """Compare the product a reviewed case assigns to an order with the row the tools can read."""
+    fixture = scenario.fixture
+    if not fixture.get("reviewed_source"):
+        return []
+    order_id = fixture.get("order_id")
+    if not order_id:
+        return []
+    item_fields = ("item", "product", "item_name", "product_name")
+    category_fields = ("item_category", "product_category", "category")
+    claims = {key: str(fixture[key]) for key in (*item_fields, *category_fields) if fixture.get(key)}
+    for key, value in re.findall(
+        r"(?im)^\s*[-*]\s*(item|product|item category|product category)\s*:\s*([^\n]+)",
+        scenario.instruction,
+    ):
+        claims.setdefault(key.casefold().replace(" ", "_"), value.strip())
+    records = state.get("orders")
+    base_orders = (contract.base_environment or {}).get("orders") if contract else None
+    if not records or (contract and contract.data_store and contract.data_store.kind == "in_process"):
+        records = base_orders if base_orders is not None else records
+    if isinstance(records, dict):
+        order = records.get(str(order_id))
+    elif isinstance(records, list):
+        order = next((row for row in records if isinstance(row, dict) and any(
+            str(row.get(key)) == str(order_id) for key in ("id", "order_id", "key")
+        )), None)
+    else:
+        order = None
+    if not isinstance(order, dict):
+        lookup = any(str(step.arguments.get("order_id")) == str(order_id) for step in scenario.solution)
+        missing_expected = re.search(
+            r"not found|no (?:such|matching) order|order (?:is missing|does not exist)|unknown order",
+            scenario.tests, re.I,
+        )
+        if isinstance(records, (dict, list)) and lookup and not missing_expected:
+            return [f"The reference looks up order {order_id}, but the orders the agent can read "
+                    "do not contain it. Use a real order, prepare a visible matching order, or test "
+                    "a general policy inquiry without a successful lookup."]
+        return []
+    products = [str(order[key]).strip().casefold() for key in item_fields if order.get(key)]
+    categories = [str(order[key]).strip().casefold() for key in category_fields if order.get(key)]
+    if not products and not categories:
+        return []
+    for key, value in claims.items():
+        actual = categories + products if key in category_fields else products
+        value = value.strip().casefold()
+        if value not in actual and not (key in category_fields and any(
+            re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", item) for item in products
+        )):
+            return [f"The caller assigns {key}={value!r} to order {order_id}, but the agent's "
+                    f"order contains {', '.join(products + categories)}. Use a verified matching "
+                    "order or ask a general policy question without claiming the order contains this item."]
+    return []
+
+
 def _only_looked_up(scenario: Scenario, world_root: Path | None) -> set[str]:
     """Every argument value the reference names only in steps of read-only tools (`_read_tools`): a record it looks up
     and never acts on, which an adversarial case may expect to be missing."""
@@ -2364,15 +2419,17 @@ def accept_scenario(
             # table a check reads is not reported as referring to something that does not exist.
             trial, _applied, _ready = prepared(scenario, world_root)
             try:
+                starting_state = trial.state()
                 problems = validate_scenario(
                     scenario,
                     catalogue,
-                    trial.state(),
+                    starting_state,
                     simulator_prompt,
                     allow_empty_solution=allow_empty_solution,
                     spoken=spoken,
                 )
                 problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+                problems.extend(_reviewed_order_item_problems(scenario, starting_state, contract))
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial, world_root))
                 problems.extend(_records_only_a_context_file_holds(scenario, trial, world_root))

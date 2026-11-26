@@ -668,3 +668,37 @@ def test_private_case_assignment_survives_generator_changes(tmp_path, monkeypatc
     job["metadata"]["assigned_source_cases"] = [{**original.cases[0], "hidden_answer": "reject"}]
     with pytest.raises(ReleaseError, match="source_case_invalid"):
         _prepare(launch)
+
+
+def test_reviewed_order_uses_the_actual_product_returned_by_the_lookup():
+    from types import SimpleNamespace
+    from fi.alk.harness.scenario_tools import _reviewed_order_item_problems
+
+    stored = {"orders": {"A1003": {"item": "water bottle", "status": "delivered"}}}
+    def case(category):
+        return SimpleNamespace(instruction="", fixture={
+            "reviewed_source": {"id": "policy"}, "order_id": "A1003", "item_category": category
+        })
+    contract = SimpleNamespace(base_environment=stored, data_store=SimpleNamespace(kind="in_process"))
+    setup_state = {"orders": [{"order_id": "A1003", "item": "headphones", "category": "electronics"}]}
+    assert _reviewed_order_item_problems(case("electronics"), setup_state, contract)
+    assert not _reviewed_order_item_problems(case("electronics"), setup_state, None)
+    assert not _reviewed_order_item_problems(case("water bottle"), {}, contract)
+    general = SimpleNamespace(instruction="What is the fee on opened electronics?",
+                              fixture={"reviewed_source": {"id": "policy"}})
+    assert not _reviewed_order_item_problems(general, {}, contract)
+
+
+def test_reviewed_hypothetical_reference_does_not_require_a_real_order_lookup():
+    from types import SimpleNamespace
+    from fi.alk.harness.scenario_tools import _reviewed_order_item_problems
+
+    case = SimpleNamespace(fixture={"reviewed_source":{"id":"policy"}, "order_id":"ORD-absent"},
+                           instruction="", tests="Process the customer's order.",
+                           solution=[SimpleNamespace(arguments={"order_id":"ORD-absent"})])
+    assert _reviewed_order_item_problems(case, {"orders":[]}, None)
+    case.tests = "Tell the caller the order was not found."
+    assert not _reviewed_order_item_problems(case, {"orders":[]}, None)
+    case.tests = "Explain the policy for future purchases."
+    case.solution = [SimpleNamespace(arguments={"query":"returns policy"})]
+    assert not _reviewed_order_item_problems(case, {"orders":[]}, None)
