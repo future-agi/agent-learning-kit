@@ -586,12 +586,24 @@ class BrowserRecorder:
     def _read(self, connection: CdpSocket) -> None:
         try:
             while True:
-                self.handle(connection.receive())
+                message = connection.receive()
+                try:
+                    self.handle(message)
+                except Exception as exc:  # noqa: BLE001 - one event handled badly never ends the record
+                    self.record.broken(f"an event from the browser was not handled ({type(exc).__name__})")
+                    logger.warning("browser record: an event from the browser was not handled", exc_info=True)
         except Exception as exc:  # noqa: BLE001 - the end of the connection, wanted or not
             if not self._leaving and connection is self._socket:
                 self.record.broken(f"the browser's DevTools connection ended ({type(exc).__name__})")
                 logger.warning("browser record: the DevTools connection ended", exc_info=True)
         finally:
+            # A connection no longer read is closed: the browser holds each new tab for the recorder while it is
+            # connected, and lets them go when it is not.
+            if connection is self._socket:
+                self._drop()
+            else:
+                with contextlib.suppress(Exception):
+                    connection.close()
             if connection is self._socket or self._socket is None:
                 self.write()
 
