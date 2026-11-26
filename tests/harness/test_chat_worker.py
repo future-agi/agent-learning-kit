@@ -847,7 +847,10 @@ def test_a_screenshot_the_run_s_level_keeps_none_of_is_not_sent_and_says_the_lev
             self.kinds.append(kind.value)
             return f"stored-{len(self.kinds)}"
 
+    sent: list[dict] = []
+
     async def worker(module, payload, **_kwargs):
+        sent.append(payload)
         return {
             "outcome": {
                 "calls": [], "turns": 1, "started_at": None, "ended_at": None, "duration_ms": 1,
@@ -871,6 +874,16 @@ def test_a_screenshot_the_run_s_level_keeps_none_of_is_not_sent_and_says_the_lev
     )
     assert adapter.kinds == ["transcript"]
     assert [one["code"] for one in outcome.notices] == ["screenshots_not_sent_at_level"]
+    # The worker is told, so it takes none and says the level itself, never that the platform lost them.
+    assert [one["screenshots_kept"] for one in sent] == [False]
+
+
+def test_the_worker_keeps_no_screenshot_where_the_run_s_level_keeps_none():
+    from fi.alk.harness.outbound import ArtifactKind
+
+    assert chat_worker._ArtifactCollector(screenshots_kept=False).keeps_artifact(ArtifactKind.SCREENSHOT) is False
+    assert chat_worker._ArtifactCollector(screenshots_kept=False).keeps_artifact(ArtifactKind.TRANSCRIPT) is True
+    assert chat_worker._ArtifactCollector().keeps_artifact(ArtifactKind.SCREENSHOT) is True
 
 
 def test_the_worker_keeps_screenshots_within_what_its_result_can_carry(monkeypatch):
