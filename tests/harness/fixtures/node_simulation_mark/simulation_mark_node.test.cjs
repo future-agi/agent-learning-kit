@@ -767,3 +767,73 @@ test("an ingest key that is not a valid header value turns the hook off, with on
     assert.equal(sent.body.toString(), body);
   }
 });
+
+test("a request that resolves the collector's name itself is not given the key", async (t) => {
+  // The collector's name resolves nowhere; only a custom lookup reaches the server on its port.
+  const other = await stub();
+  t.after(() => other.server.close());
+  const script = `
+    import http from "node:http";
+    const lookup = (host, options, callback) => {
+      if (typeof options === "function") callback = options;
+      if (options && options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+      else callback(null, "127.0.0.1", 4);
+    };
+    const requests = [
+      { lookup },
+      { agent: new http.Agent({ lookup }) },
+      { set: () => { http.globalAgent = new http.Agent({ lookup }); } },
+    ];
+    for (const { set, ...extra } of requests) {
+      if (set) set();
+      await new Promise((resolve, reject) => {
+        const req = http.request({
+          host: "collector.invalid", port: ${other.port}, path: "/v1/traces", method: "POST", ...extra,
+          headers: { "content-type": "application/json", "x-api-key": "customer-key" },
+        }, (res) => { res.resume(); res.on("end", resolve); });
+        req.on("error", reject);
+        req.end("{}");
+      });
+    }
+  `;
+  const env = {
+    ...envFor(other),
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `http://collector.invalid:${other.port}/v1/traces`,
+  };
+  const result = await run(script, env);
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(
+    other.seen.map((sent) => [sent.headers["x-api-key"], sent.headers["x-secret-key"]]),
+    Array(3).fill(["customer-key", undefined]),
+  );
+});
+
+test("a fetch with its own dispatcher is not given the key", async (t) => {
+  const collector = await stub();
+  t.after(() => collector.server.close());
+  const script = `
+    const seen = [];
+    // A dispatcher decides where the request goes; this one only records what it was handed.
+    const dispatcher = {
+      dispatch(options, handler) {
+        seen.push(Object.fromEntries(
+          Object.entries(options.headers || {}).map(([name, value]) => [name.toLowerCase(), value]),
+        ));
+        handler.onError(new Error("recorded"));
+        return true;
+      },
+    };
+    try {
+      await fetch("http://127.0.0.1:${collector.port}/v1/traces", {
+        method: "POST", dispatcher, body: "{}",
+        headers: { "content-type": "application/json", "x-api-key": "customer-key" },
+      });
+    } catch (_) {}
+    console.log(JSON.stringify(seen.map((headers) => [headers["x-api-key"], headers["x-secret-key"]])));
+  `;
+  const result = await run(script, envFor(collector));
+  assert.equal(result.code, 0, result.stderr);
+  // JSON writes the absent secret header as null.
+  assert.deepEqual(JSON.parse(result.stdout.trim().split("\n").pop()), [["customer-key", null]]);
+  assert.equal(collector.seen.length, 0);
+});

@@ -297,7 +297,9 @@ function install() {
           typeof input === "string" || input instanceof URL ? String(input) : input.url,
         );
         const method = (init && init.method) || (input && input.method) || "GET";
-        if (!aimedAtUs(method, url.protocol, url.hostname, url.port, url.pathname)) {
+        // A dispatcher of the caller's own sends the request wherever it chooses: never ours.
+        const ownDispatcher = (init && init.dispatcher !== undefined) || (input && input.dispatcher !== undefined);
+        if (ownDispatcher || !aimedAtUs(method, url.protocol, url.hostname, url.port, url.pathname)) {
           return originalFetch.call(this, input, init);
         }
         request = new Request(input, init);
@@ -457,14 +459,17 @@ function install() {
   /**
    * Whether the agent connects where the request says: Node's own Agent, with no destination of
    * its own and its own createConnection. Any other agent (a proxy agent, a subclass, one built
-   * with a host or port) may lead anywhere, so its request is never given the key.
+   * with a host, a port or its own DNS lookup) may lead anywhere, so its request is never given
+   * the key.
    */
   function stockAgent(agent) {
     if (agent === false || agent === undefined || agent === null) return true;
     if (agent.constructor !== http.Agent && agent.constructor !== https.Agent) return false;
     if (Object.prototype.hasOwnProperty.call(agent, "createConnection")) return false;
     const options = agent.options || {};
-    return !["host", "hostname", "port", "socketPath"].some((name) => options[name] !== undefined);
+    return !["host", "hostname", "port", "socketPath", "lookup"].some(
+      (name) => options[name] !== undefined,
+    );
   }
 
   function patchRequest(module, defaultProtocol) {
@@ -484,8 +489,8 @@ function install() {
         const options = args[index] && typeof args[index] === "object" ? args[index] : null;
         const opts = options || {};
         // Where Node sends it: the options over the URL's, the host and port as ClientRequest
-        // reads them. A socket the caller or its agent supplies goes wherever it leads, so it is
-        // never ours.
+        // reads them. A socket or a DNS lookup the caller or its agent supplies goes wherever it
+        // leads, so it is never ours.
         const target = url ? { ...nodeUrl.urlToHttpOptions(url), ...opts } : opts;
         const host = target.hostname || target.host || "localhost";
         const port =
@@ -493,6 +498,7 @@ function install() {
         if (
           !target.socketPath &&
           typeof target.createConnection !== "function" &&
+          target.lookup === undefined &&
           stockAgent(target.agent === undefined ? module.globalAgent : target.agent) &&
           aimedAtUs(target.method, target.protocol || defaultProtocol, host, port, target.path)
         ) {
