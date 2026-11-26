@@ -558,9 +558,9 @@ def _runtime(metadata):
     )
 
 
-def _started(tmp_path, attached: int, record: dict | None = None):
+def _started(tmp_path, attached: int, record: dict | None = None, *, requested: bool = False):
     state = tmp_path / "w0.json"
-    state.write_text(json.dumps({"attached": attached}))
+    state.write_text(json.dumps({"attached": attached, "requested": requested}))
     record_path = tmp_path / "w0-record.json"
     if record is not None:
         record_path.write_text(json.dumps(record))
@@ -570,6 +570,16 @@ def _started(tmp_path, attached: int, record: dict | None = None):
 def test_a_browser_nobody_attached_to_reads_not_used_never_an_empty_record(tmp_path) -> None:
     evidence = browser_record.browser_evidence(_started(tmp_path, 0, {"rows": []}), timeout=0.2)
     assert evidence == {"state": "not_used"}
+
+
+def test_a_browser_asked_for_a_site_with_no_client_on_the_relay_was_used_as_its_notices_say(tmp_path) -> None:
+    # The record and the trial's notices read one answer: a browser its proxy was asked through was used.
+    from fi.alk.harness.kit_browser import browser_notices
+
+    runtime = _started(tmp_path, 0, requested=True)
+    assert browser_notices(runtime) == []
+    evidence = browser_record.browser_evidence(runtime, timeout=0.2)
+    assert evidence["state"] == "used"
 
 
 def test_a_world_with_no_browser_has_no_browser_evidence(tmp_path) -> None:
