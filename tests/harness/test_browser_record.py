@@ -524,6 +524,20 @@ def test_no_page_is_photographed_once_the_pages_screenshots_are_full(tmp_path, d
     assert sum(1 for one in fake.sent if one["method"] == "Page.captureScreenshot") == 2
 
 
+def test_a_closed_tab_is_never_photographed_at_the_end(tmp_path, devtools_port) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    try:
+        for message in _loaded("http://shop.test/"):
+            fake.queue(message)
+        fake.queue({"method": "Target.detachedFromTarget", "params": {"sessionId": "S1", "targetId": "T1"}})
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [one["when"] for one in body["screenshots"]] == ["load"]
+    assert sum(1 for one in fake.sent if one["method"] == "Page.captureScreenshot") == 1
+    assert recorder._tabs == {} and recorder._urls == {}
+
+
 def test_each_page_and_the_trial_s_end_are_photographed(tmp_path, devtools_port) -> None:
     fake, recorder = _recording(tmp_path, devtools_port)
     try:
