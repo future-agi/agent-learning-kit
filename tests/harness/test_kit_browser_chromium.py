@@ -363,9 +363,59 @@ def test_a_refused_page_is_kept_whole_and_a_page_s_refused_requests_are_counted(
     assert "http://www.example.com/deals" in [one["url"] for one in body["blocked_navigations"]]
     assert "tracker.example.net" in [one["host"] for one in body["blocked_page_requests"]]
     assert not any(one["url"].startswith("http://tracker.") for one in body["blocked_navigations"])
-    # The browser's own error page at the refused address is no page the agent opened, and is never photographed.
-    assert not any(row["url"].startswith("chrome-error:") for row in body["rows"])
-    assert not any(one["url"].startswith("chrome-error:") for one in body["screenshots"])
+    _no_page_of(body, "www.example.com")
+
+
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_a_refused_page_is_neither_a_page_opened_nor_photographed(site, tmp_path, scheme) -> None:
+    # Refused over http, the proxy's own answer is shown at the refused address; over https, the browser's error
+    # page. Neither is a page the agent opened: no row, no screenshot, and the end screenshot is not of it.
+    # A browser of its own: the module's record is sealed by an earlier test, and a sealed record keeps no more.
+    refused = f"{scheme}://www.example.com/deals"
+
+    def connect(host: str, port: int) -> socket.socket:
+        if host == "shop.test":
+            return socket.create_connection(("127.0.0.1", site.server_port), timeout=5)
+        raise OSError(f"no route to {host}")
+
+    kit = KitBrowser(
+        binary=BINARY,
+        sites=["shop.test"],
+        log=MemoryLog(),
+        directory=tmp_path / "w0",
+        state_path=tmp_path / "w0.json",
+        launch=_launch,
+        stop=_stop,
+        connect=connect,
+        recorder=BrowserRecorder(["shop.test"], tmp_path / "w0-record.json"),
+    )
+    kit.start()
+    try:
+
+        async def steps(page):
+            await page.open("http://shop.test/form")
+            await page.open(refused)
+
+        _run(kit, steps)
+        body = _settled(kit)
+        sealed = sealed_record(kit.recorder.record_path, timeout=5)
+    finally:
+        kit.close()
+    assert refused in [one["url"] for one in body["blocked_navigations"]]
+    # The page before it was photographed, so a screenshot of the refused page would have been kept.
+    assert [(one["when"], one["url"]) for one in sealed["screenshots"] if one["when"] == "load"] == [
+        ("load", "http://shop.test/form")
+    ]
+    _no_page_of(body, "www.example.com")
+    _no_page_of(sealed, "www.example.com")
+
+
+def _no_page_of(body: dict, host: str) -> None:
+    def refused(url: str) -> bool:
+        return url.startswith("chrome-error:") or urlsplit(url).hostname == host
+
+    assert not [row for row in body["rows"] if refused(row["url"])]
+    assert not [one for one in body["screenshots"] if refused(one["url"])]
 
 
 def test_a_page_s_own_script_cannot_write_the_record(browser) -> None:
