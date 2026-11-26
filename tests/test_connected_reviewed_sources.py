@@ -676,7 +676,7 @@ def test_reviewed_order_uses_the_actual_product_returned_by_the_lookup():
 
     stored = {"orders": {"A1003": {"item": "water bottle", "status": "delivered"}}}
     def case(category):
-        return SimpleNamespace(instruction="", fixture={
+        return SimpleNamespace(instruction="", solution=[], tests="", fixture={
             "reviewed_source": {"id": "policy"}, "order_id": "A1003", "item_category": category
         })
     contract = SimpleNamespace(base_environment=stored, data_store=SimpleNamespace(kind="in_process"))
@@ -684,7 +684,7 @@ def test_reviewed_order_uses_the_actual_product_returned_by_the_lookup():
     assert _reviewed_order_item_problems(case("electronics"), setup_state, contract)
     assert not _reviewed_order_item_problems(case("electronics"), setup_state, None)
     assert not _reviewed_order_item_problems(case("water bottle"), {}, contract)
-    general = SimpleNamespace(instruction="What is the fee on opened electronics?",
+    general = SimpleNamespace(instruction="What is the fee on opened electronics?", solution=[], tests="",
                               fixture={"reviewed_source": {"id": "policy"}})
     assert not _reviewed_order_item_problems(general, {}, contract)
 
@@ -701,7 +701,8 @@ def test_reviewed_hypothetical_reference_does_not_require_a_real_order_lookup():
     assert not _reviewed_order_item_problems(case, {"orders":[]}, None)
     case.tests = "Explain the policy for future purchases."
     case.solution = [SimpleNamespace(arguments={"query":"returns policy"})]
-    assert not _reviewed_order_item_problems(case, {"orders":[]}, None)
+    assert _reviewed_order_item_problems(case, {"orders":[]}, None)
+    assert not _reviewed_order_item_problems(case, {}, None)
 
 
 def test_prospective_policy_question_does_not_test_an_unrelated_order_lookup():
@@ -753,3 +754,29 @@ def test_ordinary_cases_must_not_grade_uncited_source_facts():
     ):
         assert reviewed.bind(arg, []) == arg
         assert bind_scenario(reviewed.evidence, arg) == ""
+
+
+@pytest.mark.parametrize("caller", [
+    "I purchased an electronic device under order 000481.",
+    "Your details:\n- Order ID: 000481",
+    "My order number is printed below. Order #ORD-X009.",
+    "Check order_reference=RE-9900.",
+    "The order number is VP-809.",
+])
+def test_claimed_customer_order_must_exist_even_if_only_a_policy_tool_is_called(caller):
+    from types import SimpleNamespace
+    from fi.alk.harness.scenario_tools import _reviewed_order_item_problems
+
+    scenario = SimpleNamespace(
+        fixture={"reviewed_source":{"id":"policy"}},
+        instruction=caller,
+        solution=[SimpleNamespace(arguments={"query":"restocking fee"})],
+        tests="Confirms 18 percent for opened electronics.",
+    )
+    world = {"orders":[{"order_id":"A1003","item":"water bottle"}]}
+    problems = _reviewed_order_item_problems(scenario, world, None)
+    assert problems and "A1003" in problems[0]
+    scenario.tests = "Tell the caller that the policy was not found."
+    assert _reviewed_order_item_problems(scenario, world, None)
+    scenario.tests = "Tell the caller the order was not found."
+    assert not _reviewed_order_item_problems(scenario, world, None)

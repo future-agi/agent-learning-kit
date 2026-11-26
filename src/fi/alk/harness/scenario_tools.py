@@ -1768,8 +1768,44 @@ def _reviewed_order_item_problems(scenario: Scenario, state: dict, contract) -> 
     fixture = scenario.fixture
     if not fixture.get("reviewed_source"):
         return []
-    order_id = fixture.get("order_id")
-    if not order_id:
+    records = state.get("orders")
+    base_orders = (contract.base_environment or {}).get("orders") if contract else None
+    if not records or (contract and contract.data_store and contract.data_store.kind == "in_process"):
+        records = base_orders if base_orders is not None else records
+    if isinstance(records, list):
+        records = {
+            str(value): row for row in records if isinstance(row, dict)
+            for key in ("id", "order_id", "key") if (value := row.get(key)) is not None
+        }
+    if not isinstance(records, dict):
+        return []
+    # Resolve transaction references in both the structured fixture and the caller's words.
+    # A grading solution that only reads a policy can still give its caller a nonexistent order.
+    id_fields = ("order_id", "order_number", "order_ref", "order_reference")
+    ids = {str(fixture[key]) for key in id_fields if fixture.get(key) is not None}
+    ids.update(str(step.arguments[key]) for step in scenario.solution for key in id_fields if step.arguments.get(key) is not None)
+    for match in re.finditer(
+        r"\border(?:[ _-]?(?:id|no\.?|number|ref(?:erence)?))?\s*(?:is\s+)?[:=#]?\s*#?"
+        r"([A-Za-z0-9][A-Za-z0-9_-]{1,63})\b", scenario.instruction, re.I,
+    ):
+        if any(ch.isdigit() for ch in match[1]):
+            ids.add(match[1])
+    by_id = {str(key).casefold(): value for key, value in records.items()}
+    missing = sorted(key for key in ids if key.casefold() not in by_id)
+    if missing and not re.search(
+        r"\border\b[^.\n]{0,45}\b(?:not found|does not exist|is missing)\b|"
+        r"\b(?:no such|no matching|unknown|missing|nonexistent) order\b",
+        scenario.tests, re.I,
+    ):
+        available = ", ".join(sorted(str(key) for key in records)[:12]) or "(none)"
+        return [f"The caller or reference names order {', '.join(missing)}, which the agent cannot find after setup. "
+                f"Available orders include {available}. For a general policy inquiry omit the order number "
+                "entirely. Use a real matching order when testing an existing purchase."]
+    order_id = str(fixture["order_id"]) if fixture.get("order_id") is not None else None
+    if not order_id and len(ids) == 1:
+        order_id = next(iter(ids))
+    order = by_id.get(order_id.casefold()) if order_id else None
+    if not isinstance(order, dict):
         return []
     item_fields = ("item", "product", "item_name", "product_name")
     category_fields = ("item_category", "product_category", "category")
@@ -1779,29 +1815,6 @@ def _reviewed_order_item_problems(scenario: Scenario, state: dict, contract) -> 
         scenario.instruction,
     ):
         claims.setdefault(key.casefold().replace(" ", "_"), value.strip())
-    records = state.get("orders")
-    base_orders = (contract.base_environment or {}).get("orders") if contract else None
-    if not records or (contract and contract.data_store and contract.data_store.kind == "in_process"):
-        records = base_orders if base_orders is not None else records
-    if isinstance(records, dict):
-        order = records.get(str(order_id))
-    elif isinstance(records, list):
-        order = next((row for row in records if isinstance(row, dict) and any(
-            str(row.get(key)) == str(order_id) for key in ("id", "order_id", "key")
-        )), None)
-    else:
-        order = None
-    if not isinstance(order, dict):
-        lookup = any(str(step.arguments.get("order_id")) == str(order_id) for step in scenario.solution)
-        missing_expected = re.search(
-            r"not found|no (?:such|matching) order|order (?:is missing|does not exist)|unknown order",
-            scenario.tests, re.I,
-        )
-        if isinstance(records, (dict, list)) and lookup and not missing_expected:
-            return [f"The reference looks up order {order_id}, but the orders the agent can read "
-                    "do not contain it. Use a real order, prepare a visible matching order, or test "
-                    "a general policy inquiry without a successful lookup."]
-        return []
     products = [str(order[key]).strip().casefold() for key in item_fields if order.get(key)]
     categories = [str(order[key]).strip().casefold() for key in category_fields if order.get(key)]
     if not products and not categories:
@@ -2430,6 +2443,8 @@ def accept_scenario(
                 spoken=spoken,
             )
             problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+            if contract and contract.data_store and contract.data_store.kind == "in_process":
+                problems.extend(_reviewed_order_item_problems(scenario, {}, contract))
             problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
             problems.extend(_controls_the_contract_refuses(scenario, world_root, attached))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
