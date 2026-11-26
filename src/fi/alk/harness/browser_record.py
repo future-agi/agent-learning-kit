@@ -41,6 +41,7 @@ from urllib import request as urllib_request
 from urllib.parse import urlsplit
 
 from .egress_proxy import entry_admits
+from .kit_browser import browser_used
 from .outbound import redact_outbound_text
 from .world_door import MemoryLog
 
@@ -807,18 +808,6 @@ SCREENSHOTS_CAPPED = "screenshots_capped"
 SCREENSHOTS_NOT_KEPT = "screenshots_not_kept"
 
 
-def _attached(state_path: Any) -> int:
-    path = Path(str(state_path or ""))
-    try:
-        if path.is_file():
-            with path.open("rb") as handle:
-                count = json.loads(handle.read(4096)).get("attached")
-            return count if isinstance(count, int) and count > 0 else 0
-    except (OSError, ValueError, AttributeError):
-        pass
-    return 0
-
-
 def browser_evidence(runtime: Any, *, timeout: float = 5.0) -> dict[str, Any] | None:
     """What the trial keeps of its world's browser: None for a world without one; ``not_started`` or ``not_used``
     said as such, never an empty record that reads as clean; otherwise the record, sealed at the trial's end."""
@@ -827,7 +816,7 @@ def browser_evidence(runtime: Any, *, timeout: float = 5.0) -> dict[str, Any] | 
         return None
     if browser.get("state") != "started":
         return {"state": str(browser.get("state") or "unknown")}
-    if not _attached(browser.get("state_path")):
+    if not browser_used(browser.get("state_path")):
         return {"state": "not_used"}
     record = sealed_record(Path(str(browser.get("record_path") or "")), timeout=timeout) if browser.get(
         "record_path"

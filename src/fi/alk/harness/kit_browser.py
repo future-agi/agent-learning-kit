@@ -601,6 +601,25 @@ def _log_tail(path: Path) -> str:
     return "".join(one for one in redact_outbound_text(text) if one.isprintable())
 
 
+def browser_used(state_path: Any) -> bool:
+    """Whether the world's browser was used since it last started: a client attached through the relay, or its proxy
+    was asked for anything. A state that can't be read is never taken for a used browser."""
+    path = Path(str(state_path or ""))
+    try:
+        if not path.is_file():
+            return False
+        with open(path, "rb") as handle:
+            state = json.loads(handle.read(4096))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    attached = state.get("attached", 0)
+    return (isinstance(attached, int) and not isinstance(attached, bool) and attached > 0) or state.get(
+        "requested"
+    ) is True
+
+
 def browser_notices(runtime: Any) -> list[dict[str, Any]]:
     """What a trial says of its world's browser: not started for sites the agent was not read to need, and not
     used when no client attached to it and its proxy was asked for nothing. A state that can't be read is never
@@ -618,17 +637,7 @@ def browser_notices(runtime: Any) -> list[dict[str, Any]]:
         ]
     if browser.get("state") != "started":
         return []
-    state: Any = None
-    path = Path(str(browser.get("state_path") or ""))
-    try:
-        if path.is_file():
-            with open(path, "rb") as handle:
-                state = json.loads(handle.read(4096))
-    except (OSError, ValueError):
-        state = None
-    state = state if isinstance(state, dict) else {}
-    attached = state.get("attached", 0)
-    if (isinstance(attached, int) and attached > 0) or state.get("requested") is True:
+    if browser_used(browser.get("state_path")):
         return []
     return [
         {
