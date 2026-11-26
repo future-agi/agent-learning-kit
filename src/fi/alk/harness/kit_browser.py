@@ -66,6 +66,8 @@ HOUSEKEEPING_HOST = "kit-browser.invalid"
 # How long Chromium may take to open its DevTools port, and how often to look.
 _START_SECONDS = 30.0
 _START_POLL_SECONDS = 0.05
+# How long the browser's proxy tries a site's addresses, all of them together.
+_CONNECT_SECONDS = 30.0
 # How much of a browser's output a start failure quotes.
 _FAILURE_TAIL = 1024
 
@@ -166,8 +168,21 @@ def browser_environment(*, home: Path) -> dict[str, str]:
     }
 
 
-def _resolve(host: str) -> str:
-    return socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)[0][4][0]
+def _resolve(host: str) -> list[str]:
+    """Every address of a name, in the resolver's order, each once."""
+    addresses: list[str] = []
+    for *_, place in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
+        if place[0] not in addresses:
+            addresses.append(place[0])
+    return addresses
+
+
+def _leads_back(address: str) -> bool:
+    found = ipaddress.ip_address(address.split("%", 1)[0])
+    # An IPv4 address written as IPv6 is read as the IPv4 one, whatever the Python release says of it.
+    mapped = getattr(found, "ipv4_mapped", None)
+    found = mapped if mapped is not None else found
+    return found.is_loopback or found.is_unspecified
 
 
 class BrowserProxy(EgressProxy):
@@ -188,7 +203,7 @@ class BrowserProxy(EgressProxy):
         *,
         attached: Callable[[], bool],
         connect: Callable[[str, int], socket.socket] | None = None,
-        resolve: Callable[[str], str] = _resolve,
+        resolve: Callable[[str], list[str]] = _resolve,
     ) -> None:
         self._attached = attached
         self._connect = connect
@@ -203,14 +218,26 @@ class BrowserProxy(EgressProxy):
     def open(self, host: str, port: int) -> socket.socket:
         if self._connect is not None:
             return self._connect(host, port)
-        address = self._resolve(host)
-        found = ipaddress.ip_address(address.split("%", 1)[0])
-        if found.is_loopback or found.is_unspecified:
-            # A site's name that leads back to this machine would reach the world itself.
+        addresses = self._resolve(host)
+        if not addresses:
+            raise OSError(f"{host} resolves to no address")
+        if any(_leads_back(address) for address in addresses):
+            # A site's name that leads back to this machine would reach the world itself, whichever address is used.
             raise RefusedAddress(
                 f"{host} resolves to a loopback address, outside the test world"
             )
-        return socket.create_connection((address, port), timeout=30)
+        # Each address in turn, as a direct connection would, all within one time limit.
+        deadline = time.monotonic() + _CONNECT_SECONDS
+        failed: OSError | None = None
+        for address in addresses:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                return socket.create_connection((address, port), timeout=left)
+            except OSError as error:
+                failed = error
+        raise failed or OSError(f"{host} could not be reached in {_CONNECT_SECONDS} seconds")
 
     def refuse(self, host: str, method: str) -> None:
         name = host.strip().strip("[]").lower().rstrip(".")
