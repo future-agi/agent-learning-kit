@@ -109,6 +109,8 @@ def test_the_browser_reaches_its_sites_and_nothing_else(site) -> None:
         ("*.shop.test", "a.b.shop.test", True),
         ("*.shop.test", "shop.test", False),
         ("*.shop.test", "evilshop.test", False),
+        # A host under a wildcard has a name of its own before the wildcard's.
+        ("*.shop.test", ".shop.test", False),
     ],
 )
 def test_the_browser_s_proxy_reads_each_site_as_the_sandbox_firewall_does(site, host, admitted) -> None:
@@ -123,8 +125,8 @@ def test_the_browser_s_proxy_reads_each_site_as_the_sandbox_firewall_does(site, 
 def test_the_agent_s_proxy_still_reads_a_name_as_covering_the_hosts_under_it() -> None:
     from fi.alk.harness.egress_proxy import host_allowed
 
-    assert host_allowed("www.shop.test", ["shop.test"], loopback=False)
-    assert host_allowed("shop.test", ["*.shop.test"], loopback=False)
+    assert host_allowed("www.shop.test", ["shop.test"])
+    assert host_allowed("shop.test", ["*.shop.test"])
 
 
 @pytest.mark.parametrize(
