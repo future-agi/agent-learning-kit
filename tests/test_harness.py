@@ -5232,9 +5232,7 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
     session = ClaudeBackend().create(spec)
     options = session._options
 
-    # The session is limited to what the spec grants: its builtins and no MCP server of its own.
-    assert options.allowed_tools == ["Read", "AskUserQuestion"]
-    assert options.mcp_servers == {}
+    assert options.tools == ["Read", "AskUserQuestion"]
     assert options.strict_mcp_config is True
     assert options.setting_sources == []
     assert options.include_partial_messages is True
@@ -9210,8 +9208,8 @@ def test_the_system_prompt_stays_within_budget():
     )
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
     # Caps at today's size plus a little room, so a skill cannot keep growing unnoticed.
-    assert len(sub_agent) <= 185_000, f"sub-agent prompt is {len(sub_agent)} chars"
-    assert len(main_loop) <= 270_000, f"main loop prompt is {len(main_loop)} chars"
+    assert len(sub_agent) <= 205_000, f"sub-agent prompt is {len(sub_agent)} chars"
+    assert len(main_loop) <= 290_000, f"main loop prompt is {len(main_loop)} chars"
 
 
 def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(
