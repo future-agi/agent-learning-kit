@@ -528,6 +528,62 @@ def test_screenshots_stop_at_their_bytes_too(tmp_path, devtools_port) -> None:
     assert body["screenshots"][-1]["when"] == "end" and body["screenshots_capped"] is True
 
 
+def test_an_end_screenshot_larger_than_all_the_bytes_is_not_kept_and_displaces_none() -> None:
+    record, _ = _record()
+    assert record.keep_shot("load", 100, shots=5, shot_bytes=250) == (True, [])
+    record.photographed("tab-1", when="load", url="http://shop.test/", file="shot-001-load.jpg", size=100)
+    assert record.keep_shot("end", 251, shots=5, shot_bytes=250) == (False, [])
+    body = record.body()
+    assert [one["file"] for one in body["screenshots"]] == ["shot-001-load.jpg"]
+    assert body["screenshots_capped"] is True
+
+
+def test_a_sealed_record_keeps_no_more_screenshots_so_none_it_names_is_displaced() -> None:
+    record, _ = _record()
+    record.photographed("tab-1", when="load", url="http://shop.test/", file="shot-001-load.jpg", size=100)
+    record.seal_shots()
+    assert record.keep_shot("end", 100, shots=1, shot_bytes=150) == (False, [])
+    assert record.keep_shot("load", 1, shots=5, shot_bytes=150) == (False, [])
+    assert [one["file"] for one in record.body()["screenshots"]] == ["shot-001-load.jpg"]
+
+
+def test_an_end_screenshot_answered_after_the_seal_leaves_the_sealed_files_in_place(tmp_path, devtools_port) -> None:
+    class _LateEnd(_FakeCdp):
+        held: list = []
+
+        def send(self, message: dict) -> None:
+            if message["method"] == "Page.captureScreenshot" and self.sent_loads >= 1:
+                with self.ready:
+                    self.sent.append(message)
+                    self.held.append(message)
+                return
+            if message["method"] == "Page.captureScreenshot":
+                self.sent_loads += 1
+            super().send(message)
+
+        sent_loads = 0
+
+    fake = _LateEnd()
+    recorder = browser_record.BrowserRecorder(
+        ["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake, shot_seconds=0.3, shot_bytes=150
+    )
+    recorder.attach(devtools_port)
+    try:
+        fake.queue(_attached())
+        for message in _loaded("http://shop.test/"):
+            fake.queue(message)
+        _until(lambda: (tmp_path / "w0-shots").exists() and any((tmp_path / "w0-shots").iterdir()))
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=3)
+        # The end screenshot's answer comes after the seal was written.
+        [late] = fake.held
+        fake.queue({"id": late["id"], "result": {"data": base64.b64encode(fake.shot).decode()}})
+        __import__("time").sleep(0.3)
+    finally:
+        recorder.close()
+    named = [one["file"] for one in body["screenshots"]]
+    assert named and all((tmp_path / "w0-shots" / name).is_file() for name in named)
+
+
 def test_a_screenshot_the_browser_could_not_take_is_skipped_and_the_seal_still_answers(
     tmp_path, devtools_port
 ) -> None:
@@ -676,7 +732,37 @@ def test_screenshots_are_uploaded_as_their_own_kind(tmp_path) -> None:
     ids, notices = asyncio.run(browser_record.upload_screenshots(adapter, "one", evidence, shots))
     assert ids == ("artifact-1", "artifact-2")
     assert [kind for kind, _ in adapter.kinds] == [ArtifactKind.SCREENSHOT] * 2
-    assert notices == []
+    # A row naming a file outside the folder is a screenshot not kept, and says so.
+    assert notices == [browser_record.not_kept_notice(1)]
+
+
+def test_a_listed_screenshot_that_cannot_be_sent_whole_and_as_named_is_said_not_kept(tmp_path, monkeypatch) -> None:
+    import asyncio
+    import hashlib
+
+    monkeypatch.setattr(browser_record, "SHOT_BYTES", 8)
+    shots = tmp_path / "w0-shots"
+    shots.mkdir()
+    (shots / "shot-001-load.jpg").write_bytes(b"\xff\xd8one")
+    (shots / "shot-002-load.jpg").write_bytes(b"\xff\xd8" + b"x" * 20)
+    (shots / "shot-003-load.jpg").write_bytes(b"\xff\xd8two")
+    evidence = {
+        "state": "used",
+        "screenshots": [
+            {"file": "shot-001-load.jpg", "artifact_id": "sha256:" + hashlib.sha256(b"\xff\xd8one").hexdigest()},
+            # Larger than a screenshot may be: never sent cut.
+            {"file": "shot-002-load.jpg"},
+            # Not the bytes the row names.
+            {"file": "shot-003-load.jpg", "artifact_id": "sha256:" + "0" * 64},
+            # Listed, and gone from the folder.
+            {"file": "shot-004-end.jpg"},
+        ],
+    }
+    adapter = _Uploads()
+    ids, notices = asyncio.run(browser_record.upload_screenshots(adapter, "one", evidence, shots))
+    assert ids == ("artifact-1",)
+    assert [data for _, data in adapter.kinds] == [b"\xff\xd8one"]
+    assert notices == [browser_record.not_kept_notice(3)]
 
 
 def test_screenshots_the_platform_did_not_keep_are_said_and_never_fail_the_trial(tmp_path) -> None:
