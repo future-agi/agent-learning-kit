@@ -1095,7 +1095,13 @@ class HostedChatRuntime:
         return self._design_dsn
 
     async def _approve_design(self, question: str, options: list[dict[str, str]]) -> str:
-        answer = await self._ask("propose_design", {"question": question, "options": options}, None)
+        from .design.workspace import load_design
+
+        proposal = load_design(self.workspace).pending_proposal
+        payload: dict[str, Any] = {"question": question, "options": options}
+        if proposal:
+            payload["design_proposal"] = proposal.model_dump()
+        answer = await self._ask("propose_design", payload, None)
         content = answer.get("content") if isinstance(answer, dict) else None
         return "\n".join(str(part.get("text") or "") for part in content or [])
 
@@ -3376,6 +3382,11 @@ class HostedChatRuntime:
             payload={
                 "prompt": shown_question,
                 "options": shown_options,
+                **(
+                    {"design_proposal": _redact(payload["design_proposal"])}
+                    if _tool_name == "propose_design" and "design_proposal" in payload
+                    else {}
+                ),
                 **({"options_only": True} if payload.get("options_only") else {}),
             },
         )

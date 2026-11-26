@@ -527,10 +527,17 @@ def test_source_free_design_keeps_the_existing_interview(tmp_path, monkeypatch):
                 "one_liner": "Refund a fee",
                 "summary": "A refund is approved for an eligible order.",
                 "use_cases": ["Approve an eligible refund"],
+                "records": ["Orders and refund requests"],
+                "tools": ["Check eligibility"],
+                "rules": ["Approve eligible orders"],
+                "people": ["Returns supervisor"],
             },
         )
         assert not response.get("is_error"), response
-        assert load_design(tmp_path).stage == "world"
+        approved = load_design(tmp_path)
+        assert approved.stage == "world"
+        assert approved.proposal.tools == ["Check eligibility"]
+        assert approved.proposal.people == ["Returns supervisor"]
     finally:
         tools.world.close()
 
@@ -650,6 +657,18 @@ def test_native_scenario_proof_keeps_public_facts_and_citations(tmp_path, monkey
                 "solution": [
                     {"tool": "lookup_eligibility", "arguments": {}},
                     {"tool": "approve_refund", "arguments": {"status": "eligible"}},
+                ],
+                "negative_controls": [
+                    {
+                        "name": "refunds-ineligible-orders",
+                        "why": "Targets orders with the wrong eligibility status.",
+                        "steps": [
+                            {
+                                "tool": "approve_refund",
+                                "arguments": {"status": "ineligible"},
+                            }
+                        ],
+                    }
                 ],
                 "sub_goals": ["refund-approved"],
             },

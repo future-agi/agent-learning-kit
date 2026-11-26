@@ -87,6 +87,11 @@ class Proposal(BaseModel):
     # What the environment is: who the agent serves, the tools and what they change, the rules,
     # the data, and what failure looks like. Shown to the person as written.
     summary: str = Field(min_length=1)
+    records: list[str] = Field(default_factory=list, max_length=100)
+    tools: list[str] = Field(default_factory=list, max_length=100)
+    rules: list[str] = Field(default_factory=list, max_length=100)
+    people: list[str] = Field(default_factory=list, max_length=100)
+    dependencies: list[str] = Field(default_factory=list, max_length=100)
     # Each scenario's `use_case` is one of these, and each has a scenario.
     use_cases: list[str] = Field(min_length=1)
 

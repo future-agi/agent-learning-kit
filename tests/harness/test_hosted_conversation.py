@@ -364,7 +364,42 @@ harness_chat:
     assert question["payload"]["options"] == ["app/api.py", "worker.py"]
 
 
-def test_typed_text_sent_while_a_question_is_open_reaches_the_model_as_possibly_a_new_request(tmp_path):
+def test_hosted_design_approval_emits_the_saved_structured_proposal(tmp_path):
+    from fi.alk.harness.design.workspace import Proposal, open_design, save_design
+
+    design = open_design(tmp_path, name="returns")
+    proposal = Proposal(
+        one_liner="Returns",
+        summary="Handle returns.",
+        use_cases=["Refund"],
+        tools=["Look up an order"],
+        rules=["Require approval"],
+    )
+    save_design(tmp_path, design.model_copy(update={"pending_proposal": proposal}))
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  lifecycle:\n    request_user_input: true\n"
+    )
+    client = QuestionClient()
+    runtime = HostedChatRuntime(
+        client=client,
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={"metadata": {"design": {}}},
+    )
+    asyncio.run(
+        runtime._approve_design("Approve?", [{"id": "approve", "label": "Build this"}])
+    )
+    event = next(
+        event for event in client.events if event["kind"] == "question_requested"
+    )
+    assert event["payload"]["design_proposal"] == proposal.model_dump()
+
+
+def test_typed_text_sent_while_a_question_is_open_reaches_the_model_as_possibly_a_new_request(
+    tmp_path,
+):
     """The live shape: asked how to restore one case, the person typed a request about another; the chat sent it as
     the answer, and the builder took it as one."""
     policy_path = tmp_path / "policy.yaml"

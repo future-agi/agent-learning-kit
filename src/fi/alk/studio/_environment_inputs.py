@@ -96,6 +96,7 @@ def prepare_environment_inputs(
     *,
     destination_schema: DestinationSchema | None = None,
     schema_repairs: tuple[SimulationSchemaRepair, ...] = (),
+    redact_text_sources: tuple[str, ...] = (),
 ) -> EnvironmentInputDraft:
     if destination_schema is not None and (
         not isinstance(destination_schema, DestinationSchema)
@@ -113,6 +114,16 @@ def prepare_environment_inputs(
             "Supply one repair per source for an inferred schema",
         )
     source_items = tuple(sources)
+    text_sources = {
+        source.source_id
+        for source in source_items
+        if source.role in {"policy", "reference"}
+    }
+    if set(redact_text_sources) - text_sources:
+        raise EnvironmentInputError(
+            "source_request_invalid",
+            "Select a policy or reference source for text redaction",
+        )
     if len(source_items) > MAX_SOURCE_FILES:
         raise EnvironmentInputError(
             "source_too_large",
@@ -160,7 +171,7 @@ def prepare_environment_inputs(
             continue
         if isinstance(parsed, RawPolicyDocument):
             policy_source, policy_diagnostics = _prepare_policy_source(
-                source, pin, parsed
+                source, pin, parsed, redact=source.source_id in redact_text_sources
             )
             parsed_sources.append(policy_source)
             diagnostics.extend(policy_diagnostics)
@@ -572,13 +583,23 @@ def _prepare_policy_source(
     source: EnvironmentSource,
     pin: SourcePin,
     parsed: RawPolicyDocument,
+    *,
+    redact: bool = False,
 ) -> tuple[ParsedPolicySource, tuple[SourceDiagnostic, ...]]:
     pages = tuple(
-        ParsedPolicyPage(page=item.page, text=item.text) for item in parsed.pages
+        ParsedPolicyPage(
+            page=item.page,
+            text=_PHONE_RE.sub(
+                "[phone removed]", _EMAIL_RE.sub("[email removed]", item.text)
+            )
+            if redact
+            else item.text,
+        )
+        for item in parsed.pages
     )
     diagnostics: list[SourceDiagnostic] = []
     statements: list[PolicyStatement] = []
-    for page in pages:
+    for raw_page, page in zip(parsed.pages, pages):
         for index, match in enumerate(
             re.finditer(r"\S(?:.*?\S)?(?=\n\s*\n|\Z)", page.text, re.DOTALL), start=1
         ):
@@ -594,7 +615,7 @@ def _prepare_policy_source(
                     ),
                 )
             )
-        scan = scan_content(page.text)
+        scan = scan_content(raw_page.text)
         if scan["status"] == "flagged":
             diagnostics.append(
                 SourceDiagnostic(
@@ -949,13 +970,27 @@ def _propose_policy_rule(statement: PolicyStatement) -> PolicyRuleProposal:
         statement.text.strip(),
         re.IGNORECASE,
     )
+    value = (match[3] or match[4]) if match else None
+    forbidden = bool(match and match[1])
+    if not match:
+        # A literal wording check only applies when the policy explicitly covers every response.
+        imperative = re.fullmatch(
+            r"""(never |do not |always )?include (?:the (?:phrase|word) )?(["'])([^"']+)\2 in (every|any|all) (?:responses?|replies|reply)\.?""",
+            statement.text.strip(),
+            re.IGNORECASE,
+        )
+        if imperative:
+            negative = (imperative[1] or "").lower() in {"never ", "do not "}
+            if negative == (imperative[4].lower() == "any"):
+                forbidden = negative
+                value = imperative[3]
     return PolicyRuleProposal(
         rule_id=statement.statement_id + ":rule",
         statement_id=statement.statement_id,
-        kind="forbidden_behavior" if match and match[1] else "required_behavior",
-        check_type=("not_contains" if match[1] else "contains") if match else None,
-        check_arguments={"value": match[3] or match[4]} if match else {},
-        status="supported" if match else "unsupported",
+        kind="forbidden_behavior" if forbidden else "required_behavior",
+        check_type=("not_contains" if forbidden else "contains") if value else None,
+        check_arguments={"value": value} if value else {},
+        status="supported" if value else "unsupported",
     )
 
 

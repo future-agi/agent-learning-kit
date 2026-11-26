@@ -268,7 +268,8 @@ def test_categories_depend_on_approved_public_material() -> None:
         requested_count=3,
     )
     assert {draft.category for draft in generated.drafts} == {"success"}
-    assert all(draft.status == "blocked" for draft in generated.drafts)
+    assert all(draft.status == "reviewable" for draft in generated.drafts)
+    assert all(not draft.evaluator.checks for draft in generated.drafts)
 
 
 def test_hidden_sources_cannot_shape_public_content_or_diagnostics() -> None:
@@ -347,8 +348,12 @@ def test_missing_record_preserves_other_cases_and_typed_requested_reference() ->
 
 
 def test_all_blocked_drafts_retain_uncovered_cases_without_tool_obligations() -> None:
-    _, reviewed = _approve_proposals(
-        (_policy_source("Explain the policy courteously."),)
+    from fi.alk.studio import SourceAudience
+    from test_environment_source_audiences import _approve
+
+    reviewed = _approve(
+        (_policy_source("Explain the policy courteously.", source_id="private"),),
+        {"private": SourceAudience(False, ("reviewer",))},
     )
     generated = generate_source_scenarios(
         reviewed,
@@ -528,3 +533,44 @@ def test_participant_only_policy_does_not_shape_tested_agent_scenarios() -> None
         check.check_arguments.get("value") == "PARTICIPANT_ONLY_SENTINEL"
         for check in generated.evaluator_specs[0].checks
     )
+
+
+def test_policy_reviewed_as_reference_supplies_cited_cases_without_enforcing_a_rule():
+    from fi.alk.studio import SourceAudience
+    from test_environment_source_audiences import _approve
+
+    reviewed = _approve(
+        (
+            _policy_source("1. Returns go to the ORCHID desk.", source_id="desk"),
+            _policy_source("Private employee escalations use HIDDEN_TEAM.", source_id="private"),
+        ),
+        {"desk": SourceAudience(True), "private": SourceAudience(False, ("operator",))},
+    )
+    generated = generate_source_scenarios(
+        reviewed, environment_requirements=EnvironmentRequirements(task="Handle a return"), requested_count=2
+    )
+    assert all(item.status == "reviewable" for item in generated.drafts)
+    assert all(not item.evaluator.checks for item in generated.drafts)
+    for item in generated.drafts:
+        persona = item.scenario.dataset[0].persona
+        assert "ORCHID" in persona["policy_reference"]
+        assert "HIDDEN_TEAM" not in item.scenario_payload
+        assert {span["source_id"] for span in persona["citations"]} == {"desk"}
+
+
+def test_mixed_policy_gives_reference_only_passages_their_own_cited_case():
+    from fi.alk.studio import SourceAudience
+    from test_environment_source_audiences import _approve
+
+    reviewed = _approve(
+        (_policy_source('The response must contain "approved".\n\nOrchid desk handles holiday exceptions.', source_id="returns"),),
+        {"returns": SourceAudience(True)},
+    )
+    generated = generate_source_scenarios(reviewed, environment_requirements=EnvironmentRequirements(task="Handle returns"), requested_count=3)
+    assert [(d.category, bool(d.evaluator.checks)) for d in generated.drafts] == [
+        ("success", True), ("negative_control", True), ("success", False)
+    ]
+    reference = generated.drafts[-1].scenario.dataset[0].persona
+    assert "Orchid desk" in reference["policy_reference"]
+    assert reference["citations"][0]["source_id"] == "returns"
+    assert all(d.status == "reviewable" for d in generated.drafts)

@@ -112,10 +112,15 @@ def chosen_option(answer: str, options: list[dict[str, str]]) -> str | None:
 
 
 def approval_question(name: str, proposal: Proposal) -> str:
-    return (
+    question = (
         f"Approve this design for {name}?\n\n{proposal.one_liner}\n\n{proposal.summary}"
         "\n\nUse cases:\n- " + "\n- ".join(proposal.use_cases)
     )
+    for section in ("records", "tools", "rules", "people", "dependencies"):
+        items = getattr(proposal, section)
+        if items:
+            question += f"\n\n{section.capitalize()}:\n- " + "\n- ".join(items)
+    return question
 
 
 def settle_proposal(workspace: Path, answer: str) -> bool:
@@ -335,19 +340,26 @@ class DesignTools:
         if design.documents and design.reviewed_source is None:
             return _err(REVIEW_REQUIRED)
         try:
-            proposal = Proposal.model_validate(
-                {
-                    "one_liner": args.get("one_liner"),
-                    "summary": args.get("summary"),
-                    "use_cases": args.get("use_cases"),
-                }
-            )
+            proposal = Proposal.model_validate(args)
         except ValidationError as exc:
             return _err(f"Not proposed: {exc}")
-        proposal_text = "\n".join([proposal.one_liner, proposal.summary, *proposal.use_cases])
+        proposal_text = "\n".join(
+            [
+                proposal.one_liner,
+                proposal.summary,
+                *proposal.use_cases,
+                *proposal.records,
+                *proposal.tools,
+                *proposal.rules,
+                *proposal.people,
+                *proposal.dependencies,
+            ]
+        )
         for case in load_evidence(self.workspace, design).get("cases", []):
             if problem := record_role_problem(proposal_text, case):
-                return _err("Revise the proposal before requesting approval. " + problem)
+                return _err(
+                    "Revise the proposal before requesting approval. " + problem
+                )
         save_design(
             self.workspace, design.model_copy(update={"pending_proposal": proposal})
         )
@@ -973,12 +985,24 @@ class DesignTools:
                     "Ask the person to approve the design before anything is built: a one-line "
                     "description, a summary (who the agent serves and over which channel, each "
                     "tool and what it changes, the rules, the data, what failure looks like) and "
-                    "the use cases every scenario belongs to. Waits for their answer.",
+                    "the use cases every scenario belongs to. List the proposed records (tables, not real personal data), "
+                    "tools, rules and people (roles, not names), one readable line per item. Use empty lists "
+                    "where none are needed. List unsupported external integrations in dependencies so the person can choose to simulate or omit each. Waits for their answer.",
                     schema(
                         {
                             "one_liner": str,
                             "summary": str,
-                            "use_cases": {"type": "array", "items": {"type": "string"}},
+                            **{
+                                key: {"type": "array", "items": {"type": "string"}}
+                                for key in (
+                                    "use_cases",
+                                    "records",
+                                    "tools",
+                                    "rules",
+                                    "people",
+                                    "dependencies",
+                                )
+                            },
                         },
                         ["one_liner", "summary", "use_cases"],
                     ),

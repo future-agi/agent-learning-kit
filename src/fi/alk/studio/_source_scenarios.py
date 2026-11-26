@@ -10,6 +10,7 @@ from fi.alk.studio._environment_input_types import (
     EnvironmentInputError,
     JsonScalar,
     PolicyRuleProposal,
+    PolicyStatement,
     RecordRelationship,
     ReviewedEnvironmentInputs,
     ReviewedPolicySource,
@@ -175,6 +176,34 @@ def _sealed_source_case(case: dict[str, Any]) -> dict[str, Any]:
     return {**_canonical_value(case), "proof_digest": _content_digest(case)}
 
 
+_LIST_ITEM = re.compile(r"^\d+[.)]\s+")
+_DOCUMENT_LABEL = re.compile(
+    r"(?:(?:policy|document)\s+)?(?:version|edition|revision)\b.*"
+    r"|(?:training|draft|reference|sample) copy[.]?",
+    re.IGNORECASE,
+)
+
+
+def _reference_passages(statements: tuple[PolicyStatement, ...]) -> tuple[PolicyStatement, ...]:
+    """Keep list items and separate narrative statements with their own original page."""
+    parts = [
+        replace(statement, text=part.strip())
+        for statement in statements
+        for part in re.split(r"(?m)^\s*(?=\d+[.)]\s+)", statement.text)
+        if part.strip()
+    ]
+    if not any(_LIST_ITEM.match(part.text) for part in parts):
+        return statements
+    return tuple(
+        part for part in parts
+        if _LIST_ITEM.match(part.text) or not all(
+            line.startswith("#") or line.endswith(":") or _DOCUMENT_LABEL.fullmatch(line)
+            or (line.isupper() and line.endswith((" POLICY", " RUBRIC", " MANUAL", " GUIDELINES")))
+            for line in (line.strip() for line in part.text.splitlines() if line.strip())
+        )
+    )
+
+
 def generate_source_scenarios(
     reviewed: ReviewedEnvironmentInputs,
     *,
@@ -207,19 +236,20 @@ def generate_source_scenarios(
     )
     references = []
     for source in reviewed.sources:
-        if not isinstance(source, ReviewedReferenceSource) or not source.audience.tested_agent:
+        if not source.audience.tested_agent:
             continue
-        # In a numbered reference, use its list items for test cases. The full
-        # reference, including introductory text, stays available to the agent.
-        clauses = []
-        for statement in source.statements:
-            parts = re.split(r"(?m)^\s*(?=\d+[.)]\s+)", statement.text)
-            clauses.extend(
-                replace(statement, text=part.strip())
-                for part in parts
-                if re.match(r"^\d+[.)]\s+", part.strip())
-            )
-        references.extend(clauses or source.statements)
+        if isinstance(source, ReviewedReferenceSource):
+            passages = source.statements
+        elif isinstance(source, ReviewedPolicySource):
+            reference_ids = {
+                item.proposal.statement_id
+                for item in source.rule_reviews
+                if item.decision == "reference_only"
+            }
+            passages = tuple(item for item in source.statements if item.statement_id in reference_ids)
+        else:
+            continue
+        references.extend(_reference_passages(passages))
     private_rules = tuple(
         rule
         for source in reviewed.sources
@@ -245,9 +275,14 @@ def generate_source_scenarios(
         categories.append("refusal")
     if any(_negative_output(rule) is not None for rule in public_rules):
         categories.append("negative_control")
+    # Preserve the full rule cycle (including refusal and negative controls) and then
+    # cover a reference passage in its own success case, without enforcing it as a rule.
+    cycle_size = len(categories) + int(bool(public_rules and references))
     drafts: list[SourceScenarioDraft] = []
     for index in range(requested_count):
-        category = categories[index % len(categories)]
+        cycle, slot = divmod(index, cycle_size)
+        reference_case = slot == len(categories)
+        category = "success" if reference_case else categories[slot]
         ref = _case_record(index, environment_requirements, records)
         source_record = records.get(ref) if ref else None
         selected_records = [(ref, source_record)] if ref and source_record else []
@@ -276,11 +311,12 @@ def generate_source_scenarios(
             for key, (_, record) in selected_records
             for field, value in record.values
         )
-        applicable = _rules_for_category(public_rules, category)
+        applicable = () if reference_case else _rules_for_category(public_rules, category)
         if applicable:
-            applicable = (applicable[(index // len(categories)) % len(applicable)],)
+            applicable = (applicable[cycle % len(applicable)],)
         candidates = statements if applicable else references
-        excerpt = candidates[index % len(candidates)] if candidates else None
+        passage_index = cycle if reference_case else index
+        excerpt = candidates[passage_index % len(candidates)] if candidates else None
         if applicable:
             excerpt = next(
                 (
