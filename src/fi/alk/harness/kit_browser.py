@@ -328,6 +328,12 @@ class DevToolsRelay:
 
     def close(self) -> None:
         self._closed = True
+        # Shut down first: on Linux a listening socket closed while the serving thread waits in accept() goes on
+        # listening until that wait ends, and the shutdown is what ends it.
+        try:
+            self._listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         try:
             self._listener.close()
         except OSError:
