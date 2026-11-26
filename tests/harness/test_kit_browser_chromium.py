@@ -551,3 +551,28 @@ def test_a_world_the_agent_makes_under_the_recorder_s_old_name_cannot_write_the_
     rows = _settled(kit)["rows"]
     assert not [row for row in rows if "forged.example" in row["url"] or "forged-world" in json.dumps(row)]
     assert kit.recorder.binding != "alkBrowserRecord" and kit.recorder.listener_world != "alk-browser-record"
+
+
+def test_typing_sent_as_input_is_kept_and_an_action_made_by_script_is_not(browser) -> None:
+    # The limit HOW-IT-WORKS states: only trusted events are rows. A fill sent as input is one; a click or typing a
+    # script makes inside the page is not, though the page itself is kept.
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/form")
+        await page.click("#q")
+        await page.call("Input.insertText", {"text": "blue hats"})
+        await page.call(
+            "Runtime.evaluate",
+            {
+                "expression": "document.getElementById('buy').click();"
+                " const q = document.getElementById('q'); q.value = 'scripted words';"
+                " q.dispatchEvent(new Event('input', {bubbles: true}));"
+            },
+        )
+
+    _run(kit, steps)
+    rows = [row for row in _settled(kit)["rows"] if row["url"] == "http://shop.test/form"]
+    assert [row["text"] for row in rows if row["kind"] == "typing"][-1] == "blue hats"
+    assert not [row for row in rows if "scripted words" in json.dumps(row)]
+    assert any(row["kind"] == "navigation" for row in rows)
