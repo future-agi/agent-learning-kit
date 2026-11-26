@@ -2276,6 +2276,26 @@ def test_an_agent_s_role_settings_neither_refuse_a_reset_nor_shape_the_harness_s
         connection.execute("ALTER ROLE alk_w1 RESET ALL")
 
 
+@real_postgres
+def test_a_large_object_the_seed_left_writable_carries_no_note_across_trials(door_worlds, monkeypatch):
+    """A large object the seed made and left writable to everyone: the agent's role can write into it (making one is
+    refused), so its contents are in the digest and a reset that finds them changed refuses the world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        [oid] = connection.execute("SELECT lo_from_bytea(0, 'seeded')").fetchone()
+        connection.execute(f"GRANT SELECT, UPDATE ON LARGE OBJECT {int(oid)} TO PUBLIC")
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute("SELECT lo_put(%s, 0, 'answer')", (oid,))
+    with pytest.raises(WorldResetRefused, match="large objects"):
+        store.restore(snapshot)
+
+
 _SHOUTING = (
     "CREATE TABLE public.parent (id serial PRIMARY KEY, name text);\n"
     "CREATE TABLE public.child (id serial PRIMARY KEY, parent_id int REFERENCES public.parent (id));\n"

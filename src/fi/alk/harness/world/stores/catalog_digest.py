@@ -57,7 +57,11 @@ _KINDS: tuple[tuple[str, str], ...] = (
          "FROM pg_event_trigger e"),
         # A large object outlives a reset of rows; one made since the snapshot would carry across trials.
         ("large objects", "SELECT concat_ws('|', l.oid, pg_get_userbyid(l.lomowner), l.lomacl::text"
-         ") FROM pg_largeobject_metadata l"),
+         # Its contents too, where the reset's role may read them: one others may write could carry a note.
+         ", CASE WHEN (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) OR l.lomowner = "
+         "(SELECT oid FROM pg_roles WHERE rolname = current_user) OR EXISTS (SELECT FROM aclexplode(l.lomacl) a "
+         "WHERE a.privilege_type = 'SELECT' AND (a.grantee = 0 OR pg_has_role(current_user, a.grantee, 'USAGE'))) "
+         "THEN md5(lo_get(l.oid)) END) FROM pg_largeobject_metadata l"),
         # Default privileges carry a grant to whatever is made next.
         ("default privileges", "SELECT concat_ws('|', pg_get_userbyid(a.defaclrole), a.defaclnamespace, "
          "a.defaclobjtype, a.defaclacl::text) FROM pg_default_acl a"),
