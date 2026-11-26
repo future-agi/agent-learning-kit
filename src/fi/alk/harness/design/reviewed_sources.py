@@ -26,7 +26,7 @@ from ..backends import ToolServer, tool, tool_server
 from ..folder import read_all
 from ..releases import ReleaseError
 from ..scenario import SOURCE_FIXTURE
-from ..source_grounding import action_code_guidance, bind_source_case, validate_bound_scenario
+from ..source_grounding import SOURCE_OUTCOME_GUIDANCE, action_code_guidance, bind_source_case, validate_bound_scenario
 from ..tools import schema
 from .workspace import Design, DocumentRecord, ReviewedSourcePin
 
@@ -320,7 +320,7 @@ def bind_scenario(evidence: dict[str, Any], args: dict[str, Any]) -> str:
     except ValueError as exc:
         if str(exc) == "source_case_answer_in_situation":
             return "Keep the expected code in the test and solution. Remove it from the name, heading and caller situation."
-        hint = action_code_guidance([case])
+        hint = SOURCE_OUTCOME_GUIDANCE + action_code_guidance([case])
         return "The scenario is unrelated to its approved source case. Choose an input that triggers the cited rule and assert the required outcome. Keep record codes in their supplied roles. Only name queues, priorities and deadlines supported by the evidence." + (" " + hint if hint else "")
     return ""
 

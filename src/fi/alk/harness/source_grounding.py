@@ -86,7 +86,78 @@ def _identifier_pattern(identifier: str) -> str:
     return r"(?<![\w-])" + re.escape(identifier.casefold()) + r"(?![\w-])"
 
 
-def _policy_assertion_matches(test_text: str, case: Mapping[str, Any]) -> bool:
+_REFUSAL = (
+    r"\b(?:den(?:y|ies|ied|ying)|reject(?:s|ed)?|refus(?:e|es|ed)|declin(?:e|es|ed)|"
+    r"ineligible|too late|not eligible|cannot (?:return|refund))\b"
+)
+_APPROVAL = (
+    r"\b(?:accept(?:s|ed)?|approv(?:e|es|ed)|eligible|"
+    r"(?:issu(?:e|es|ed)|process(?:es|ed)?|grant(?:s|ed)?) (?:a |the )?(?:standard |full )?(?:return|refund))\b"
+)
+_ESCALATION = r"\b(?:escalat\w*|rout\w*|refer\w*|hand(?:s)? off)\b"
+_FULL_REFUND = r"full refund|refund(?:ed)? in full|100\s*(?:%|percent) refund"
+_PREPAID = r"(?:pre[- ]?paid|free) (?:return )?(?:shipping|label|postage)|return shipping at no cost"
+_DAY_WORDS = (
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen"
+).split()
+
+
+def _affirmed(text: str, expression: str) -> bool:
+    """Discard a required outcome if the test only says to withhold it."""
+    for match in re.finditer(expression, text):
+        before = text[:match.start()]
+        if not re.search(
+            r"\b(?:no|not|never|without|deny|denies|refuses?|rejects?) "
+            r"(?:(?:give|offer|issue|provide|apply|charge|a|an|the|any) )*$", before,
+        ):
+            return True
+    return False
+
+
+SOURCE_OUTCOME_GUIDANCE = (
+    "Write the specific decision and every promised outcome in the test itself. "
+    "Include the applicable fee, service, turnaround, escalation code and shipping terms when supplied. "
+    "Looking up a record, starting a workflow or reciting a policy alone does not test its outcome. "
+)
+
+
+def _return_terms_match(policy: str, test: str, situation: str) -> bool:
+    # Use the simulated day to select the applicable side of a return deadline.
+    window = re.search(r"(?:through|up to) day (\d+).*?day (\d+) is late", policy)
+    if window:
+        days = re.findall(r"\bday\s+(\d+)|\b(\d+) days? (?:ago|after delivery)", situation)
+        days = [int(left or right) for left, right in days]
+        if days and min(days) >= int(window[2]):
+            if not _affirmed(test, _REFUSAL):
+                return False
+        elif days and max(days) <= int(window[1]):
+            if not _affirmed(test, _APPROVAL):
+                return False
+        elif not (
+            re.search(rf"\b{window[1]}[ -]day|\bday {window[1]}\b", test)
+            and (_affirmed(test, _REFUSAL) or _affirmed(test, _APPROVAL))
+        ):
+            return False
+    fee = re.search(r"(\d+(?:\.\d+)?)\s*(?:%|percent) restocking fee", policy)
+    if fee:
+        rate = rf"(?<![.\d]){re.escape(fee[1])}\s*(?:%|percent\b)"
+        if "restocking" not in test or not _affirmed(test, rate):
+            return False
+    if _affirmed(policy, _FULL_REFUND) and not _affirmed(test, _FULL_REFUND):
+        return False
+    # Extracted PDF lines may split the last word of “prepaid return shipping”.
+    if _affirmed(policy, r"pre[- ]?paid (?:return|shipping|postage|label)|free return shipping") and not _affirmed(test, _PREPAID):
+        return False
+    if "final sale unless" in policy:
+        damaged = "damag" in situation and not re.search(r"undamaged|not damaged|without damage", situation)
+        return bool(re.search(r"final sale unless|exception.*damag", test)
+                    or (damaged and _affirmed(test, _APPROVAL))
+                    or (not damaged and _affirmed(test, _REFUSAL)))
+    return True
+
+
+def _policy_assertion_matches(test_text: str, situation: str, case: Mapping[str, Any]) -> bool:
     named_codes = re.findall(
         r"\b(?:code|label)\s+(?:is\s+)?([A-Z]{2,}-[0-9]+)\b",
         str(case.get("policy_reference") or ""),
@@ -113,7 +184,7 @@ def _policy_assertion_matches(test_text: str, case: Mapping[str, Any]) -> bool:
             test_text,
         ):
             return False
-    return True
+    return _return_terms_match(" ".join(policy.split()), test_text, situation)
 
 
 def _record_fields(case: Mapping[str, Any]) -> dict[str, Any]:
@@ -209,6 +280,26 @@ def _record_assertion_matches(test_text: str, instruction: str, case: Mapping[st
                 for key, value in fields.items()
             ):
                 return False
+    service = fields.get("service")
+    if isinstance(service, str) and not all(
+        _affirmed(test_text, _identifier_pattern(word)) for word in _WORDS.findall(service.casefold())
+    ):
+        return False
+    processing = fields.get("processing_days")
+    if processing is not None and str(processing).isdigit():
+        days = int(processing)
+        numbers = f"{days}|{_DAY_WORDS[days]}" if days < len(_DAY_WORDS) else str(days)
+        duration = rf"(?<![.\d])\b(?:{numbers})[ -](?:(?:business|working|calendar) )?days?\b"
+        if not _affirmed(test_text, duration):
+            return False
+    if action:
+        action_words = action.casefold().replace("_", " ")
+        verb = action_words.partition(" ")[0]
+        outcome = {"deny": _REFUSAL, "approve": _APPROVAL, "escalate": _ESCALATION}.get(verb)
+        if outcome and not _affirmed(test_text, outcome):
+            return False
+        if not _return_terms_match(action_words, test_text, instruction):
+            return False
     if "queue" in fields:
         check_words = _WORDS.findall(test_text)
         for key in ("queue", "priority", "code"):
@@ -245,7 +336,8 @@ def scenario_relates_to_case(args: Mapping[str, Any], case: Mapping[str, Any]) -
     if not (_tokens(authored_values["instruction"]) & (strong | topic)):
         return False
     test_text = authored_values["tests"].casefold()
-    if not _policy_assertion_matches(test_text, case) or not _record_assertion_matches(test_text, authored_values["instruction"].casefold(), case):
+    situation = authored_values["instruction"].casefold()
+    if not _policy_assertion_matches(test_text, situation, case) or not _record_assertion_matches(test_text, situation, case):
         return False
     if record_role_problem(test_text + " " + authored_values["instruction"], case, args.get("solution")):
         return False

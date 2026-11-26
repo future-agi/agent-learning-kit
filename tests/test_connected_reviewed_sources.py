@@ -537,3 +537,69 @@ def test_qualification_requires_specific_score_and_label_in_authored_assertion()
         },
         case,
     )
+
+
+@pytest.mark.parametrize(("policy", "situation", "weak", "grounded"), [
+    ("Returns are accepted through day 27 after delivery. A request on day 28 is late.",
+     "My parcel arrived 28 days ago.", "States the store return policy.",
+     "Denies the late return."),
+    ("Opened electronics are refundable, with a 12 percent restocking fee.",
+     "I opened the electronics.", "Mentions a 2 percent restocking fee.",
+     "Charges a 12% restocking fee for opened electronics."),
+    ("A visibly damaged item qualifies for a full refund and prepaid return shipping.",
+     "My mug arrived visibly damaged.", "Starts a return with the damage reason.",
+     "Issues the full refund and provides a prepaid return label."),
+])
+def test_policy_outcome_has_to_be_in_the_authored_test(policy, situation, weak, grounded):
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    case = {"policy_reference": policy}
+    # Quoting the real policy in the metadata cannot rescue a generic test.
+    for tests, expected in [(weak + "\n\nReviewed source expectations: " + policy, False),
+                            (grounded, True)]:
+        assert scenario_relates_to_case({"instruction": situation, "tests": tests}, case) is expected
+
+
+def test_warranty_outcome_requires_the_service_and_its_turnaround_in_the_test():
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    facts = {"product": "Northstar Relay", "service": "advance replacement", "processing_days": 4}
+    case = {"starting_facts": [{"field": "src_a/" + k, "value": v, "record_id": "NW-26"}
+                               for k, v in facts.items()]}
+    situation = "My Northstar Relay display flickers. I heard about advance replacement in four days."
+    for tests, accepted in [
+        ("States the two-year Northstar Relay warranty.", False),
+        ("Offers advance replacement in 14 days.", False),
+        ("Offers depot repair in four days.", False),
+        ("Offers an advance replacement within four working days.", True),
+    ]:
+        assert scenario_relates_to_case({"instruction": situation, "tests": tests}, case) is accepted
+
+
+def test_reference_selection_excludes_disclaimer_only_pages_with_or_without_numbered_rules():
+    from fi.alk.studio._environment_input_types import PolicyStatement, SourceSpan
+    from fi.alk.studio._source_scenarios import _reference_passages
+
+    span = SourceSpan("src_a", page=2)
+    note = PolicyStatement("note", "These rules are fictional and exist only for scenario-generation testing.", span)
+    heading = PolicyStatement("heading", "NORTHSTAR RETURNS POLICY\nPolicy version: 2026-11-23", span)
+    assert not _reference_passages((heading, note))
+    rubric_title = PolicyStatement("title", "Slack community prospect qualification rubric", span)
+    assert not _reference_passages((rubric_title,))
+    for text in ["1. Customers receive a free replacement.", "Customers receive a free replacement."]:
+        rule = PolicyStatement("rule", text, span)
+        assert _reference_passages((heading, rule, note)) == (rule,)
+
+
+
+def test_compound_policy_and_record_outcomes_cannot_omit_or_reverse_a_benefit():
+    from fi.alk.harness.source_grounding import scenario_relates_to_case
+
+    args = {"instruction": "I received a damaged mug on order RET-005."}
+    rule = {"policy_reference": "A visibly damaged item qualifies for a full refund and prepaid return shippin\ng."}
+    record = {"starting_facts": [{"field":"expected_action", "value":"approve_full_refund_and_prepaid_shipping",
+                                 "record_id":"RET-005"}]}
+    for case in (rule, record):
+        for tests in ["Approves the full refund.", "Approves the full refund without prepaid shipping."]:
+            assert not scenario_relates_to_case({**args, "tests": tests}, case)
+        assert scenario_relates_to_case({**args, "tests":"Approves a full refund with prepaid shipping."}, case)

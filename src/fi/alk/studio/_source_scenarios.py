@@ -179,29 +179,40 @@ def _sealed_source_case(case: dict[str, Any]) -> dict[str, Any]:
 _LIST_ITEM = re.compile(r"^\d+[.)]\s+")
 _DOCUMENT_LABEL = re.compile(
     r"(?:(?:policy|document)\s+)?(?:version|edition|revision)\b.*"
-    r"|(?:training|draft|reference|sample) copy[.]?",
+    r"|(?:training|draft|reference|sample) copy[.]?"
+    r"|(?:these (?:rules|policies|examples)|this (?:document|policy|data)) "
+    r"(?:are|is) (?:fictional|synthetic)(?: and (?:exist[s]?|(?:are|is) intended) "
+    r"(?:only )?for (?:scenario[- ]generation |simulation |training )?(?:testing|purposes))?[.]?"
+    r"|(?:for (?:testing|training|illustration|demonstration) (?:purposes )?only)[.]?",
     re.IGNORECASE,
 )
 
 
+def _document_label(line: str) -> bool:
+    line = _LIST_ITEM.sub("", line.strip()).strip()
+    if line.endswith(":") or _DOCUMENT_LABEL.fullmatch(line):
+        return True
+    # A short noun-phrase title is a label even outside a Markdown heading.
+    # Preserve factual sentences and instructions that happen to reference a policy.
+    title = line.lstrip("# ").strip()
+    return bool(
+        re.fullmatch(r"[\w '&/–-]+ (?:policy|rubric|manual|guidelines)", title, re.I)
+        and len(title.split()) <= 12
+        and not re.search(r"\b(?:is|are|must|may|shall|should|use|follow|apply|read|refer|see)\b", title, re.I)
+    ) or (line.startswith("#") and not re.search(r"[.!?]$", title))
+
+
 def _reference_passages(statements: tuple[PolicyStatement, ...]) -> tuple[PolicyStatement, ...]:
-    """Keep list items and separate narrative statements with their own original page."""
-    parts = [
-        replace(statement, text=part.strip())
-        for statement in statements
-        for part in re.split(r"(?m)^\s*(?=\d+[.)]\s+)", statement.text)
-        if part.strip()
-    ]
-    if not any(_LIST_ITEM.match(part.text) for part in parts):
-        return statements
-    return tuple(
-        part for part in parts
-        if _LIST_ITEM.match(part.text) or not all(
-            line.startswith("#") or line.endswith(":") or _DOCUMENT_LABEL.fullmatch(line)
-            or (line.isupper() and line.endswith((" POLICY", " RUBRIC", " MANUAL", " GUIDELINES")))
-            for line in (line.strip() for line in part.text.splitlines() if line.strip())
-        )
-    )
+    """Keep rule and narrative passages with the locations of their original statements."""
+    passages = []
+    for statement in statements:
+        for part in re.split(r"(?m)^\s*(?=\d+[.)]\s+)", statement.text):
+            # Keep original paragraph wrapping, including multiple lines in a PDF clause.
+            lines = [line for line in part.splitlines() if not _document_label(line)]
+            text = "\n".join(lines).strip()
+            if text:
+                passages.append(replace(statement, text=text))
+    return tuple(passages)
 
 
 def generate_source_scenarios(
