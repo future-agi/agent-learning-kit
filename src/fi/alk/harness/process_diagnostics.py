@@ -448,7 +448,9 @@ def _shape(record: list[str]) -> str:
     """A record with its clearly volatile parts (times, durations, addresses, ids, long numbers) replaced, so only
     real copies share a shape."""
 
-    return _OPAQUE_ID.sub("#", _VOLATILE.sub("#", "".join(record)))
+    # Line endings are not part of a record: the log's last line has none, and CRLF and LF are the same line.
+    text = "\n".join(one.rstrip("\r\n") for one in record)
+    return _OPAQUE_ID.sub("#", _VOLATILE.sub("#", text))
 
 
 def _collapse_repeated_lines(text: str) -> str:

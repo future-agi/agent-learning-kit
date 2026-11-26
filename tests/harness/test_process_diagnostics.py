@@ -1145,3 +1145,16 @@ def test_a_bare_status_code_keeps_two_errors_apart_inside_chatter(tmp_path):
 
     # Read as one record, the two codes would collapse into the last 500 with the polling around them.
     assert "returned 404" in body and "returned 500" in body
+
+
+def test_the_last_line_without_a_newline_is_still_a_copy_of_the_ones_before():
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+
+    assert (
+        _collapse_repeated_lines("a\na\na")
+        == "[earlier copies of the next line omitted: 2]\na"
+    )
+    assert (
+        _collapse_repeated_lines("poll\r\npoll\n")
+        == "[earlier copies of the next line omitted: 1]\npoll\n"
+    )
