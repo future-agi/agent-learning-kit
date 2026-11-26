@@ -1304,7 +1304,7 @@ that thing and reacts the way they would.
 opens with; anything the instruction holds back for later, a correction, a detail the agent must draw
 out, the vagueness the scenario tests, is not in it. A vague-request scenario whose opening line
 already names the problem has tested nothing. It is in the language the caller speaks on the call,
-the one in their `languages`: a caller who speaks first says it word for word, so an opening in
+the first language in their `languages`, the one the call starts in: a caller who speaks first says it word for word, so an opening in
 another language starts the call in a language they do not speak.
 
 **An overlay is an attack in the instruction, not a word in the coordinate.** Before you write any
