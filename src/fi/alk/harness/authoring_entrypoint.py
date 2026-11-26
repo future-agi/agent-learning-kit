@@ -40,6 +40,7 @@ from .job import (
 )
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
+from .provider_tools import with_provider_tools
 from .releases import ReleaseError
 from .reviewed_build import prepare_reviewed_build
 from .scenarios import load as load_written
@@ -594,10 +595,12 @@ def _load_provider_import_profile(
     if source is None:
         return None
     if profile_cache_path is not None and profile_cache_path.is_file():
+        if secrets_path is not None:
+            secrets_path.unlink(missing_ok=True)
         cached = json.loads(profile_cache_path.read_text(encoding="utf-8"))
         if not isinstance(cached, dict):
             raise RuntimeError("provider_import_authoring_profile_invalid")
-        return cached
+        return with_provider_tools(cached)
     if secrets_path is None:
         raise RuntimeError("provider_import_authoring_secrets_missing")
     try:
@@ -623,7 +626,7 @@ def _load_provider_import_profile(
         profile_cache_path.write_text(
             json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-    return profile
+    return with_provider_tools(profile)
 
 
 def agent_source_kind(job: HarnessJob, profile: dict[str, object] | None) -> str:
@@ -862,6 +865,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         return _certify_only(args)
     if args.read_agent_only:
         import logging
+        from dataclasses import replace
 
         from .agent_reading import READ_AGENT
         from .reading_entry import run_reading_mode
@@ -873,7 +877,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         if not logging.getLogger().handlers:
             reading_log.addHandler(logging.StreamHandler())
         return run_reading_mode(
-            READ_AGENT,
+            replace(
+                READ_AGENT,
+                work=partial(READ_AGENT.work, profile_cache=args.provider_profile_cache),
+            ),
             job_path=args.job,
             source=args.source.resolve(),
             output=args.output.resolve(),

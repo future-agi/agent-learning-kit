@@ -3253,10 +3253,15 @@ def _read_file_tool_calls(
         failed = door_failure(_structured(output))
         is_error = bool(record.get("is_error", False)) or failed is not None
         raw_at = record.get("at")
+        result = None if is_error else _structured(output)
+        if record.get("source") == _SPAN_SOURCE:
+            if _langchain_arguments(arguments):
+                result = _unwrapped_result(result)
+            arguments = _unwrapped_arguments(arguments)
         call = Call(
             name=name,
             arguments=arguments,
-            result=None if is_error else _structured(output),
+            result=result,
             ok=not is_error,
             error=failed or (str(output) if is_error and output is not None else None),
             **tool_call_attribution(record),
@@ -4020,6 +4025,23 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 )
             )
     return tuple(calls)
+
+
+def _langchain_arguments(arguments: dict[str, Any]) -> bool:
+    return set(arguments) == {"input"} and isinstance(arguments["input"], str)
+
+
+def _unwrapped_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    if not _langchain_arguments(arguments):
+        return arguments
+    inner = _structured(arguments["input"])
+    return inner if isinstance(inner, dict) else arguments
+
+
+def _unwrapped_result(result: Any) -> Any:
+    if isinstance(result, dict) and set(result) == {"output"} and not _framework_message(result):
+        return _structured(result["output"])
+    return result
 
 
 def _framework_message(result: Any) -> bool:
