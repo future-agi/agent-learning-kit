@@ -1817,6 +1817,13 @@ class PostgresRoster:
         return {"permitted_actions": row[0], "on_behalf_of": row[1]} if row else None
 
 
+# A session the harness opens as one of a world's roles: what the agent's own role settings could otherwise decide
+# for it (its search path, read-only by default, a timeout), set here.
+WORLD_ROLE_SESSION = (
+    "-c search_path=public -c default_transaction_read_only=off -c statement_timeout=0 -c lock_timeout=0"
+)
+
+
 class PostgresRecords:
     """Record changes run on the world's own Postgres database."""
 
@@ -1827,7 +1834,7 @@ class PostgresRecords:
         import psycopg
 
         with psycopg.connect(
-            self.dsn, autocommit=True, connect_timeout=5
+            self.dsn, autocommit=True, connect_timeout=5, options=WORLD_ROLE_SESSION
         ) as connection:
             return int(connection.execute(sql, params).rowcount)
 

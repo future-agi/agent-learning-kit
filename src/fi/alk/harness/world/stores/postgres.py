@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from ...world_door import WORLD_ROLE_SESSION
 from ..errors import WorldQueryRejected
 from . import Held, Snapshot, StoreError, WorldResetRefused
 from .container import ContainerStore, docker
@@ -101,10 +102,19 @@ _CATALOG = " UNION ALL ".join(
         ("casts", "SELECT concat_ws('|', c.castsource, c.casttarget, c.castfunc, c.castcontext) FROM pg_cast c "
          "WHERE c.oid >= 16384"),
         ("extensions", "SELECT concat_ws('|', e.extname, e.extversion, e.extnamespace) FROM pg_extension e"),
+        # The reset's own role, here and everywhere: the role whose code a reset runs. Another world's roles, and the
+        # agent's own role (whose settings each world's reset clears), are no part of this world's reset.
         ("role settings", "SELECT concat_ws('|', s.setdatabase, pg_get_userbyid(s.setrole), s.setconfig::text) "
-         "FROM pg_db_role_setting s"),
+         "FROM pg_db_role_setting s WHERE s.setrole = (SELECT oid FROM pg_roles WHERE rolname = current_user) "
+         "AND s.setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))"),
         ("event triggers", "SELECT concat_ws('|', e.evtname, e.evtevent, e.evtenabled, e.evtfoid) "
          "FROM pg_event_trigger e"),
+        # A large object outlives a reset of rows; one made since the snapshot would carry across trials.
+        ("large objects", "SELECT concat_ws('|', l.oid, pg_get_userbyid(l.lomowner), l.lomacl::text) "
+         "FROM pg_largeobject_metadata l"),
+        # Default privileges carry a grant to whatever is made next.
+        ("default privileges", "SELECT concat_ws('|', pg_get_userbyid(a.defaclrole), a.defaclnamespace, "
+         "a.defaclobjtype, a.defaclacl::text) FROM pg_default_acl a"),
     )
 )
 
@@ -236,7 +246,7 @@ class PostgresStore(ContainerStore):
 
     def query_as_world(self, statement: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         """``query`` as the agent's tools' own role, under the world's row security: a handler's read."""
-        return self._read(self.dsn(), statement, params, "")
+        return self._read(self.dsn(), statement, params, WORLD_ROLE_SESSION)
 
     def _reader_address(self) -> str:
         return getattr(self, "_reader_dsn", None) or self.dsn()
@@ -580,6 +590,16 @@ class PostgresStore(ContainerStore):
                     self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
                 self._set_counters(connection, snapshot.counters)
                 self._verify_reset(connection, snapshot, tables)
+                self._keep_own_password(connection)
+
+    def _keep_own_password(self, connection: Any) -> None:
+        """Last in the reset's transaction, after every statement that ran the world's code: the store role's password
+        set back to the one it logs in with. Any role may change its own password, so a check the reset ran could
+        have given it another, which would then let anyone holding it in, past the world's row security."""
+        password = _psycopg().conninfo.conninfo_to_dict(getattr(self, "_reader_dsn", None) or "").get("password")
+        if password:
+            sql = _psycopg().sql
+            connection.execute(sql.SQL("ALTER ROLE CURRENT_USER PASSWORD {}").format(sql.Literal(password)))
 
     def save_to(self, path: str | Path) -> None:
         """Save both the records and the DDL a fresh Postgres store needs."""

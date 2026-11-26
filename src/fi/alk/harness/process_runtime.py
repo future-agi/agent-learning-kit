@@ -7033,6 +7033,7 @@ def _grant_world_role_group(
 
 def _grant_log_role_group(run: Callable[[str, str], None], baseline_db: str) -> None:
     _no_notify(run, baseline_db)
+    _no_large_objects(run, baseline_db)
     _grant_log_readers(run, baseline_db)
 
 
@@ -7040,6 +7041,13 @@ def _no_notify(run: Callable[[str, str], None], baseline_db: str) -> None:
     """No world role may call the `pg_notify` function from its world's code. (The NOTIFY statement needs no grant
     and cannot be revoked; no world role can read the harness's log, so it carries only what that role may read.)"""
     run(baseline_db, "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_notify(text, text) FROM PUBLIC")
+
+
+def _no_large_objects(run: Callable[[str, str], None], baseline_db: str) -> None:
+    """No world role may make a large object: one outlives a reset of the world's rows, so an agent could leave itself
+    a note for the next trial. (Reading one the seed made is untouched; a reset refuses a world with a new one.)"""
+    for function in ("lo_create(oid)", "lo_creat(integer)", "lo_from_bytea(oid, bytea)"):
+        run(baseline_db, f"REVOKE EXECUTE ON FUNCTION pg_catalog.{function} FROM PUBLIC")
 
 
 def _grant_log_readers(run: Callable[[str, str], None], baseline_db: str) -> None:

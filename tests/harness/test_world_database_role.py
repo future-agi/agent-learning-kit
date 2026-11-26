@@ -627,6 +627,7 @@ def door_worlds(monkeypatch):
         # World 0's store role, for the tests that read and reset it as the harness does.
         make.store_url = url(pr.store_role(superuser, 0))
         make.log_url = url(pr.log_role(superuser, 0))
+        make.other_world_url = url(pr.world_role(superuser, 1), 1)
         return (
             url(superuser),
             url(pr.world_role(superuser, 0)),
@@ -2180,6 +2181,99 @@ def test_a_door_bundle_whose_world_has_no_action_log_yet_takes_its_grants():
         pr._grant_world_role_group(**checked, door=True)
     finally:
         _dropped(superuser, baseline, run)
+
+
+@real_postgres
+def test_a_password_the_world_s_code_gives_the_store_role_during_a_reset_never_takes(door_worlds, monkeypatch):
+    """Any role may change its own password: a check the reset runs as the store role gives it one of its own. The
+    reset sets the store role's own password back last in its transaction, so the planted one never logs in."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    store_url = door_worlds.store_url
+    _owned_by_the_login(
+        superuser,
+        "CREATE FUNCTION public.take_over() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
+        "EXECUTE 'ALTER ROLE ' || quote_ident(current_user) || ' PASSWORD ''taken-over'''; RETURN true; END $$; "
+        "CREATE TABLE public.notes (id int PRIMARY KEY); INSERT INTO public.notes VALUES (1); "
+        "ALTER TABLE public.notes ADD CONSTRAINT armed CHECK (take_over()) NOT VALID; "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools",
+    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("DELETE FROM public.notes")
+    store.restore(snapshot)
+    planted = urlunsplit(urlsplit(store_url)._replace(
+        netloc=f"{urlsplit(store_url).username}:taken-over@{urlsplit(store_url).hostname}:{urlsplit(store_url).port}"
+    ))
+    with pytest.raises(psycopg.OperationalError):
+        psycopg.connect(planted).close()
+    with psycopg.connect(store_url) as connection:
+        assert connection.execute("SELECT count(*) FROM public.notes").fetchone() == (1,)
+
+
+@real_postgres
+@pytest.mark.parametrize("carrier", ("a large object", "default privileges"))
+def test_state_an_agent_leaves_outside_the_rows_refuses_the_reset(door_worlds, monkeypatch, carrier):
+    """A large object, or default privileges, made since the snapshot would carry across trials past a reset of the
+    rows: the reset refuses the world instead."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        if carrier == "a large object":
+            connection.execute("SELECT lo_from_bytea(0, 'trial 1: the answer is 42')")
+        else:
+            connection.execute(
+                f'ALTER DEFAULT PRIVILEGES FOR ROLE "{urlsplit(world).username}" GRANT SELECT ON TABLES TO PUBLIC'
+            )
+    with pytest.raises(WorldResetRefused, match=carrier.split()[-2] if carrier == "a large object" else "default"):
+        store.restore(snapshot)
+
+
+@real_postgres
+def test_no_world_role_can_make_a_large_object(door_worlds):
+    """The agent's own role cannot leave itself a large object for the next trial."""
+    _superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(world, autocommit=True) as connection:
+        for statement in ("SELECT lo_from_bytea(0, 'note')", "SELECT lo_create(0)", "SELECT lo_creat(-1)"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(statement)
+
+
+@real_postgres
+def test_an_agent_s_role_settings_neither_refuse_a_reset_nor_shape_the_harness_s_sessions(door_worlds, monkeypatch):
+    """The agent may give its own role settings (any role may): they refuse no reset, of its world or another's, they
+    do not decide the harness's sessions as that role (read-only by default, a search path), and the next world reset
+    clears them."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world_door import PostgresRecords
+
+    superuser, world, _door, reset = door_worlds(True)
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    other = door_worlds.other_world_url
+    for address in (world, other):
+        with psycopg.connect(address, autocommit=True) as connection:
+            connection.execute("ALTER ROLE CURRENT_USER SET default_transaction_read_only = on")
+            connection.execute("ALTER ROLE CURRENT_USER SET search_path = nowhere")
+    store.restore(snapshot)
+    # Found on the harness's own path, not the role's `nowhere`; a write, not refused as read-only.
+    [seen] = store.query_as_world("SELECT count(*) AS n FROM riders")
+    assert PostgresRecords(world)("UPDATE riders SET name = name", []) == seen["n"]
+    reset(0)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = 'alk_w0'::regrole"
+        ).fetchone() == (0,)
+        connection.execute("ALTER ROLE alk_w1 RESET ALL")
 
 
 _SHOUTING = (
