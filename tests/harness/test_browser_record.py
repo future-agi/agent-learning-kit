@@ -84,6 +84,11 @@ def test_each_recorder_s_world_and_binding_are_its_own_and_its_listener_calls_it
     try:
         assert len({one.binding, two.binding}) == 2 and len({one.listener_world, two.listener_world}) == 2
         assert f"globalThis.{one.binding}" in one.listener and two.binding not in one.listener
+        # New at each attach, so a later browser on the same world has names its agent never saw.
+        before = (one.binding, one.listener_world)
+        one.attach(1)
+        assert one.binding != before[0] and one.listener_world != before[1]
+        assert f"globalThis.{one.binding}" in one.listener
     finally:
         one.close()
         two.close()
