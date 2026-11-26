@@ -396,14 +396,13 @@ _VOLATILE = re.compile(
     r"|\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?\b"
     r"|0x[0-9a-fA-F]+"
 )
-# A name that carries digits (gpt-4, llm-2, s3transfer2): part of what the record is about, not a counter.
-_NAME_WITH_DIGITS = re.compile(
-    r"(?<![0-9A-Za-z])[A-Za-z][A-Za-z0-9]*(?:[-_.][A-Za-z0-9]+)*(?![0-9A-Za-z])"
-)
 # Numbers that tell two errors apart: a status, exit or signal code, an HTTP code.
 _MEANINGFUL = re.compile(
     r"(?i)(?:status(?:_code)?|code|exit(?:\s+(?:code|status))?|returncode|signal|http(?:/\d\.\d)?)"
     r"[\"'\s:=_]*\d+"
+    # A bare three-digit code (404, 500), standing alone, and where in a file a record was written.
+    r"|(?<![\w.:#-])[1-5]\d\d(?![\w.:#-])"
+    r"|\.[A-Za-z]{1,5}:\d+(?::\d+)?"
 )
 # Opaque ids, so two copies of one record with different ids match: hex runs that carry a digit
 # (uuids, hashes), and letter-and-digit runs of twelve or more (job, request and sandbox ids;
@@ -419,40 +418,17 @@ _OPAQUE_ID = re.compile(
 _CHAINED = (
     "During handling of the above exception",
     "The above exception was the direct cause",
-    # Java and the other JVM languages print an exception's cause and suppressed ones unindented.
-    "Caused by:",
-    "Suppressed:",
 )
-# A Go panic's stack: each goroutine's header, then for each frame its function line, unindented, and its file line,
-# indented. Both belong to the panic above them.
-_GOROUTINE = re.compile(r"goroutine \d+ \[[^\]]*\]:\s*$")
 
 
 def _records(lines: list[str]) -> list[list[str]]:
-    """Split log lines into records: a line with its continuation lines (indented ones, a JVM exception's
-    cause, a Go panic's goroutine stacks), and a Python traceback kept whole from its header to its exception
-    line, chained tracebacks included."""
+    """Split log lines into records: a line with its indented continuation lines, and a Python traceback kept
+    whole from its header to its exception line, chained tracebacks included."""
 
     records: list[list[str]] = []
     in_traceback = False
-    in_goroutine = False
-    for index, line in enumerate(lines):
+    for line in lines:
         indented = line[:1] in (" ", "\t")
-        following = lines[index + 1] if index + 1 < len(lines) else ""
-        if records and _GOROUTINE.match(line):
-            records[-1].append(line)
-            in_goroutine = True
-            continue
-        if (
-            records
-            and in_goroutine
-            and line.rstrip().endswith(")")
-            and following[:1] in (" ", "\t")
-        ):
-            records[-1].append(line)
-            continue
-        if not (indented or not line.strip()):
-            in_goroutine = False
         if line.startswith("Traceback (most recent call last)"):
             # Python prints a blank line between "...direct cause..." and the next traceback.
             said = [one for one in records[-1] if one.strip()] if records else []
@@ -488,43 +464,56 @@ def _shape(record: list[str]) -> str:
         # A placeholder with no digits, so removing digits cannot touch it.
         return "\0" + chr(0xE000 + len(kept) - 1) + "\0"
 
-    def hold_name(match: re.Match[str]) -> str:
-        return (
-            hold(match) if any(c.isdigit() for c in match.group(0)) else match.group(0)
-        )
-
-    # Only digits that stand alone (counters, durations, sizes) are dropped.
-    held = _NAME_WITH_DIGITS.sub(hold_name, _MEANINGFUL.sub(hold, text)).translate(
-        _DIGITS
-    )
+    held = _MEANINGFUL.sub(hold, text).translate(_DIGITS)
     return re.sub("\0(.)\0", lambda m: kept[ord(m.group(1)) - 0xE000], held)
 
 
-def _collapse_repeated_lines(text: str) -> str:
-    """Keep a repeated log record only where it last appears, above it the count of its earlier
-    copies.
+# The most records a repeating pattern spans, so a run of two or three kinds of polling still collapses but a
+# multi-record block (an error with its stack) that recurs is left where it was written.
+_RUN_PERIOD = 3
 
-    A healthy process repeats some lines all through its log (stream notices, polling, retries);
-    left in, they push the one line that explains a failure out of the retained tail. A record is
-    a line with its indented continuation, and a traceback stays whole, so two different errors
-    never share or lose frames. Records that differ only in digits (times, counters) or opaque ids
-    (uuids, hashes, long letter-and-digit ids) count as the same record, but a status, exit or
-    HTTP code keeps two errors apart. The kept copy is the
-    last one, so its time is the latest, not the first.
+
+def _collapse_repeated_lines(text: str) -> str:
+    """Drop the earlier copies of a log record that repeats in a run, and say above its last copy how
+    many were dropped.
+
+    A healthy process repeats some lines all through its log (stream notices, polling, retries); left
+    in, they push the one line that explains a failure out of the retained tail. A record is a line with
+    its indented continuation, and a Python traceback stays whole. Records that differ only in volatile
+    parts (times, ids, counters) count as copies; a status, exit or HTTP code, or the file and line a
+    record names, keeps two records apart.
+
+    An earlier copy is dropped only inside a run: when the same record comes again within three records
+    and every record between repeats too. So a copy that sits among distinct lines, for example an exception line shared by
+    two different errors in any language's format, stays where it was written, and no line is ever shown
+    under a record it does not belong to. The kept copy is the last one, so its time is the latest.
     """
 
     records = _records(text.splitlines(keepends=True))
     shapes = [_shape(record) for record in records]
     last = {shape: index for index, shape in enumerate(shapes)}
+    earlier = [last[shape] != index for index, shape in enumerate(shapes)]
     copies = Counter(shapes)
+    # In a run: the same record comes again within a few records, and everything between repeats too (one line repeated, or a few lines repeated in turn, like two kinds of polling).
+    dropped = [
+        copy
+        and any(
+            index + gap < len(shapes)
+            and shapes[index + gap] == shapes[index]
+            and all(copies[shape] > 1 for shape in shapes[index + 1 : index + gap])
+            for gap in range(1, _RUN_PERIOD + 1)
+        )
+        for index, copy in enumerate(earlier)
+    ]
+    omitted = Counter(shape for shape, gone in zip(shapes, dropped) if gone)
     kept: list[str] = []
     for index, record in enumerate(records):
-        if last[shapes[index]] != index:
+        if dropped[index]:
             continue
-        if copies[shapes[index]] > 1:
+        if last[shapes[index]] == index and omitted[shapes[index]]:
             what = "line" if len(record) == 1 else f"{len(record)} lines"
             kept.append(
-                f"[earlier copies of the next {what} omitted: {copies[shapes[index]] - 1}]\n"
+                f"[earlier copies of the next {what} omitted: {omitted[shapes[index]]}]\n"
             )
         kept.extend(record)
     return "".join(kept)

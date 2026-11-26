@@ -110,9 +110,12 @@ def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path)
         "<redacted>2:00:59 INFO stream text not consumed\n"
         "worker idle\n"
     )
-    # A repeated real error stays, with its own count; a line that does not repeat is never dropped.
+    # A copy among distinct lines stays where it was written; a run of copies keeps its last, with the count.
     assert _collapse_repeated_lines("error 402\nb\nerror 402\nc\n") == (
-        "b\n[earlier copies of the next line omitted: 1]\nerror 402\nc\n"
+        "error 402\nb\nerror 402\nc\n"
+    )
+    assert _collapse_repeated_lines("b\nerror 402\nerror 402\nerror 402\nc\n") == (
+        "b\n[earlier copies of the next line omitted: 2]\nerror 402\nc\n"
     )
 
 
@@ -1083,12 +1086,71 @@ def test_a_python_traceback_still_keeps_its_own_frames_and_error(tmp_path):
     assert first in body and second in body
 
 
-def test_a_digit_inside_a_name_tells_two_errors_apart(tmp_path):
-    body = _retained(
-        tmp_path,
-        "ERROR model gpt-4 not found\nERROR model gpt-5 not found\nERROR llm-2 down\nERROR llm-3 down\n",
+def test_a_counter_inside_a_name_collapses_in_a_run_of_retries(tmp_path):
+    """Digits inside a name count as volatile (attempt-1, worker-2), so retry and polling spam collapses. Two
+    such records are kept apart only by where they sit: outside a run, each stays."""
+    retries = "".join(f"WARN retry attempt-{n} for job-1234\n" for n in (1, 2, 3))
+
+    body = _retained(tmp_path, "INFO start\n" + retries + "ERROR gave up\n")
+
+    assert (
+        "[earlier copies of the next line omitted: 2]\nWARN retry attempt-3 for job-1234\n"
+        in body
+    )
+    assert "attempt-1" not in body and "ERROR gave up" in body
+
+
+def test_a_logged_exception_stays_under_its_own_message(tmp_path):
+    """SLF4J and logback print the message, then the exception unindented, then its frames: two messages that
+    share the exception each keep it."""
+    exception = "java.net.ConnectException: Connection refused\n\tat Client.connect(Client.java:42)\n"
+    first = "ERROR c.e.Booking - booking failed for slot A\n" + exception
+    second = "ERROR c.e.Refund - refund failed for order 7\n" + exception
+
+    body = _retained(tmp_path, first + second)
+
+    assert first in body and second in body
+    assert "omitted" not in body
+
+
+def test_a_rust_panic_keeps_its_own_location_and_message(tmp_path):
+    first = "thread 'main' panicked at src/main.rs:5:9:\nbooking failed\n"
+    second = "thread 'main' panicked at src/main.rs:12:9:\nbad slot\n"
+
+    body = _retained(tmp_path, first + second)
+
+    assert first in body and second in body
+
+
+def test_the_same_error_thrown_from_two_places_stays_two_records(tmp_path):
+    first = "Error: boom\n    at run (/app/index.js:3:9)\n"
+    second = "Error: boom\n    at run (/app/index.js:9:9)\n"
+
+    body = _retained(tmp_path, first + second)
+
+    assert first in body and second in body
+    assert "omitted" not in body
+
+
+def test_a_go_panic_keeps_its_created_by_frame(tmp_path):
+    def panic(message: str) -> str:
+        return (
+            f"panic: {message}\n\ngoroutine 7 [running]:\nmain.worker()\n\t/app/main.go:10 +0x1d\n"
+            "created by main.main in goroutine 1\n\t/app/main.go:4 +0x25\nexit status 2\n"
+        )
+
+    first, second = panic("booking failed"), panic("bad slot")
+    body = _retained(tmp_path, first + second)
+
+    assert first in body and second in body
+
+
+def test_a_bare_status_code_keeps_two_errors_apart_inside_chatter(tmp_path):
+    text = "".join(
+        f"INFO poll\nERROR upstream returned {code}\n" for code in (404, 500, 404, 500)
     )
 
-    for line in ("gpt-4 not found", "gpt-5 not found", "llm-2 down", "llm-3 down"):
-        assert line in body
-    assert "omitted" not in body
+    body = _retained(tmp_path, text)
+
+    # Read as one record, the two codes would collapse into the last 500 with the polling around them.
+    assert "returned 404" in body and "returned 500" in body
