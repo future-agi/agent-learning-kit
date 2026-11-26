@@ -51,10 +51,16 @@ setTimeout(() => {
 <input id=csc aria-label="Security code" autocomplete="section-a billing cc-csc">
 <input id=otp aria-label="Code" autocomplete="one-time-code">
 </body></html>""",
-    "/card-switched": """<html><body><input id=num aria-label="Card number" autocomplete="cc-number">
-<script>document.getElementById('num').setAttribute('autocomplete', 'off');</script></body></html>""",
-    "/switched": """<html><body><input id=pw name=secret type=password>
-<script>document.getElementById('pw').type = 'text';</script></body></html>""",
+    "/card-switched": """<html><body><script>
+const num = document.createElement('input'); num.id = 'num'; num.setAttribute('aria-label', 'Card number');
+num.setAttribute('autocomplete', 'cc-number'); document.body.appendChild(num); num.setAttribute('autocomplete', 'off');
+</script></body></html>""",
+    # Added and changed in one task, so the listener first sees the field already changed: only the change's old
+    # value says it was a secret field.
+    "/switched": """<html><body><script>
+const pw = document.createElement('input'); pw.id = 'pw'; pw.name = 'secret'; pw.type = 'password';
+document.body.appendChild(pw); pw.type = 'text';
+</script></body></html>""",
 }
 
 
