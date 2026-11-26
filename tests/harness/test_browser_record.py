@@ -680,6 +680,157 @@ def test_a_screenshot_the_browser_could_not_take_is_skipped_and_the_seal_still_a
     assert body["complete"] is True and body["screenshots"] == []
 
 
+def _tab(session: str, target: str) -> dict:
+    return {
+        "method": "Target.attachedToTarget",
+        "params": {"sessionId": session, "targetInfo": {"type": "page", "targetId": target}, "waitingForDebugger": True},
+    }
+
+
+def _loaded_on(session: str, target: str, url: str) -> list[dict]:
+    return [
+        {"method": "Page.frameNavigated", "sessionId": session, "params": {"frame": {"id": target, "url": url}}},
+        {"method": "Page.loadEventFired", "sessionId": session, "params": {}},
+    ]
+
+
+def _page_shots(body: dict) -> list[str]:
+    return [one["url"] for one in body["screenshots"] if one["when"] == "load"]
+
+
+class _Unanswered(_FakeCdp):
+    """Never answers a screenshot asked of the sessions in ``silent``, as a tab closed mid-capture."""
+
+    silent: frozenset = frozenset({"S2"})
+
+    def send(self, message: dict) -> None:
+        if message["method"] == "Page.captureScreenshot" and message.get("sessionId") in self.silent:
+            with self.ready:
+                self.sent.append(message)
+            return
+        super().send(message)
+
+
+class _SendFails(_FakeCdp):
+    """The first screenshot asked for cannot be sent."""
+
+    failed = False
+
+    def send(self, message: dict) -> None:
+        if message["method"] == "Page.captureScreenshot" and not self.failed:
+            self.failed = True
+            raise ConnectionError("not sent")
+        super().send(message)
+
+
+class _FirstShotLarge(_FakeCdp):
+    """The first screenshot is larger than all of them together may be; the rest are small."""
+
+    answered = 0
+
+    def send(self, message: dict) -> None:
+        if message["method"] == "Page.captureScreenshot":
+            self.answered += 1
+            self.shot = b"\xff\xd8\xff" + b"j" * (1997 if self.answered == 1 else 97)
+        super().send(message)
+
+
+def _places_come_back(tmp_path, devtools_port, fake, first: list[dict], **kwargs) -> tuple[dict, object]:
+    # Two places for pages and one for the end's: a page whose screenshot was not kept leaves its place free.
+    recorder = browser_record.BrowserRecorder(
+        ["shop.test"], tmp_path / "w0-record.json", connect=lambda url: fake, shots=3, **kwargs
+    )
+    recorder.attach(devtools_port)
+    try:
+        fake.queue(_attached())
+        for message in first:
+            fake.queue(message)
+        # The first page's screenshot is asked for, then its answer (or its tab's close) is handled before the next
+        # pages load: a screenshot still being taken holds its place.
+        _until(lambda: getattr(fake, "failed", False) or any(m["method"] == "Page.captureScreenshot" for m in fake.sent))
+        handled = threading.Event()
+        recorder._command("Browser.getVersion", then=lambda _answer: handled.set())
+        assert handled.wait(5)
+        for message in _loaded("http://shop.test/1") + _loaded("http://shop.test/2"):
+            fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    return body, recorder
+
+
+def test_a_tab_closed_before_its_screenshot_is_answered_leaves_its_place_free(tmp_path, devtools_port) -> None:
+    first = [_tab("S2", "T2"), *_loaded_on("S2", "T2", "http://shop.test/0"),
+             {"method": "Target.detachedFromTarget", "params": {"sessionId": "S2", "targetId": "T2"}}]
+    body, _ = _places_come_back(tmp_path, devtools_port, _Unanswered(), first)
+    assert _page_shots(body) == ["http://shop.test/1", "http://shop.test/2"]
+
+
+def test_a_screenshot_that_could_not_be_asked_for_leaves_its_place_free_and_no_answer_waiting(
+    tmp_path, devtools_port
+) -> None:
+    body, recorder = _places_come_back(tmp_path, devtools_port, _SendFails(), _loaded("http://shop.test/0"))
+    assert _page_shots(body) == ["http://shop.test/1", "http://shop.test/2"]
+    assert recorder._waiting == {}
+
+
+def test_a_screenshot_too_large_to_keep_leaves_its_place_free(tmp_path, devtools_port) -> None:
+    body, _ = _places_come_back(
+        tmp_path, devtools_port, _FirstShotLarge(), _loaded("http://shop.test/0"), shot_bytes=1000
+    )
+    assert _page_shots(body) == ["http://shop.test/1", "http://shop.test/2"]
+
+
+def test_a_screenshot_that_could_not_be_written_leaves_its_place_free(tmp_path, devtools_port, monkeypatch) -> None:
+    write_bytes = browser_record.Path.write_bytes
+    failed: list[str] = []
+
+    def fails_once(path, data):
+        if not failed:
+            failed.append(path.name)
+            raise OSError("disk full")
+        return write_bytes(path, data)
+
+    monkeypatch.setattr(browser_record.Path, "write_bytes", fails_once)
+    body, _ = _places_come_back(tmp_path, devtools_port, _FakeCdp(), _loaded("http://shop.test/0"))
+    assert failed and _page_shots(body) == ["http://shop.test/1", "http://shop.test/2"]
+
+
+def test_a_screenshot_the_browser_refused_to_take_leaves_its_place_free(tmp_path, devtools_port) -> None:
+    class _FirstRefused(_FakeCdp):
+        refused = False
+
+        def send(self, message: dict) -> None:
+            self.fail_shots = message["method"] == "Page.captureScreenshot" and not self.refused
+            if self.fail_shots:
+                self.refused = True
+            super().send(message)
+
+    body, _ = _places_come_back(tmp_path, devtools_port, _FirstRefused(), _loaded("http://shop.test/0"))
+    assert _page_shots(body) == ["http://shop.test/1", "http://shop.test/2"]
+
+
+def test_with_the_last_tab_closed_the_end_is_of_the_page_opened_last_on_a_tab_still_open(
+    tmp_path, devtools_port
+) -> None:
+    fake, recorder = _recording(tmp_path, devtools_port)
+    try:
+        for message in (
+            _tab("S2", "T2"),
+            _tab("S3", "T3"),
+            {"method": "Page.frameNavigated", "sessionId": "S1", "params": {"frame": {"id": "T1", "url": "http://shop.test/a"}}},
+            {"method": "Page.frameNavigated", "sessionId": "S2", "params": {"frame": {"id": "T2", "url": "http://shop.test/b"}}},
+            {"method": "Page.frameNavigated", "sessionId": "S1", "params": {"frame": {"id": "T1", "url": "http://shop.test/c"}}},
+            {"method": "Page.frameNavigated", "sessionId": "S3", "params": {"frame": {"id": "T3", "url": "http://shop.test/d"}}},
+            {"method": "Target.detachedFromTarget", "params": {"sessionId": "S3", "targetId": "T3"}},
+        ):
+            fake.queue(message)
+        body = browser_record.sealed_record(tmp_path / "w0-record.json", timeout=5)
+    finally:
+        recorder.close()
+    assert [(one["when"], one["url"]) for one in body["screenshots"]] == [("end", "http://shop.test/c")]
+
+
 def test_a_new_record_starts_with_no_screenshots_of_the_last_trial(tmp_path, devtools_port) -> None:
     fake, recorder = _recording(tmp_path, devtools_port)
     try:
