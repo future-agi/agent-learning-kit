@@ -307,6 +307,49 @@ def test_a_message_over_the_cap_is_refused_not_read_into_memory() -> None:
         client.close()
 
 
+def test_two_threads_never_write_their_messages_into_each_other() -> None:
+    # The reader answers pings, the trial's end sends the seal, a timer sends its own: one frame at a time.
+    inside, release, second_in = threading.Event(), threading.Event(), threading.Event()
+    written: list[bytes] = []
+
+    class _Connection:
+        def sendall(self, data: bytes) -> None:
+            if not inside.is_set():
+                inside.set()
+                release.wait(5)
+            else:
+                second_in.set()
+            written.append(data)
+
+    client = CdpSocket(_Connection())
+    first = threading.Thread(target=client.send, args=({"id": 1, "method": "a"},))
+    first.start()
+    assert inside.wait(5)
+    second = threading.Thread(target=client.send, args=({"id": 2, "method": "b"},))
+    second.start()
+    # The second waits while the first is still writing; a bounded wait, since nothing else would end it.
+    assert not second_in.wait(0.5)
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert second_in.is_set() and len(written) == 2
+
+
+def test_a_reader_that_ends_closes_only_its_own_connection_never_a_newer_one(tmp_path) -> None:
+    # The window between an ended reader's check and its close cannot be hit on demand; the close itself is given
+    # the connection it may close.
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json")
+    old, new = _FakeCdp(), _FakeCdp()
+    recorder._socket = new
+    try:
+        assert recorder._drop(old) is False
+        assert recorder._socket is new and not new.closed
+        assert recorder._drop(new) is True
+        assert recorder._socket is None and new.closed
+    finally:
+        recorder.close()
+
+
 def test_a_closed_connection_ends_the_read() -> None:
     def script(connection, _server):
         connection.sendall(_frame(b"\x03\xe8", opcode=8))
