@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -659,6 +660,47 @@ def test_a_browser_that_never_opens_its_port_is_stopped(tmp_path, monkeypatch) -
         # Stopped by the failed start itself, before anything closes the kit.
         assert stopped == [handle]
     finally:
+        kit.close()
+
+
+@pytest.mark.parametrize("kind", ["fifo", "link"])
+def test_a_port_file_that_is_not_a_plain_file_is_never_read(tmp_path, monkeypatch, kind) -> None:
+    # The browser's own user can write its profile: a pipe there must not hold the start past its time limit, and a
+    # link must not point the relay at a port of that user's choosing.
+    monkeypatch.setattr(kit_browser, "_START_SECONDS", 0.3)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("9333\n/devtools/browser/x\n")
+
+    def launch(argv, cwd, env, log_path):
+        if kind == "fifo":
+            os.mkfifo(cwd / "DevToolsActivePort")
+        else:
+            (cwd / "DevToolsActivePort").symlink_to(elsewhere)
+        return _Handle()
+
+    kit = KitBrowser(
+        binary="/opt/alk-chromium", sites=["shop.test"], log=MemoryLog(), directory=tmp_path / "browser",
+        state_path=tmp_path / "state.json", launch=launch, stop=lambda handle: None,
+    )
+    outcome: list = []
+
+    def start() -> None:
+        try:
+            kit.start()
+        except RuntimeError as error:
+            outcome.append(error)
+
+    worker = threading.Thread(target=start, daemon=True)
+    worker.start()
+    worker.join(10)
+    try:
+        assert not worker.is_alive(), "the start waited on the port file"
+        assert outcome and "within" in str(outcome[0])
+    finally:
+        if worker.is_alive():
+            # Free the reader the start left waiting, so the test leaves nothing behind.
+            fifo = next((tmp_path / "browser").glob("profile-*/DevToolsActivePort"))
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
         kit.close()
 
 
