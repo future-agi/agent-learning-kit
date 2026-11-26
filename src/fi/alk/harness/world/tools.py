@@ -719,7 +719,10 @@ def world_actor_tools(
                 f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
                 "`surface` is where it acts in the world."
             )
-        if "role" in given or current is None:
+        # A role that is not text is left for the record's own check to refuse.
+        if ("role" in given or current is None) and isinstance(
+            given.get("role", ""), str
+        ):
             role = " ".join(str(given.get("role") or "").split())
             if not role:
                 return _err(

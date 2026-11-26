@@ -11805,7 +11805,12 @@ def test_every_actor_gets_a_role_and_one_part_is_written_the_same_way(tmp_path):
     asyncio.run(add({"id": "omar", "name": "Omar Haddad", "role": "  sales  MANAGER "}))
 
     roles = {one.id: (one.name, one.role) for one in load_actors(tmp_path).actors}
+    not_text = asyncio.run(add({"id": "tom", "name": "Tom Reed", "role": 7}))
+
     assert "needs a role" in str(missing)
+    assert "Not added" in str(not_text) and "tom" not in {
+        one.id for one in load_actors(tmp_path).actors
+    }
     assert roles == {
         "priya": ("Priya Sharma", "Sales manager"),
         "omar": ("Omar Haddad", "Sales manager"),
