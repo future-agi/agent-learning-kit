@@ -1809,14 +1809,10 @@
    "line": 1
   },
   "expected": {
-   "refused": true
-  },
-  "earlier": {
    "refused": false,
    "name": "",
    "setting": "LLM_MODEL"
-  },
-  "why": "the read is assigned to a name called model while another model is written as a value in the same statement; the same line assigned to any other name was refused already, and an assigned name is not a model's key"
+  }
  },
  {
   "id": "model-os-getenv-llm-model-gpt-4o-stt-stt-model-n-line1-name+setting",
@@ -1830,14 +1826,10 @@
    "line": 1
   },
   "expected": {
-   "refused": true
-  },
-  "earlier": {
    "refused": false,
    "name": "gpt-4o",
    "setting": "LLM_MODEL"
-  },
-  "why": "the read is assigned to a name called model while another model is written as a value in the same statement; the same line assigned to any other name was refused already, and an assigned name is not a model's key"
+  }
  },
  {
   "id": "llm-llm-model-os-getenv-llm-model-gpt-4o-line1-setting",

@@ -1280,15 +1280,51 @@ def _span_line(text: str, offset: int) -> str:
     return text[offset : len(text) if end < 0 else end]
 
 
-def _writes_a_model(text: str, spans, setting: str) -> bool:
+_STATEMENT_END = re.compile(r"[()\[\]{};]")
+
+
+def _part_holding(text: str, spans, at: int) -> tuple[int, int]:
+    """Where the part of the statement (``text`` and its lines' ``spans``) that holds ``at``
+    starts and ends: the statement cut at each ; outside its strings, comments and brackets.
+    llm = os.getenv("LLM_MODEL"); stt = STT(model="nova-3") is two parts. One pass."""
+    skipped, _ = _skipped(text, spans)
+    ranges = iter(skipped)
+    current = next(ranges, None)
+    depth = 0
+    start, end = 0, len(text)
+    for found in _STATEMENT_END.finditer(text):
+        where = found.start()
+        while current is not None and current[1] <= where:
+            current = next(ranges, None)
+        if current is not None and current[0] <= where:
+            continue
+        char = text[where]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if where < at:
+                start = where + 1
+            else:
+                end = where
+                break
+    return start, end
+
+
+def _writes_a_model(
+    text: str, spans, setting: str, part: tuple[int, int] | None = None
+) -> bool:
     """Whether the statement (``text`` and its lines' ``spans``, as _statement gives them) writes
     a model as a quoted value after model= or model: outside its comments, one that doesn't read
     ``setting`` (model: "${OPENAI_MODEL:-gpt-4o}" does): ChatOpenAI(model="gpt-4o",
-    timeout=os.getenv("LLM_TIMEOUT")) reads LLM_TIMEOUT beside the model."""
+    timeout=os.getenv("LLM_TIMEOUT")) reads LLM_TIMEOUT beside the model. Only in ``part`` (where
+    it starts and ends) when given: a model after a ; is another statement's."""
+    start, end = part if part is not None else (0, len(text))
     for offset, comment, _, _ in spans:
         line = _span_line(text, offset)[:comment]
         for found in _MODEL_VALUE.finditer(line):
-            if setting not in found.group(3):
+            if setting not in found.group(3) and start <= offset + found.start() < end:
                 return True
     return False
 
@@ -1534,7 +1570,12 @@ def model_problems(
                 if start + shift < len(outer)
             ]
         if not _is_the_models_value(outer, outer_spans, outer_reads) and (
-            _writes_a_model(text, spans, setting)
+            _writes_a_model(
+                text,
+                spans,
+                setting,
+                _part_holding(text, spans, reads[0][0]) if reads else None,
+            )
             or (
                 outer is not text
                 and _written_in_the_call_read_in(

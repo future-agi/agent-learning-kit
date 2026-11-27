@@ -6280,6 +6280,25 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             id="the-models-own-key-in-a-literal-inside-a-literal-with-a-model",
         ),
         pytest.param(
+            "agent.py",
+            'llm = os.getenv("LLM_MODEL", "gpt-4o"); stt = STT(model="nova-3")\n',
+            1,
+            id="another-statement-after-a-semicolon-writes-a-model",
+        ),
+        pytest.param(
+            "agent.py",
+            'model = os.getenv("LLM_MODEL", "gpt-4o"); stt = STT(model="nova-3")\n',
+            1,
+            id="model-target-with-another-statement-after-a-semicolon",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const stt = new STT({ model: "nova-3" }); '
+            'const llm = process.env.LLM_MODEL ?? "gpt-4o";\n',
+            1,
+            id="another-statement-before-a-semicolon-writes-a-model",
+        ),
+        pytest.param(
             "Agent.java",
             "public class Agent {\n"
             '    private final Stt stt = new Stt(model = "nova-3");\n'
@@ -6527,6 +6546,16 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             "    ],\n"
             ")\n",
             id="read-in-a-list-inside-the-call",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const llm = new ChatOpenAI({ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT });\n',
+            id="one-statement-ending-in-a-semicolon",
+        ),
+        pytest.param(
+            "agent.py",
+            'llm = ChatOpenAI(model="gpt-4o", stop=";", timeout=os.getenv("LLM_TIMEOUT")); x = 1\n',
+            id="semicolons-in-a-string-and-after-the-call",
         ),
     ],
 )
