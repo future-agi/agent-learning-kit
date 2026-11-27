@@ -1,6 +1,8 @@
 # Release pipeline. Every push to main either opens the next version-bump pull
 # request or, when the pushed version is not on PyPI yet, releases it: SDK to
-# PyPI, a certified E2B template, and a pull request in future-agi/deployment.
+# PyPI, a certified E2B template, and a pull request in future-agi/deployment;
+# and the ready environments, attached to a GitHub release, with a pull request
+# in future-agi that pins them.
 # To release: merge the open `chore(release): bump ...` pull request, then
 # approve the `pypi` and `e2b-template` deployments.
 # Setup (secrets, approvers, PyPI publisher): DEVELOPMENT.md, "Release pipeline".
@@ -20,6 +22,7 @@ on:
       - hosted-snapshot/**
       - pyproject.toml
       - src/**
+      - tests/harness/test_ready_environments.py
 
 permissions:
   contents: read
@@ -416,4 +419,197 @@ jobs:
             gh api -X PATCH "repos/future-agi/deployment/pulls/${existing}" -f body="$body" --silent
           else
             gh pr create --repo future-agi/deployment --base main --head "$branch" --title "$title" --body "$body"
+          fi
+
+  # The ready environments this release ships: each vertical world sealed with its suite proved on
+  # PostgreSQL, attached to the `ready-environments-v<version>` GitHub release with the list that
+  # names them (fi.alk.environments.ready). A pull request in future-agi then pins that list; the
+  # platform registers what it names on every deploy (`manage.py seed_ready_environments`).
+  ready-environments-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Seal a ready environment on PostgreSQL, twice, as a release would
+        env:
+          ALK_RELEASE_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen --python 3.12 --extra harness-stores --with pytest \
+            pytest -q -rs tests/harness/test_ready_environments.py | tee pytest.out
+          ! grep -q "SKIPPED" pytest.out
+
+  ready-environments-publish:
+    needs: sdk-check
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || needs.sdk-check.outputs.publish == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    concurrency:
+      group: ready-environments-${{ github.sha }}
+      cancel-in-progress: false
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    outputs:
+      version: ${{ steps.publish.outputs.version }}
+      download_url: ${{ steps.publish.outputs.download_url }}
+      manifest: ${{ steps.publish.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Seal every ready environment
+        env:
+          ALK_RELEASE_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(uv version --short)"
+          uv run --frozen --python 3.12 --extra harness-stores \
+            python -m fi.alk.environments.ready --out dist/ready-environments \
+            --version "$version" --revision "$GITHUB_SHA"
+      - name: Attach them to the ready-environments release
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(uv version --short)"
+          tag="ready-environments-v${version}"
+          out=dist/ready-environments
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A release's archives never change: a rerun of the same source seals the same bytes.
+            mkdir -p "$RUNNER_TEMP/published"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern ready-environments.json \
+              --dir "$RUNNER_TEMP/published"
+            if ! cmp -s "$RUNNER_TEMP/published/ready-environments.json" "$out/ready-environments.json"; then
+              echo "::error::${tag} is already published with other archives. Bump the version to publish these."
+              exit 1
+            fi
+            echo "${tag} is already published with these archives"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Ready environments ${version}" --latest=false \
+              --notes "The ready environments agent-learning-kit ${version} ships, sealed with their suites proved on PostgreSQL. future-agi registers what ready-environments.json names (manage.py seed_ready_environments)." \
+              "$out"/*
+          fi
+          {
+            echo "version=${version}"
+            echo "download_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/"
+            echo "manifest=$(jq -c . "$out/ready-environments.json")"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Ready environments ${version}"
+            jq -r '.environments[] | "- `\(.name)`: environment `\(.environment)`, suite `\(.suite)`"' \
+              "$out/ready-environments.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ready-environments-pin:
+    needs: ready-environments-publish
+    if: ${{ !cancelled() && needs.ready-environments-publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: ready-environments-pin-${{ github.sha }}
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.ready-environments-publish.outputs.version }}
+      DOWNLOAD_URL: ${{ needs.ready-environments-publish.outputs.download_url }}
+      MANIFEST: ${{ needs.ready-environments-publish.outputs.manifest }}
+    steps:
+      - name: Check required credentials
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$APP_ID" || -z "$APP_KEY" ]]; then
+            echo "::error::Share the RELEASE_BOT_APP_ID and RELEASE_BOT_PRIVATE_KEY organization secrets with this repository to open the future-agi pull request."
+            exit 1
+          fi
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: future-agi
+          repositories: future-agi
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: future-agi/future-agi
+          ref: dev
+          token: ${{ steps.app-token.outputs.token }}
+          path: platform
+          sparse-checkout: futureagi/simulate
+      - name: Pin the list in future-agi
+        working-directory: platform
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pinned=futureagi/simulate/ready_environments.json
+          printf '%s' "$MANIFEST" | jq -S --indent 2 --arg url "$DOWNLOAD_URL" '. + {download_url: $url}' > "$pinned"
+          branch="chore/ready-environments-${VERSION}"
+          title="chore(simulate): pin the ready environments of agent-learning-kit ${VERSION}"
+          git config user.name "futureagi-release-bot"
+          git config user.email "release-bot@futureagi.com"
+          git switch -c "$branch"
+          git add "$pinned"
+          if git diff --cached --quiet; then
+            echo "future-agi already pins these ready environments; nothing to do"
+            exit 0
+          fi
+          git commit -m "$title"
+          git push --force origin "$branch"
+          body="$(jq -r --arg run "$RUN_URL" --arg url "$DOWNLOAD_URL" '[
+            "## Summary",
+            "",
+            "- Pin the ready environments agent-learning-kit \(.alk_version) ships. Every deploy registers the ones not registered yet (`manage.py seed_ready_environments`, run by the bootstrap after `seed_system_evals`).",
+            "- Opened by the agent-learning-kit release workflow after sealing each one with its suite proved on PostgreSQL.",
+            "",
+            "## Environments",
+            "",
+            (.environments[] | "- `\(.name)`: environment `\(.environment)`, suite `\(.suite)`"),
+            "",
+            "- Archives: \($url)",
+            "- Kit commit: `\(.alk_source_revision)`",
+            "- Run: \($run)",
+            "",
+            "Docs: none (the ready environments list changes; no documented behavior does)"
+          ] | join("\n")' "$pinned")"
+          existing="$(gh pr list --repo future-agi/future-agi --head "$branch" --base dev --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh api -X PATCH "repos/future-agi/future-agi/pulls/${existing}" -f body="$body" --silent
+          else
+            gh pr create --repo future-agi/future-agi --base dev --head "$branch" --title "$title" --body "$body"
           fi
