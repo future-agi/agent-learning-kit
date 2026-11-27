@@ -1,0 +1,2073 @@
+[
+ {
+  "id": "client-make-client-api-key-gpt-4o-line1-name",
+  "files": {
+   "a.py": "client = make_client(api_key, \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "const-c-new-client-apikey-gpt-4o-line1-name",
+  "files": {
+   "a.ts": "const c = new Client(apiKey, \"gpt-4o\");\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.ts",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "llm-openailike-base-url-gpt-4o-line1-name",
+  "files": {
+   "a.py": "llm = OpenAILike(base_url, \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "r-call-llm-token-gpt-4o-prompt-line1-name",
+  "files": {
+   "a.py": "r = call_llm(token, \"gpt-4o\", prompt)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "n-count-tokens-gpt-4o-line1-name",
+  "files": {
+   "a.py": "n = count(tokens, \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "os-setenv-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.go": "os.Setenv(\"LLM_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.go",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "register-alias-fast-model-gpt-4o-mini-line1-name",
+  "files": {
+   "a.py": "register_alias(\"FAST_MODEL\", \"gpt-4o-mini\")\n"
+  },
+  "model": {
+   "name": "gpt-4o-mini",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "client-make-client-self-api-key-gpt-4o-line1-name",
+  "files": {
+   "a.py": "client = make_client(self.api_key, \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "client-make-client-settings-openai-api-key-gpt-4-line1-name",
+  "files": {
+   "a.py": "client = make_client(settings.OPENAI_API_KEY, \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "const-c-new-client-process-env-openai-api-key-gp-line1-name",
+  "files": {
+   "a.ts": "const c = new Client(process.env.OPENAI_API_KEY, \"gpt-4o\");\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.ts",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "client-make-client-api-key-gpt-4o-line1-name-2",
+  "files": {
+   "a.py": "client = make_client(API_KEY, \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "const-c-new-client-this-apikey-gpt-4o-line1-name",
+  "files": {
+   "a.ts": "const c = new Client(this.apiKey, \"gpt-4o\");\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.ts",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "std-env-set-var-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.rs": "std::env::set_var(\"LLM_MODEL\", \"gpt-4o\");\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.rs",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "environment-setenvironmentvariable-llm-model-gpt-line1-name",
+  "files": {
+   "a.cs": "Environment.SetEnvironmentVariable(\"LLM_MODEL\", \"gpt-4o\");\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.cs",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "monkeypatch-setenv-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.py": "monkeypatch.setenv(\"LLM_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "os-environ-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.py": "os.environ[\"LLM_MODEL\"] = \"gpt-4o\"\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "process-env-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.ts": "process.env.LLM_MODEL = \"gpt-4o\";\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.ts",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "choices-default-model-gpt-4o-line1-name",
+  "files": {
+   "a.py": "CHOICES = [(\"DEFAULT_MODEL\", \"gpt-4o\")]\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "putenv-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.php": "putenv(\"LLM_MODEL=gpt-4o\");\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.php",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "spawn-cmd-env-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.ts": "spawn(cmd, { env: { LLM_MODEL: \"gpt-4o\" } });\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.ts",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "os-setenv-llm-model-gpt-4o-line1-name-2",
+  "files": {
+   "a.go": "os.Setenv( \"LLM_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.go",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  }
+ },
+ {
+  "id": "set-key-env-llm-model-gpt-4o-line1-name",
+  "files": {
+   "a.py": "set_key(\".env\", \"LLM_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": ""
+  },
+  "earlier": {
+   "refused": true
+  },
+  "why": "set_key writes the setting with the model as its value, not as a lookup default, so the name given alone is the model"
+ },
+ {
+  "id": "llm-chatopenai-model-gpt-4o-timeout-os-getenv-ll-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(model=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "llm-chatopenai-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(\n    model=\"gpt-4o\",\n    timeout=os.getenv(\"LLM_TIMEOUT\"),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "llm-chatopenai-line3-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(\n    model=\"gpt-4o\",\n    timeout=os.getenv(\"LLM_TIMEOUT\"),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "llm-chatopenai-model-name-gpt-4o-timeout-os-gete-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(model_name=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "llm-chatopenai-deployment-name-gpt-4o-timeout-os-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(deployment_name=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "llm-chatopenai-model-id-gpt-4o-timeout-os-getenv-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(model_id=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "llm-chatopenai-azure-deployment-gpt-4o-timeout-o-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(azure_deployment=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "llm-chatopenai-engine-gpt-4o-timeout-os-getenv-l-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(engine=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "llm-chatopenai-modelid-gpt-4o-timeout-os-getenv--line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(modelId=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "const-llm-new-chatopenai-model-gpt-4o-timeout-pr-line1-setting",
+  "files": {
+   "a.ts": "const llm = new ChatOpenAI({ model: \"gpt-4o\", timeout: process.env.LLM_TIMEOUT });\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.ts",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "const-llm-new-chatopenai-modelname-gpt-4o-timeou-line1-setting",
+  "files": {
+   "a.ts": "const llm = new ChatOpenAI({ modelName: \"gpt-4o\", timeout: process.env.LLM_TIMEOUT });\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.ts",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from"
+ },
+ {
+  "id": "agent-agent-line1-name+setting",
+  "files": {
+   "a.py": "agent = Agent(\n    llm=LLM(model=os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n    stt=STT(model=\"nova-3\"),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-agent-line2-name+setting",
+  "files": {
+   "a.py": "agent = Agent(\n    llm=LLM(model=os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n    stt=STT(model=\"nova-3\"),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-agent-llm-llm-model-os-getenv-llm-model-gp-line1-name+setting",
+  "files": {
+   "a.py": "agent = Agent(llm=LLM(model=os.getenv(\"LLM_MODEL\", \"gpt-4o\")), stt=STT(model=\"nova-3\"))\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "llm-chatopenai-model-gpt-4o-if-fast-else-os-gete-line1-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(model=\"gpt-4o\" if fast else os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  }
+ },
+ {
+  "id": "a-llm-model-gpt-4o-b-llm-model-os-getenv-llm-fal-line1-setting",
+  "files": {
+   "a.py": "a = LLM(model=\"gpt-4o\"); b = LLM(model=os.getenv(\"LLM_FALLBACK_MODEL\"))\n"
+  },
+  "model": {
+   "setting": "LLM_FALLBACK_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_FALLBACK_MODEL"
+  }
+ },
+ {
+  "id": "gemini-model-gemini-1-5-pro-line2-setting",
+  "files": {
+   "a.py": "GEMINI_MODEL = \"gemini-1.5-pro\"\nllm = genai.GenerativeModel(GEMINI_MODEL)\n"
+  },
+  "model": {
+   "setting": "GEMINI_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "model-var-openai-model-line2-setting",
+  "files": {
+   "a.py": "MODEL_VAR = \"OPENAI_MODEL\"\nMODEL = os.environ.get(MODEL_VAR, \"gpt-4o\")\n"
+  },
+  "model": {
+   "setting": "MODEL_VAR",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "model-var-openai-model-line2-setting-2",
+  "files": {
+   "a.py": "MODEL_VAR = \"OPENAI_MODEL\"\nMODEL = os.environ.get(MODEL_VAR, \"gpt-4o\")\n"
+  },
+  "model": {
+   "setting": "OPENAI_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "model-var-openai-model-line1-setting",
+  "files": {
+   "a.py": "MODEL_VAR = \"OPENAI_MODEL\"\nMODEL = os.environ.get(MODEL_VAR, \"gpt-4o\")\n"
+  },
+  "model": {
+   "setting": "OPENAI_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "OPENAI_MODEL"
+  }
+ },
+ {
+  "id": "model-var-openai-model-line1-name+setting",
+  "files": {
+   "a.py": "MODEL_VAR = \"OPENAI_MODEL\"\nMODEL = os.environ.get(MODEL_VAR, \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "OPENAI_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "llm-genai-generativemodel-cfg-gemini-model-line1-setting",
+  "files": {
+   "a.py": "llm = genai.GenerativeModel(cfg.GEMINI_MODEL)\n"
+  },
+  "model": {
+   "setting": "GEMINI_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "GEMINI_MODEL"
+  }
+ },
+ {
+  "id": "m-os-getenv-author-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"AUTHOR_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "AUTHOR_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "AUTHOR_MODEL"
+  }
+ },
+ {
+  "id": "m-os-getenv-curie-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"CURIE_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "CURIE_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "CURIE_MODEL"
+  }
+ },
+ {
+  "id": "m-os-getenv-first-pass-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"FIRST_PASS_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "FIRST_PASS_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "FIRST_PASS_MODEL"
+  }
+ },
+ {
+  "id": "m-os-getenv-tokenizer-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"TOKENIZER_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "TOKENIZER_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "TOKENIZER_MODEL"
+  }
+ },
+ {
+  "id": "m-os-getenv-keyword-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"KEYWORD_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "KEYWORD_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "KEYWORD_MODEL"
+  }
+ },
+ {
+  "id": "m-os-getenv-second-pass-llm-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"SECOND_PASS_LLM\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "SECOND_PASS_LLM",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "SECOND_PASS_LLM"
+  }
+ },
+ {
+  "id": "m-os-getenv-auth-llm-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"AUTH_LLM\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "AUTH_LLM",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "AUTH_LLM"
+  }
+ },
+ {
+  "id": "m-os-getenv-openai-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"OPENAI_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "OPENAI_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "OPENAI_MODEL"
+  }
+ },
+ {
+  "id": "m-os-getenv-azure-openai-deployment-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"AZURE_OPENAI_DEPLOYMENT\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "AZURE_OPENAI_DEPLOYMENT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "AZURE_OPENAI_DEPLOYMENT"
+  }
+ },
+ {
+  "id": "m-os-getenv-monkey-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MONKEY_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MONKEY_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-db-pass-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"DB_PASS\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "DB_PASS",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-db-pwd-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"DB_PWD\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "DB_PWD",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-openai-auth-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"OPENAI_AUTH\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "OPENAI_AUTH",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-sentry-dsn-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"SENTRY_DSN\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "SENTRY_DSN",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-apikey-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_APIKEY\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_APIKEY",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-apitoken-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_APITOKEN\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_APITOKEN",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-model-clientsecret-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MODEL_CLIENTSECRET\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MODEL_CLIENTSECRET",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-model-passcode-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MODEL_PASSCODE\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MODEL_PASSCODE",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-baseurl-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_BASEURL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_BASEURL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-openai-key2-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"OPENAI_KEY2_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "OPENAI_KEY2_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-max-token-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MAX_TOKEN_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MAX_TOKEN_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-chat-model-key-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"CHAT_MODEL_KEY\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "CHAT_MODEL_KEY",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-passphrase-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_PASSPHRASE\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_PASSPHRASE",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-access-key-id-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_ACCESS_KEY_ID\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_ACCESS_KEY_ID",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-model-private-key-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MODEL_PRIVATE_KEY\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MODEL_PRIVATE_KEY",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-sessiontoken-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_SESSIONTOKEN\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_SESSIONTOKEN",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-bearer-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_BEARER\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_BEARER",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_BEARER"
+  }
+ },
+ {
+  "id": "m-os-getenv-model-cookie-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MODEL_COOKIE\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MODEL_COOKIE",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "MODEL_COOKIE"
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-signature-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_SIGNATURE\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_SIGNATURE",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_SIGNATURE"
+  }
+ },
+ {
+  "id": "m-os-getenv-model-secretname-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MODEL_SECRETNAME\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MODEL_SECRETNAME",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "MODEL_SECRETNAME"
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-keys-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_KEYS_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_KEYS_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-keyid-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_KEYID\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_KEYID",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_KEYID"
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-endpoint-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_ENDPOINT\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_ENDPOINT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_ENDPOINT"
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-host-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_HOST\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_HOST",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_HOST"
+  }
+ },
+ {
+  "id": "m-os-getenv-model-conn-string-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"MODEL_CONN_STRING\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "MODEL_CONN_STRING",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "MODEL_CONN_STRING"
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-password-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_PASSWORD_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_PASSWORD_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-db-pass-hunter2-line1-name",
+  "files": {
+   "a.py": "m = os.getenv(\"DB_PASS\", \"hunter2\")\n"
+  },
+  "model": {
+   "name": "hunter2",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-sentry-dsn-hunter2-line1-name",
+  "files": {
+   "a.py": "m = os.getenv(\"SENTRY_DSN\", \"hunter2\")\n"
+  },
+  "model": {
+   "name": "hunter2",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-llm-keyid-hunter2-line1-name",
+  "files": {
+   "a.py": "m = os.getenv(\"LLM_KEYID\", \"hunter2\")\n"
+  },
+  "model": {
+   "name": "hunter2",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-key-shaped-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "m = os.getenv(\"{KEY_SHAPED}\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "{KEY_SHAPED}",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-os-getenv-key-shaped-x1-line1-name",
+  "files": {
+   "a.py": "m = os.getenv(\"{KEY_SHAPED}\", \"x1\")\n"
+  },
+  "model": {
+   "name": "x1",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "x1",
+   "setting": ""
+  }
+ },
+ {
+  "id": "val-m-system-getenv-llm-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.kt": "val m = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.kt",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "model-llm-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.sh": "MODEL=${LLM_MODEL:=gpt-4o}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.sh",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "model-llm-model-gpt-4o-line1-name+setting-2",
+  "files": {
+   "a.sh": "MODEL=${LLM_MODEL=gpt-4o}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.sh",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "m-f-openai-os-environ-llm-model-line1-setting",
+  "files": {
+   "a.py": "m = f\"openai/{os.environ['LLM_MODEL']}\"\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "m-env-llm-model-line1-setting",
+  "files": {
+   "a.ps1": "$m = $env:LLM_MODEL\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.ps1",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "model-llm-model-gpt-4o-line1-name+setting-3",
+  "files": {
+   "docker-compose.yml": "      MODEL: ${LLM_MODEL:-gpt-4o}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "docker-compose.yml",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "val-m-system-getenv-llm-model-gpt-4o-line1-name+setting-2",
+  "files": {
+   "a.kt": "val m = System.getenv(\"LLM_MODEL\")?:\"gpt-4o\"\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.kt",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "model-chatopenai-model-gpt-4o-timeout-os-getenv--line1-setting",
+  "files": {
+   "a.py": "model = ChatOpenAI(model=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from, even when the call is assigned to a name called model"
+ },
+ {
+  "id": "self-model-chatopenai-model-gpt-4o-timeout-os-ge-line1-setting",
+  "files": {
+   "a.py": "self.model = ChatOpenAI(model=\"gpt-4o\", timeout=os.getenv(\"LLM_TIMEOUT\"))\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from, even when the call is assigned to a name called model"
+ },
+ {
+  "id": "model-chatopenai-model-gpt-4o-temperature-float--line1-setting",
+  "files": {
+   "a.py": "model = ChatOpenAI(model=\"gpt-4o\", temperature=float(os.getenv(\"LLM_TEMPERATURE\", \"0\")))\n"
+  },
+  "model": {
+   "setting": "LLM_TEMPERATURE",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TEMPERATURE"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from, even when the call is assigned to a name called model"
+ },
+ {
+  "id": "const-model-new-chatopenai-model-gpt-4o-timeout--line1-setting",
+  "files": {
+   "a.py": "const model = new ChatOpenAI({ model: \"gpt-4o\", timeout: process.env.LLM_TIMEOUT });\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read beside the model written as a value in the same call (a timeout or a temperature), so it is not where the model comes from, even when the call is assigned to a name called model"
+ },
+ {
+  "id": "agent-agent-line3-setting",
+  "files": {
+   "a.py": "agent = Agent(\n    stt=STT(model=\"nova-3\"),\n    llm=LLM(os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-agent-line3-name+setting",
+  "files": {
+   "a.py": "agent = Agent(\n    stt=STT(model=\"nova-3\"),\n    llm=LLM(os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-agent-stt-stt-model-nova-3-llm-llm-os-gete-line1-setting",
+  "files": {
+   "a.py": "agent = Agent(stt=STT(model=\"nova-3\"), llm=LLM(os.getenv(\"LLM_MODEL\", \"gpt-4o\")))\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "agent-agent-stt-stt-model-nova-3-llm-llm-os-gete-line1-name+setting",
+  "files": {
+   "a.py": "agent = Agent(stt=STT(model=\"nova-3\"), llm=LLM(os.getenv(\"LLM_MODEL\", \"gpt-4o\")))\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  }
+ },
+ {
+  "id": "agent-agent-line3-setting-2",
+  "files": {
+   "a.py": "agent = Agent(\n    stt=STT(model=\"nova-3\"),\n    llm=LLM(model=os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-agent-line3-name+setting-2",
+  "files": {
+   "a.py": "agent = Agent(\n    stt=STT(model=\"nova-3\"),\n    llm=LLM(model=os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-create-agent-line2-setting",
+  "files": {
+   "a.py": "agent = create_agent(\n    init_chat_model(os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n    embeddings=OpenAIEmbeddings(model=\"text-embedding-3-small\"),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-create-agent-line2-name+setting",
+  "files": {
+   "a.py": "agent = create_agent(\n    init_chat_model(os.getenv(\"LLM_MODEL\", \"gpt-4o\")),\n    embeddings=OpenAIEmbeddings(model=\"text-embedding-3-small\"),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "model-llm-os-getenv-llm-model-gpt-4o-embed-embed-line1-setting",
+  "files": {
+   "a.py": "model = LLM(os.getenv(\"LLM_MODEL\", \"gpt-4o\"), embed=Embed(model=\"text-embedding-3-small\"))\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  },
+  "why": "the read is assigned to a name called model while another model is written as a value in the same statement; the same line assigned to any other name was refused already, and an assigned name is not a model's key"
+ },
+ {
+  "id": "model-llm-os-getenv-llm-model-gpt-4o-embed-embed-line1-name+setting",
+  "files": {
+   "a.py": "model = LLM(os.getenv(\"LLM_MODEL\", \"gpt-4o\"), embed=Embed(model=\"text-embedding-3-small\"))\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  },
+  "why": "the read is assigned to a name called model while another model is written as a value in the same statement; the same line assigned to any other name was refused already, and an assigned name is not a model's key"
+ },
+ {
+  "id": "config-line2-setting",
+  "files": {
+   "a.py": "CONFIG = {\n    \"model\": os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    \"embedding\": {\"model\": \"text-embedding-3-small\"},\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "config-line2-name+setting",
+  "files": {
+   "a.py": "CONFIG = {\n    \"model\": os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    \"embedding\": {\"model\": \"text-embedding-3-small\"},\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "const-llm-new-chatopenai-line2-setting",
+  "files": {
+   "a.py": "const llm = new ChatOpenAI({\n  model: process.env.LLM_MODEL ?? \"gpt-4o\",\n  temperature: 0,\n});\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "const-llm-new-chatopenai-line2-name+setting",
+  "files": {
+   "a.py": "const llm = new ChatOpenAI({\n  model: process.env.LLM_MODEL ?? \"gpt-4o\",\n  temperature: 0,\n});\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "model-os-getenv-llm-model-gpt-4o-stt-stt-model-n-line1-setting",
+  "files": {
+   "a.py": "model = os.getenv(\"LLM_MODEL\", \"gpt-4o\"); stt = STT(model=\"nova-3\")\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  },
+  "why": "the read is assigned to a name called model while another model is written as a value in the same statement; the same line assigned to any other name was refused already, and an assigned name is not a model's key"
+ },
+ {
+  "id": "model-os-getenv-llm-model-gpt-4o-stt-stt-model-n-line1-name+setting",
+  "files": {
+   "a.py": "model = os.getenv(\"LLM_MODEL\", \"gpt-4o\"); stt = STT(model=\"nova-3\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  },
+  "why": "the read is assigned to a name called model while another model is written as a value in the same statement; the same line assigned to any other name was refused already, and an assigned name is not a model's key"
+ },
+ {
+  "id": "llm-llm-model-os-getenv-llm-model-gpt-4o-line1-setting",
+  "files": {
+   "a.py": "llm = LLM(model=os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n          stt=STT(model=\"nova-3\"))\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "llm-llm-model-os-getenv-llm-model-gpt-4o-line1-name+setting",
+  "files": {
+   "a.py": "llm = LLM(model=os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n          stt=STT(model=\"nova-3\"))\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 1
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "session-agentsession-line4-setting",
+  "files": {
+   "a.py": "session = AgentSession(\n    stt=deepgram.STT(model=\"nova-3\"),\n    llm=openai.LLM(\n        model=os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n    tts=cartesia.TTS(model=\"sonic-2\"),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "session-agentsession-line4-name+setting",
+  "files": {
+   "a.py": "session = AgentSession(\n    stt=deepgram.STT(model=\"nova-3\"),\n    llm=openai.LLM(\n        model=os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n    tts=cartesia.TTS(model=\"sonic-2\"),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "export-async-function-entry-ctx-line3-setting",
+  "files": {
+   "a.ts": "export async function entry(ctx) {\n  const stt = new deepgram.STT({ model: \"nova-3\" });\n  const llmModel = process.env.LLM_MODEL ?? \"gpt-4o\";\n  return llmModel;\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "export-async-function-entry-ctx-line3-name+setting",
+  "files": {
+   "a.ts": "export async function entry(ctx) {\n  const stt = new deepgram.STT({ model: \"nova-3\" });\n  const llmModel = process.env.LLM_MODEL ?? \"gpt-4o\";\n  return llmModel;\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "public-class-agent-line3-setting",
+  "files": {
+   "A.java": "public class Agent {\n    private final Stt stt = new Stt(model = \"nova-3\");\n    private final String llm = System.getenv().getOrDefault(\"LLM_MODEL\", \"gpt-4o\");\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "A.java",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "public-class-agent-line3-name+setting",
+  "files": {
+   "A.java": "public class Agent {\n    private final Stt stt = new Stt(model = \"nova-3\");\n    private final String llm = System.getenv().getOrDefault(\"LLM_MODEL\", \"gpt-4o\");\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "A.java",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "class-agent-line3-setting",
+  "files": {
+   "A.kt": "class Agent {\n    val stt = STT(model = \"nova-3\")\n    val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "A.kt",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "class-agent-line3-name+setting",
+  "files": {
+   "A.kt": "class Agent {\n    val stt = STT(model = \"nova-3\")\n    val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "A.kt",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "def-entry-line3-setting",
+  "files": {
+   "a.py": "def entry():\n    stt = STT(model=\"nova-3\")\n    llm = os.getenv(\"LLM_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "def-entry-line3-name+setting",
+  "files": {
+   "a.py": "def entry():\n    stt = STT(model=\"nova-3\")\n    llm = os.getenv(\"LLM_MODEL\", \"gpt-4o\")\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "export-const-config-line3-setting",
+  "files": {
+   "a.ts": "export const config = {\n  stt: { model: \"nova-3\" },\n  llm: process.env.LLM_MODEL ?? \"gpt-4o\",\n};\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "export-const-config-line3-name+setting",
+  "files": {
+   "a.ts": "export const config = {\n  stt: { model: \"nova-3\" },\n  llm: process.env.LLM_MODEL ?? \"gpt-4o\",\n};\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ }
+]
