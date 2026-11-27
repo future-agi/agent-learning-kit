@@ -3515,7 +3515,7 @@ def test_the_world_s_reader_is_settled_after_a_reset_like_the_agent_s_role(monke
 @pytest.mark.parametrize("value", ["alk_r3", "it's", "a\\b", "x'\\y", "", "ß 名前"])
 def test_a_role_literal_is_quoted_as_the_driver_quotes_it(value):
     """The kit builds a world role's literals itself, the way the driver would."""
-    from psycopg import sql
+    sql = pytest.importorskip("psycopg.sql")
 
     assert pr._literal(value) == sql.Literal(value).as_string(None)
 
@@ -3534,3 +3534,23 @@ def test_a_world_s_role_statements_are_built_without_the_postgres_driver(monkeyp
     statements = pr._reader_login_statements(reader, "w3")
 
     assert "PASSWORD 'it''s; DROP ROLE x; --'" in statements[1]
+
+
+def test_a_reset_quotes_each_role_name_it_looks_up_in_its_do_block():
+    """The reset's own DO blocks take each role's name through the one literal helper, never pasted by hand."""
+    statements, runner = _recording()
+    role = pr.EngineCredentials(username="o'w3", password="pw")
+
+    pr._reset_template_database(
+        host="localhost",
+        port=1,
+        credentials=_CREDENTIALS,
+        world_db="w3",
+        template_db="baseline_t",
+        sql_runner=runner,
+        process_name="db",
+        isolate=True,
+        role=role,
+    )
+
+    assert "WHERE rolname = 'o''w3') THEN CREATE ROLE \"o'w3\" LOGIN" in "\n".join(statements)

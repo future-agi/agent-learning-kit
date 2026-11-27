@@ -6922,7 +6922,9 @@ STORE_ROLE_DEFAULT = 'ALTER ROLE "{role}" SET session_replication_role = replica
 def _literal(value: str) -> str:
     """A name as a SQL string literal, never pasted between quotes by hand: each quote doubled, and with a backslash
     the escape form, backslashes doubled, so it reads the same whatever the server's standard_conforming_strings.
-    The kit installs without a Postgres driver, so this is built here, the way the driver builds it."""
+    The kit installs without a Postgres driver, so this is built here, the way the driver builds it. Some of these
+    literals sit inside a DO $$ body, where a $$ in the value would end the body: the names quoted here are the
+    harness's own (role names it derives), never a customer's."""
     if "\x00" in value:
         raise ValueError("a SQL string literal cannot hold a NUL character")
     quoted = value.replace("'", "''")
@@ -7055,7 +7057,7 @@ def _reset_template_database(
     if role is not None:
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{role.username}') THEN CREATE ROLE \"{role.username}\" LOGIN IN ROLE "
+            f"{_literal(role.username)}) THEN CREATE ROLE \"{role.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
             f"PASSWORD {_literal(role.password)}",
@@ -7066,7 +7068,7 @@ def _reset_template_database(
         store = _store_role_of(credentials, role)
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{store.username}') THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
+            f"{_literal(store.username)}) THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{store.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
             f"PASSWORD {_literal(store.password)}",
@@ -7082,7 +7084,7 @@ def _reset_template_database(
         log = _log_role_of(credentials, role)
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{log.username}') THEN CREATE ROLE \"{log.username}\" LOGIN IN ROLE "
+            f"{_literal(log.username)}) THEN CREATE ROLE \"{log.username}\" LOGIN IN ROLE "
             f'"{LOG_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{log.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
             f"PASSWORD {_literal(log.password)}",
@@ -7092,7 +7094,7 @@ def _reset_template_database(
     if role is not None and door is not None:
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{door.username}') THEN CREATE ROLE \"{door.username}\" LOGIN IN ROLE "
+            f"{_literal(door.username)}) THEN CREATE ROLE \"{door.username}\" LOGIN IN ROLE "
             f'"{DOOR_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{door.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
             f"PASSWORD {_literal(door.password)}",
