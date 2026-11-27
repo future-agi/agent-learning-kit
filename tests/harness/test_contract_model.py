@@ -5756,19 +5756,28 @@ def test_a_setting_held_in_a_constant_is_cited_where_its_name_is_written(root):
 # A setting beside the model in a wrapped call
 
 
-WRAPPED = 'llm = ChatOpenAI(\n    model="gpt-4o",\n    timeout=os.getenv("LLM_TIMEOUT"),\n)\n'
+WRAPPED = (
+    'llm = ChatOpenAI(\n    model="gpt-4o",\n    timeout=os.getenv("LLM_TIMEOUT"),\n)\n'
+)
 
 
 @pytest.mark.parametrize("target", ["llm", "model"])
 def test_a_setting_beside_the_model_in_a_wrapped_call_is_dropped_with_it(
     tmp_path, root, target
 ):
-    (root / "agent.py").write_text(target + WRAPPED.removeprefix("llm"), encoding="utf-8")
+    (root / "agent.py").write_text(
+        target + WRAPPED.removeprefix("llm"), encoding="utf-8"
+    )
     destination = tmp_path / "out"
     submit = submitter(destination, root)
     beside = payload(
         hard_constraints=["Be polite."],
-        model={"setting": "LLM_TIMEOUT", "name": "gpt-4o", "path": "agent.py", "line": 1}
+        model={
+            "setting": "LLM_TIMEOUT",
+            "name": "gpt-4o",
+            "path": "agent.py",
+            "line": 1,
+        },
     )
 
     assert submit(beside).get("is_error")
@@ -5806,7 +5815,9 @@ def test_a_refusal_beside_the_model_names_the_line_it_is_written_on(
 ):
     (root / "agent.py").write_text(written, encoding="utf-8")
 
-    problems, _, _ = checked(root, {"setting": "LLM_MODEL", "path": "agent.py", "line": cited})
+    problems, _, _ = checked(
+        root, {"setting": "LLM_MODEL", "path": "agent.py", "line": cited}
+    )
 
     assert problems and "writes the model as a value beside LLM_MODEL" in problems[0]
     if where == cited:
@@ -6425,7 +6436,8 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             '  model: "nova-3",\n'
             "  async fetch(request, env) {\n"
             '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
-            + "    log(llm);\n" * 30
+            + "    log(llm);\n"
+            * 30
             + "  },\n"
             "};\n",
             4,
@@ -6675,9 +6687,7 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             '    model="gpt-4o",\n'
             "    http_client=Client(\n"
             '        timeout=os.getenv("LLM_TIMEOUT"),\n'
-            "    ),\n"
-            + "".join(f"    arg{i}={i},\n" for i in range(25))
-            + ")\n",
+            "    ),\n" + "".join(f"    arg{i}={i},\n" for i in range(25)) + ")\n",
             id="read-in-a-call-inside-a-call-still-open-long-after",
         ),
         pytest.param(

@@ -844,7 +844,10 @@ def _after_a_result_word(text: str, last: int) -> bool:
         if (
             start >= 0
             and text.startswith(word, start)
-            and (start == 0 or not (text[start - 1].isalnum() or text[start - 1] in "_.$"))
+            and (
+                start == 0
+                or not (text[start - 1].isalnum() or text[start - 1] in "_.$")
+            )
         ):
             return True
     return False
@@ -1443,7 +1446,9 @@ def _written_beside(
         return text.count("\n", 0, at)
     cited = outer.count("\n", 0, shift)
     if outer is not text:
-        at = _written_in_the_call_read_in(outer, outer_spans, setting, outer_reads, shift)
+        at = _written_in_the_call_read_in(
+            outer, outer_spans, setting, outer_reads, shift
+        )
         if at is not None:
             return outer.count("\n", 0, at) - cited
     if beside:
