@@ -15,6 +15,7 @@ import dataclasses
 import io
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -32,6 +33,7 @@ from fi.alk.harness.authoring_entrypoint import _load_provider_import_profile
 from fi.alk.harness.bundle_author_v2 import resolve_environment_plan
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
+from fi.alk.harness.simulation_worker_events import _append as _kit_append
 from fi.alk.harness.job import (
     AgentConnection,
     ExecutionMode,
@@ -762,6 +764,119 @@ def test_a_trial_s_own_cut_first_line_after_an_earlier_writer_died_mid_line_fail
         cr.collect_file_tool_calls(runtime, strict=True)
     with pytest.raises(cr.ToolCaptureFailed):
         cr.collect_seam_calls(runtime, None, strict=True)
+
+
+def _span_record(at: float) -> dict:
+    return {"name": "look_up_order", "arguments": {"order_id": "1043"}, "output": "shipped", "is_error": False,
+            "at": at, "source": "otel"}
+
+
+def _cut_by_a_size_limit(trace: Path, record: dict, keep: int) -> None:
+    """The kit's own writer, under a file-size limit that lets ``keep`` bytes of its line in: the kernel cuts the write
+    short and refuses the rest, as a full disk does."""
+    resource = pytest.importorskip("resource")
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    signalled = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (trace.stat().st_size + keep, hard))
+    try:
+        with pytest.raises(OSError):
+            _kit_append(trace, record)
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+        signal.signal(signal.SIGXFSZ, signalled)
+
+
+def test_a_trial_s_cut_first_call_run_on_by_its_next_after_an_earlier_writer_died_fails_the_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.touch()
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _kit_append(trace, _span_record(100.0))
+    _cut_by_a_size_limit(trace, _span_record(150.0), 31)  # the earlier writer dies mid-line
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    _cut_by_a_size_limit(trace, _span_record(200.0), 50)  # this trial's first call, cut
+    _kit_append(trace, _span_record(201.0))  # space comes back: its next call lands whole, run on from the cut one
+    # The trial's one line holds both calls and reads as neither: never "no call".
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_seam_calls(runtime, None, strict=True)
+
+
+def test_a_trial_s_only_call_run_on_from_an_earlier_line_whose_writer_died_after_the_mark_fails_the_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    earlier = _agent_call(150.0)
+    trace.write_text(_agent_call(100.0) + earlier[:40], encoding="utf-8")
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write(earlier[40:90])  # the earlier writer goes on past the mark, then dies
+        lines.write(_agent_call(200.0))
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+
+
+def test_an_earlier_line_still_unended_when_a_trial_with_no_call_is_read_fails_its_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Bytes after the mark with no newline cannot be told from this trial's own cut line: the read is loud, never
+    # "no call", whichever they are.
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    earlier = _agent_call(150.0)
+    trace.write_text(_agent_call(100.0) + earlier[:40], encoding="utf-8")
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write(earlier[40:90])
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+
+
+def test_an_earlier_writer_s_tail_ending_on_a_nested_object_with_a_name_is_no_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    earlier = json.dumps(
+        {"name": "find_user", "arguments": {"user": {"name": "Alice"}}, "output": "found", "is_error": False,
+         "at": 150.0, "source": "livekit"},
+        sort_keys=True,
+    )
+    inner = earlier.index('{"name": "Alice"}')
+    trace.write_text(_agent_call(100.0) + earlier[:inner], encoding="utf-8")
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write('{"name": "Alice"}')  # the earlier writer dies just past the inner object; this trial calls nothing
+    assert cr.collect_file_tool_calls(runtime, strict=True) == ()
+
+
+@pytest.mark.parametrize("marked", [True, False])
+def test_a_line_cut_inside_a_character_fails_the_capture_and_never_escapes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, marked: bool
+) -> None:
+    # An agent's own writer that keeps non-ASCII text as it is; its line is cut inside "é".
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    line = json.dumps({"name": "note", "arguments": {"text": "café"}, "at": 200.0}, ensure_ascii=False).encode()
+    cut = line[: line.index("é".encode()) + 1]
+    if marked:
+        trace.write_bytes(_agent_call(100.0).encode() + b'{"name": "look_up_order", "argu')
+        _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    with trace.open("ab") as lines:
+        lines.write(cut)
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_seam_calls(runtime, None, strict=True)
+    assert cr.collect_file_tool_calls(runtime) == ()
 
 
 def test_a_trace_file_truncated_in_place_and_grown_past_the_mark_fails_the_capture(
