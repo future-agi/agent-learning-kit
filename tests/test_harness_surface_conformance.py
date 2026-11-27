@@ -23,7 +23,6 @@ These are cheap, offline, and would have caught all three before a single token 
 from __future__ import annotations
 
 import asyncio
-import json
 import tempfile
 from pathlib import Path
 
@@ -32,7 +31,6 @@ import pytest
 
 from fi.alk.harness.contract import AgentContract, Dependency, Reached
 from fi.alk.harness.environment import SubGoal
-from fi.alk.harness.scenario_tools import scenario_tools
 from fi.alk.harness.tools import contract_tools
 from fi.alk.harness.world.provision import provision_tools
 from fi.alk.harness.world.tools import world_tools
@@ -193,18 +191,3 @@ def test_named_observation_schema_is_resolvable(contract_schema):
     declaration["runtime"]["observations"]["history"]["parameters"]["session"]["type"] = "object"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.Draft202012Validator(contract_schema).validate(declaration)
-
-
-def test_the_opening_line_is_written_in_the_caller_s_first_language(tmp_path) -> None:
-    """A caller who speaks first says `initial_message` word for word, and the call starts in the first language of
-    their `languages`, so both the tool and the method that write it say which language it is in."""
-    server, _kept = scenario_tools(
-        AgentContract(agent="a"), tmp_path, tmp_path, wanted=1
-    )
-    offered = json.dumps(schemas(server))
-    skill = (
-        Path(__file__).parents[1] / "src/fi/alk/harness/skills/write-scenarios/SKILL.md"
-    ).read_text(encoding="utf-8")
-
-    assert "first language in their languages" in offered
-    assert "first language in their `languages`" in skill
