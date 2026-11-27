@@ -69,9 +69,10 @@ SECRET_AUTOFILL = frozenset(
 # The page's listener runs in a world of its own and only that world can call the binding. Both names are random and
 # new at each attach, so a world the agent makes cannot share them, and neither says what it is.
 
-# A field is a secret field for the rest of the page's life once it has been one: a password, or a field whose
-# autofill names a password, a card's number, code or expiry, or a one-time code. Nothing here reads a field's value
-# except to report typing into a field that is not one.
+# A field is a secret field for the rest of the page's life once it has been one: a password, a field whose autofill
+# names a password, a card's number, code or expiry, or a one-time code, a field the page shows as dots itself, or a
+# one-character box beside a field named as a code's. Nothing here reads a field's value except to report typing into
+# a field that is not one.
 LISTENER = r"""
 (() => {
   // The binding is taken into this closure and gone from the world's globals before any page script runs, so a
@@ -86,10 +87,33 @@ LISTENER = r"""
     const auto = String(value || '').toLowerCase();
     return auto.includes('password') || auto.split(/\s+/).some((token) => secretFill.has(token));
   };
+  // A field the page shows as dots itself, though not a password field.
+  const masked = (el) => {
+    try {
+      const style = getComputedStyle(el);
+      const shown = style.getPropertyValue('-webkit-text-security') || style.webkitTextSecurity || 'none';
+      return shown !== 'none';
+    } catch (e) { return false; }
+  };
+  // One box of a code split over one-character fields: a one-character field near a field named as a code's.
+  const codeBox = (el) => {
+    if (!/^input$/i.test(el.tagName) || el.maxLength !== 1) return false;
+    let scope = el.form || el.parentElement;
+    for (let up = 0; scope && up < 3; up += 1, scope = scope.parentElement) {
+      const others = scope.querySelectorAll ? scope.querySelectorAll('input[autocomplete]') : [];
+      for (const other of others) {
+        if (other !== el && secretAuto(other.getAttribute('autocomplete'))) return true;
+      }
+      if (el.form) break;
+    }
+    return false;
+  };
   const isSecret = (el) => {
     if (!el || el.nodeType !== 1) return false;
     const type = String(el.getAttribute('type') || '').toLowerCase();
-    if (type === 'password' || secretAuto(el.getAttribute('autocomplete'))) secret.add(el);
+    if (type === 'password' || secretAuto(el.getAttribute('autocomplete')) || masked(el) || codeBox(el)) {
+      secret.add(el);
+    }
     return secret.has(el);
   };
   // Marked as the page is built and as it changes, so a field the page turns from password to text stays one.
