@@ -72,6 +72,11 @@ setTimeout(() => {
 setTimeout(() => { location.href = 'http://pagemade.example/landing'; }, 100);
 </script></body></html>""",
     "/link-off": """<html><body><a id=go href="http://agentmade.example/clicked">go</a></body></html>""",
+    # A single-page app's button: its own handler moves the page when the agent clicks it.
+    "/button-off": """<html><body><button id=go onclick="location.href='http://clickscript.example/x'">Go</button>
+</body></html>""",
+    "/meta-off": """<html><head><meta http-equiv=refresh content="0;url=http://metamade.example/landing"></head>
+<body>moving</body></html>""",
     "/card-switched": """<html><body><script>
 const num = document.createElement('input'); num.id = 'num'; num.setAttribute('aria-label', 'Card number');
 num.setAttribute('autocomplete', 'cc-number'); document.body.appendChild(num); num.setAttribute('autocomplete', 'off');
@@ -95,6 +100,15 @@ class _Page(BaseHTTPRequestHandler):
             self.send_header("location", "http://pagemade.example/after-redirect")
             self.send_header("content-length", "0")
             self.end_headers()
+            return
+        if self.path == "/header-refresh-off":
+            content = b"<html><body>moving</body></html>"
+            self.send_response(200)
+            self.send_header("refresh", "0;url=http://metamade.example/by-header")
+            self.send_header("content-type", "text/html")
+            self.send_header("content-length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
             return
         if self.path.startswith("/fill/"):
             token = self.path.removeprefix("/fill/")
@@ -492,6 +506,36 @@ def test_what_the_agent_opens_off_the_list_is_its_attempt_and_the_refusal_s_icon
     assert tried == ["http://agentmade.example/clicked", "http://agentmade.example/typed"]
     # The browser asks a refused host for its icon to show beside the refusal: neither the agent's nor a page's.
     assert not [one for one in body["blocked_page_requests"] if one["host"] == "agentmade.example"]
+
+
+def test_a_button_the_agent_clicks_that_moves_the_page_by_script_is_the_agent_s_attempt(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/button-off")
+        await page.click("#go")
+        await asyncio.sleep(1)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    tried = [one["url"] for one in body["blocked_navigations"] if "clickscript.example" in one["url"]]
+    assert tried == ["http://clickscript.example/x"]
+    assert not [one for one in body["blocked_page_requests"] if one["host"] == "clickscript.example"]
+
+
+def test_a_page_that_refreshes_itself_off_the_list_makes_its_own_request(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/meta-off")
+        await asyncio.sleep(1.5)
+        await page.open("http://shop.test/header-refresh-off")
+        await asyncio.sleep(1.5)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    assert not [one for one in body["blocked_navigations"] if "metamade.example" in one["url"]]
+    assert {"host": "metamade.example", "count": 2} in body["blocked_page_requests"]
 
 
 @pytest.mark.parametrize("scheme", ["http", "https"])

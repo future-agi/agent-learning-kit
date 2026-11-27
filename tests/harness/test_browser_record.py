@@ -1432,3 +1432,35 @@ def test_ci_runs_each_client_s_journey_in_a_row_of_its_own_and_fails_if_it_skips
     names = [line.split("(")[0].removeprefix("def ") for line in tests.splitlines() if line.startswith("def test_")]
     chosen = ("playwright", "plain_devtools", "puppeteer", "browser_use")
     assert names and all(any(word in name for word in chosen) for name in names), names
+
+
+def test_who_asked_for_a_page_off_the_list_is_read_from_the_browser_s_own_events(tmp_path) -> None:
+    """A click the agent made counts as its attempt even where the page's handler moves the page; a page's own timer,
+    a redirect and a refresh count as the page's requests."""
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=_refuse_connect)
+    recorder._tabs = {"s1": ("1", "main")}
+
+    def asked(url: str, **extra) -> None:
+        recorder.handle({
+            "method": "Network.requestWillBeSent",
+            "sessionId": "s1",
+            "params": {"request": {"url": url}, "type": "Document", "frameId": "main", **extra},
+        })
+
+    asked("http://clicked.example/x", initiator={"type": "script"}, hasUserGesture=True)
+    asked("http://timer.example/x", initiator={"type": "script"}, hasUserGesture=False)
+    asked("http://redirected.example/x", initiator={"type": "other"}, redirectResponse={"status": 302})
+    for reason, url in (("metaTagRefresh", "http://meta.example/x"), ("httpHeaderRefresh", "http://header.example/x")):
+        recorder.handle({
+            "method": "Page.frameRequestedNavigation",
+            "sessionId": "s1",
+            "params": {"frameId": "main", "reason": reason, "url": url, "disposition": "currentTab"},
+        })
+        asked(url, initiator={"type": "other"})
+    asked("http://typed.example/x", initiator={"type": "other"})
+
+    body = recorder.record.body()
+    assert [one["url"] for one in body["blocked_navigations"]] == ["http://clicked.example/x", "http://typed.example/x"]
+    assert {one["host"] for one in body["blocked_page_requests"]} == {
+        "timer.example", "redirected.example", "meta.example", "header.example"
+    }
