@@ -3554,3 +3554,34 @@ def test_a_reset_quotes_each_role_name_it_looks_up_in_its_do_block():
     )
 
     assert "WHERE rolname = 'o''w3') THEN CREATE ROLE \"o'w3\" LOGIN" in "\n".join(statements)
+
+
+@real_postgres
+def test_a_world_s_state_read_as_its_roles_never_reaches_the_harness_s_tables(door_worlds, monkeypatch):
+    """The baseline is measured as the harness, so its counts name the harness's own tables too. A world read back
+    through the world's roles reads the world's tables only: the harness's are no world role's to read."""
+    import random
+
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.handle import HostedWorld
+
+    superuser, world, _door, _reset = door_worlds(True)
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    from psycopg import conninfo
+
+    as_harness = conninfo.make_conninfo(superuser, dbname=conninfo.conninfo_to_dict(world)["dbname"])
+    with psycopg.connect(as_harness) as connection:
+        names = [
+            row[0]
+            for row in connection.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").fetchall()
+        ]
+        counts = {
+            name: connection.execute(f'SELECT count(*) FROM public."{name}"').fetchone()[0]  # noqa: S608 - catalogue names
+            for name in names
+        }
+    assert any(name.startswith("_alk_") for name in counts)
+
+    state = HostedWorld(store, 0, random.Random(0), counts).state()
+
+    assert state and not any(name.startswith("_alk_") for name in state)
