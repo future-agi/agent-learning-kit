@@ -658,16 +658,23 @@ def _kept(monkeypatch: pytest.MonkeyPatch, trace: Path) -> None:
     monkeypatch.setattr(Path, "unlink", refused)
 
 
+def _agent_call(at: float) -> str:
+    """One call's line as the kit's LiveKit hook writes it: keys sorted, so ``at`` sits near the front and the line's
+    last bytes are the same for every call of one tool with one result."""
+    return (
+        json.dumps(
+            {"name": "look_up_order", "arguments": {"order_id": "1043"}, "output": "shipped", "is_error": False,
+             "at": at, "source": "livekit"},
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
 def _agent_calls(trace: Path, count: int, at: float) -> None:
     with trace.open("a", encoding="utf-8") as lines:
         for index in range(count):
-            lines.write(
-                json.dumps(
-                    {"name": "look_up_order", "arguments": {"order_id": "1043"}, "output": "shipped",
-                     "is_error": False, "at": at + index}
-                )
-                + "\n"
-            )
+            lines.write(_agent_call(at + index))
 
 
 def test_a_trial_reads_only_its_own_calls_when_the_trace_file_cannot_be_removed(
@@ -734,7 +741,27 @@ def test_a_trial_s_first_call_after_an_earlier_writer_died_mid_line_is_read(
     assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0]
 
 
-def test_a_trace_file_truncated_in_place_and_grown_past_the_mark_is_read_from_its_start(
+def test_a_trial_s_own_cut_first_line_after_an_earlier_writer_died_mid_line_fails_the_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 1, at=100.0)
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write('{"name": "look_up_order", "argu')
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    # This trial's one call is itself cut when the trace is read: its line has no newline yet.
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write(_agent_call(200.0)[:40])
+    # Never "this trial called no tool": the one record it wrote cannot be read.
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_seam_calls(runtime, None, strict=True)
+
+
+def test_a_trace_file_truncated_in_place_and_grown_past_the_mark_fails_the_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
@@ -746,10 +773,13 @@ def test_a_trace_file_truncated_in_place_and_grown_past_the_mark_is_read_from_it
     trace.write_text("", encoding="utf-8")
     _agent_calls(trace, 4, at=300.0)
     assert trace.stat().st_ino == inode
-    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [300.0, 301.0, 302.0, 303.0]
+    # Not the last call alone, as from the old mark: what is in the file before the mark is no longer what was there.
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+    assert cr.collect_file_tool_calls(runtime) == ()
 
 
-def test_a_trace_file_truncated_in_place_to_shorter_than_the_mark_is_read_from_its_start(
+def test_a_trace_file_truncated_in_place_to_shorter_than_the_mark_fails_the_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
@@ -759,7 +789,32 @@ def test_a_trace_file_truncated_in_place_to_shorter_than_the_mark_is_read_from_i
     cr._clear_file_tool_calls(runtime)
     trace.write_text("", encoding="utf-8")
     _agent_calls(trace, 1, at=300.0)
-    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [300.0]
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+
+
+def test_a_trace_file_rewritten_in_place_with_its_earlier_records_changed_fails_the_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An agent's own writer that rewrites the whole file at each call and changes the records already there.
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 3, at=100.0)
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    inode = trace.stat().st_ino
+    records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    for at in (200.0, 201.0):
+        records.append(json.loads(_agent_call(at)))
+        with trace.open("r+", encoding="utf-8") as lines:
+            lines.truncate(0)
+            lines.writelines(json.dumps({**record, "ended_at": record["at"]}, sort_keys=True) + "\n"
+                             for record in records)
+    assert trace.stat().st_ino == inode
+    # Never the earlier trials' three calls with this trial's two, [100.0, 101.0, 102.0, 200.0, 201.0].
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+    assert cr.collect_file_tool_calls(runtime) == ()
 
 
 def test_a_trace_file_replaced_by_a_longer_one_is_read_from_its_start(
@@ -771,11 +826,11 @@ def test_a_trace_file_replaced_by_a_longer_one_is_read_from_its_start(
     _kept(monkeypatch, trace)
     cr._clear_file_tool_calls(runtime)
     os.remove(trace)
-    _agent_calls(trace, 4, at=400.0)
-    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [400.0, 401.0, 402.0, 403.0]
+    _agent_calls(trace, 4, at=500.0)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [500.0, 501.0, 502.0, 503.0]
 
 
-def test_a_trace_file_recreated_under_the_same_inode_is_read_from_its_start(
+def test_a_trace_file_recreated_under_the_same_inode_fails_the_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # As ext4 often does: the new file takes the old one's inode number.
@@ -798,7 +853,36 @@ def test_a_trace_file_recreated_under_the_same_inode_is_read_from_its_start(
         return info
 
     monkeypatch.setattr(cr.os, "fstat", same_inode)
-    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [400.0, 401.0, 402.0, 403.0]
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+
+
+def test_a_short_trace_file_whose_earlier_line_ends_while_the_trial_starts_is_read_from_the_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The kept file is shorter than one line: an earlier trial's writer has written the line's start only, and ends it
+    # just after the trial measured the file.
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    line = _agent_call(100.0)
+    trace.write_text(line[:20], encoding="utf-8")
+    _kept(monkeypatch, trace)
+    fstat = os.fstat
+    ended = []
+
+    def then_the_line_ends(fd: int) -> os.stat_result:
+        info = fstat(fd)
+        if not ended:
+            ended.append(True)
+            with trace.open("a", encoding="utf-8") as lines:
+                lines.write(line[20:])
+        return info
+
+    monkeypatch.setattr(cr.os, "fstat", then_the_line_ends)
+    cr._clear_file_tool_calls(runtime)
+    monkeypatch.setattr(cr.os, "fstat", fstat)
+    _agent_calls(trace, 2, at=200.0)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0, 201.0]
 
 
 def test_a_trial_whose_trace_cannot_be_cleared_or_measured_reads_as_a_failed_capture(
