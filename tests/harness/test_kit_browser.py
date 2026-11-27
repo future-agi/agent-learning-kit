@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib import error, request
 
 import pytest
+import yaml
 
 from fi.alk.harness import kit_browser
 from fi.alk.harness.call_runner import trial_state_changes
@@ -813,3 +816,74 @@ def test_a_relay_whose_browser_refuses_it_says_so(tmp_path, caplog) -> None:
     finally:
         relay.close()
     assert "could not reach the browser" in caplog.text
+
+
+# What Chromium puts under its temporary folder for the socket that keeps one browser to a profile, as a Linux runner
+# logged it: <TMPDIR>/org.chromium.Chromium.ZHDJgi/SingletonSocket. A Unix socket's path holds at most 107 bytes.
+_SINGLETON_TAIL = len("/org.chromium.Chromium.XXXXXX/SingletonSocket")
+_SOCKET_PATH_MAX = 107
+
+
+def _kit_seeing_its_launch(directory, tmp_path, launched):
+    def launch(argv, cwd, env, log_path):
+        launched.append(env)
+        (cwd / "DevToolsActivePort").write_text("9333\n/devtools/browser/x\n")
+        return object()
+
+    return KitBrowser(
+        binary="/opt/alk-chromium",
+        sites=["shop.test"],
+        log=MemoryLog(),
+        directory=directory,
+        state_path=tmp_path / "state.json",
+        launch=launch,
+        stop=lambda handle: None,
+    )
+
+
+def test_the_browser_s_temporary_folder_leaves_room_for_chromium_s_socket_under_the_hosted_work_folder(
+    tmp_path,
+) -> None:
+    launched: list[dict] = []
+    directory = tmp_path / "browser"
+    kit = _kit_seeing_its_launch(directory, tmp_path, launched)
+    try:
+        kit.start()
+    finally:
+        kit.close()
+    [env] = launched
+    added = len(env["TMPDIR"]) - len(str(directory))
+    for hosted in ("/work/worlds/w0/.kit-browser", "/work/worlds/w99/.kit-browser"):
+        assert len(hosted) + added + _SINGLETON_TAIL <= _SOCKET_PATH_MAX, (hosted, env["TMPDIR"])
+
+
+@pytest.mark.parametrize("platform, refused", [("linux", True), ("darwin", False)])
+def test_a_browser_folder_too_long_for_chromium_s_socket_fails_at_start_on_linux_and_says_so(
+    tmp_path, monkeypatch, platform, refused
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    launched: list[dict] = []
+    kit = _kit_seeing_its_launch(tmp_path / ("x" * 100), tmp_path, launched)
+    try:
+        if refused:
+            with pytest.raises(RuntimeError, match="too long for the browser"):
+                kit.start()
+            assert launched == []
+        else:
+            kit.start()
+            assert len(launched) == 1
+    finally:
+        kit.close()
+
+
+def test_ci_runs_the_real_chromium_tests_with_the_hosted_image_s_chromium_and_fails_if_they_skip() -> None:
+    """Chromium's own limits (its socket's path among them) show only in a real browser on Linux: CI installs the
+    hosted image's Chromium for that file, and a skip there fails the job."""
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8"))["jobs"]
+    (job,) = [one for one in jobs.values() if "tests/harness/test_kit_browser_chromium.py" in json.dumps(one)]
+    steps = "\n".join(str(step.get("run", "")) for step in job["steps"])
+    assert "PLAYWRIGHT_VERSION" in steps and "Dockerfile.hosted" in steps
+    assert "playwright install --with-deps --no-shell chromium" in steps
+    assert "ALK_CHROMIUM" in steps and "websockets" in steps
+    assert '! grep -q "skipped"' in steps

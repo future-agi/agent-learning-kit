@@ -289,7 +289,14 @@ def test_an_idle_browser_asks_for_nothing_the_agent_would_be_blamed_for(
     ] == []
 
 
-def test_a_browser_no_client_holds_asks_for_nothing_on_its_own(tmp_path) -> None:
+@pytest.fixture
+def short_dir(tmp_path_factory):
+    """A folder of its own with a short path: a test's own tmp_path on a Linux runner leaves too little room for
+    Chromium's socket under the profile."""
+    return tmp_path_factory.mktemp("kb")
+
+
+def test_a_browser_no_client_holds_asks_for_nothing_on_its_own(short_dir) -> None:
     # With no client, nothing reaches the proxy but the browser's own housekeeping, so a refusal while the browser
     # runs is always the work of a client, however it reached the browser.
     log = MemoryLog()
@@ -297,8 +304,8 @@ def test_a_browser_no_client_holds_asks_for_nothing_on_its_own(tmp_path) -> None
         binary=BINARY,
         sites=["shop.test"],
         log=log,
-        directory=tmp_path / "w0",
-        state_path=tmp_path / "w0.json",
+        directory=short_dir / "w0",
+        state_path=short_dir / "w0.json",
         launch=_launch,
         stop=_stop,
         connect=lambda host, port: (_ for _ in ()).throw(OSError(f"no route to {host}")),
@@ -339,7 +346,7 @@ def test_each_start_is_a_browser_that_remembers_nothing_at_the_same_address(
     assert kit.relay.attached()
 
 
-def test_the_browser_starts_through_the_kit_s_own_process_runner(tmp_path) -> None:
+def test_the_browser_starts_through_the_kit_s_own_process_runner(short_dir) -> None:
     from fi.alk.harness import process_runtime as pr
 
     def launch(argv, cwd, env, log_path):
@@ -349,8 +356,8 @@ def test_the_browser_starts_through_the_kit_s_own_process_runner(tmp_path) -> No
         binary=BINARY,
         sites=["shop.test"],
         log=MemoryLog(),
-        directory=tmp_path / "w0",
-        state_path=tmp_path / "w0.json",
+        directory=short_dir / "w0",
+        state_path=short_dir / "w0.json",
         launch=launch,
         stop=lambda handle: pr._terminate_and_wait(handle),
     )
