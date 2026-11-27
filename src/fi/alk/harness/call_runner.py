@@ -3344,9 +3344,9 @@ def _read_file_tool_calls(
         lines = _trial_trace_text(path).splitlines()
     except OSError as exc:
         if strict:
-            raise ToolCaptureFailed(
-                f"tool_trace file unreadable: {type(exc).__name__}"
-            ) from None
+            # Only the runner's own reasons are shown in full: another error's text may hold a path.
+            reason = f"{type(exc).__name__}: {exc}" if isinstance(exc, TraceStartUnknown) else type(exc).__name__
+            raise ToolCaptureFailed(f"tool_trace file unreadable: {reason}") from None
         return [], []
     # Records that cannot be read as a call: a cut JSON line, a value that is not an object, a
     # record with no name. One among good records is dropped; a file of nothing else is not a
