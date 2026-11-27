@@ -1071,3 +1071,26 @@ def test_the_worker_keeps_screenshots_within_what_its_result_can_carry(monkeypat
 
     asyncio.run(run())
     assert [one["kind"] for one in collector.artifacts] == ["transcript", "screenshot"]
+
+
+def test_ci_s_kit_tests_installs_the_stores_driver_the_chat_worker_imports() -> None:
+    """The chat worker reaches the world's tools, which import psycopg (the `harness-stores` extra): each row of the
+    job that runs this file installs it, or every isolated chat call there fails at import."""
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8"))["jobs"]
+    running = [one for one in jobs.values() if "tests/harness/test_chat_worker.py" in json.dumps(one)]
+    assert running
+    for job in running:
+        rows = job["strategy"]["matrix"]["dependencies"]
+        installs = [step for step in job["steps"] if "pip install" in str(step.get("run", ""))]
+        for row in rows:
+            mine = [
+                str(step["run"]) for step in installs
+                if step.get("if") in (None, f"matrix.dependencies == '{row}'")
+            ]
+            assert any(re.search(r"'\.\[[^\]]*harness-stores[^\]]*\]'", run) for run in mine), (row, mine)
