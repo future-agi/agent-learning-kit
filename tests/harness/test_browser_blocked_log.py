@@ -72,6 +72,19 @@ def test_a_blocked_file_that_could_not_be_cut_is_unreadable_never_the_last_trial
     assert blocked_from_file(path) is None
 
 
+def test_a_blocked_file_one_byte_past_its_limit_reads_as_unreadable_even_cut_at_a_line_end(
+    tmp_path, monkeypatch
+) -> None:
+    line = json.dumps({"arguments": {"host": "a.example.com", "method": "GET", "via": "browser"}}) + "\n"
+    big = tmp_path / "w0-blocked.jsonl"
+    big.write_text(line * 3)
+    # Every line whole, and one byte more than any file the kit writes.
+    monkeypatch.setattr(browser_blocked_log, "KIT_FILE_BYTES", len(line) * 3 - 1)
+    assert blocked_from_file(big) is None
+    monkeypatch.setattr(browser_blocked_log, "KIT_FILE_BYTES", len(line) * 3)
+    assert blocked_from_file(big) is not None
+
+
 def test_a_kit_file_larger_than_its_limit_is_never_read_whole(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(browser_blocked_log, "KIT_FILE_BYTES", 64)
     asked: list[int] = []

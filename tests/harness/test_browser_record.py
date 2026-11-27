@@ -1094,6 +1094,48 @@ def test_a_listed_screenshot_that_cannot_be_sent_whole_and_as_named_is_said_not_
     assert "platform did not keep" not in notices[0]["message"]
 
 
+def test_a_listed_screenshot_that_is_a_link_is_never_sent_even_to_the_right_bytes(tmp_path) -> None:
+    import asyncio
+    import hashlib
+
+    shots = tmp_path / "w0-shots"
+    shots.mkdir()
+    real = tmp_path / "elsewhere.jpg"
+    real.write_bytes(b"\xff\xd8one")
+    (shots / "shot-001-load.jpg").symlink_to(real)
+    evidence = {
+        "state": "used",
+        "screenshots": [{"file": "shot-001-load.jpg", "artifact_id": "sha256:" + hashlib.sha256(b"\xff\xd8one").hexdigest()}],
+    }
+    adapter = _Uploads()
+    ids, notices = asyncio.run(browser_record.upload_screenshots(adapter, "one", evidence, shots))
+    assert ids == () and adapter.kinds == []
+    assert notices == [browser_record.not_kept_notice(1)]
+
+
+def test_a_listed_screenshot_that_is_not_a_plain_file_is_never_sent_and_never_waited_on(tmp_path) -> None:
+    import asyncio
+    import os
+    import threading
+
+    shots = tmp_path / "w0-shots"
+    shots.mkdir()
+    os.mkfifo(shots / "shot-001-load.jpg")
+    evidence = {"state": "used", "screenshots": [{"file": "shot-001-load.jpg"}]}
+    adapter = _Uploads()
+    done: list[tuple] = []
+    worker = threading.Thread(
+        target=lambda: done.append(asyncio.run(browser_record.upload_screenshots(adapter, "one", evidence, shots))),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(5)
+    assert done, "reading a pipe listed as a screenshot waited for a writer"
+    [(ids, notices)] = done
+    assert ids == () and adapter.kinds == []
+    assert notices == [browser_record.not_kept_notice(1)]
+
+
 def test_screenshots_the_platform_did_not_keep_are_said_and_never_fail_the_trial(tmp_path) -> None:
     import asyncio
 
