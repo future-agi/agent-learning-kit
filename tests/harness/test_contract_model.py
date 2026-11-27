@@ -6223,6 +6223,41 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             id="swift-assigned-closure-with-a-model-constant",
         ),
         pytest.param(
+            "agent.swift",
+            "func make() -> () -> String {\n"
+            "    return {\n"
+            '        let model = "nova-3"\n'
+            '        let llm = ProcessInfo.processInfo.environment["LLM_MODEL"] ?? "gpt-4o"\n'
+            "        return llm\n"
+            "    }\n"
+            "}\n",
+            4,
+            id="swift-returned-closure-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "fun handler(): () -> String {\n"
+            "    return {\n"
+            '        val model = "nova-3"\n'
+            '        val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "        llm\n"
+            "    }\n"
+            "}\n",
+            4,
+            id="kotlin-returned-lambda-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.ts",
+            "function f() {\n"
+            "  {\n"
+            '    const model = "nova-3";\n'
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  }\n"
+            "}\n",
+            4,
+            id="ts-block-straight-inside-a-block-with-a-model-constant",
+        ),
+        pytest.param(
             "Agent.java",
             "public class Agent {\n"
             '    private final Stt stt = new Stt(model = "nova-3");\n'
@@ -6385,6 +6420,41 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             "};\n",
             id="key-after-a-block-comment",
         ),
+        pytest.param(
+            "agent.py",
+            "def config():\n"
+            "    return {\n"
+            '        "model": "gpt-4o",\n'
+            '        "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "    }\n",
+            id="returned-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "export default {\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="default-exported-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "function cfg() {\n"
+            "  return {\n"
+            '    model: "gpt-4o",\n'
+            "    timeout: process.env.LLM_TIMEOUT,\n"
+            "  };\n"
+            "}\n",
+            id="ts-returned-literal",
+        ),
+        pytest.param(
+            "agent.tsx",
+            "<Chat config={{\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "}} />\n",
+            id="literal-straight-inside-a-brace",
+        ),
     ],
 )
 def test_a_setting_beside_the_model_its_own_call_is_given_is_still_refused(
@@ -6442,7 +6512,7 @@ def test_many_reads_inside_deep_brackets_are_checked_quickly(root, opener, befor
     # without walking the brackets still open.
     reads = '"LLM_MODEL",' * (KEYS_LINE // 2 // len('"LLM_MODEL",'))
     if before:
-        # A { right after a { opens a block, not a value; "{," keeps every brace holding.
+        # Braces that hold values ("{,"), each opened before the cited line and still open at it.
         unit = opener + "," if opener == "{" else opener
         brackets = "".join(
             unit * (KEYS_LINE // 2 // 20 // len(unit)) + "\n" for _ in range(20)
