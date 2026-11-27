@@ -24,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ...source_model import is_harness_table
 from ...world_door import WORLD_ROLE_SESSION
 from ..errors import WorldQueryRejected
 from . import Held, Snapshot, StoreError, WorldResetRefused
@@ -72,11 +73,6 @@ def _as_multiset(rows: Sequence[Mapping[str, Any]]) -> list[str]:
 def _key(schema: str, table: str) -> str:
     """A table's key in a snapshot: its bare name in `public`, `schema.table` elsewhere."""
     return table if schema == "public" else f"{schema}.{table}"
-
-
-def harness_table(schema: str, name: str) -> bool:
-    """The harness's own tables in a world (its log, its keys, its marker): no world role may read or reset them."""
-    return schema == "public" and (name.startswith("_alk_") or name == "harness_seed_sentinel")
 
 
 def _ident(schema: str, name: str) -> str:
@@ -283,7 +279,7 @@ class PostgresStore(ContainerStore):
         names = [_catalogue_text(row[0]) for row in rows]
         if getattr(self, "_restore_as_role", False):
             # The world's own tables: the harness's (its log, its marker) are no world role's to read or reset.
-            names = [name for name in names if not harness_table("public", name)]
+            names = [name for name in names if not is_harness_table(name)]
         return names
 
     def _reset_tables(self, connection: Connection[Any]) -> list[tuple[str, str]]:
@@ -294,7 +290,11 @@ class PostgresStore(ContainerStore):
         ).fetchall()
         tables = [(str(schema), str(table)) for schema, table in rows]
         if getattr(self, "_restore_as_role", False):
-            tables = [(schema, table) for schema, table in tables if not harness_table(schema, table)]
+            tables = [
+                (schema, table)
+                for schema, table in tables
+                if not (schema == "public" and is_harness_table(table))
+            ]
         return tables
 
     def _column_kinds(self, connection: Connection[Any], schema: str, table: str) -> dict[str, tuple[str, str, str]]:
@@ -435,7 +435,7 @@ class PostgresStore(ContainerStore):
             tables = self._tables(connection) if only is None else list(only)
             if getattr(self, "_restore_as_role", False):
                 # Read as the world's role: a list that names the harness's own tables still reads the world's only.
-                tables = [table for table in tables if not harness_table("public", table)]
+                tables = [table for table in tables if not is_harness_table(table)]
             return {table: self._select_ordered(connection, table) for table in tables}
 
     def columns(self, name: str) -> list[str]:
