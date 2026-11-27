@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import ast
-import functools
 import json
 import os
+import re
 import stat
-from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .generated_runtime import NODE_LANGUAGES
 from .import_lines import import_lines
+from . import workspace_glob
 from .python_source import EscapeBudget, ParseBudget, parsed_or_syntax_error, read_module
 from .source_folder import is_within
 
@@ -61,6 +61,7 @@ _JAVASCRIPT_LANGUAGES = NODE_LANGUAGES | {"bun"}
 # A workspace root's member patterns are read up to these bounds.
 _WORKSPACE_PATTERNS = 256
 _WORKSPACE_PATTERN_LENGTH = 256
+_LEADING_SLASH = re.compile(r"^\.?/+")
 _JAVASCRIPT_LAUNCHERS = frozenset({"node", "bun"})
 # A package manager starts the package the planner builds; the planner names its language.
 _PACKAGE_LAUNCHERS = frozenset({"npm", "pnpm", "yarn"})
@@ -163,40 +164,52 @@ def _manifest_exists(folder: Path) -> bool:
 
 def _names_member(workspace: dict[str, Any], member: str) -> bool:
     """Whether a workspace root's ``workspaces`` (a list, or Yarn's ``{"packages": [...]}``)
-    names the member folder, written relative to the root."""
+    names the member folder, written relative to the root, as npm's ``@npmcli/map-workspaces``
+    maps it. A positive pattern takes back, whole, a preceding negation that its text matches; a
+    negation still standing then drops each positive whose text it matches, and ignores the
+    folders it matches. A field that costs more than the budget to read names no member."""
     patterns = workspace.get("workspaces")
     if isinstance(patterns, dict):
         patterns = patterns.get("packages")
-    if not isinstance(patterns, list):
+    if not isinstance(patterns, list) or "node_modules" in member.split("/"):
         return False
-    parts = tuple(member.split("/"))
-    named = False
-    for pattern in patterns[:_WORKSPACE_PATTERNS]:
+    budget = workspace_glob.Budget()
+    try:
+        return _maps_member(patterns[:_WORKSPACE_PATTERNS], member, budget)
+    except workspace_glob.TooCostly:
+        return False
+
+
+def _maps_member(patterns: list[Any], member: str, budget: workspace_glob.Budget) -> bool:
+    def matches(pattern: str, path: str, *, folder: bool = False, dot: bool = False) -> bool:
+        return workspace_glob.matches(pattern, path, budget, dot=dot, folder=folder)
+
+    included: list[str] = []
+    excluded: list[str] = []
+    for pattern in patterns:
         if not isinstance(pattern, str) or len(pattern) > _WORKSPACE_PATTERN_LENGTH:
             continue
-        spelled = pattern.strip()
-        excluded = spelled.startswith("!")
-        spelled = spelled.removeprefix("!").strip().removeprefix("./").strip("/")
-        if spelled and _matches(tuple(spelled.split("/")), parts):
-            # A `!` pattern takes the folder out of the workspace, wherever it is listed.
-            if excluded:
-                return False
-            named = True
-    return named
-
-
-def _matches(pattern: tuple[str, ...], parts: tuple[str, ...]) -> bool:
-    """A workspace glob against a folder, one segment at a time; ``**`` spans any number."""
-
-    @functools.cache
-    def at(p: int, q: int) -> bool:
-        if p == len(pattern):
-            return q == len(parts)
-        if pattern[p] == "**":
-            return at(p + 1, q) or (q < len(parts) and at(p, q + 1))
-        return q < len(parts) and fnmatchcase(parts[q], pattern[p]) and at(p + 1, q + 1)
-
-    return at(0, 0)
+        bangs = len(pattern) - len(pattern.lstrip("!"))
+        # An odd number of `!` negates; a leading `/` or `./` is dropped.
+        spelled = _LEADING_SLASH.sub("", pattern[bangs:])
+        if bangs % 2:
+            excluded.append(spelled)
+            continue
+        index = 0
+        while index < len(excluded):
+            if matches(excluded[index], spelled):
+                # npm removes it in place and steps on, so the negation after it is not tested.
+                del excluded[index]
+            index += 1
+        included.append(spelled)
+    included = [
+        pattern.replace("\\", "/")
+        for pattern in included
+        if pattern and not any(matches(negation, pattern) for negation in excluded)
+    ]
+    return any(matches(pattern, member, folder=True) for pattern in included) and not any(
+        matches(negation, member, folder=True, dot=True) for negation in excluded
+    )
 
 
 def _node_instrumentation(root: Path) -> str:

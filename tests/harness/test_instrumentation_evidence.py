@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import ast
 import json
+import time
 from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import instrumentation_evidence, python_source, tools
+from fi.alk.harness import instrumentation_evidence, python_source, tools, workspace_glob
 from fi.alk.harness.instrumentation_evidence import detect_instrumentation
 from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
 from fi.alk.harness.tools import accept_contract
@@ -855,6 +856,170 @@ def test_a_member_the_workspace_excludes_is_read_alone(tmp_path: Path, workspace
         )
         == "none"
     )
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "member"),
+    [
+        (["packages/{api,worker}"], "packages/api"),
+        (["packages/**", "!packages/b/**", "packages/b/a"], "packages/b/a"),
+    ],
+    ids=["brace", "later_positive_re_includes"],
+)
+def test_a_member_npm_maps_reads_the_root_s_packages(
+    tmp_path: Path, workspaces: list[str], member: str
+) -> None:
+    """Two workspaces npm maps that a segment-by-segment glob misses: a brace, and a negation that a
+    later positive takes back."""
+    files = {
+        "package.json": json.dumps(
+            {"name": "repo", "workspaces": workspaces, "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        f"{member}/package.json": _package({}),
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(_repository(tmp_path, files), member)
+        == "traceai"
+    )
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "member", "expected"),
+    [
+        (["packages/{api,worker}"], "packages/api", True),
+        (["packages/**", "!packages/b/**", "packages/b/a"], "packages/b/a", True),
+        (["packages/{api,worker}"], "packages/worker", True),
+        (["packages/{api,worker}"], "packages/web", False),
+        (["packages/{api,{web,cli}}"], "packages/cli", True),
+        (["packages/agent-{1..3}"], "packages/agent-2", True),
+        (["packages/agent-{1..3}"], "packages/agent-4", False),
+        (["packages/@(api|worker)"], "packages/worker", True),
+        (["packages/@(api|worker)"], "packages/apiworker", False),
+        (["packages/+(a|b)"], "packages/abba", True),
+        (["packages/api?(-v2)"], "packages/api-v2", True),
+        (["packages/api?(-v2)"], "packages/api", True),
+        (["packages/*(x)y"], "packages/y", True),
+        (["packages/!(legacy)"], "packages/api", True),
+        (["packages/!(legacy)"], "packages/legacy", False),
+        (["packages/[ab]pi"], "packages/api", True),
+        (["packages/[!ab]pi"], "packages/api", False),
+        (["apps/**/service"], "apps/a/b/service", True),
+        (["apps/**/service"], "apps/service", True),
+        (["apps/**"], "apps/a/b", True),
+        (["packages/*"], "packages/a/b", False),
+        (["packages/*"], "packages/.agent", False),
+        (["**"], "node_modules/agent", False),
+        (["packages/*", "!packages/agent", "packages/agent"], "packages/agent", True),
+        (["packages/*", "!packages/agent", "packages/agent", "!packages/agent"], "packages/agent", False),
+        (["packages/*", "!packages/agent", "packages/*"], "packages/agent", False),
+        (["packages/**", "!packages/b/**", "packages/b/a"], "packages/b/c", True),
+        (["packages/*", "!packages/b/**"], "packages/b", False),
+        (["apps/**", "!apps/*"], "apps/a/service", False),
+        (["packages/*", "!packages/b/**", "packages/b"], "packages/b", False),
+        (["packages/*", "!packages/api", "!packages/a*", "packages/api"], "packages/api", False),
+        (["packages/*", "!!packages/agent"], "packages/agent", True),
+        ({"packages": ["packages/{api,worker}", "!packages/worker"]}, "packages/api", True),
+        ({"packages": ["packages/{api,worker}", "!packages/worker"]}, "packages/worker", False),
+        ({"packages": ["packages/*", "!packages/agent", "packages/agent"]}, "packages/agent", True),
+    ],
+    ids=[
+        "reviewer_brace",
+        "reviewer_later_positive_re_includes",
+        "brace_second",
+        "brace_other",
+        "brace_nested",
+        "brace_range",
+        "brace_range_outside",
+        "extglob_one_of",
+        "extglob_one_of_not_both",
+        "extglob_one_or_more",
+        "extglob_optional_present",
+        "extglob_optional_absent",
+        "extglob_any_number",
+        "extglob_not",
+        "extglob_not_the_excluded",
+        "class",
+        "class_negated",
+        "globstar_deep",
+        "globstar_zero",
+        "globstar_trailing",
+        "star_is_one_segment",
+        "star_skips_dot_folders",
+        "node_modules_never",
+        "later_positive_re_includes",
+        "later_negative_removes_again",
+        "broader_positive_keeps_the_negation",
+        "taken_back_negation_is_dropped_whole",
+        "negation_ending_in_globstar_covers_the_folder",
+        "negation_drops_a_positive_its_text_matches",
+        "trailing_globstar_needs_a_name_below_in_text",
+        "take_back_skips_the_next_negation_as_npm_does",
+        "double_bang_is_positive",
+        "yarn_object_brace",
+        "yarn_object_negation",
+        "yarn_object_re_include",
+    ],
+)
+def test_workspace_membership_follows_npm_s_mapper(
+    workspaces: object, member: str, expected: bool
+) -> None:
+    """npm's @npmcli/map-workspaces: minimatch globs, and a positive pattern that a preceding
+    negation matches takes that negation back."""
+    assert instrumentation_evidence._names_member({"workspaces": workspaces}, member) is expected
+
+
+_ADVERSARIAL_WORKSPACES = {
+    # Each hangs a backtracking regular expression for minutes.
+    "many_stars": (["p/" + "*a" * 20 + "b"], "p/" + "a" * 60, False),
+    "nested_repeats": (["p/*(*(a))b"], "p/" + "a" * 40, False),
+    "overlapping_alternatives": (["p/+(a|aa)b"], "p/" + "a" * 60, False),
+    "deep_extglob_nesting": (["p/" + "@(" * 40 + "a" + ")" * 40 + "b"], "p/" + "a" * 200, False),
+    "globstar_chain_over_a_long_path": (["**/" * 60 + "x"], "/".join(["a"] * 120) + "/y", False),
+    "negated_extglob_over_a_long_path": (["**/!(x)/**"], "/".join(["seg"] * 120), True),
+    "brace_explosion": (["p/" + "{a,b}" * 8 + "c"], "p/" + "ab" * 4 + "d", False),
+    # 128 positives each tested against 128 negations of 256 expansions: past the budget, so the
+    # field names no member.
+    "quadratic_take_back": (
+        [f"!p/{'{a,b}' * 8}x{i}" for i in range(128)]
+        + [f"p/{'{a,b}' * 8}y{i}" for i in range(128)],
+        "p/aaaaaaaay0",
+        False,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "member", "expected"),
+    list(_ADVERSARIAL_WORKSPACES.values()),
+    ids=list(_ADVERSARIAL_WORKSPACES),
+)
+def test_an_adversarial_workspace_field_is_answered_within_its_budget(
+    workspaces: list[str], member: str, expected: bool
+) -> None:
+    """A manifest's patterns cannot stall a save: one question takes at most the budget's steps."""
+    started = time.monotonic()
+    answer = instrumentation_evidence._names_member({"workspaces": workspaces}, member)
+    assert time.monotonic() - started < 0.5
+    assert answer is expected
+
+
+def test_a_workspace_question_stops_at_its_step_budget() -> None:
+    """A real field takes a few hundred steps; the budget stops a match at its limit."""
+    budget = workspace_glob.Budget()
+    assert workspace_glob.matches("packages/@(api|worker)", "packages/worker", budget, folder=True)
+    assert workspace_glob.Budget().left - budget.left < 200
+    with pytest.raises(workspace_glob.TooCostly):
+        workspace_glob.matches("packages/*", "packages/worker", workspace_glob.Budget(5))
+
+
+@pytest.mark.parametrize(
+    "workspaces",
+    [["other/*"] * 256 + ["packages/*"], ["packages/" + "*" * 300]],
+    ids=["past_the_pattern_count", "past_the_pattern_length"],
+)
+def test_a_pattern_past_the_bounds_is_not_read(workspaces: list[str]) -> None:
+    assert instrumentation_evidence._names_member({"workspaces": workspaces}, "packages/agent") is False
 
 
 def test_an_unread_manifest_ends_the_walk(tmp_path: Path) -> None:
