@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -405,8 +407,19 @@ def test_each_start_is_a_new_empty_profile_and_the_last_one_is_gone(tmp_path) ->
     assert sorted(path.name for path in second.iterdir()) == ["DevToolsActivePort"]
 
 
+@pytest.fixture()
+def short_base(monkeypatch):
+    """Browsers' temporary folders under a short folder of the test's own under /tmp, removed after it whatever the
+    test did to removal."""
+    remove = shutil.rmtree
+    base = Path(tempfile.mkdtemp(dir="/tmp"))
+    monkeypatch.setattr(kit_browser, "_BROWSER_TEMPORARY_BASE", str(base))
+    yield base
+    remove(base, ignore_errors=True)
+
+
 def test_a_last_profile_that_cannot_be_removed_is_logged_and_never_reused(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch, caplog, short_base
 ) -> None:
     profiles: list = []
     kit = _kit(tmp_path, profiles)
@@ -430,6 +443,22 @@ def test_a_last_profile_that_cannot_be_removed_is_logged_and_never_reused(
     assert first != second and first.parent == second.parent
     assert sorted(path.name for path in second.iterdir()) == ["DevToolsActivePort"]
     assert "could not be removed" in caplog.text
+    # The temporary folder that could not be removed is under the test's own base, not left in /tmp.
+    assert [path.name.startswith("alk-browser-") for path in short_base.iterdir()] == [True]
+
+
+def test_the_folder_above_a_browser_s_profile_lets_the_agent_s_user_pass_through(tmp_path) -> None:
+    # Under per-user isolation the harness's umask keeps what it makes to itself; the browser runs as the agent's
+    # user and opens its profile by a path through this folder.
+    profiles: list = []
+    kit = _kit(tmp_path, profiles)
+    umask = os.umask(0o077)
+    try:
+        kit.start()
+    finally:
+        os.umask(umask)
+        kit.close()
+    assert oct((tmp_path / "browser").stat().st_mode & 0o777) == oct(0o711)
 
 
 # The DevTools relay
@@ -918,9 +947,12 @@ def test_a_temporary_folder_too_long_for_chromium_s_socket_fails_at_start_on_lin
     tmp_path, monkeypatch, platform, refused
 ) -> None:
     monkeypatch.setattr(sys, "platform", platform)
-    # Counted in bytes, as a socket's path is: 40 characters, 80 bytes.
-    base = tmp_path / ("é" * 40)
-    base.mkdir()
+    # Counted in bytes, as a socket's path is: a short base whose folder fits the socket counted in characters and
+    # does not counted in bytes.
+    base = Path(tempfile.mkdtemp(prefix="é" * 16, dir="/tmp"))
+    folder = f"{base}/alk-browser-XXXXXXXX"
+    room = _SOCKET_PATH_MAX - _SINGLETON_TAIL
+    assert len(folder) <= room < len(os.fsencode(folder)), folder
     monkeypatch.setattr(kit_browser, "_BROWSER_TEMPORARY_BASE", str(base))
     launched: list[dict] = []
     kit = _kit_seeing_its_launch(tmp_path / "browser", tmp_path, launched)
@@ -936,6 +968,7 @@ def test_a_temporary_folder_too_long_for_chromium_s_socket_fails_at_start_on_lin
             assert len(launched) == 1
     finally:
         kit.close()
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_ci_runs_the_real_chromium_tests_with_the_hosted_image_s_chromium_and_fails_if_they_skip() -> None:
