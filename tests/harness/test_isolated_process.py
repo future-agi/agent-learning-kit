@@ -322,3 +322,19 @@ def test_a_work_directory_another_account_could_change_is_not_used(tmp_path, wor
     assert not scratch.is_relative_to(work.resolve()) and not scratch.is_relative_to((tmp_path / "elsewhere").resolve())
     # The private directory used instead is gone with the worker.
     assert not scratch.parent.exists()
+
+
+@pytest.mark.parametrize(("parent_mode", "used"), [(0o777, False), (0o1777, True)])
+def test_a_private_work_directory_under_a_parent_others_may_write_is_used_only_if_sticky(
+    tmp_path, worker_env, parent_mode, used
+):
+    """Another account that may write in the parent could rename the private directory away and put its own in
+    its place; a sticky parent lets only the directory's owner move it."""
+    parent = tmp_path / "shared"
+    parent.mkdir()
+    parent.chmod(parent_mode)
+    work = parent / "workers"
+    work.mkdir(mode=0o700)
+    result = asyncio.run(run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=work))
+    assert result["marker"] == "parent"
+    assert Path(result["tmp"]).resolve().is_relative_to(work.resolve()) is used

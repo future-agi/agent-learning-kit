@@ -228,15 +228,32 @@ async def _communicate(
                 await exchange
 
 
+def _held_parents(directory: Path) -> bool:
+    """No other account can rename or replace ``directory``: every directory above it is root's or this account's,
+    and writable by no one else unless sticky (where only an entry's owner may move it)."""
+    for parent in Path(os.path.realpath(directory.parent), "_").parents:
+        found = os.stat(parent)
+        if found.st_uid not in (0, os.geteuid()):
+            return False
+        if found.st_mode & 0o022 and not found.st_mode & stat.S_ISVTX:
+            return False
+    return True
+
+
 def _private_directory(directory: Path) -> tuple[Path, bool]:
     """``directory`` made this process's own (0700), or, where it is not (another account owns it or may write in it,
-    or it is a link), a new private one in its place: a worker's result is written inside it, so such a directory
+    it is a link, or a directory above it lets another account move it), a new private one in its place: a worker's result is written inside it, so such a directory
     could be made to hand back another result."""
     directory.parent.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(FileExistsError):
         directory.mkdir(mode=0o700)
     found = os.lstat(directory)
-    if stat.S_ISDIR(found.st_mode) and found.st_uid == os.geteuid() and not found.st_mode & 0o022:
+    if (
+        stat.S_ISDIR(found.st_mode)
+        and found.st_uid == os.geteuid()
+        and not found.st_mode & 0o022
+        and _held_parents(directory)
+    ):
         return directory, False
     logging.getLogger(__name__).warning("worker directory %s is not this account's alone; using a private one instead", directory)
     return Path(tempfile.mkdtemp(prefix="alk-workers-")), True
