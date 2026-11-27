@@ -108,6 +108,9 @@ _MATERIALIZED_VIEWS = (
 )
 
 
+HARNESS_STATE_KINDS = ("large object contents", "materialized view contents")
+
+
 def harness_state_digest(connection: Connection[Any]) -> dict[str, str]:
     """The contents of the world's large objects and materialized views, a digest per kind, read as the harness
     (call inside a transaction: the search path is set for it only)."""
@@ -126,7 +129,5 @@ def harness_state_digest(connection: Connection[Any]) -> dict[str, str]:
             ).fetchone()
             contents = str(row[0]) if row else ""
         views.append(f"{schema}.{name}|{contents}")
-    return {
-        "large object contents": str(objects),
-        "materialized view contents": hashlib.md5("\n".join(views).encode(), usedforsecurity=False).hexdigest(),
-    }
+    contents = str(objects), hashlib.md5("\n".join(views).encode(), usedforsecurity=False).hexdigest()
+    return dict(zip(HARNESS_STATE_KINDS, contents, strict=True))

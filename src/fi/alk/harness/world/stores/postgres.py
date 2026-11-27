@@ -28,6 +28,7 @@ from ...source_model import is_harness_table
 from ...world_door import WORLD_ROLE_SESSION
 from ..errors import WorldQueryRejected
 from . import Held, Snapshot, StoreError, WorldResetRefused
+from .catalog_digest import HARNESS_STATE_KINDS as _HARNESS_STATE_KINDS
 from .catalog_digest import catalog_digest, harness_state_digest
 from .container import ContainerStore, docker
 
@@ -496,9 +497,11 @@ class PostgresStore(ContainerStore):
     def _verify_harness_state(self, snapshot: Snapshot) -> None:
         """After a reset commits: the contents its rows do not hold (large objects, materialized views) as the
         snapshot found them, read as the harness; otherwise the world is refused and never graded again."""
-        changed = sorted(
-            kind for kind, digest in self._harness_state().items() if snapshot.catalog.get(kind) != digest
-        )
+        # A snapshot that read none (taken another way) is compared on nothing.
+        held = {kind: digest for kind, digest in snapshot.catalog.items() if kind in _HARNESS_STATE_KINDS}
+        if not held:
+            return
+        changed = sorted(kind for kind, digest in self._harness_state().items() if held.get(kind) != digest)
         if changed:
             raise WorldResetRefused(
                 "the world's " + ", ".join(changed) + " changed since its snapshot, which a reset of its rows does "
