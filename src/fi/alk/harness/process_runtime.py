@@ -8289,6 +8289,7 @@ class ProcessRuntimeProvider:
             )
             self._diagnostic_work_directory = work_directory
             job_id = _read_job_id(work_directory)
+            browser_sites = read_browser_allowed_sites(work_directory)
             context = SpawnContext(
                 work_directory=work_directory,
                 port_plan=port_plan,
@@ -8301,8 +8302,9 @@ class ProcessRuntimeProvider:
                     work_directory
                 ),
                 egress_allowed_hosts=_read_egress_allowed_hosts(work_directory),
-                browser_allowed_sites=read_browser_allowed_sites(work_directory),
-                needs_browser=contract_needs_browser(bundle_dir),
+                browser_allowed_sites=browser_sites,
+                # Read only where the job has sites: a job with no browser never parses the contract for one.
+                needs_browser=contract_needs_browser(bundle_dir) if browser_sites is not None else False,
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
