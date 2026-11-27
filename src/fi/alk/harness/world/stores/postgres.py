@@ -496,7 +496,9 @@ class PostgresStore(ContainerStore):
     def _verify_harness_state(self, snapshot: Snapshot) -> None:
         """After a reset commits: the contents its rows do not hold (large objects, materialized views) as the
         snapshot found them, read as the harness; otherwise the world is refused and never graded again."""
-        changed = sorted(kind for kind, digest in self._harness_state().items() if snapshot.catalog.get(kind) != digest)
+        changed = sorted(
+            kind for kind, digest in self._harness_state().items() if snapshot.catalog.get(kind) != digest
+        )
         if changed:
             raise WorldResetRefused(
                 "the world's " + ", ".join(changed) + " changed since its snapshot, which a reset of its rows does "
