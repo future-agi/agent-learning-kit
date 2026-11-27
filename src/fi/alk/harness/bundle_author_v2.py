@@ -1511,31 +1511,44 @@ _NODE_LAYOUT_UNSUPPORTED = (
 # Files that make the launch folder, or a folder above it, part of a layout v1 does not install.
 _NODE_FOREIGN_LAYOUT = ("pnpm-lock.yaml", "pnpm-workspace.yaml", "yarn.lock")
 _NODE_PARENT_LOCKS = ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb", *_NODE_FOREIGN_LAYOUT)
-# Node options that load a module before the entry script. A relative or absolute value is a file in the
-# package; a bare value (`dotenv/config`) is a dependency `npm ci` installs.
-_NODE_PRELOAD_OPTIONS = frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader"})
-# Options after which Node runs no entry script.
-_NODE_INLINE_OPTIONS = frozenset({"-e", "--eval", "-p", "--print", "--run", "--test"})
-# Node 22 (`node --help`) options that read their value from the next argument when written without `=`.
-_NODE_VALUE_OPTIONS = frozenset(
-    {
-        *_NODE_PRELOAD_OPTIONS, *(_NODE_INLINE_OPTIONS - {"--test"}),
-        "--allow-fs-read", "--allow-fs-write", "--build-snapshot-config", "-C", "--conditions",
-        "--cpu-prof-dir", "--cpu-prof-interval", "--cpu-prof-name", "--diagnostic-dir", "--disable-proto",
-        "--disable-warning", "--dns-result-order", "--env-file", "--env-file-if-exists",
-        "--experimental-config-file", "--experimental-default-type", "--experimental-sea-config",
-        "--experimental-test-isolation", "--heap-prof-dir", "--heap-prof-interval", "--heap-prof-name",
-        "--heapsnapshot-near-heap-limit", "--heapsnapshot-signal", "--icu-data-dir", "--input-type",
-        "--inspect-publish-uid", "--localstorage-file", "--max-http-header-size",
-        "--max-old-space-size-percentage", "--network-family-autoselection-attempt-timeout",
-        "--openssl-config", "--redirect-warnings", "--report-filename", "--report-signal", "--secure-heap",
-        "--secure-heap-min", "--snapshot-blob", "--test-concurrency", "--test-coverage-branches",
-        "--test-coverage-exclude", "--test-coverage-functions", "--test-coverage-include",
-        "--test-coverage-lines", "--test-name-pattern", "--test-reporter", "--test-reporter-destination",
-        "--test-shard", "--test-skip-pattern", "--test-timeout", "--title", "--tls-cipher-list",
-        "--tls-keylog", "--trace-event-categories", "--trace-event-file-pattern", "--trace-require-module",
-        "--unhandled-rejections", "--use-largepages", "--v8-pool-size", "--watch-kill-signal", "--watch-path",
-    }
+# The only Node options v1 runs, from Node 22.11 `node --help` (V8's for the three `joined` ones), by how
+# each takes its value: `flag` none, `value` the next argument or `=`, `joined` only `=`, `preload` a module
+# loaded before the entry script. A relative or absolute preload is a file in the package that sealing
+# keeps; a bare one (`dotenv/config`) is a dependency `npm ci` installs. Every other option is refused: it
+# reads or writes a file at start (--env-file, --snapshot-blob, --experimental-config-file, ...), changes
+# how the entry script resolves, or starts something other than the script.
+_NODE_OPTIONS: dict[str, str] = {
+    **dict.fromkeys(("-r", "--require", "--import", "--loader", "--experimental-loader"), "preload"),
+    **dict.fromkeys(
+        (
+            "--title", "--disable-warning", "--dns-result-order", "--unhandled-rejections",
+            "--max-http-header-size", "--network-family-autoselection-attempt-timeout", "--tls-cipher-list",
+            "--experimental-default-type", "--v8-pool-size", "--disable-proto", "--use-largepages",
+        ),
+        "value",
+    ),
+    **dict.fromkeys(("--max-old-space-size", "--max-semi-space-size", "--stack-trace-limit"), "joined"),
+    **dict.fromkeys(
+        (
+            "--enable-source-maps", "--no-warnings", "--no-deprecation", "--throw-deprecation",
+            "--trace-deprecation", "--pending-deprecation", "--trace-warnings", "--trace-uncaught",
+            "--trace-exit", "--trace-sigint", "--trace-sync-io", "--expose-gc", "--frozen-intrinsics",
+            "--disallow-code-generation-from-strings", "--jitless", "--zero-fill-buffers", "--no-addons",
+            "--force-context-aware", "--insecure-http-parser", "--experimental-vm-modules",
+            "--experimental-eventsource", "--experimental-import-meta-resolve", "--no-experimental-fetch",
+            "--no-experimental-global-navigator", "--no-experimental-websocket",
+            "--no-experimental-global-customevent", "--no-experimental-global-webcrypto",
+            "--no-experimental-detect-module", "--no-extra-info-on-fatal-exception",
+            "--no-force-async-hooks-checks", "--no-global-search-paths", "--enable-network-family-autoselection",
+            "--no-network-family-autoselection", "--use-bundled-ca", "--tls-min-v1.0", "--tls-min-v1.1",
+            "--tls-min-v1.2", "--tls-min-v1.3", "--tls-max-v1.2", "--tls-max-v1.3",
+        ),
+        "flag",
+    ),
+}
+_NODE_OPTION_NAME = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9._-]*")
+_NODE_OPTION_HINT = (
+    "v1 runs only the Node options that read no file at start, besides --require, --import and --loader"
 )
 _NODE_EXTENSIONS = ("", ".js", ".json", ".node")
 
@@ -1558,11 +1571,24 @@ def _node_manifest(path: Path) -> dict[str, Any]:
     return manifest
 
 
-def _node_startup_operands(command: Sequence[str]) -> list[tuple[int, str, str]]:
+def _node_option_unsupported(where: str, token: str, hint: str = "") -> BundleAuthorError:
+    # The option's name only: its value, or a token that is no option name, may be a path or a secret.
+    name = token.partition("=")[0]
+    named = f" ({name})" if _NODE_OPTION_NAME.fullmatch(name) else ""
+    return BundleAuthorError(
+        f"runtime_node_option_unsupported: {where}{named}; "
+        + (hint or _NODE_OPTION_HINT)
+    )
+
+
+def _node_startup_operands(command: Sequence[str], where: str = "argv") -> list[tuple[int, str, str]]:
     """The operands Node opens as files to start ``command``, as (argv index, role, value): path-valued
-    preloads, then the entry script. Arguments after the entry script belong to the application."""
+    preloads, then the entry script. Arguments after the entry script belong to the application.
+
+    An option outside ``_NODE_OPTIONS`` is refused, so no other startup file can be left out of the bundle.
+    """
     operands: list[tuple[int, str, str]] = []
-    inline, index = False, 1
+    index = 1
     while index < len(command):
         token = command[index]
         if token == "--":
@@ -1570,22 +1596,52 @@ def _node_startup_operands(command: Sequence[str]) -> list[tuple[int, str, str]]
             break
         if token == "-" or not token.startswith("-"):
             break
-        # Node splits `=` only off a long option; it rejects `-r=x`.
+        # Node splits `=` only off a long option, and reads `_` in a long name as `-`.
         name, joined, value = token.partition("=") if token.startswith("--") else (token, "", "")
-        if not joined and name in _NODE_VALUE_OPTIONS and index + 1 < len(command):
+        arity = _NODE_OPTIONS.get("--" + name[2:].replace("_", "-") if name.startswith("--") else name)
+        if arity is None:
+            hint = (
+                "the harness supplies the environment: declare it in runtime.config_files, whose values "
+                "reach the process environment"
+                if name.replace("_", "-").startswith("--env-file")
+                else ""
+            )
+            raise _node_option_unsupported(f"{where}[{index}]", token, hint)
+        if arity in ("value", "preload") and not joined:
+            # Node exits when a separated value is missing or starts with `-`.
+            if index + 1 == len(command) or command[index + 1].startswith("-"):
+                raise _node_option_unsupported(f"{where}[{index}]", token, "the option needs a value")
             index += 1
             value = command[index]
-        if name in _NODE_PRELOAD_OPTIONS and (
-            value in (".", "..") or value.startswith(("./", "../", "/", "file:"))
-        ):
+        elif arity == "joined" and not joined:
+            raise _node_option_unsupported(f"{where}[{index}]", token, "write the option's value after `=`")
+        if arity == "preload" and (value in (".", "..") or value.startswith(("./", "../", "/", "file:"))):
             operands.append((index, f"{name} preload", value))
-        elif name == "--env-file":
-            operands.append((index, name, value))
-        inline = inline or name in _NODE_INLINE_OPTIONS
         index += 1
-    if not inline and index < len(command) and command[index] != "-":
+    if index < len(command) and command[index] != "-":
         operands.append((index, "entry script", command[index]))
     return operands
+
+
+def _check_node_options_environment(process: SourceProcess) -> None:
+    """Node reads NODE_OPTIONS at start as more options, and the process environment carries the agent's
+    value (alk.yaml runtime.environment, a config file's values) to the spawn: it gets the argv check. A path
+    preload or a quote is refused too, since sealing keeps only the files the command names."""
+    if any("NODE_OPTIONS" in resource.secret_aliases for resource in process.config_files.values()):
+        raise _node_option_unsupported("NODE_OPTIONS (secret)", "", "a secret's value cannot be checked at seal")
+    values = [process.environment.get("NODE_OPTIONS", "")]
+    values += [resource.values.get("NODE_OPTIONS", "") for resource in process.config_files.values()]
+    for value in filter(None, values):
+        if any(char in value for char in "\"'\\"):
+            # Node's NODE_OPTIONS quoting differs from a shell's: refuse it rather than guess the split.
+            raise _node_option_unsupported("NODE_OPTIONS (quoting)", "", "use plain space-separated options")
+        tokens = value.split()
+        for index, role, _value in _node_startup_operands(["node", *tokens], "NODE_OPTIONS"):
+            raise _node_option_unsupported(
+                f"NODE_OPTIONS[{index}]",
+                role.removesuffix(" preload") if role.endswith(" preload") else "",
+                "NODE_OPTIONS may name no file: put a preload in the command",
+            )
 
 
 def _node_resolve(target: Path) -> list[Path]:
@@ -1623,12 +1679,6 @@ def _node_startup_files(root: Path, command: Sequence[str]) -> list[str]:
     """
     root, files = root.resolve(), []
     for index, role, value in _node_startup_operands(command):
-        if role == "--env-file":
-            # Sealing drops `.env` files, and Node exits when this one is missing. `--env-file-if-exists` is fine.
-            raise BundleAuthorError(
-                f"runtime_node_env_file_unsupported: argv[{index}] (--env-file); the harness supplies the "
-                "environment: declare it in runtime.config_files, whose values reach the process environment"
-            )
         target = Path(os.path.normpath(root / value))
         found = [] if value.startswith("file:") else _node_resolve(target)
         if value.startswith("file:") or not all(
@@ -3970,6 +4020,8 @@ def resolve_environment_plan(
     for process in processes:
         if _SPANS_NEWLY_ON in (getattr(process, "environment", None) or {}):
             raise BundleAuthorError(f"runtime_environment_reserved_name: {_SPANS_NEWLY_ON}")
+        if isinstance(process, SourceProcess) and _NPM_INSTALL in process.build_commands:
+            _check_node_options_environment(process)
 
     # A Compose agent, selected or authored, gets the framework observation too, but not import-mode tool bindings.
     compose = isinstance(selected, ComposeSelection) or runtime_model.execution == "compose"

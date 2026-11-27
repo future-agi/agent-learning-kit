@@ -9860,7 +9860,7 @@ def test_a_node_entrypoint_outside_runtime_workdir_is_refused_at_admission(tmp_p
     assert not (tmp_path / "bundle").exists()
 
 
-def _seal_node(tmp_path, files: dict[str, str], command: list[str], excludes=(), **manifest):
+def _seal_node(tmp_path, files: dict[str, str], command: list[str], excludes=(), runtime=None, **manifest):
     source = _repo(tmp_path, {"server.js": _NODE_CHAT_SERVER, **files})
     _node_package(source, **manifest)
     authoring = _authoring(tmp_path)
@@ -9874,6 +9874,7 @@ def _seal_node(tmp_path, files: dict[str, str], command: list[str], excludes=(),
                     "command": command,
                     "interface": _NODE_JSON_INTERFACE,
                     "context_excludes": list(excludes),
+                    **(runtime or {}),
                 },
                 "data_store": {"kind": "none"},
                 "tools": [{"name": "lookup_order", "args": ["order_id"]}],
@@ -10006,18 +10007,145 @@ def test_a_node_tools_api_with_a_rewritten_port_still_seals_its_entry_script(tmp
 
 
 @pytest.mark.parametrize(
-    "command", [["node", "--env-file=.env", "server.js"], ["node", "--env-file", ".env", "server.js"]]
+    ("option", "files", "excluded"),
+    [
+        ("--experimental-config-file=node.config.json", {"node.config.json": "{}"}, "node.config.json"),
+        # Reads the implicit ./node.config.json.
+        ("--experimental-default-config-file", {"node.config.json": "{}"}, "node.config.json"),
+        ("--snapshot-blob=snapshot.blob", {"snapshot.blob": "blob"}, "snapshot.blob"),
+    ],
 )
-def test_a_node_command_that_needs_an_env_file_is_refused_at_admission(tmp_path, command):
-    """Sealing drops `.env`, so Node would exit at start; the harness supplies the environment instead."""
-    with pytest.raises(BundleAuthorError, match="runtime_node_env_file_unsupported") as refused:
-        _seal_node(tmp_path, {".env": "ORDERS_REGION=eu\n"}, command)
-    assert ".env" not in str(refused.value).replace("--env-file", "")
+def test_a_node_startup_file_the_bundle_would_drop_is_refused_at_admission(tmp_path, option, files, excluded):
+    """Node exits before the server starts when one of these files is missing (9 for the config, 14 for
+    the snapshot), and context_excludes could drop it: v1 refuses the option instead of sealing it."""
+    name = option.partition("=")[0]
+    with pytest.raises(BundleAuthorError, match=r"runtime_node_option_unsupported: argv\[1\]") as refused:
+        _seal_node(tmp_path, files, ["node", option, "server.js"], excludes=[excluded])
+    assert f"({name})" in str(refused.value)
+    assert excluded not in str(refused.value).replace(name, "")
     assert not (tmp_path / "bundle").exists()
 
 
-def test_a_node_command_with_an_optional_env_file_still_seals(tmp_path):
-    command = ["node", "--env-file-if-exists=.env", "server.js"]
+# Every Node 22 option v1 refuses that reads or writes a file, or changes what starts; then spellings.
+_NODE_REFUSED_OPTIONS = [
+    (["--env-file=.env"], "--env-file"),
+    (["--env-file", ".env"], "--env-file"),
+    (["--env-file-if-exists=.env"], "--env-file-if-exists"),
+    (["--experimental-config-file", "node.config.json"], "--experimental-config-file"),
+    (["--snapshot_blob=snapshot.blob"], "--snapshot_blob"),
+    (["--build-snapshot"], "--build-snapshot"),
+    (["--build-snapshot-config=snapshot.json"], "--build-snapshot-config"),
+    (["--experimental-sea-config=sea.json"], "--experimental-sea-config"),
+    (["--watch"], "--watch"),
+    (["--watch-path=lib"], "--watch-path"),
+    (["--diagnostic-dir=diag"], "--diagnostic-dir"),
+    (["--redirect-warnings=warnings.log"], "--redirect-warnings"),
+    (["--report-dir=reports"], "--report-dir"),
+    (["--report-on-signal"], "--report-on-signal"),
+    (["--cpu-prof"], "--cpu-prof"),
+    (["--heap-prof"], "--heap-prof"),
+    (["--heapsnapshot-signal=SIGUSR2"], "--heapsnapshot-signal"),
+    (["--icu-data-dir=icu"], "--icu-data-dir"),
+    (["--openssl-config=openssl.cnf"], "--openssl-config"),
+    (["--openssl-shared-config"], "--openssl-shared-config"),
+    (["--use-openssl-ca"], "--use-openssl-ca"),
+    (["--enable-fips"], "--enable-fips"),
+    (["--tls-keylog=keys.log"], "--tls-keylog"),
+    (["--secure-heap=4096"], "--secure-heap"),
+    (["--localstorage-file=storage.json"], "--localstorage-file"),
+    (["--trace-event-file-pattern=trace.log"], "--trace-event-file-pattern"),
+    (["--trace-env"], "--trace-env"),
+    (["--test"], "--test"),
+    (["--test-reporter-destination=out.txt"], "--test-reporter-destination"),
+    (["--permission"], "--permission"),
+    (["--allow-fs-read=lib"], "--allow-fs-read"),
+    (["--inspect"], "--inspect"),
+    (["--entry-url"], "--entry-url"),
+    (["--preserve-symlinks"], "--preserve-symlinks"),
+    (["-C", "development"], "-C"),
+    (["-e", "require('./server.js')"], "-e"),
+    (["--run=serve"], "--run"),
+    (["--check"], "--check"),
+    (["-i"], "-i"),
+    # Unknown means refused, also a V8 flag v1 does not list.
+    (["--no-such-option"], "--no-such-option"),
+    (["--harmony"], "--harmony"),
+    # Node rejects `-r=x`; the diagnostic still names only the option.
+    (["-r=./boot.cjs"], "-r"),
+    # Node exits 9: a V8 value needs `=`, and a Node value cannot start with `-`.
+    (["--max-old-space-size", "512"], "--max-old-space-size"),
+    (["--title", "--snapshot-blob=snapshot.blob"], "--title"),
+]
+
+
+@pytest.mark.parametrize(("options", "name"), _NODE_REFUSED_OPTIONS)
+def test_a_node_option_outside_the_v1_list_is_refused_at_admission(tmp_path, options, name):
+    files = {".env": "ORDERS_REGION=eu\n", "boot.cjs": _NODE_PRELOAD}
+    with pytest.raises(BundleAuthorError, match=r"runtime_node_option_unsupported: argv\[1\]") as refused:
+        _seal_node(tmp_path, files, ["node", *options, "server.js"])
+    message = str(refused.value)
+    assert f"({name})" in message
+    # The diagnostic names the option, never its value.
+    for value in [option.partition("=")[2] for option in options if "=" in option] + options[1:]:
+        assert value not in message.replace(name, "")
+    if name.startswith("--env-file"):
+        assert "runtime.config_files" in message
+    assert not (tmp_path / "bundle").exists()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--title", "orders"],
+        ["--max-old-space-size=512"],
+        ["--max_old_space_size=512"],
+        ["--enable-source-maps"],
+        ["--no-warnings", "--stack-trace-limit=50", "--unhandled-rejections", "strict"],
+    ],
+)
+def test_a_node_command_with_a_v1_option_seals_and_reloads(tmp_path, options):
+    command = ["node", *options, "server.js"]
     sealed = _seal_node(tmp_path, {}, command)
     control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
     assert control.run_command == command
+    assert (tmp_path / "bundle" / control.working_directory / "server.js").is_file()
+    reloaded = load_bundle_v2(tmp_path / "bundle")
+    control = next(p for p in reloaded.processes if p.name == reloaded.runtime.control_service)
+    assert control.run_command == command
+
+
+def _node_options_from(channel: str, value: str) -> tuple[dict[str, str], dict]:
+    """NODE_OPTIONS as the agent declares it: in alk.yaml runtime.environment, or a config file's values."""
+    if channel == "alk.yaml":
+        return {"alk.yaml": f"runtime:\n  environment:\n    NODE_OPTIONS: '{value}'\n"}, {}
+    return {}, {"config_files": {".env": {"values": {"NODE_OPTIONS": value}}}}
+
+
+@pytest.mark.parametrize("channel", ["alk.yaml", "config_files"])
+@pytest.mark.parametrize(
+    ("value", "name"),
+    [
+        ("--require=../setup.js", "--require"),
+        ("--snapshot-blob=snapshot.blob", "--snapshot-blob"),
+        ("--enable-source-maps --experimental-default-config-file", "--experimental-default-config-file"),
+        ('--title="a --snapshot-blob=snapshot.blob"', "quoting"),
+    ],
+)
+def test_a_node_options_value_from_the_agent_is_checked_like_argv(tmp_path, channel, value, name):
+    """Node reads NODE_OPTIONS at start as more argv, and the process environment carries it to the spawn."""
+    files, runtime = _node_options_from(channel, value)
+    files = {**files, "snapshot.blob": "blob"}
+    with pytest.raises(BundleAuthorError, match=r"runtime_node_option_unsupported: NODE_OPTIONS") as refused:
+        _seal_node(tmp_path, files, ["node", "server.js"], runtime=runtime)
+    assert f"({name})" in str(refused.value)
+    assert "snapshot.blob" not in str(refused.value) and "../" not in str(refused.value)
+    assert not (tmp_path / "bundle").exists()
+
+
+@pytest.mark.parametrize("channel", ["alk.yaml", "config_files"])
+def test_a_node_options_value_with_v1_options_still_seals(tmp_path, channel):
+    value = "--max-old-space-size=512 --enable-source-maps --require dotenv/config"
+    files, runtime = _node_options_from(channel, value)
+    sealed = _seal_node(tmp_path, files, ["node", "server.js"], runtime=runtime)
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.environment["NODE_OPTIONS"] == value
