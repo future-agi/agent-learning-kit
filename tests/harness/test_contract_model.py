@@ -5451,8 +5451,11 @@ def test_a_setting_held_in_a_constant_is_cited_where_its_name_is_written(root):
 WRAPPED = 'llm = ChatOpenAI(\n    model="gpt-4o",\n    timeout=os.getenv("LLM_TIMEOUT"),\n)\n'
 
 
-def test_a_setting_beside_the_model_in_a_wrapped_call_is_dropped_with_it(tmp_path, root):
-    (root / "agent.py").write_text(WRAPPED, encoding="utf-8")
+@pytest.mark.parametrize("target", ["llm", "model"])
+def test_a_setting_beside_the_model_in_a_wrapped_call_is_dropped_with_it(
+    tmp_path, root, target
+):
+    (root / "agent.py").write_text(target + WRAPPED.removeprefix("llm"), encoding="utf-8")
     destination = tmp_path / "out"
     submit = submitter(destination, root)
     beside = payload(
@@ -5854,6 +5857,46 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             id="kotlin-class-body-with-a-model-field",
         ),
         pytest.param(
+            "Agent.scala",
+            "object Agent {\n"
+            "  def run(): Unit = {\n"
+            '    val model = "nova-3"\n'
+            '    val llm = sys.env.getOrElse("LLM_MODEL", "gpt-4o")\n'
+            "  }\n"
+            "}\n",
+            4,
+            id="scala-method-body-after-equals-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.ts",
+            "switch (mode) {\n"
+            '  case "voice": {\n'
+            '    const model = "nova-3";\n'
+            '    const llmModel = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  }\n"
+            "}\n",
+            4,
+            id="ts-case-block-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "val handler = { ctx: Ctx ->\n"
+            '    val model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-assigned-lambda-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "val handler = {\n"
+            '    model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-assigned-lambda-setting-a-model-at-the-line-start",
+        ),
+        pytest.param(
             "Agent.java",
             "public class Agent {\n"
             '    private final Stt stt = new Stt(model = "nova-3");\n'
@@ -5919,9 +5962,10 @@ def test_the_models_own_setting_is_kept_beside_another_components_model(
 
 
 @pytest.mark.parametrize(
-    "written",
+    ("file", "written"),
     [
         pytest.param(
+            "agent.py",
             "llm = ChatOpenAI(\n"
             '    stt=STT(model="nova-3"),\n'
             '    model="gpt-4o",\n'
@@ -5930,6 +5974,7 @@ def test_the_models_own_setting_is_kept_beside_another_components_model(
             id="the-calls-own-model-beside-another",
         ),
         pytest.param(
+            "agent.py",
             "def build():\n"
             "    return ChatOpenAI(\n"
             '        model="gpt-4o",\n'
@@ -5937,16 +5982,40 @@ def test_the_models_own_setting_is_kept_beside_another_components_model(
             "    )\n",
             id="wrapped-call-in-a-body",
         ),
+        pytest.param(
+            "agent.py",
+            "config = {\n"
+            '    "model": "gpt-4o",\n'
+            '    "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="quoted-key-of-a-literal-after-equals",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const config = {\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="bare-key-of-a-literal-after-equals",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const llm = new ChatOpenAI({\n"
+            '  temperature: 0, model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "});\n",
+            id="key-after-a-comma-in-a-literal-given-to-a-call",
+        ),
     ],
 )
 def test_a_setting_beside_the_model_its_own_call_is_given_is_still_refused(
-    root, written
+    root, file, written
 ):
-    (root / "agent.py").write_text(written, encoding="utf-8")
+    (root / file).write_text(written, encoding="utf-8")
     line = written.count("\n", 0, written.index("LLM_TIMEOUT")) + 1
 
     problems, _, _ = checked(
-        root, {"setting": "LLM_TIMEOUT", "path": "agent.py", "line": line}
+        root, {"setting": "LLM_TIMEOUT", "path": file, "line": line}
     )
 
     assert problems and "writes the model as a value beside LLM_TIMEOUT" in problems[0]
@@ -5994,7 +6063,11 @@ def test_many_reads_inside_deep_brackets_are_checked_quickly(root, opener, befor
     # without walking the brackets still open.
     reads = '"LLM_MODEL",' * (KEYS_LINE // 2 // len('"LLM_MODEL",'))
     if before:
-        brackets = "".join(opener * (KEYS_LINE // 2 // 20) + "\n" for _ in range(20))
+        # A { right after a { opens a block, not a value; "{," keeps every brace holding.
+        unit = opener + "," if opener == "{" else opener
+        brackets = "".join(
+            unit * (KEYS_LINE // 2 // 20 // len(unit)) + "\n" for _ in range(20)
+        )
         text, line = brackets + reads + "\n", 21
     else:
         text, line = "x = " + opener * (KEYS_LINE // 2) + reads + "\n", 1

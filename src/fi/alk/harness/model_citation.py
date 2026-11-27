@@ -907,15 +907,26 @@ def _written_in_the_call_read_in(
     model="gpt-4o" on one and timeout=os.getenv("LLM_TIMEOUT") on the next, does. A model inside
     another call beside the read (an Agent( given stt=STT(model="nova-3") on one line and
     llm=LLM(os.getenv("LLM_MODEL")) on the next) is another component's and doesn't count. One
-    pass over the statement."""
+    pass over the statement. In a { only a key of that literal counts (after the { or a comma,
+    as model: or "model":, or model= on the same line), not a statement in a body that opens
+    after = or : (Scala's def run(): Unit = {, a case "voice": {, an assigned lambda) holding
+    val model = "nova-3": that is a constant beside the read, not a model given with it."""
     values: list[int] = []
+    keyed: set[int] = set()
     for offset, comment, _, _ in spans:
         line = _span_line(text, offset)[:comment]
-        values.extend(
-            offset + found.start()
-            for found in _MODEL_VALUE.finditer(line)
-            if setting not in found.group(3)
-        )
+        for found in _MODEL_VALUE.finditer(line):
+            if setting in found.group(3):
+                continue
+            at = offset + found.start()
+            values.append(at)
+            before = at - 1
+            while before >= 0 and text[before] in " \t\r\n":
+                before -= 1
+            if before >= 0 and text[before] in "{,":
+                colon = _KEY_SEPARATOR.search(found.group(0)).group() == ":"
+                if colon or "\n" not in text[before:at]:
+                    keyed.add(at)
     if not values:
         return False
     skipped, _ = _skipped(text, spans)
@@ -927,6 +938,7 @@ def _written_in_the_call_read_in(
     # The open brackets, the nearest of them at or below each that holds arguments, and how many
     # of them opened before the cited line (always the first ones).
     stack: list[int] = []
+    braces: list[bool] = []
     holding: list[int | None] = []
     earlier = 0
     value_in: list[int] = []
@@ -935,15 +947,17 @@ def _written_in_the_call_read_in(
         if kind == 2:
             if char in "([{":
                 stack.append(at)
+                braces.append(char == "{")
                 holding.append(at if holds else (holding[-1] if holding else None))
                 if at < shift:
                     earlier = len(stack)
             elif stack:
                 stack.pop()
+                braces.pop()
                 holding.pop()
                 earlier = min(earlier, len(stack))
         elif kind == 0:
-            if stack:
+            if stack and (not braces[-1] or at in keyed):
                 value_in.append(stack[-1])
         elif earlier and holding[earlier - 1] is not None:
             calls.add(holding[earlier - 1])
@@ -1106,6 +1120,8 @@ _MODEL_VALUE = re.compile(
 )
 # Any key a value is given under, from where it starts: timeout=, "timeout":, model:. Not ==,
 # =>, :=, ::, :- (a comparison, an arrow, an assignment, a path, a shell default).
+# Where a model value's key ends and its value begins: the first : or = after the key.
+_KEY_SEPARATOR = re.compile(r"[:=]")
 _ANY_KEY = re.compile(r"""(["']?)([A-Za-z_]\w*)\1\s*(?::(?![:=\-])|=(?![=>]))""")
 # What the walk in _owners looks at outside strings and comments: names, brackets, the commas
 # and semicolons that end a value, and line breaks.
