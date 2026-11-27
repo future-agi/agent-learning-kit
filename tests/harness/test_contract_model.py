@@ -5373,6 +5373,10 @@ def test_a_contract_not_copied_dumps_without_the_record():
         pytest.param("llm.go", 'os.Setenv("LLM_MODEL", "gpt-4o")', id="go-setenv"),
         pytest.param("llm.c", 'setenv("LLM_MODEL", "gpt-4o", 1);', id="c-setenv"),
         pytest.param("llm.py", 'os.putenv("LLM_MODEL", "gpt-4o")', id="putenv"),
+        pytest.param("llm.py", 'set_key(".env", "LLM_MODEL", "gpt-4o")', id="dotenv-set-key"),
+        pytest.param(
+            "llm.py", 'dotenv.set_key(env_path, "LLM_MODEL", "gpt-4o")', id="dotenv-set-key-path"
+        ),
     ],
 )
 def test_a_model_passed_after_another_value_is_kept_as_the_model(root, file, written):
@@ -5658,3 +5662,187 @@ def test_a_wrong_name_given_with_the_models_own_setting_keeps_the_setting(tmp_pa
     assert not second.get("is_error"), second
     assert saved(destination)["model"]["setting"] == "LLM_MODEL"
     assert saved(destination)["model"]["name"] == ""
+
+
+# A setting read inside what a model is given, beside the model written there
+
+TIMEOUT = 'os.getenv("LLM_TIMEOUT")'
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param(
+            "agent.py", f'model = ChatOpenAI(model="gpt-4o", timeout={TIMEOUT})', id="model-target"
+        ),
+        pytest.param(
+            "agent.py",
+            f'self.model = ChatOpenAI(model="gpt-4o", timeout={TIMEOUT})',
+            id="attribute-target",
+        ),
+        pytest.param(
+            "agent.py",
+            f'model: BaseChatModel = ChatOpenAI(model="gpt-4o", timeout={TIMEOUT})',
+            id="annotated-target",
+        ),
+        pytest.param(
+            "agent.py",
+            f'agent = Agent(model=ChatOpenAI(model="gpt-4o", timeout={TIMEOUT}))',
+            id="model-key-given-a-client",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const model = new ChatOpenAI({ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT });',
+            id="ts-model-target",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const model: ChatOpenAI = new ChatOpenAI("
+            '{ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT });',
+            id="ts-typed-target",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const agent = new Agent({ model: new ChatOpenAI("
+            '{ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT }) });',
+            id="ts-model-key-given-a-client",
+        ),
+        *(
+            pytest.param(
+                "agent.py", f'llm = ChatOpenAI({key}="gpt-4o", timeout={TIMEOUT})', id=key
+            )
+            for key in ("model_name", "deployment_name", "model_id", "azure_deployment", "engine")
+        ),
+        *(
+            pytest.param(
+                "agent.ts",
+                f'const llm = new ChatOpenAI({{ {key}: "gpt-4o", timeout: process.env.LLM_TIMEOUT }});',
+                id=f"ts-{key}",
+            )
+            for key in ("modelName", "modelId")
+        ),
+    ],
+)
+def test_a_setting_read_beside_a_written_model_is_refused_whatever_holds_it(root, file, written):
+    (root / file).write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"setting": "LLM_TIMEOUT", "path": file, "line": 1})
+
+    assert problems and "writes the model as a value beside LLM_TIMEOUT" in problems[0]
+
+
+MODEL_WRAPPED = WRAPPED.replace("llm = ", "model = ")
+
+
+@pytest.mark.parametrize(
+    "written, line",
+    [
+        pytest.param(MODEL_WRAPPED, 1, id="model-target-wrapped"),
+        pytest.param(WRAPPED, 3, id="cited-on-the-settings-line"),
+        pytest.param(MODEL_WRAPPED, 3, id="model-target-cited-on-the-settings-line"),
+    ],
+)
+def test_a_setting_read_beside_a_model_in_a_wrapped_call_is_refused(root, written, line):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"setting": "LLM_TIMEOUT", "path": "agent.py", "line": line})
+
+    assert problems and "writes the model as a value beside LLM_TIMEOUT" in problems[0]
+
+
+def test_the_wrapped_model_with_its_name_is_dropped_on_the_second_submit(tmp_path, root):
+    (root / "agent.py").write_text(MODEL_WRAPPED, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    beside = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "LLM_TIMEOUT", "name": "gpt-4o", "path": "agent.py", "line": 1},
+    )
+
+    assert submit(beside).get("is_error")
+    second = submit(beside)
+
+    assert not second.get("is_error"), second
+    assert saved(destination).get("model") is None
+
+
+@pytest.mark.parametrize(
+    "written, model, line",
+    [
+        pytest.param(
+            VOICE, {"setting": "LLM_MODEL", "name": "gpt-4o"}, 3, id="voice-cited-on-its-llm-line"
+        ),
+        pytest.param(
+            VOICE.replace("model=os.getenv", "model_name=os.getenv"),
+            {"setting": "LLM_MODEL", "name": "gpt-4o"},
+            1,
+            id="voice-model-name-key",
+        ),
+        pytest.param(
+            "session = AgentSession(\n"
+            '    stt=STT(model="nova-3"),\n'
+            "    llm=LLM(\n"
+            '        model=os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            {"setting": "LLM_MODEL", "name": "gpt-4o"},
+            4,
+            id="voice-nested-wrap",
+        ),
+    ],
+)
+def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
+    root, written, model, line
+):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(root, {**model, "path": "agent.py", "line": line})
+
+    assert problems == []
+    assert (contract.model.setting, contract.model.name) == (model["setting"], model["name"])
+
+
+# A long line of model keys is read in one pass
+
+KEYS_LINE = 256 * 1024
+
+
+@pytest.mark.parametrize("key", ['model=', '"model": ', "model=\"x' "], ids=["kwarg", "dict", "odd-quotes"])
+def test_a_long_line_of_model_keys_is_checked_quickly(root, key):
+    head = 'x = f(os.getenv("LLM_MODEL", "gpt-4o"), '
+    (root / "agent.py").write_text(
+        head + key * ((KEYS_LINE - len(head)) // len(key)) + ")\n", encoding="utf-8"
+    )
+
+    _, _, took = checked(
+        root, {"setting": "LLM_MODEL", "name": "gpt-4o", "path": "agent.py", "line": 1}
+    )
+
+    assert took < QUICK_SECONDS
+
+
+def test_a_long_line_of_model_keys_before_the_cited_line_is_checked_quickly(root):
+    head = "x = f(\n"
+    keys = "model=" * (KEYS_LINE // len("model="))
+    (root / "agent.py").write_text(
+        head + keys + '\n    os.getenv("LLM_MODEL", "gpt-4o"),\n)\n', encoding="utf-8"
+    )
+
+    _, _, took = checked(
+        root, {"setting": "LLM_MODEL", "name": "gpt-4o", "path": "agent.py", "line": 3}
+    )
+
+    assert took < QUICK_SECONDS
+
+
+# A credential's name shaped like a key is never repeated
+
+
+def test_the_default_of_a_key_shaped_credential_is_refused_without_naming_it(root):
+    owner = "AKIA" + "QWERTYUIOPASDFGH" + "_KEY"
+    (root / "llm.py").write_text(f'KEY = os.getenv("{owner}", "gpt-4o")\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 1})
+
+    assert problems and "names a credential" in problems[0]
+    assert all(owner not in problem for problem in problems)
