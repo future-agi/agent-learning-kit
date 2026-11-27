@@ -173,21 +173,21 @@ def test_with_actors_off_no_actor_tool_is_offered_and_no_actors_file_is_written(
     assert not (tmp_path / ACTORS_FILE).exists()
 
 
-def test_with_actors_on_the_platform_s_range_is_the_default_share(tmp_path, monkeypatch):
+def test_with_actors_on_the_platform_s_range_is_the_default_share(tmp_path, monkeypatch, share_refused):
     monkeypatch.delenv("ALK_HARNESS_JOB_ID", raising=False)
     tools = _tools(tmp_path, {"actors": ON}, kept=_written(9))
     assert {"actors", "faults", "pre_run", "starts_with"} <= set(tools["submit_scenario"].input_schema["properties"])
     assert [one.name for one in world_actor_tools(tmp_path)][:2] == ["add_actor", "drop_actor"]
-    assert SHARE_REFUSAL not in _submit(tools)["content"][0]["text"]
+    assert not share_refused(lambda: _submit(tools))
 
 
-def test_a_local_job_with_no_switch_behaves_as_before(tmp_path, monkeypatch):
+def test_a_local_job_with_no_switch_behaves_as_before(tmp_path, monkeypatch, share_refused):
     monkeypatch.delenv("ALK_HARNESS_JOB_ID", raising=False)
     tools = _tools(tmp_path, {}, hosted=False, kept=_written(9))
     share = default_share(str(tmp_path))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
     assert "actors" in tools["submit_scenario"].input_schema["properties"]
-    assert SHARE_REFUSAL not in _submit(tools)["content"][0]["text"]
+    assert not share_refused(lambda: _submit(tools))
 
 
 # --- run time -------------------------------------------------------------------------------------------------------

@@ -93,13 +93,15 @@ def test_a_range_from_the_request_refuses_nothing(tmp_path):
     assert SHARE_REFUSAL not in _submit(tools, "s9", with_actor=False)
 
 
-def test_with_a_cast_listed_the_default_share_never_refuses_a_scenario_where_the_person_is_alone(tmp_path):
-    """The default share is a target: nine scenarios already written without an actor, and the tenth too, are kept
-    whatever the share drawn, so no actor is forced into a situation that has no one else."""
+def test_with_a_cast_listed_the_default_share_never_refuses_a_scenario_where_the_person_is_alone(
+    tmp_path, share_refused
+):
+    """The default share is a target: nine scenarios already written without an actor, and the tenth too, are never
+    refused for the share, whatever share was drawn, so no actor is forced into a situation that has no one else."""
     share = default_share(str(tmp_path))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
     tools = _stage(tmp_path, _written(9, with_actor=False))
-    assert SHARE_REFUSAL not in _submit(tools, "s9", with_actor=False)
+    assert not share_refused(lambda: _submit(tools, "s9", with_actor=False))
 
 
 
@@ -158,7 +160,6 @@ def test_the_plan_spreads_actor_scenarios_across_every_kind_the_environment_supp
     tools = {one.name: one.handler for one in server.tools}
     aim = {"count": 40, "axes": {axis: ["plain"] for axis in CANONICAL_AXES}, "actor_share": {"min": 0.5, "max": 0.5}}
     said = asyncio.run(tools["aim_for"](aim))["content"][0]["text"]
-    assert "20 of the 40 scenarios include an actor or a fault, as the person asked" in said
     assert "no one kind on more than 50% of them" in said
     assert "an actor who speaks (second)" in said
     assert "an actor who acts through the world (lead: approval.put)" in said

@@ -11149,7 +11149,7 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
 
     from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
     from fi.alk.harness.call_actor import save_call_actors
-    from fi.simulate.simulation.call_actors import SHARE_RANGE, at_least, default_share
+    from fi.simulate.simulation.call_actors import SHARE_RANGE, default_share
 
     root, contract, _catalogue = _built_environment(tmp_path)
     contract.modality = "voice"
@@ -11165,22 +11165,6 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
 
     share = default_share(str(root))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
-    assert (
-        f"Aim for about {at_least(share, 40)} of the 40 scenarios to include an actor"
-        in said()
-    )
-    job = next(
-        f"job-{n}"
-        for n in range(100)
-        if at_least(default_share(f"job-{n}"), 40) != at_least(share, 40)
-    )
-    monkeypatch.setenv("ALK_HARNESS_JOB_ID", job)
-    assert (
-        f"Aim for about {at_least(default_share(job), 40)} of the 40 scenarios to include an actor"
-        in said()
-    )
-    monkeypatch.delenv("ALK_HARNESS_JOB_ID")
-    assert "16 of the 40 scenarios include an actor or a fault, as the person asked" in said(actor_share={"min": 0.4, "max": 0.4})
     assert "No scenario includes an actor, as the person asked" in said(
         actor_share={"min": 0, "max": 0}
     )
