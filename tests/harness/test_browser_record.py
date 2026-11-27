@@ -1434,6 +1434,60 @@ def test_ci_runs_each_client_s_journey_in_a_row_of_its_own_and_fails_if_it_skips
     assert names and all(any(word in name for word in chosen) for name in names), names
 
 
+def test_a_script_move_after_the_agent_acted_on_the_page_is_the_agent_s_until_the_next_page(tmp_path) -> None:
+    """The browser's input mark lapses after a few seconds and a window opened uses it up; a move a page's script makes
+    after the agent clicked or typed on that page is still the agent's. On a new page with no input, it is the page's."""
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=_refuse_connect)
+    recorder._tabs = {"s1": ("1", "main")}
+
+    def asked(url: str) -> None:
+        recorder.handle({
+            "method": "Network.requestWillBeSent",
+            "sessionId": "s1",
+            "params": {"request": {"url": url}, "type": "Document", "frameId": "main",
+                       "initiator": {"type": "script"}, "hasUserGesture": False},
+        })
+
+    def page(url: str) -> None:
+        recorder.handle({"method": "Page.frameNavigated", "sessionId": "s1", "params": {"frame": {"id": "main", "url": url}}})
+
+    page("http://shop.test/pay")
+    recorder.handle({
+        "method": "Runtime.bindingCalled",
+        "sessionId": "s1",
+        "params": {"name": recorder.binding, "payload": json.dumps(
+            {"kind": "click", "url": "http://shop.test/pay", "target": {"tag": "button", "text": "Pay"}})},
+    })
+    asked("http://late.example/x")
+    page("http://shop.test/next")
+    asked("http://timer.example/x")
+
+    body = recorder.record.body()
+    assert [one["url"] for one in body["blocked_navigations"]] == ["http://late.example/x"]
+    assert {one["host"] for one in body["blocked_page_requests"]} == {"timer.example"}
+
+
+def test_a_page_s_refresh_to_an_address_with_a_fragment_is_its_own_request(tmp_path) -> None:
+    # The browser names the refresh's address with its fragment, and the request it then makes without it.
+    recorder = browser_record.BrowserRecorder(["shop.test"], tmp_path / "w0-record.json", connect=_refuse_connect)
+    recorder._tabs = {"s1": ("1", "main")}
+    recorder.handle({
+        "method": "Page.frameRequestedNavigation",
+        "sessionId": "s1",
+        "params": {"frameId": "main", "reason": "metaTagRefresh", "url": "http://meta.example/x#part",
+                   "disposition": "currentTab"},
+    })
+    recorder.handle({
+        "method": "Network.requestWillBeSent",
+        "sessionId": "s1",
+        "params": {"request": {"url": "http://meta.example/x", "urlFragment": "#part"}, "type": "Document",
+                   "frameId": "main", "initiator": {"type": "other"}},
+    })
+    body = recorder.record.body()
+    assert body["blocked_navigations"] == []
+    assert {one["host"] for one in body["blocked_page_requests"]} == {"meta.example"}
+
+
 def test_who_asked_for_a_page_off_the_list_is_read_from_the_browser_s_own_events(tmp_path) -> None:
     """A click the agent made counts as its attempt even where the page's handler moves the page; a page's own timer,
     a redirect and a refresh count as the page's requests."""

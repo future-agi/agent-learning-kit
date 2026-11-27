@@ -96,6 +96,14 @@ setTimeout(() => { const s = document.getElementById('s'); s.focus();
 <input id=b2 aria-label="Street"><input id=b3 aria-label="Code" autocomplete="one-time-code"></form></body></html>""",
     "/meta-off": """<html><head><meta http-equiv=refresh content="0;url=http://metamade.example/landing"></head>
 <body>moving</body></html>""",
+    # A button whose handler moves the page only after a slow step, once the browser's input mark has lapsed.
+    "/button-slow-off": """<html><body><button id=go
+onclick="setTimeout(() => { location.href = 'http://slowclick.example/x'; }, 6500)">Pay</button></body></html>""",
+    # A button whose handler opens a window first, which uses up the browser's input mark, then moves the page.
+    "/button-popup-off": """<html><body><button id=go
+onclick="window.open('/popped', '_blank'); location.href = 'http://popclick.example/x'">Go</button></body></html>""",
+    "/meta-fragment-off": """<html><head><meta http-equiv=refresh content="0;url=http://metafragment.example/x#part">
+</head><body>moving</body></html>""",
     "/card-switched": """<html><body><script>
 const num = document.createElement('input'); num.id = 'num'; num.setAttribute('aria-label', 'Card number');
 num.setAttribute('autocomplete', 'cc-number'); document.body.appendChild(num); num.setAttribute('autocomplete', 'off');
@@ -540,6 +548,49 @@ def test_a_button_the_agent_clicks_that_moves_the_page_by_script_is_the_agent_s_
     tried = [one["url"] for one in body["blocked_navigations"] if "clickscript.example" in one["url"]]
     assert tried == ["http://clickscript.example/x"]
     assert not [one for one in body["blocked_page_requests"] if one["host"] == "clickscript.example"]
+
+
+def test_a_button_the_agent_clicks_that_moves_the_page_after_a_slow_step_is_the_agent_s_attempt(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/button-slow-off")
+        await page.click("#go")
+        await asyncio.sleep(8)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    tried = [one["url"] for one in body["blocked_navigations"] if "slowclick.example" in one["url"]]
+    assert tried == ["http://slowclick.example/x"]
+    assert not [one for one in body["blocked_page_requests"] if one["host"] == "slowclick.example"]
+
+
+def test_a_button_the_agent_clicks_that_opens_a_window_then_moves_the_page_is_the_agent_s_attempt(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/button-popup-off")
+        await page.click("#go")
+        await asyncio.sleep(1.5)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    tried = [one["url"] for one in body["blocked_navigations"] if "popclick.example" in one["url"]]
+    assert tried == ["http://popclick.example/x"]
+    assert not [one for one in body["blocked_page_requests"] if one["host"] == "popclick.example"]
+
+
+def test_a_page_that_refreshes_itself_to_an_address_with_a_fragment_makes_its_own_request(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/meta-fragment-off")
+        await asyncio.sleep(1.5)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    assert not [one for one in body["blocked_navigations"] if "metafragment.example" in one["url"]]
+    assert {"host": "metafragment.example", "count": 1} in body["blocked_page_requests"]
 
 
 def test_a_page_that_refreshes_itself_off_the_list_makes_its_own_request(browser) -> None:
