@@ -3204,8 +3204,36 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
 def _a_record(line: bytes) -> bool:
     try:
         return isinstance(json.loads(line), dict)
-    except ValueError:
+    except (ValueError, RecursionError):
         return False
+
+
+def _a_call_record(line: bytes) -> bool:
+    """Whether ``line`` reads as a whole record a writer writes: a call (a name with its arguments or time) or a
+    note of a kind, not an object nested in one."""
+    try:
+        record = json.loads(line)
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(record, dict) and (
+        "kind" in record or ("name" in record and ("arguments" in record or "at" in record))
+    )
+
+
+def _line_before(handle: Any, offset: int) -> bytes:
+    """The bytes from the last newline before ``offset`` up to it: the start of the line ``offset`` falls in."""
+    start, parts = offset, []
+    while start > 0:
+        step = min(1 << 16, start)
+        handle.seek(start - step)
+        block = handle.read(step)
+        cut = block.rfind(b"\n")
+        if cut >= 0:
+            parts.append(block[cut + 1 :])
+            break
+        parts.append(block)
+        start -= step
+    return b"".join(reversed(parts))
 
 
 def _trial_trace_text(path: Path) -> str:
@@ -3217,15 +3245,16 @@ def _trial_trace_text(path: Path) -> str:
     if key in _TRACE_STARTS and _TRACE_STARTS[key] is None:
         raise TraceStartUnknown("where this trial's part of the tool trace begins is unknown")
     start = _TRACE_STARTS.get(key)
+    # A line cut inside a character reads as one more unreadable line, not as a failure of the whole read.
     if start is None:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8", errors="replace")
     device, inode, offset, digest, mid_line = start
     with path.open("rb") as handle:
         info = os.fstat(handle.fileno())
         if (info.st_dev, info.st_ino) != (device, inode):
             # The file was removed and a new one started: all of it was written after this trial began. A writer that
             # replaced it with a copy keeping earlier records would be read whole; the kit's writers only append.
-            return handle.read().decode("utf-8")
+            return handle.read().decode("utf-8", errors="replace")
         # The same file with other or fewer bytes before the mark was truncated and regrown, recreated under the same inode
         # number, or rewritten with its earlier records changed. These cannot be told apart, and neither the mark nor
         # the file's start is then where this trial's part begins: the read fails rather than count another trial's
@@ -3233,16 +3262,21 @@ def _trial_trace_text(path: Path) -> str:
         if _first_bytes(handle, offset)[:2] != (digest, offset):
             raise TraceRewritten("the tool trace file no longer holds what it held when this trial began")
         if mid_line:
-            # The trial began on a line not yet ended. Where an earlier writer was still writing it, what follows the
-            # mark ends that line with a newline, is no record and is that trial's: it is dropped. Where the writer
-            # died instead, no newline ever came and this trial's first line starts at the mark: it is kept when it
-            # reads as a record or has no newline yet (this trial's own line, cut, which then fails the capture). The
-            # trade: a cut line of this trial's that its next line ran on from ends in a newline as an earlier line's
-            # end does, and is dropped with that next line.
+            # The trial began on a line not yet ended. Where an earlier writer was still writing it and ended it after
+            # the mark, that line's start before the mark joined with what follows the mark reads as a record: the
+            # end is that trial's and is dropped. Otherwise what follows the mark is this trial's and is kept: its
+            # own first line after a writer that died, cut or run on by its next call (then unreadable, so the
+            # capture fails rather than reading as no call). Bytes still unended at the read cannot be told from this
+            # trial's own cut line, so an earlier line unended then fails a trial that made no call too. One unended
+            # first line that parses but is no whole record (an object nested in a dead writer's line) is dropped.
+            earlier = _line_before(handle, offset)
+            handle.seek(offset)
             rest = handle.readline()
-            if _a_record(rest) or not rest.endswith(b"\n"):
+            ended_earlier = _a_record(earlier + rest)
+            nested = not rest.endswith(b"\n") and _a_record(rest) and not _a_call_record(rest)
+            if not (ended_earlier or nested):
                 handle.seek(offset)
-        return handle.read().decode("utf-8")
+        return handle.read().decode("utf-8", errors="replace")
 
 
 # Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
