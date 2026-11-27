@@ -38,7 +38,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 from urllib import request as urllib_request
-from urllib.parse import urlsplit
+from urllib.parse import urldefrag, urlsplit
 
 from .browser_blocked_log import blocked_from_file, read_kit_file, write_text
 from .devtools_socket import CdpSocket
@@ -465,6 +465,8 @@ class BrowserRecorder:
         self._urls: dict[str, str] = {}  # session -> its tab's page now
         # session -> addresses its page asked to refresh to (a meta tag or a Refresh header), not yet requested
         self._refreshes: dict[str, set[str]] = {}
+        # Tabs whose page now the agent has clicked or typed on: their script's moves are the agent's (see requested).
+        self._acted_on: set[str] = set()
         self._connect = connect
         self._clock = clock
         self.record = BrowserRecord(self.sites, clock=clock, secret_values=self._secrets)
@@ -496,6 +498,7 @@ class BrowserRecorder:
         self._tabs = {}
         self._urls = {}
         self._refreshes = {}
+        self._acted_on = set()
         self._leaving = False
         self._shots_pending = {}
         try:
@@ -693,6 +696,8 @@ class BrowserRecorder:
             tab = self._tabs.get(session or "")
             if tab is not None and not frame.get("parentId") and frame.get("id") == tab[1]:
                 url = str(frame.get("url") or "")
+                # A new page in the tab: nothing done on it yet.
+                self._acted_on.discard(tab[0])
                 # Last in the order: the end screenshot falls back to the page opened last.
                 self._urls.pop(session or "", None)
                 self._urls[session or ""] = url
@@ -725,7 +730,8 @@ class BrowserRecorder:
                 and params.get("frameId") == tab[1]
                 and params.get("reason") in _PAGE_REFRESHES
             ):
-                self._refreshes.setdefault(session or "", set()).add(str(params.get("url") or ""))
+                # The browser names the address with its fragment, and requests it without.
+                self._refreshes.setdefault(session or "", set()).add(urldefrag(str(params.get("url") or "")).url)
         elif method == "Network.requestWillBeSent":
             tab = self._tabs.get(session or "")
             if tab is not None:
@@ -743,14 +749,22 @@ class BrowserRecorder:
                     main_frame=main_frame,
                     # The page asked, not the agent: a server's redirect, the page's own refresh, or its script
                     # running with no input behind it. A script the agent's click set off (a button's own handler)
-                    # carries that click's gesture, and the attempt stays the agent's.
+                    # carries that click's mark, and the attempt stays the agent's; the mark lapses after a few
+                    # seconds and a window opened uses it up, so once the agent has clicked or typed on the page,
+                    # its script's moves stay the agent's until the next page.
                     by_page=bool(params.get("redirectResponse"))
                     or by_refresh
-                    or (initiator.get("type") == "script" and not params.get("hasUserGesture")),
+                    or (
+                        initiator.get("type") == "script"
+                        and not params.get("hasUserGesture")
+                        and tab[0] not in self._acted_on
+                    ),
                 )
         elif method == "Runtime.bindingCalled" and params.get("name") == self.binding:
             tab = self._tabs.get(session or "")
             if tab is not None:
+                # Only the listener, in a world of its own, calls the binding, and only for trusted input.
+                self._acted_on.add(tab[0])
                 self.record.acted(tab[0], str(params.get("payload") or ""))
 
     def _photographed(self, answer: dict[str, Any], when: str, session: str | None, url: str) -> None:

@@ -159,8 +159,11 @@ redirect, a refresh (a meta tag or a `Refresh` header) or its own script with no
 counted as the page's request; so is a move the agent makes by running script in the page
 (`location.href` set) rather than by navigating, which is not counted as its attempt. A click of the
 agent's that the page's own handler turns into a move (a button whose script navigates) is the
-agent's attempt: the browser marks the move as set off by input. A page's own timer that fires just
-after an agent's click may carry that mark too, and then reads as the agent's. The icon the browser asks of a site it was just refused is no request at all. Both lists are capped with the rows. A DevTools client is
+agent's attempt: the browser marks the move as set off by input. That mark lapses after about 5 s and a
+window the handler opens uses it up, so once the agent has clicked or typed on a page, a move that page's script
+makes is the agent's until the tab opens another page: a handler that moves the page after a slow step, or after
+opening a window, stays the agent's. The cost: a page's own timer that fires after any click or typing of the
+agent's on that page reads as the agent's too. The icon the browser asks of a site it was just refused is no request at all. Both lists are capped with the rows. A DevTools client is
 not told of the clicks and keys another client sends, so a small listener runs in each page, in a
 script world of its own, and reports only trusted events through a binding; the page's own
 scripts can neither write to the record nor read it. The world's and the binding's names are
