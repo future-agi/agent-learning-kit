@@ -2061,5 +2061,426 @@
    "name": "gpt-4o",
    "setting": "LLM_MODEL"
   }
+ },
+ {
+  "id": "object-agent-def-run-unit-val-model-nova-3-val-llm-sys-env-getor-line4-setting",
+  "files": {
+   "Agent.scala": "object Agent {\n  def run(): Unit = {\n    val model = \"nova-3\"\n    val llm = sys.env.getOrElse(\"LLM_MODEL\", \"gpt-4o\")\n  }\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "Agent.scala",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "object-agent-def-run-unit-val-model-nova-3-val-llm-sys-env-getor-line4-name+setting",
+  "files": {
+   "Agent.scala": "object Agent {\n  def run(): Unit = {\n    val model = \"nova-3\"\n    val llm = sys.env.getOrElse(\"LLM_MODEL\", \"gpt-4o\")\n  }\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "Agent.scala",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "switch-mode-case-voice-const-model-nova-3-const-llmmodel-process-line4-setting",
+  "files": {
+   "agent.ts": "switch (mode) {\n  case \"voice\": {\n    const model = \"nova-3\";\n    const llmModel = process.env.LLM_MODEL ?? \"gpt-4o\";\n  }\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "agent.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "switch-mode-case-voice-const-model-nova-3-const-llmmodel-process-line4-name+setting",
+  "files": {
+   "agent.ts": "switch (mode) {\n  case \"voice\": {\n    const model = \"nova-3\";\n    const llmModel = process.env.LLM_MODEL ?? \"gpt-4o\";\n  }\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "agent.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "val-handler-ctx-ctx-val-model-nova-3-val-llm-system-getenv-llm-m-line3-setting",
+  "files": {
+   "Agent.kt": "val handler = { ctx: Ctx ->\n    val model = \"nova-3\"\n    val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "Agent.kt",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "val-handler-ctx-ctx-val-model-nova-3-val-llm-system-getenv-llm-m-line3-name+setting",
+  "files": {
+   "Agent.kt": "val handler = { ctx: Ctx ->\n    val model = \"nova-3\"\n    val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "Agent.kt",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "let-llm-let-model-nova-3-std-env-var-llm-model-unwrap-or-gpt-4o-line3-setting",
+  "files": {
+   "main.rs": "let llm = {\n    let model = \"nova-3\";\n    std::env::var(\"LLM_MODEL\").unwrap_or(\"gpt-4o\".to_string())\n};\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "main.rs",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "def-run-def-model-nova-3-def-llm-system-getenv-llm-model-gpt-4o-line3-setting",
+  "files": {
+   "agent.groovy": "def run = {\n    def model = \"nova-3\"\n    def llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "agent.groovy",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "def-run-def-model-nova-3-def-llm-system-getenv-llm-model-gpt-4o-line3-name+setting",
+  "files": {
+   "agent.groovy": "def run = {\n    def model = \"nova-3\"\n    def llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "agent.groovy",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "let-configure-ctx-context-in-let-model-nova-3-let-llm-processinf-line3-setting",
+  "files": {
+   "a.swift": "let configure = { (ctx: Context) in\n    let model = \"nova-3\"\n    let llm = ProcessInfo.processInfo.environment[\"LLM_MODEL\"] ?? \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.swift",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "let-configure-ctx-context-in-let-model-nova-3-let-llm-processinf-line3-name+setting",
+  "files": {
+   "a.swift": "let configure = { (ctx: Context) in\n    let model = \"nova-3\"\n    let llm = ProcessInfo.processInfo.environment[\"LLM_MODEL\"] ?? \"gpt-4o\"\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.swift",
+   "line": 3
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "llm-chatopenai-model-gpt-4o-model-kwargs-temperature-float-os-ge-line4-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(\n    model=\"gpt-4o\",\n    model_kwargs={\n        \"temperature\": float(os.getenv(\"LLM_TEMPERATURE\", \"0\")),\n    },\n)\n"
+  },
+  "model": {
+   "setting": "LLM_TEMPERATURE",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TEMPERATURE"
+  },
+  "why": "the setting is read in a call, list or literal given to the call that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "def-config-return-model-gpt-4o-timeout-os-getenv-llm-timeout-line4-setting",
+  "files": {
+   "a.py": "def config():\n    return {\n        \"model\": \"gpt-4o\",\n        \"timeout\": os.getenv(\"LLM_TIMEOUT\"),\n    }\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same returned, exported or passed literal that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "export-default-model-gpt-4o-timeout-process-env-llm-timeout-line3-setting",
+  "files": {
+   "a.ts": "export default {\n  model: \"gpt-4o\",\n  timeout: process.env.LLM_TIMEOUT,\n};\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.ts",
+   "line": 3
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same returned, exported or passed literal that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "function-cfg-return-model-gpt-4o-timeout-process-env-llm-timeout-line4-setting",
+  "files": {
+   "a.ts": "function cfg() {\n  return {\n    model: \"gpt-4o\",\n    timeout: process.env.LLM_TIMEOUT,\n  };\n}\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same returned, exported or passed literal that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "const-cfg-model-gpt-4o-timeout-process-env-llm-timeout-line3-setting",
+  "files": {
+   "a.ts": "const cfg = () => ({\n  model: \"gpt-4o\",\n  timeout: process.env.LLM_TIMEOUT,\n});\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.ts",
+   "line": 3
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same call or literal that writes the model on an earlier line, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "chat-config-model-gpt-4o-timeout-process-env-llm-timeout-line3-setting",
+  "files": {
+   "a.tsx": "<Chat config={{\n  model: \"gpt-4o\",\n  timeout: process.env.LLM_TIMEOUT,\n}} />\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.tsx",
+   "line": 3
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same returned, exported or passed literal that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "config-model-gpt-4o-timeout-os-getenv-llm-timeout-line3-setting",
+  "files": {
+   "a.py": "CONFIG = {\n    \"model\": \"gpt-4o\",\n    \"timeout\": os.getenv(\"LLM_TIMEOUT\"),\n}\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same call or literal that writes the model on an earlier line, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "llm-chatopenai-model-gpt-4o-http-client-client-timeout-os-getenv-line4-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(\n    model=\"gpt-4o\",\n    http_client=Client(\n        timeout=os.getenv(\"LLM_TIMEOUT\"),\n    ),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in a call, list or literal given to the call that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "const-llm-new-chatopenai-model-gpt-4o-configuration-timeout-proc-line4-setting",
+  "files": {
+   "a.ts": "const llm = new ChatOpenAI({\n  model: \"gpt-4o\",\n  configuration: {\n    timeout: process.env.LLM_TIMEOUT,\n  },\n});\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in a call, list or literal given to the call that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "llm-chatopenai-model-gpt-4o-timeout-os-getenv-llm-timeout-line3-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(\n    model=\"gpt-4o\",\n    timeout=os.getenv(\"LLM_TIMEOUT\"),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.py",
+   "line": 3
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same call or literal that writes the model on an earlier line, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "llm-chatopenai-model-gpt-4o-stop-os-getenv-llm-stop-line4-setting",
+  "files": {
+   "a.py": "llm = ChatOpenAI(\n    model=\"gpt-4o\",\n    stop=[\n        os.getenv(\"LLM_STOP\"),\n    ],\n)\n"
+  },
+  "model": {
+   "setting": "LLM_STOP",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_STOP"
+  },
+  "why": "the setting is read in a call, list or literal given to the call that writes the model, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "export-function-cfg-const-c-model-gpt-4o-timeout-process-env-llm-line4-setting",
+  "files": {
+   "a.ts": "export function cfg() {\n  const c = {\n    model: \"gpt-4o\",\n    timeout: process.env.LLM_TIMEOUT,\n  };\n}\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "the setting is read in the same call or literal that writes the model on an earlier line, so it sets something of that model's, not which model the agent uses"
  }
 ]
