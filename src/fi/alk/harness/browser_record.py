@@ -212,6 +212,8 @@ class BrowserRecord:
         self._page_requests: dict[str, int] = {}
         self._tabs: dict[str, int] = {}
         self._last_refused: dict[tuple[str, str, str], float] = {}
+        # The hosts each tab was refused a page of: the browser then asks them for the icon of its refusal page.
+        self._refused_hosts: dict[str, set[str]] = {}
         self._truncated = False
         self._why_incomplete: str | None = None
         self._shots: list[dict[str, Any]] = []
@@ -293,13 +295,23 @@ class BrowserRecord:
         with self._lock:
             self._add({"kind": "navigation", "url": self._kept(url, 2048)}, tab)
 
-    def requested(self, tab: str, url: str, *, document: bool, main_frame: bool) -> None:
-        """A request the browser made; kept only when its host is off the list, the rule its proxy keeps."""
+    def requested(
+        self, tab: str, url: str, *, document: bool, main_frame: bool, by_page: bool = False
+    ) -> None:
+        """A request the browser made; kept only when its host is off the list, the rule its proxy keeps. A page
+        that moves itself off the list (a redirect, or its script) made that request, not the agent: it is counted
+        with the page's requests. The icon the browser asks a refused host for, to show beside its refusal, is
+        neither's."""
         if not _web(url) or self.allowed(url):
             return
         host = _host(url)
         with self._lock:
-            if not (document and main_frame):
+            if not document and urlsplit(url).path == "/favicon.ico" and host in self._refused_hosts.get(tab, ()):
+                return
+            if document and main_frame:
+                # Its refusal page is shown in the tab, whoever asked for it.
+                self._refused_hosts.setdefault(tab, set()).add(host)
+            if not (document and main_frame) or by_page:
                 if host in self._page_requests or len(self._page_requests) < self.cap:
                     self._page_requests[host] = self._page_requests.get(host, 0) + 1
                 else:
@@ -672,11 +684,14 @@ class BrowserRecorder:
         elif method == "Network.requestWillBeSent":
             tab = self._tabs.get(session or "")
             if tab is not None:
+                initiator = params.get("initiator") if isinstance(params.get("initiator"), dict) else {}
                 self.record.requested(
                     tab[0],
                     str((params.get("request") or {}).get("url") or ""),
                     document=params.get("type") == "Document",
                     main_frame=params.get("frameId") == tab[1],
+                    # A server's redirect, or the page's own script, moved it: the page asked, not the agent.
+                    by_page=bool(params.get("redirectResponse")) or initiator.get("type") == "script",
                 )
         elif method == "Runtime.bindingCalled" and params.get("name") == self.binding:
             tab = self._tabs.get(session or "")
