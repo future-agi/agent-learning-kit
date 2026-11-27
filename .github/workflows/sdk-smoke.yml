@@ -156,6 +156,38 @@ jobs:
             -k pinned_libraries | tee pytest.out
           ! grep -q "skipped" pytest.out
 
+  kit-browser-chromium:
+    # The kit's browser and its record against a real Chromium: the hosted image's build, from the
+    # Playwright release Dockerfile.hosted pins, installed for this job only. The listener's guards
+    # (secret fields, the page's own moves off the list) are JavaScript, so only here are they tried.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit, and Playwright at the hosted image's pin with its Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          PLAYWRIGHT_VERSION=$(sed -n 's/^ARG PLAYWRIGHT_VERSION=//p' Dockerfile.hosted)
+          test -n "$PLAYWRIGHT_VERSION"
+          websockets=$(python -c "import tomllib; print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package'] if p['name'] == 'websockets'))")
+          python -m pip install . pytest "websockets==$websockets" "playwright==$PLAYWRIGHT_VERSION"
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright" python -m playwright install --with-deps --no-shell chromium
+          chrome=$(find "$RUNNER_TEMP/ms-playwright" -path '*/chrome-linux*/chrome' -type f | head -n 1)
+          test -n "$chrome"
+          echo "ALK_CHROMIUM=$chrome" >> "$GITHUB_ENV"
+          "$chrome" --version
+      - name: Run the real-Chromium tests, failing if they skip
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -rs tests/harness/test_kit_browser_chromium.py | tee chromium.out
+          ! grep -q "skipped" chromium.out
+
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
     # long test run is kit-tests: this job takes 1 to 4 of its 15 minutes.
