@@ -812,7 +812,7 @@ def test_a_trace_file_rewritten_in_place_with_its_earlier_records_changed_fails_
                              for record in records)
     assert trace.stat().st_ino == inode
     # Never the earlier trials' three calls with this trial's two, [100.0, 101.0, 102.0, 200.0, 201.0].
-    with pytest.raises(cr.ToolCaptureFailed):
+    with pytest.raises(cr.ToolCaptureFailed, match="no longer holds what it held when this trial began"):
         cr.collect_file_tool_calls(runtime, strict=True)
     assert cr.collect_file_tool_calls(runtime) == ()
 
