@@ -118,12 +118,13 @@ when a wildcard there covers it.
 **The environment's browser** (`kit_browser.py`). Where the job has sites and the contract needs a
 browser, the kit starts one headless Chromium for each world (`alk-chromium` from the image, or
 `ALK_CHROMIUM` for a local run), as the agent's user with a bare environment, on an empty profile
-at each spawn of the world. The profile, which is also the browser's temporary folder, has a short
-name: Chromium keeps a socket under it, and on Linux a socket's path holds at most 107 bytes, so a
-work folder too long for it fails the browser's start and says so. A reset in a browser environment is therefore a full respawn: every
+at each spawn of the world. A reset in a browser environment is therefore a full respawn: every
 process of the world starts again and each store is resealed from its baseline, never reset in
 place, so the agent never holds a connection to the last trial's browser. That costs a world's
-start-up on every trial. The agent's process alone
+start-up on every trial. Each start also gives the browser a new temporary folder of its own under
+`/tmp`, the agent's user's, removed when the browser stops: on Linux Chromium keeps a socket under
+it, and a socket's path holds at most 107 bytes, so it cannot be under the work folder, whose
+length the kit does not choose. A temporary folder still too long fails the start and says so. The agent's process alone
 gets its DevTools address in `ALK_BROWSER_CDP_URL`: a relay in front of the browser's port, fixed
 for the world's life, which counts the clients that attach. The browser's requests go through a
 refusing proxy of its own whose list is the sites and nothing else, each read as above and never

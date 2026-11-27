@@ -40,7 +40,6 @@ from fi.alk.harness.framework_detection import detect_framework
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
 from fi.alk.harness.agent_type_check import EXIT_REFUSED
 from fi.alk.harness.job import HarnessJob
-from fi.alk.harness.poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 from fi.alk.harness.reading_result import document
 from fi.alk.harness.seed_contract import (
     RECORD_KEY,
@@ -1058,8 +1057,6 @@ def _handle_command(runtime, command) -> None:
 def _builder(
     tmp_path: Path, monkeypatch, *, marker=True, state=None, control_only=True
 ) -> HostedChatRuntime:
-    monkeypatch.delenv(TARGET_PHONE_ENV, raising=False)
-    monkeypatch.delenv(PIN_ENV, raising=False)
     job = _job()
     workspace = tmp_path / "authoring"
     workspace.mkdir()
@@ -1140,7 +1137,7 @@ def test_the_seed_is_left_alone_when(tmp_path, monkeypatch, case):
     elif case == "world":
         runtime._what_exists = lambda: (True, True)
 
-        def built(contract, overview, policy_job):
+        def built(contract, overview):
             raise _Opened(contract)
 
         runtime._open_built = built

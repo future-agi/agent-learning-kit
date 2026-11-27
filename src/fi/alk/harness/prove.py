@@ -38,7 +38,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Collection, Mapping, Sequence
 
-from .actors import load_actors
+from .actors import load_actors, without_actors
+from .job import actors_on, current_actors_switch
 from .catalogue import Catalogue
 from .checks import OUTCOME_HELPERS, Outcome, reference_of, run_check
 from .contract import AgentContract
@@ -1769,12 +1770,15 @@ def prove(
     A scenario whose solution calls a tool in `postgres_only` is checked for readiness here and
     proved in full by the PostgreSQL proof, which runs those tools. With `state_changing`, a
     fourth gate grades the untouched world against the solution's calls, those tools' calls
-    still successful: each check that held with the solution must then fail.
+    still successful: each check that held with the solution must then fail. With the actors switch off, the scenario is proved as a run
+    plays it: no actor, pre-run, first speaker or fault (`without_actors`).
 
     `judge(goal, world, calls, messages, scenario) -> (held, explanation)` decides a judged-only
     case's controls; None uses the harness judge. `conflict_judge(expected, rule) -> (conflict, why)`
     decides whether a cited rule contradicts the expected outcome; None uses the harness judge.
     `agent_tools` are the tools the agent version under test has, when known; None skips that check."""
+    if not actors_on(current_actors_switch()):
+        scenario = without_actors(scenario)
     proof = Proof(case_goals=list(case_goals), as_written=as_written)
     if agent_tools is not None:
         proof.missing_tools = sorted({str(step.tool) for step in scenario.solution} - set(agent_tools))

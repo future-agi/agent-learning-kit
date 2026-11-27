@@ -334,6 +334,29 @@ def test_a_browser_no_client_holds_asks_for_nothing_on_its_own(short_dir) -> Non
     assert log.rows() == []
 
 
+def test_a_browser_under_a_work_folder_longer_than_a_socket_s_path_starts(tmp_path) -> None:
+    # Chromium's socket goes under its temporary folder, which is the kit's own and short, whatever the work folder.
+    directory = tmp_path / ("a_long_work_folder_" * 6) / "worlds" / "w0" / ".kit-browser"
+    assert len(str(directory)) > 107
+    kit = KitBrowser(
+        binary=BINARY,
+        sites=["shop.test"],
+        log=MemoryLog(),
+        directory=directory,
+        state_path=tmp_path / "w0.json",
+        launch=_launch,
+        stop=_stop,
+        connect=lambda host, port: (_ for _ in ()).throw(OSError(f"no route to {host}")),
+    )
+    try:
+        kit.start()
+        assert kit._handle.poll() is None
+        with request.urlopen(f"{kit.relay.url}/json/version", timeout=10) as answer:
+            assert "Browser" in json.loads(answer.read())
+    finally:
+        kit.close()
+
+
 def test_each_start_is_a_browser_that_remembers_nothing_at_the_same_address(
     browser,
 ) -> None:

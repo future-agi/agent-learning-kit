@@ -25,7 +25,7 @@ is attached.
 What the proxy logs is per host: it sees a host name, not who asked. Once a client has attached, a
 refused request is logged whether the agent's navigation asked for it or a page it opened did (a
 script, a font, a favicon), and a refused https site is asked for again by the browser itself.
-Telling those apart is the browser record's work, from inside the browser.
+This module does not tell those apart.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ import shutil
 import socket
 import stat
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -159,22 +160,39 @@ def chromium_arguments(binary: str, *, profile: Path, proxy_url: str) -> list[st
     ]
 
 
-# Chromium keeps one browser to a profile through a socket under its temporary folder (the profile here):
-# <TMPDIR>/org.chromium.Chromium.XXXXXX/SingletonSocket. On Linux a socket's path holds at most 107 bytes, and a
-# longer one stops the browser at start, so the profile's own name is short.
+# On Linux, Chromium keeps one browser to a profile through a socket under its temporary folder:
+# <TMPDIR>/org.chromium.Chromium.XXXXXX/SingletonSocket. A socket's path holds at most 107 bytes, and a longer one
+# stops the browser at start. So the temporary folder is the kit's own, short and under /tmp, whatever the work
+# folder is. (On macOS Chromium puts this socket under the system's own temporary folder.)
 _SINGLETON_SOCKET_TAIL = len("/org.chromium.Chromium.XXXXXX/SingletonSocket")
 _SOCKET_PATH_MAX = 107
+_BROWSER_TEMPORARY_BASE = "/tmp"
 
 
-def browser_environment(*, home: Path) -> dict[str, str]:
+def browser_environment(*, home: Path, temporary: Path) -> dict[str, str]:
     """The browser's whole environment: no key, no kit token and no proxy variable. Its proxy is on its command
     line, and whoever holds its DevTools address controls it."""
     return {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "HOME": str(home),
-        "TMPDIR": str(home),
+        "TMPDIR": str(temporary),
         "LANG": "C.UTF-8",
     }
+
+
+def _browser_temporary_folder() -> Path:
+    """A new, empty temporary folder for one browser, short enough for Chromium's socket under it on Linux."""
+    base = _BROWSER_TEMPORARY_BASE if os.path.isdir(_BROWSER_TEMPORARY_BASE) else None
+    folder = Path(tempfile.mkdtemp(prefix="alk-browser-", dir=base))
+    room = _SOCKET_PATH_MAX - _SINGLETON_SOCKET_TAIL
+    taken = len(os.fsencode(folder))
+    if sys.platform.startswith("linux") and taken > room:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise RuntimeError(
+            f"the browser's temporary folder {folder} is too long for the browser: its path takes {taken} bytes, "
+            f"and Chromium's socket under it leaves room for {room}"
+        )
+    return folder
 
 
 def _resolve(host: str) -> list[str]:
@@ -467,6 +485,7 @@ class KitBrowser:
         self._prepare = prepare
         self._retain_log = retain_log
         self._handle: Any = None
+        self._temporary: Path | None = None
 
     def environment(self) -> dict[str, str]:
         return {BROWSER_CDP_URL_ENV: self.relay.url}
@@ -494,21 +513,17 @@ class KitBrowser:
             except OSError:
                 logger.warning("browser: the last profile under %s could not be removed", self.directory)
         profile = self.directory / f"p{uuid.uuid4().hex[:8]}"
-        room = _SOCKET_PATH_MAX - _SINGLETON_SOCKET_TAIL
-        if sys.platform.startswith("linux") and len(str(profile)) > room:
-            raise RuntimeError(
-                f"the browser's folder {self.directory} is too long for the browser: its profile's path takes "
-                f"{len(str(profile))} bytes, and Chromium's socket under it leaves room for {room}"
-            )
         profile.mkdir(parents=True)
+        self._temporary = _browser_temporary_folder()
         self._prepare(profile)
+        self._prepare(self._temporary)
         argv = chromium_arguments(
             self.binary, profile=profile, proxy_url=self.proxy.url
         )
         self._handle = self._launch(
             argv,
             profile,
-            browser_environment(home=profile),
+            browser_environment(home=profile, temporary=self._temporary),
             self.directory / "browser.log",
         )
         port = self._devtools_port(profile)
@@ -523,8 +538,18 @@ class KitBrowser:
         if self.recorder is not None:
             self.recorder.detach()
         handle, self._handle = self._handle, None
-        if handle is not None:
-            self._stop(handle)
+        try:
+            if handle is not None:
+                self._stop(handle)
+        finally:
+            temporary, self._temporary = self._temporary, None
+            if temporary is not None:
+                try:
+                    shutil.rmtree(temporary)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.warning("browser: its temporary folder %s could not be removed", temporary)
 
     def close(self) -> None:
         try:

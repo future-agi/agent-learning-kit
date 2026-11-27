@@ -948,7 +948,6 @@ class HostedChatRuntime:
 
     async def _open_builder(self, *, resume: bool = True) -> Stage:
         from .builder import BUILDER
-        from .poc_guest_booking import guest_booking_policy_job
 
         if self._designing():
             stage = await self._open_for_designing()
@@ -957,7 +956,6 @@ class HostedChatRuntime:
         elif self._composing():
             stage = await self._open_for_composition()
         else:
-            policy_job = guest_booking_policy_job(self.job)
             # A reading the platform handed this build is used before anything opens.
             await asyncio.to_thread(self._take_seed)
             contract = load_contract(self.workspace)
@@ -982,7 +980,7 @@ class HostedChatRuntime:
                     overview = await self.client.overview()
                 except ConversationTransportError:
                     overview = None
-                stage = self._open_built(contract, overview, policy_job)
+                stage = self._open_built(contract, overview)
         # A design's approval is its gate: per-call confirmations do not apply to it.
         if not self._control_only() and not self._designing() and self._nudge is None:
             self._guard(stage.spec)
@@ -1169,10 +1167,9 @@ class HostedChatRuntime:
         content = answer.get("content") if isinstance(answer, dict) else None
         return "\n".join(str(part.get("text") or "") for part in content or [])
 
-    def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
+    def _open_built(self, contract: Any, overview: Any) -> Stage:
         from .builder import environment_brief, open_builder
         from .nudge import ENVIRONMENT
-        from .poc_guest_booking import guest_booking_pin_scenario_problem
 
         # A rebuild's servers share one catalogue, so a retired sub-goal stays retired.
         catalogue = load_catalogue(self.workspace) if self._nudge is not None else None
@@ -1184,11 +1181,6 @@ class HostedChatRuntime:
             source_root=self.source if self.source.is_dir() else None,
             platform=self._builder_platform_server(),
             ask=self._ask,
-            scenario_problem=(
-                (lambda args: guest_booking_pin_scenario_problem(policy_job, args))
-                if policy_job is not None
-                else None
-            ),
             hosted_prompt=self._hosted_prompt(),
             sealed=not self._control_only(),
             # While building, the world itself (tools, data, caller prompt) can still change; once built, only the cast.
