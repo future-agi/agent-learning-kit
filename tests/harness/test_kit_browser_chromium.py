@@ -456,7 +456,7 @@ def test_what_the_agent_opens_off_the_list_is_its_attempt_and_the_refusal_s_icon
 
 
 @pytest.mark.parametrize("scheme", ["http", "https"])
-def test_a_refused_page_is_neither_a_page_opened_nor_photographed(site, tmp_path, scheme) -> None:
+def test_a_refused_page_is_neither_a_page_opened_nor_photographed(site, short_dir, scheme) -> None:
     # Refused over http, the proxy's own answer is shown at the refused address; over https, the browser's error
     # page. Neither is a page the agent opened: no row, no screenshot, and the end screenshot is not of it.
     # A browser of its own: the module's record is sealed by an earlier test, and a sealed record keeps no more.
@@ -471,12 +471,12 @@ def test_a_refused_page_is_neither_a_page_opened_nor_photographed(site, tmp_path
         binary=BINARY,
         sites=["shop.test"],
         log=MemoryLog(),
-        directory=tmp_path / "w0",
-        state_path=tmp_path / "w0.json",
+        directory=short_dir / "w0",
+        state_path=short_dir / "w0.json",
         launch=_launch,
         stop=_stop,
         connect=connect,
-        recorder=BrowserRecorder(["shop.test"], tmp_path / "w0-record.json"),
+        recorder=BrowserRecorder(["shop.test"], short_dir / "w0-record.json"),
     )
     kit.start()
     try:
@@ -536,7 +536,7 @@ def test_a_password_field_the_page_turns_into_text_stays_a_password_field(browse
     assert "hunter2" not in json.dumps(body)
 
 
-def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, tmp_path) -> None:
+def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, short_dir) -> None:
     class _Failing(BrowserRecorder):
         def _command(self, method, params=None, session=None, **kwargs):
             if method == "Page.addScriptToEvaluateOnNewDocument":
@@ -550,12 +550,12 @@ def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, tmp_path) 
         binary=BINARY,
         sites=["shop.test"],
         log=MemoryLog(),
-        directory=tmp_path / "w0",
-        state_path=tmp_path / "w0.json",
+        directory=short_dir / "w0",
+        state_path=short_dir / "w0.json",
         launch=_launch,
         stop=_stop,
         connect=connect,
-        recorder=_Failing(["shop.test"], tmp_path / "w0-record.json"),
+        recorder=_Failing(["shop.test"], short_dir / "w0-record.json"),
     )
     kit.start()
     try:
@@ -567,7 +567,7 @@ def test_a_tab_is_let_go_even_when_the_recorder_cannot_watch_it(site, tmp_path) 
         assert kit.recorder.record.body()["complete"] is False
     finally:
         kit.close()
-    assert json.loads((tmp_path / "w0-record.json").read_text())["complete"] is False
+    assert json.loads((short_dir / "w0-record.json").read_text())["complete"] is False
 
 
 def test_card_numbers_security_codes_and_one_time_codes_are_never_kept_as_text(browser) -> None:

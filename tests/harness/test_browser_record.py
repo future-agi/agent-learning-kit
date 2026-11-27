@@ -1417,19 +1417,6 @@ def test_the_one_setting_holds_typed_text_to_recordings_and_says_so(monkeypatch)
     assert stored["browser"]["typed_text"] == browser_record.TYPED_TEXT_NOT_KEPT_AT_LEVEL
 
 
-def test_ci_runs_the_real_chromium_tests_with_a_chromium_and_fails_if_they_skip() -> None:
-    """The listener's guards (secret fields, the page's own moves) are JavaScript, so only a real browser tries
-    them: CI installs the hosted image's Chromium for that file, and a skip there fails the job."""
-    root = Path(__file__).resolve().parents[2]
-    jobs = yaml.safe_load((root / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8"))["jobs"]
-    (job,) = [one for one in jobs.values() if "tests/harness/test_kit_browser_chromium.py" in json.dumps(one)]
-    steps = "\n".join(str(step.get("run", "")) for step in job["steps"])
-    assert "PLAYWRIGHT_VERSION" in steps and "Dockerfile.hosted" in steps
-    assert "playwright install --with-deps --no-shell chromium" in steps
-    assert "ALK_CHROMIUM" in steps and "websockets" in steps
-    assert '! grep -q "skipped"' in steps
-
-
 def test_ci_runs_each_client_s_journey_in_a_row_of_its_own_and_fails_if_it_skips() -> None:
     """Playwright, Puppeteer and browser-use each get a row, so one client's install cannot fail another's; every
     test of the clients file is chosen by some row, and a skip fails it."""

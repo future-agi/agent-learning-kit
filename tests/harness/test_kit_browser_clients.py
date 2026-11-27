@@ -32,8 +32,10 @@ OFF_THE_LIST = "http://www.example.com/deals"
 
 
 @pytest.fixture
-def kit(site, tmp_path):  # noqa: F811 - the fixture imported above
-    """A browser of its own for each client, allowed `shop.test` only, so each record holds that client's run."""
+def kit(site, tmp_path_factory):  # noqa: F811 - the fixture imported above
+    """A browser of its own for each client, allowed `shop.test` only, so each record holds that client's run. Its
+    folder's path is short: a test's own tmp_path on a Linux runner leaves too little room for Chromium's socket."""
+    tmp_path = tmp_path_factory.mktemp("kc")
 
     def connect(host: str, port: int) -> socket.socket:
         if host == "shop.test":
