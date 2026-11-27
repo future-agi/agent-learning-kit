@@ -307,7 +307,7 @@ def test_the_browser_s_environment_holds_no_key_token_or_proxy_setting(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("ALK_HOSTED_TOKEN", "t")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-    env = kit_browser.browser_environment(home=tmp_path)
+    env = kit_browser.browser_environment(home=tmp_path, temporary=tmp_path)
     assert set(env) <= {"PATH", "HOME", "TMPDIR", "LANG", "FONTCONFIG_PATH"}
     assert env["HOME"] == str(tmp_path)
 
