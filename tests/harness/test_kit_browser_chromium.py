@@ -100,6 +100,7 @@ class _Tab:
         self.ws = ws
         self.next = 0
         self.session = None
+        self.last: list[str] = []
 
     async def call(
         self, method: str, params: dict | None = None, *, session: bool = True
@@ -124,11 +125,14 @@ class _Tab:
             found = await self.call(
                 "Runtime.evaluate",
                 {
-                    "expression": "[document.readyState, document.body ? document.body.innerText : '']",
+                    "expression": "[document.readyState, document.body ? document.body.innerText : '',"
+                    " location.href, document.documentElement ? document.documentElement.outerHTML.slice(0, 600) : '']",
                     "returnByValue": True,
                 },
             )
-            state, text = found["result"]["result"].get("value") or ["", ""]
+            state, text, *where = found["result"]["result"].get("value") or ["", "", "", ""]
+            # Where the tab ended, for a failure's message: its address, its state and the start of its page.
+            self.last = [*where[:1], state, *where[1:]]
             if (state == "complete" and text) or time.monotonic() >= deadline:
                 return str(text)
             await asyncio.sleep(0.25)
@@ -164,11 +168,11 @@ def test_the_browser_opens_its_site_and_refuses_another_which_is_logged_as_the_a
     async def steps(page):
         return await page.open("http://shop.test/cart"), await page.open(
             "http://www.example.com/"
-        )
+        ), page.last
 
-    shop, other = _run(kit, steps)
+    shop, other, where = _run(kit, steps)
     assert "page /cart" in shop
-    assert "outside the test world" in other
+    assert "outside the test world" in other, where
     hosts = [row["arguments"]["host"] for row in log.rows()[before:]]
     assert hosts.count("www.example.com") >= 1
     assert {row["arguments"]["via"] for row in log.rows()[before:]} == {"browser"}
