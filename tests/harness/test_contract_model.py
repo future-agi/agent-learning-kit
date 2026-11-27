@@ -4635,6 +4635,25 @@ def test_a_reading_under_a_profile_with_no_whole_prompt_is_asked_once_from_the_d
     assert saved(destination)["system_prompt_from"] == []
 
 
+def test_a_prompt_that_cannot_be_encoded_is_not_whole_and_the_reading_is_asked_for_one(
+    tmp_path, root
+):
+    from fi.alk.harness.provider_import import whole_prompt
+
+    # A lone surrogate is valid JSON (\ud800) that a fetched prompt can carry; it has no UTF-8 form.
+    broken = {**_PHONE, "system_prompt": "Take bookings.\ud800 Be brief."}
+    assert whole_prompt(broken) is None
+
+    destination = tmp_path / "out"
+    submit = provider_submitter(destination, broken, root)
+    bare = payload(system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}])
+    first = submit(bare)
+    assert first.get("is_error")
+    assert "provider definition" in text_of(first)
+    assert not submit(bare).get("is_error")
+    assert saved(destination)["system_prompt_copied"] is False
+
+
 def test_a_reading_under_a_profile_with_a_whole_prompt_is_not_asked_for_one(tmp_path, root):
     destination = tmp_path / "out"
     result = provider_submitter(destination, _PHONE, root)(payload())

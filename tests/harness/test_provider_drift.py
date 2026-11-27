@@ -109,3 +109,25 @@ def test_an_assistant_changed_since_adaptation_is_refused_before_anything_is_cre
         )
     assert str(raised.value).startswith("provider_configuration_changed")
     assert not [call for call in calls if call[0] != "GET"]
+
+
+def test_an_assistant_sealed_before_the_prompt_check_was_recorded_still_runs():
+    # A kit without the record sealed the same unchanged assistant: its digest must still match,
+    # or every stored binding is refused as changed after an upgrade, and again after a rollback.
+    from fi.alk.harness.provider_import import PROMPT_CHECK
+
+    request, _ = _provider("Book appointments.", BOOK)
+    inspected = inspect_provider_target(
+        "vapi", source_target_id="source-assistant", api_key="key", request=request
+    )
+    assert inspected[PROMPT_CHECK] == "unchanged"
+    without = {key: value for key, value in inspected.items() if key != PROMPT_CHECK}
+
+    assert provider_profile_digest(without) == provider_profile_digest(inspected)
+    receipt = clone_provider_target(
+        _spec(provider_profile_digest(without)),
+        context=CONTEXT,
+        api_key="key",
+        request=request,
+    )
+    assert receipt.target.id == "cloned-assistant"
