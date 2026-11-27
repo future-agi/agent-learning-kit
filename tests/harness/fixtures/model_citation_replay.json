@@ -2501,7 +2501,7 @@
    "name": "",
    "setting": "LLM_MODEL"
   },
-  "why": "the read is the only value of a call given to another call that writes a model on an earlier line, with no model key of its own, so it is read beside that model, as its one-line form always was; given under its own model key it is still kept"
+  "why": "refused like its one- and two-line forms: the read is the only value of a call given to another call that writes a model on an earlier line, with no model key of its own, so it is read beside that model; given under its own model key it is still kept"
  },
  {
   "id": "agent-agent-model-gpt-4o-mini-llm-llm-os-getenv-llm-model-line4-name+setting",
@@ -2522,7 +2522,7 @@
    "name": "gpt-4o",
    "setting": "LLM_MODEL"
   },
-  "why": "the read is the only value of a call given to another call that writes a model on an earlier line, with no model key of its own, so it is read beside that model, as its one-line form always was; given under its own model key it is still kept"
+  "why": "refused like its one- and two-line forms: the read is the only value of a call given to another call that writes a model on an earlier line, with no model key of its own, so it is read beside that model; given under its own model key it is still kept"
  },
  {
   "id": "agent-agent-model-gpt-4o-mini-llm-llm-model-os-getenv-llm-model-line4-setting",
