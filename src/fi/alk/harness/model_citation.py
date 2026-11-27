@@ -853,14 +853,37 @@ def _after_a_result_word(text: str, last: int) -> bool:
     return False
 
 
+# A struct literal's first key after the { that follows its type's name (Rust's Config {
+# model: …, Go's Config{ model: …}): a name or a quoted name, then one : (not ::, not :=).
+_FIRST_KEY = re.compile(r'(?:[A-Za-z_]\w*|"[^"\n]*")[ \t]*:(?![:=])')
+
+
+def _opens_a_struct_literal(text: str, at: int) -> bool:
+    """Whether the { at ``at``, straight after a word, opens a struct literal: its first line,
+    past spaces and line comments, is a key (``model: "gpt-4o"``), not code (``fn``, ``val``,
+    ``stt :=``, ``model = …``). Looks only at the spaces after the { and a few characters past
+    them."""
+    after = at + 1
+    while after < len(text):
+        if text[after] in " \t\r\n":
+            after += 1
+        elif text.startswith("//", after):
+            stop = text.find("\n", after)
+            after = len(text) if stop < 0 else stop
+        else:
+            break
+    return bool(_FIRST_KEY.match(text, after, after + 200))
+
+
 def _brackets(
     text: str, skipped: list[tuple[int, int]]
 ) -> Iterator[tuple[int, str, bool]]:
     """Each bracket of ``text`` outside ``skipped`` (in order, merged), in order, with whether it
     holds arguments or a value: ( and [ always, { only after ( [ { , = or : or the words return,
-    default or yield (a literal given as an argument, a value or a result), never a { that opens
-    a block (a function, class or method body). The look-back passes over the spaces before a {,
-    each once, so a text costs about its length."""
+    default or yield (a literal given as an argument, a value or a result), or after a type's
+    name when its first line is a key (a struct literal), never a { that opens a block (a
+    function, class or method body). The look-back passes over the spaces before a {, and the
+    look-ahead over the spaces after it, each once, so a text costs about its length."""
     ranges = iter(skipped)
     current = next(ranges, None)
     for found in _BRACKET.finditer(text):
@@ -876,7 +899,12 @@ def _brackets(
             while before >= 0 and text[before] in " \t\r\n":
                 before -= 1
             holds = before >= 0 and (
-                text[before] in "([{,=:" or _after_a_result_word(text, before)
+                text[before] in "([{,=:"
+                or _after_a_result_word(text, before)
+                or (
+                    (text[before].isalnum() or text[before] == "_")
+                    and _opens_a_struct_literal(text, at)
+                )
             )
         yield at, char, holds
 

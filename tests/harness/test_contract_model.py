@@ -6508,6 +6508,25 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             4,
             id="python-lambda-given-to-a-call",
         ),
+        # A { after a word that opens code, not a struct literal: its first line is not a key.
+        pytest.param(
+            "agent.go",
+            "if voice {\n"
+            '\tstt := NewSTT(model: "nova-3")\n'
+            '\tllm := getenvOr("LLM_MODEL", "gpt-4o")\n'
+            "}\n",
+            3,
+            id="go-block-opening-on-a-short-declaration",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "fun handler() = run {\n"
+            '    model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-run-block-assigning-a-model",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -6752,6 +6771,22 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             "  configuration: { timeout: process.env.LLM_TIMEOUT },\n"
             "});\n",
             id="read-in-a-literal-given-in-the-call-on-one-line",
+        ),
+        pytest.param(
+            "main.rs",
+            "let cfg = Config {\n"
+            '    model: "gpt-4o".into(),\n'
+            '    timeout: env::var("LLM_TIMEOUT").ok(),\n'
+            "};\n",
+            id="rust-struct-literal",
+        ),
+        pytest.param(
+            "main.go",
+            "cfg := Config{\n"
+            '\tmodel: "gpt-4o",\n'
+            '\ttimeout: os.Getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="go-composite-literal",
         ),
     ],
 )
