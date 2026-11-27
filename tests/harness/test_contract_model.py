@@ -6205,6 +6205,24 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             id="kotlin-assigned-lambda-setting-a-model-at-the-line-start",
         ),
         pytest.param(
+            "agent.groovy",
+            "def run = {\n"
+            '    def model = "nova-3"\n'
+            '    def llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="groovy-assigned-closure-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.swift",
+            "let configure = { (ctx: Context) in\n"
+            '    let model = "nova-3"\n'
+            '    let llm = ProcessInfo.processInfo.environment["LLM_MODEL"] ?? "gpt-4o"\n'
+            "}\n",
+            3,
+            id="swift-assigned-closure-with-a-model-constant",
+        ),
+        pytest.param(
             "Agent.java",
             "public class Agent {\n"
             '    private final Stt stt = new Stt(model = "nova-3");\n'
@@ -6267,6 +6285,25 @@ def test_the_models_own_setting_is_kept_beside_another_components_model(
         "LLM_MODEL",
         given.get("name", ""),
     )
+
+
+def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
+    # The setting alone: a default after unwrap_or is not read as one, so a name given with it
+    # is refused for that reason, as before this rule.
+    (root / "main.rs").write_text(
+        "let llm = {\n"
+        '    let model = "nova-3";\n'
+        '    std::env::var("LLM_MODEL").unwrap_or("gpt-4o".to_string())\n'
+        "};\n",
+        encoding="utf-8",
+    )
+
+    problems, contract, _ = checked(
+        root, {"setting": "LLM_MODEL", "path": "main.rs", "line": 3}
+    )
+
+    assert problems == []
+    assert contract.model.setting == "LLM_MODEL"
 
 
 @pytest.mark.parametrize(
