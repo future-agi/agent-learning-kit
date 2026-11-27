@@ -57,9 +57,12 @@ def test_authoring_receives_actual_execution_capabilities(
     assert prompts
     for prompt in prompts:
         assert "Available execution capabilities" in prompt
-        assert "supports Python or source-declared pinned Bun" in prompt
-        assert "not arbitrary native Node.js startup" in prompt
-        assert "Do not translate a Node.js project to Bun without source evidence" in prompt
+        assert "supports Python, source-declared pinned Bun" in prompt
+        assert "or one npm package started with a node command" in prompt
+        assert "It runs on the image's Node" in prompt
+        assert "npm or pnpm workspaces, pnpm and yarn are not supported yet" in prompt
+        assert "Read a Node.js project as runtime.language=node" in prompt
+        assert "do not translate it to Bun without source evidence" in prompt
         assert "/private/control/runtime.sock" not in prompt
         if socket_variable:
             assert "Managed source-owned Compose deployment is available for chat agents with an HTTP ingress" in prompt
@@ -88,4 +91,4 @@ def test_other_understanding_flows_keep_their_runtime_profile(tmp_path, monkeypa
         source, out=tmp_path / "output", require_setup_contract=provider,
     )
     assert "Available execution capabilities" not in stage._spec.system_prompt
-    assert "not arbitrary native Node.js startup" not in stage._spec.system_prompt
+    assert "one npm package started with a node command" not in stage._spec.system_prompt
