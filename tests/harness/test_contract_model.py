@@ -6351,6 +6351,40 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             "});\n",
             id="key-after-a-comma-in-a-literal-given-to-a-call",
         ),
+        pytest.param(
+            "agent.py",
+            "config = {\n"
+            "    # which model\n"
+            '    "model": "gpt-4o",\n'
+            '    "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="key-after-a-comment-line",
+        ),
+        pytest.param(
+            "agent.py",
+            "config = {  # the client\n"
+            '    "model": "gpt-4o",\n'
+            '    "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="key-after-a-comment-on-the-brace-line",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const config = {\n"
+            "  temperature: 0, // warm\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="key-after-a-comment-ending-the-line-before",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const config = {\n"
+            '  /* which */ model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="key-after-a-block-comment",
+        ),
     ],
 )
 def test_a_setting_beside_the_model_its_own_call_is_given_is_still_refused(

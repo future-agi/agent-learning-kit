@@ -913,6 +913,17 @@ def _written_in_the_call_read_in(
     val model = "nova-3": that is a constant beside the read, not a model given with it."""
     values: list[int] = []
     keyed: set[int] = set()
+    # Comments, from where each ends to where it starts, so the look-back before a key passes
+    # over them as it does over spaces: a comment line between a { and its "model": key.
+    comments: dict[int, int] = {}
+    for offset, comment, inside, _ in spans:
+        end = offset + len(_span_line(text, offset))
+        if offset + comment < end:
+            comments[end - 1] = offset + comment
+        for start, stop in inside:
+            # A block comment's stretch stops before its */.
+            closed = text.startswith("*/", offset + stop)
+            comments[offset + stop + (1 if closed else -1)] = offset + start
     for offset, comment, _, _ in spans:
         line = _span_line(text, offset)[:comment]
         for found in _MODEL_VALUE.finditer(line):
@@ -921,8 +932,13 @@ def _written_in_the_call_read_in(
             at = offset + found.start()
             values.append(at)
             before = at - 1
-            while before >= 0 and text[before] in " \t\r\n":
-                before -= 1
+            while before >= 0:
+                if text[before] in " \t\r\n":
+                    before -= 1
+                elif before in comments:
+                    before = comments[before] - 1
+                else:
+                    break
             if before >= 0 and text[before] in "{,":
                 colon = _KEY_SEPARATOR.search(found.group(0)).group() == ":"
                 if colon or "\n" not in text[before:at]:
