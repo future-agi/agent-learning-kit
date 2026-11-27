@@ -188,7 +188,7 @@ def resolve_system_prompt(
         client_kwargs["base_url"] = str(base_url)
     client = openai.AsyncOpenAI(**client_kwargs)
     return OpenAIAgentWrapper(
-        client, model=str(config.get("model", "gpt-4-turbo")), system_prompt=str(prompt)
+        client, model=str(config.get("model", "gpt-5.6-sol")), system_prompt=str(prompt)
     )
 
 
