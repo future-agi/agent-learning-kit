@@ -2852,7 +2852,6 @@ def scenario_tools(
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
-    scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     postgres_proof: Callable[[Scenario, Catalogue], str] | None = None,
     catalogue: Catalogue | None = None,
     removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
@@ -3630,10 +3629,6 @@ def scenario_tools(
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
 
-        if scenario_problem:
-            problem = scenario_problem(args)
-            if problem:
-                return _refuse(problem)
         # A taken name is refused before anything costly runs (a pre-run conversation, the proof).
         same_key = str(args.get("scenario_key") or "").strip()
         clash = _name_clash(
