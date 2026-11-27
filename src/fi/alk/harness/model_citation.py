@@ -1160,9 +1160,16 @@ def _owners(text: str, spans, positions: list[int]) -> dict[int, bool]:
             continue
         events.append((at, 2, 0))
     events.sort()
-    # The key holding the value at each open bracket, and whether it is a model's.
-    held: list[tuple[str, bool]] = [("", False)]
+    # Per open bracket, whether the key holding its value is a model's (None when no key holds
+    # it), and beside it the nearest of those at or below it that has a key, so a read finds
+    # its owner without walking the brackets still open.
+    held: list[bool | None] = [None]
+    nearest: list[bool | None] = [None]
     owners: dict[int, bool] = {}
+
+    def hold(model: bool | None) -> None:
+        held[-1] = model
+        nearest[-1] = nearest[-2] if model is None and len(nearest) > 1 else model
 
     def give(key: re.Match[str], at: int) -> None:
         before = at - 1
@@ -1170,14 +1177,11 @@ def _owners(text: str, spans, positions: list[int]) -> dict[int, bool]:
             before -= 1
         attribute = before >= 0 and text[before] == "."
         assigned = text[key.end() - 1] == "=" and len(held) == 1
-        held[-1] = (
-            key.group(2),
-            key.group(2) in _MODEL_KEY_NAMES and not attribute and not assigned,
-        )
+        hold(key.group(2) in _MODEL_KEY_NAMES and not attribute and not assigned)
 
     for at, kind, _ in events:
         if kind == 0:
-            owners[at] = next((model for name, model in reversed(held) if name), False)
+            owners[at] = bool(nearest[-1])
         elif kind == 1:
             key = _ANY_KEY.match(text, at)
             if key and key.group(1):
@@ -1185,14 +1189,16 @@ def _owners(text: str, spans, positions: list[int]) -> dict[int, bool]:
         else:
             char = text[at]
             if char in "([{":
-                held.append(("", False))
+                held.append(None)
+                nearest.append(nearest[-1])
             elif char in ")]}":
                 if len(held) > 1:
                     held.pop()
+                    nearest.pop()
                 else:
-                    held[-1] = ("", False)
+                    hold(None)
             elif char in ",;" or (char == "\n" and len(held) == 1):
-                held[-1] = ("", False)
+                hold(None)
             elif char.isalpha() or char == "_":
                 if at and (text[at - 1].isalnum() or text[at - 1] == "_"):
                     continue

@@ -5985,6 +5985,28 @@ def test_a_long_line_of_model_keys_before_the_cited_line_is_checked_quickly(root
     assert took < QUICK_SECONDS
 
 
+@pytest.mark.parametrize("opener", ["(", "[", "{"], ids=["paren", "square", "brace"])
+@pytest.mark.parametrize(
+    "before", [False, True], ids=["on-the-cited-line", "before-the-cited-line"]
+)
+def test_many_reads_inside_deep_brackets_are_checked_quickly(root, opener, before):
+    # Half open brackets, half reads of the setting inside them: each read finds its owner
+    # without walking the brackets still open.
+    reads = '"LLM_MODEL",' * (KEYS_LINE // 2 // len('"LLM_MODEL",'))
+    if before:
+        brackets = "".join(opener * (KEYS_LINE // 2 // 20) + "\n" for _ in range(20))
+        text, line = brackets + reads + "\n", 21
+    else:
+        text, line = "x = " + opener * (KEYS_LINE // 2) + reads + "\n", 1
+    (root / "agent.py").write_text(text, encoding="utf-8")
+
+    _, _, took = checked(
+        root, {"setting": "LLM_MODEL", "path": "agent.py", "line": line}
+    )
+
+    assert took < QUICK_SECONDS
+
+
 # A credential's name shaped like a key is never repeated
 
 
