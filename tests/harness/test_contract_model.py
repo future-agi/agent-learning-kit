@@ -5691,6 +5691,22 @@ TIMEOUT = 'os.getenv("LLM_TIMEOUT")'
             id="model-key-given-a-client",
         ),
         pytest.param(
+            "agent.py",
+            f'model = pick({TIMEOUT}, fallback=ChatOpenAI(model="gpt-4o"))',
+            id="read-straight-under-the-model-target",
+        ),
+        pytest.param(
+            "agent.ts",
+            "init(this.model = pick(process.env.LLM_TIMEOUT, "
+            'new ChatOpenAI({ model: "gpt-4o" })));',
+            id="read-straight-under-a-model-attribute",
+        ),
+        pytest.param(
+            "agent.py",
+            f'llm = make_llm(model="gpt-4o", *extra({TIMEOUT}))',
+            id="read-after-the-models-value-ends",
+        ),
+        pytest.param(
             "agent.ts",
             'const model = new ChatOpenAI({ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT });',
             id="ts-model-target",
