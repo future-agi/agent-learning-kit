@@ -172,7 +172,9 @@ def test_the_browser_opens_its_site_and_refuses_another_which_is_logged_as_the_a
 
     shop, other, where = _run(kit, steps)
     assert "page /cart" in shop
-    assert "outside the test world" in other, where
+    # The proxy refuses with its own 403 page; Chromium as the hosted image pins it shows its own error page for it
+    # instead (an older build shows the proxy's text). Either way the agent's page is not the site's.
+    assert "outside the test world" in other or where[:1] == ["chrome-error://chromewebdata/"], where
     hosts = [row["arguments"]["host"] for row in log.rows()[before:]]
     assert hosts.count("www.example.com") >= 1
     assert {row["arguments"]["via"] for row in log.rows()[before:]} == {"browser"}
