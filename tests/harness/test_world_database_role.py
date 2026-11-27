@@ -3735,12 +3735,21 @@ _DEFINER_SETUP = (
     "GRANT ALL ON public.ledger, public.audit TO PUBLIC",
     "INSERT INTO public.ledger VALUES (1, 5)",
     "CREATE FUNCTION public.plus_one(x int) RETURNS int LANGUAGE sql AS $f$ SELECT coalesce(x, 0) + 1 $f$",
+    "CREATE TEXT SEARCH CONFIGURATION public.words (COPY = english)",
 )
 _DEFINER_CHANGES = {
     "function made strict": ("ALTER FUNCTION public.plus_one(int) STRICT", "functions"),
     "domain default": ("ALTER DOMAIN public.amount SET DEFAULT 42", "types"),
     "domain not null dropped": ("ALTER DOMAIN public.amount DROP NOT NULL", "types"),
     "table made to inherit": ("ALTER TABLE public.audit INHERIT public.ledger", "inheritance"),
+    "text search mapping dropped": (
+        "ALTER TEXT SEARCH CONFIGURATION public.words DROP MAPPING FOR asciiword",
+        "text search mappings",
+    ),
+    "comment on the database": (
+        "DO $d$ BEGIN EXECUTE format('COMMENT ON DATABASE %I IS %L', current_database(), 'the answer'); END $d$",
+        "comments",
+    ),
     "database setting": (
         "DO $d$ BEGIN EXECUTE format('ALTER DATABASE %I SET app.note TO %L', current_database(), 'the answer'); "
         "END $d$",
@@ -3779,7 +3788,8 @@ def test_a_definition_a_definer_function_changes_never_survives_a_reset(door_wor
                 f"DO $$ BEGIN CREATE ROLE {runtime.MIGRATOR_ROLE}; EXCEPTION WHEN duplicate_object THEN NULL; END $$"
             )
             for made in ("DOMAIN public.amount", "TABLE public.ledger", "TABLE public.audit",
-                         "FUNCTION public.plus_one(int)", "FUNCTION public.act()"):
+                         "FUNCTION public.plus_one(int)", "FUNCTION public.act()",
+                         "TEXT SEARCH CONFIGURATION public.words"):
                 connection.execute(f"ALTER {made} OWNER TO {runtime.MIGRATOR_ROLE}")
     monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
@@ -3791,3 +3801,27 @@ def test_a_definition_a_definer_function_changes_never_survives_a_reset(door_wor
             pytest.skip("the migrator may not make this change")
     with pytest.raises(WorldResetRefused, match=kind):
         store.restore(snapshot)
+
+
+@real_postgres
+def test_an_analyze_on_its_own_never_refuses_the_reset(door_worlds, monkeypatch):
+    """What the server changes on its own, an analyze clearing a stale relhassubclass after a migration dropped a
+    child table, is no definition of the world's: the reset after it goes through."""
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        for statement in (
+            "CREATE TABLE public.parent (id int)",
+            "CREATE TABLE public.child () INHERITS (public.parent)",
+            "DROP TABLE public.child",
+            "GRANT ALL ON public.parent TO PUBLIC",
+        ):
+            connection.execute(statement)
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        # What autovacuum runs on its own.
+        connection.execute("VACUUM ANALYZE public.parent")
+    store.restore(snapshot)

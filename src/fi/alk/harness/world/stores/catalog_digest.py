@@ -14,16 +14,17 @@ if TYPE_CHECKING:
 _IN_WORLD = "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%%'"
 _KINDS: tuple[tuple[str, str], ...] = (
         ("schemas", f"SELECT row_to_json(n)::text FROM pg_namespace n WHERE {_IN_WORLD}"),
-        # Every column but the planner's own counts and the vacuum's horizons, which move on their own.
+        # Every column but the planner's own counts, the vacuum's horizons and relhassubclass, which move on their
+        # own (an analyze clears relhassubclass; inheritance itself is read from pg_inherits below).
         ("relations", "SELECT concat_ws('|', n.nspname, c.relname, c.relkind, pg_get_userbyid(c.relowner), "
          "c.relacl::text, c.relrowsecurity, c.relforcerowsecurity, c.relpersistence, c.reloptions::text, "
          "c.reltype, c.reloftype, c.relam, c.reltablespace, c.relreplident, c.relispartition, "
-         "pg_get_expr(c.relpartbound, c.oid), c.relhassubclass, c.relrewrite) "
+         "pg_get_expr(c.relpartbound, c.oid), c.relrewrite) "
          f"FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE {_IN_WORLD}"),
         ("columns", "SELECT concat_ws('|', n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), "
          "a.attnotnull, a.attidentity, a.attgenerated, a.attacl::text, pg_get_expr(d.adbin, d.adrelid), "
          "a.attnum, a.attcollation, a.attstorage, a.attcompression, a.attoptions::text, a.attfdwoptions::text, "
-         "a.attislocal, a.attinhcount, a.atthasmissing, a.attstattarget) "
+         "a.attislocal, a.attinhcount, a.attstattarget) "
          "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
          "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
          f"WHERE a.attnum > 0 AND NOT a.attisdropped AND {_IN_WORLD}"),
@@ -82,7 +83,9 @@ _KINDS: tuple[tuple[str, str], ...] = (
          f"JOIN pg_namespace n ON n.oid = c.relnamespace WHERE {_IN_WORLD}"),
         # A comment on any object made after the system's own: a note the world's code could leave for the next trial.
         ("comments", "SELECT concat_ws('|', d.classoid::regclass, d.objoid, d.objsubid, d.description) "
-         "FROM pg_description d WHERE d.objoid >= 16384"),
+         "FROM pg_description d WHERE d.objoid >= 16384 UNION ALL SELECT concat_ws('|', 'database', d.description) "
+         "FROM pg_shdescription d WHERE d.classoid = 'pg_database'::regclass "
+         "AND d.objoid = (SELECT oid FROM pg_database WHERE datname = current_database())"),
         # A publication, which code running as a superuser-owned definer could add.
         ("publications", "SELECT concat_ws('|', row_to_json(p)::text, (SELECT string_agg(row_to_json(r)::text, ',' "
          "ORDER BY r.oid) FROM pg_publication_rel r WHERE r.prpubid = p.oid), (SELECT string_agg("
@@ -90,6 +93,33 @@ _KINDS: tuple[tuple[str, str], ...] = (
          "FROM pg_publication p"),
         # Default privileges carry a grant to whatever is made next.
         ("default privileges", "SELECT row_to_json(a)::text FROM pg_default_acl a"),
+)
+# The other kinds of definition a database holds, whole rows of every one made after the system's own (an object id
+# of 16384 or more): text search, collations, conversions, extended statistics, operator classes and families,
+# languages, transforms, access methods, aggregates and foreign-data definitions.
+_KINDS += tuple(
+    (kind, f"SELECT row_to_json(x)::text FROM {catalog} x WHERE x.{key}::oid >= 16384")
+    for kind, catalog, key in (
+        ("text search configurations", "pg_ts_config", "oid"),
+        ("text search mappings", "pg_ts_config_map", "mapcfg"),
+        ("text search dictionaries", "pg_ts_dict", "oid"),
+        ("text search parsers", "pg_ts_parser", "oid"),
+        ("text search templates", "pg_ts_template", "oid"),
+        ("collations", "pg_collation", "oid"),
+        ("conversions", "pg_conversion", "oid"),
+        ("extended statistics", "pg_statistic_ext", "oid"),
+        ("operator classes", "pg_opclass", "oid"),
+        ("operator families", "pg_opfamily", "oid"),
+        ("operator family members", "pg_amop", "oid"),
+        ("operator family functions", "pg_amproc", "oid"),
+        ("languages", "pg_language", "oid"),
+        ("transforms", "pg_transform", "oid"),
+        ("access methods", "pg_am", "oid"),
+        ("aggregates", "pg_aggregate", "aggfnoid"),
+        ("foreign data wrappers", "pg_foreign_data_wrapper", "oid"),
+        ("foreign servers", "pg_foreign_server", "oid"),
+        ("foreign tables", "pg_foreign_table", "ftrelid"),
+    )
 )
 _CATALOG = " UNION ALL ".join(
     f"SELECT %s, md5(coalesce(string_agg(x, E'\\n' ORDER BY x), '')) FROM ({rows}) d(x)" for _kind, rows in _KINDS
