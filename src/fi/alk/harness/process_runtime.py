@@ -4519,12 +4519,20 @@ def _without_trigger_toggles(file: Path) -> tuple[Path, int]:
 
 
 def _run_sql_as_login(
-    file: Path, *, relative_path: str, port: int, dbname: str, login: EngineCredentials, process_name: str
+    file: Path,
+    *,
+    relative_path: str,
+    port: int,
+    dbname: str,
+    login: EngineCredentials,
+    process_name: str,
 ) -> None:
     """Run one of a bundle's SQL files as the restricted login (`bundle_sql.run_bundle_sql`); a refusal fails the
     build naming the file and what to change."""
     try:
-        run_bundle_sql(file, port=port, dbname=dbname, user=login.username, password=login.password)
+        run_bundle_sql(
+            file, port=port, dbname=dbname, user=login.username, password=login.password
+        )
     except BundleSqlRefused as refused:
         raise ProcessRuntimeError(
             "seed",
@@ -4561,7 +4569,9 @@ def _refused_as_login(relative_path: str, failure: str) -> str:
         errors = [said.strip() or "the file could not be applied"]
     hints = [hint for marker, hint in _LOGIN_REFUSALS if any(marker.lower() in error.lower() for error in errors)]
     permission = any(
-        marker in error.lower() for error in errors for marker in ("permission denied", "must be superuser", "must be owner")
+        marker in error.lower()
+        for error in errors
+        for marker in ("permission denied", "must be superuser", "must be owner")
     )
     hint = "; ".join(dict.fromkeys(hints)) or (
         "migrations and the seed run as a login that is no superuser and owns only this database: drop the "
@@ -4569,7 +4579,9 @@ def _refused_as_login(relative_path: str, failure: str) -> str:
         if permission
         else ""
     )
-    return f"{relative_path}: {'; '.join(errors)}." + (f" {hint[:1].upper()}{hint[1:]}." if hint else "")
+    return f"{relative_path}: {'; '.join(errors)}." + (
+        f" {hint[:1].upper()}{hint[1:]}." if hint else ""
+    )
 
 
 def apply_store_seed(
@@ -4629,10 +4641,18 @@ def apply_store_seed(
                 continue
             try:
                 apply_seed_file(
-                    engine, path, port=port, dbname=dbname,
-                    credentials=migration_credentials if as_login else credentials, process_name=process_name,
-                    sync_run=sync_run, user=user, group=group, rabbitmq_import=rabbitmq_import,
-                    source_digest=source_digest, generic_artifact_root=generic_artifact_root,
+                    engine,
+                    path,
+                    port=port,
+                    dbname=dbname,
+                    credentials=migration_credentials if as_login else credentials,
+                    process_name=process_name,
+                    sync_run=sync_run,
+                    user=user,
+                    group=group,
+                    rabbitmq_import=rabbitmq_import,
+                    source_digest=source_digest,
+                    generic_artifact_root=generic_artifact_root,
                 )
             except ProcessRuntimeError as failed:
                 if not as_login:
@@ -4677,8 +4697,14 @@ def sentinel_credentials(
     if world_roles and world_index is not None and credentials.world_secret:
         # The log reader runs only the harness's own fixed query; a bundle's own sentinel is the world's SQL, run as
         # the world's store role like any other read of its rows.
-        harness_query = _LEGACY_SENTINEL_QUERIES.get(str(query), query) == SEED_SENTINEL_QUERY
-        return log_role(credentials, world_index) if harness_query else store_role(credentials, world_index)
+        harness_query = (
+            _LEGACY_SENTINEL_QUERIES.get(str(query), query) == SEED_SENTINEL_QUERY
+        )
+        return (
+            log_role(credentials, world_index)
+            if harness_query
+            else store_role(credentials, world_index)
+        )
     return credentials
 
 
@@ -5576,7 +5602,9 @@ def _freeze_one_store(
                 host="localhost",
                 port=port,
                 dbname=sentinel_dbname,
-                credentials=sentinel_credentials(process.engine, credentials, login=login),
+                credentials=sentinel_credentials(
+                    process.engine, credentials, login=login
+                ),
                 sql_runner=context.sql_runner,
                 redis_runner=context.redis_runner,
                 rabbitmq_inspector=context.rabbitmq_inspector,
@@ -5593,7 +5621,11 @@ def _freeze_one_store(
         finally:
             # Whether the sentinel passed or not, the login can no longer log in.
             retire_login(
-                login, port=port, credentials=credentials, sql_runner=context.sql_runner, process_name=process.name
+                login,
+                port=port,
+                credentials=credentials,
+                sql_runner=context.sql_runner,
+                process_name=process.name,
             )
 
         row_counts: dict[str, int] = {}
@@ -6453,7 +6485,13 @@ def seed_store_safely(
 
         def after_migrations() -> None:
             # What the source's own migrations made: the seed check refuses only what the seed adds or changes.
-            _end_sessions_of(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
+            _end_sessions_of(
+                login,
+                port=port,
+                credentials=credentials,
+                sql_runner=sql_runner,
+                process_name=process_name,
+            )
             if postgres:
                 _adopt_harness_tables(
                     port=port,
@@ -6512,7 +6550,13 @@ def seed_store_safely(
                 statement=f'ALTER ROLE "{login.username}" NOBYPASSRLS',
             )
         # No session of the login's outlives its files: none can act after the checks below.
-        _end_sessions_of(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
+        _end_sessions_of(
+            login,
+            port=port,
+            credentials=credentials,
+            sql_runner=sql_runner,
+            process_name=process_name,
+        )
         if postgres:
             _refuse_seed_escalation(
                 port=port,
@@ -6559,7 +6603,13 @@ def seed_store_safely(
                 )
     except BaseException:
         # A build that fails anywhere after the login was made leaves it unable to log in, holding nothing.
-        retire_login(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
+        retire_login(
+            login,
+            port=port,
+            credentials=credentials,
+            sql_runner=sql_runner,
+            process_name=process_name,
+        )
         raise
     return login
 
@@ -6587,11 +6637,22 @@ def retire_login(
         dbname="postgres",
         statement=f'ALTER ROLE "{login.username}" NOLOGIN NOBYPASSRLS PASSWORD NULL',
     )
-    _end_sessions_of(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
+    _end_sessions_of(
+        login,
+        port=port,
+        credentials=credentials,
+        sql_runner=sql_runner,
+        process_name=process_name,
+    )
 
 
 def _refuse_other_sessions(
-    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+    *,
+    port: int,
+    credentials: EngineCredentials,
+    baseline_db: str,
+    sql_runner: SqlRunner,
+    process_name: str,
 ) -> None:
     """The baseline is sealed only with no session but the harness's own connected to it: one held open by another
     role could change it after the checks."""
@@ -6888,15 +6949,24 @@ def _grant_log_role_group(run: Callable[[str, str], None], baseline_db: str) -> 
 def _no_notify(run: Callable[[str, str], None], baseline_db: str) -> None:
     """No world role may call the `pg_notify` function from its world's code. (The NOTIFY statement needs no grant
     and cannot be revoked; no world role can read the harness's log, so it carries only what that role may read.)"""
-    run(baseline_db, "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_notify(text, text) FROM PUBLIC")
+    run(
+        baseline_db,
+        "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_notify(text, text) FROM PUBLIC",
+    )
 
 
 def _no_large_objects(run: Callable[[str, str], None], baseline_db: str) -> None:
     """No world role may make a new large object with `lo_create`, `lo_creat` or `lo_from_bytea` (`lo_import` is a
     superuser's already): one outlives a reset of the world's rows. Large objects the seed made keep the rights the
     seed gave them; a reset checks their contents where its role may read them."""
-    for function in ("lo_create(oid)", "lo_creat(integer)", "lo_from_bytea(oid, bytea)"):
-        run(baseline_db, f"REVOKE EXECUTE ON FUNCTION pg_catalog.{function} FROM PUBLIC")
+    for function in (
+        "lo_create(oid)",
+        "lo_creat(integer)",
+        "lo_from_bytea(oid, bytea)",
+    ):
+        run(
+            baseline_db, f"REVOKE EXECUTE ON FUNCTION pg_catalog.{function} FROM PUBLIC"
+        )
 
 
 def _grant_log_readers(run: Callable[[str, str], None], baseline_db: str) -> None:
@@ -6920,10 +6990,15 @@ STORE_ROLE_DEFAULT = 'ALTER ROLE "{role}" SET session_replication_role = replica
 
 
 def _literal(value: str) -> str:
-    """A name as a SQL string literal, quoted by the driver: never pasted between quotes by hand."""
-    from psycopg import sql
-
-    return sql.Literal(value).as_string(None)
+    """A name as a SQL string literal, never pasted between quotes by hand: each quote doubled, and with a backslash
+    the escape form, backslashes doubled, so it reads the same whatever the server's standard_conforming_strings.
+    The kit installs without a Postgres driver, so this is built here, the way the driver builds it."""
+    if "\x00" in value:
+        raise ValueError("a SQL string literal cannot hold a NUL character")
+    quoted = value.replace("'", "''")
+    if "\\" in value:
+        return " E'" + quoted.replace("\\", "\\\\") + "'"
+    return "'" + quoted + "'"
 
 
 def _only_member_of(role: str, group: str) -> list[str]:
