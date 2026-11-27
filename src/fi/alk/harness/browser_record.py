@@ -281,8 +281,9 @@ class BrowserRecord:
 
     def opened(self, url: str) -> bool:
         """Whether ``url`` is a page the agent opened, by its address: not a blank page, not the browser's own error
-        page (shown for any page it could not load, a refused one over https among them), and not an address off
-        the sites, where over http the proxy's refusal is shown. A refusal is kept in its own list."""
+        page (the pinned Chromium shows it for any page it could not load or the proxy refused), and not an address
+        off the sites (where an older build shows the proxy's refusal over http). A refusal is kept in its own
+        list."""
         lowered = url.lower()
         if not url or lowered.startswith(("about:blank", "chrome-error:")):
             return False

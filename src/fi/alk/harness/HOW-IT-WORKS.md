@@ -183,12 +183,13 @@ kept. Rows are capped (the record then says `truncated`), and a
 screenshot is taken at each page load and at the trial's end, capped in count and bytes with one
 place kept free for the end's, each named by the id it is stored under. The end's is not kept when it
 is larger than all of them together may be, or is answered after the record is sealed. A page is
-judged by its address: a blank page, the browser's own error page (shown for any page it could not
-load, a refused one over https among them) and an address off the sites (where over http the
-proxy's refusal is shown) are neither rows nor screenshots, and never the end's. So an allowed https
-page that fails to load leaves no row, and an allowed name the proxy refuses by its address (one
-that resolves to loopback) shows the proxy's refusal at the allowed address, kept as a page; the
-refusal itself is in the blocked list. The record holds against the page,
+judged by its address: a blank page, the browser's own error page and an address off the sites are
+neither rows nor screenshots, and never the end's. The Chromium the image pins shows its own error
+page for any page it could not load and any page the proxy refused (an older build shows the
+proxy's refusal over http, at the refused address). So an allowed page that fails to load leaves
+no row, and so does an allowed name the proxy refuses by its address (one that resolves to
+loopback); a build that shows the proxy's refusal would keep that one as a page at the allowed
+address. The refusal itself is in the blocked list. The record holds against the page,
 not against a client holding the DevTools address: such a client can do whatever DevTools can,
 so the record says what the browser did, never that nothing else touched it.
 
