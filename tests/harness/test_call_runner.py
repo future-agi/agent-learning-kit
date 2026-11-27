@@ -2400,6 +2400,29 @@ class _NoTablePsycopg:
         return Connection()
 
 
+@pytest.mark.parametrize("seam", [EvidenceSeam.HTTP_TOOL, EvidenceSeam.TOOL_TRACE])
+def test_voice_trials_on_one_world_each_count_their_own_calls_when_the_trace_file_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: EvidenceSeam
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    trace_path = tmp_path / "agent-tool-calls.jsonl"
+    _kept(monkeypatch, trace_path)
+    made = iter([1, 2, 2])
+
+    async def place_call(spec):
+        _agent_calls(trace_path, next(made), at=100.0)
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    runtime = _runtime(
+        metadata={"livekit_agent_name": "agent-w0", "tool_trace_path": str(trace_path)}
+    )
+    counted = [len(_run(runner, _FakeScenario("k1"), runtime).calls) for _ in range(3)]
+
+    assert counted == [1, 2, 2]
+
+
 @pytest.mark.parametrize(
     "seam,trace,database,failed,captured",
     [

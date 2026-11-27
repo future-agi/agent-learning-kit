@@ -507,6 +507,63 @@ def test_hosted_chat_says_when_the_agent_s_tool_trace_could_not_be_read(
     assert outcome.tool_capture_failed is failed
 
 
+def test_hosted_chat_trials_on_one_world_each_count_their_own_calls_when_the_trace_file_is_kept(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    made = iter([1, 2, 2])
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            # The agent's process appends to the trace file it keeps for the world's life.
+            with trace.open("a", encoding="utf-8") as lines:
+                for _ in range(next(made)):
+                    lines.write(json.dumps({"name": "lookup_account", "arguments": {}}) + "\n")
+            return AgentResponse(content="I can't share that account.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    unlink = Path.unlink
+
+    def kept(self: Path, missing_ok: bool = False) -> None:
+        # The runner may read the trace file but not remove it, as where the agent's own user owns its folder.
+        if self == trace:
+            raise PermissionError(13, "Permission denied", str(self))
+        unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", kept)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+        metadata={"tool_trace_path": str(trace)},
+    )
+    runner = chat.HostedChatCallRunner(_Adapter(), _context(tmp_path))
+
+    counted = [
+        len(
+            asyncio.run(
+                runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime)
+            ).calls
+        )
+        for _ in range(3)
+    ]
+
+    assert counted == [1, 2, 2]
+
+
 def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

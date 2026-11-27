@@ -3174,8 +3174,9 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
 
 def _trial_trace_text(path: Path) -> str:
     """This trial's part of the trace file at ``path``: what was written after the trial began, or the whole file where
-    the trial removed it or it has been replaced since. Raises `OSError` when it cannot be read, `TraceStartUnknown`
-    when the trial's start could not be marked."""
+    the trial removed it or it is no longer the file that was marked (another inode, or shorter than the mark; a file
+    recreated under the same inode number is told only by being shorter). Raises `OSError` when it cannot be read,
+    `TraceStartUnknown` when the trial's start could not be marked."""
     key = str(path)
     if key in _TRACE_STARTS and _TRACE_STARTS[key] is None:
         raise TraceStartUnknown("where this trial's part of the tool trace begins is unknown")
@@ -4833,8 +4834,9 @@ class CallRunnerImpl:
             recordings_root=self._context.work_directory / "voice-calls",
         )
 
+        # Every seam reads the agent's trace file (`collect_seam_calls`), so every trial starts its own part of it.
+        _clear_file_tool_calls(runtime)
         if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE:
-            _clear_file_tool_calls(runtime)
             endpoint = _find_postgres_endpoint(runtime)
             if endpoint is not None:
                 _clear_tool_trace_calls(endpoint.address)
