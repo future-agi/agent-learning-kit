@@ -13,6 +13,7 @@ import ast
 import hashlib
 import json
 import logging
+import os
 import re
 import shlex
 import shutil
@@ -77,6 +78,7 @@ from .framework_servers import (
     server_start_seconds,
     serves_port_option,
 )
+from .process_runtime import NODE_TOOLCHAIN_PROBE as _NODE_TOOLCHAIN_PROBE
 from .generated_runtime import (
     GeneratedRuntimeError,
     _python_install,
@@ -1522,11 +1524,287 @@ def _python_component_command(
     )
 
 
+_NODE_LANGUAGES = {"node", "nodejs"}
+# Corepack runs the exact npm the source pins. COREPACK_ENV_FILE=0 keeps a source .corepack.env from
+# choosing the registry or integrity keys; it is argv, so no declared environment value overrides it.
+_NPM_INSTALL = ["env", "COREPACK_ENV_FILE=0", "corepack", "npm", "ci", "--ignore-scripts"]
+_NODE_LAYOUT_UNSUPPORTED = (
+    "runtime_node_layout_unsupported: Not supported yet: npm/pnpm workspaces, pnpm and yarn. "
+    "Use a single npm package with package-lock.json."
+)
+# Files that make the launch folder, or a folder above it, part of a layout v1 does not install.
+_NODE_FOREIGN_LAYOUT = ("pnpm-lock.yaml", "pnpm-workspace.yaml", "yarn.lock")
+_NODE_PARENT_LOCKS = ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb", *_NODE_FOREIGN_LAYOUT)
+# The only Node options v1 runs, from Node 22.11 `node --help` (V8's for the three `joined` ones), by how
+# each takes its value: `flag` none, `value` the next argument or `=`, `joined` only `=`, `preload` a module
+# loaded before the entry script. A relative or absolute preload is a file in the package that sealing
+# keeps; a bare one (`dotenv/config`) is a dependency `npm ci` installs. Every other option is refused: it
+# reads or writes a file at start (--env-file, --snapshot-blob, --experimental-config-file, ...), changes
+# how the entry script resolves, or starts something other than the script.
+_NODE_OPTIONS: dict[str, str] = {
+    **dict.fromkeys(("-r", "--require", "--import", "--loader", "--experimental-loader"), "preload"),
+    **dict.fromkeys(
+        (
+            "--title", "--disable-warning", "--dns-result-order", "--unhandled-rejections",
+            "--max-http-header-size", "--network-family-autoselection-attempt-timeout", "--tls-cipher-list",
+            "--experimental-default-type", "--v8-pool-size", "--disable-proto", "--use-largepages",
+        ),
+        "value",
+    ),
+    **dict.fromkeys(("--max-old-space-size", "--max-semi-space-size", "--stack-trace-limit"), "joined"),
+    **dict.fromkeys(
+        (
+            "--enable-source-maps", "--no-warnings", "--no-deprecation", "--throw-deprecation",
+            "--trace-deprecation", "--pending-deprecation", "--trace-warnings", "--trace-uncaught",
+            "--trace-exit", "--trace-sigint", "--trace-sync-io", "--expose-gc", "--frozen-intrinsics",
+            "--disallow-code-generation-from-strings", "--jitless", "--zero-fill-buffers", "--no-addons",
+            "--force-context-aware", "--insecure-http-parser", "--experimental-vm-modules",
+            "--experimental-eventsource", "--experimental-import-meta-resolve", "--no-experimental-fetch",
+            "--no-experimental-global-navigator", "--no-experimental-websocket",
+            "--no-experimental-global-customevent", "--no-experimental-global-webcrypto",
+            "--no-experimental-detect-module", "--no-extra-info-on-fatal-exception",
+            "--no-force-async-hooks-checks", "--no-global-search-paths", "--enable-network-family-autoselection",
+            "--no-network-family-autoselection", "--use-bundled-ca", "--tls-min-v1.0", "--tls-min-v1.1",
+            "--tls-min-v1.2", "--tls-min-v1.3", "--tls-max-v1.2", "--tls-max-v1.3",
+        ),
+        "flag",
+    ),
+}
+_NODE_OPTION_NAME = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9._-]*")
+_NODE_OPTION_HINT = (
+    "v1 runs only the Node options that read no file at start, besides --require, --import and --loader"
+)
+_NODE_EXTENSIONS = ("", ".js", ".json", ".node")
+
+
+def _is_node(language: str, command: Sequence[str]) -> bool:
+    """Whether a native process declares Node: by its language, or with none by a ``node`` command."""
+    language = language.lower()
+    return language in _NODE_LANGUAGES or (not language and list(command[:1]) == ["node"])
+
+
+def _node_manifest(path: Path) -> dict[str, Any]:
+    if path.is_symlink():
+        raise BundleAuthorError("runtime_node_manifest_unsafe")
+    try:
+        manifest = json.loads(path.read_text())
+    except (ValueError, UnicodeError) as exc:
+        raise BundleAuthorError("runtime_node_manifest_invalid") from exc
+    if not isinstance(manifest, dict):
+        raise BundleAuthorError("runtime_node_manifest_invalid")
+    return manifest
+
+
+def _node_option_unsupported(where: str, token: str, hint: str = "") -> BundleAuthorError:
+    # The option's name only: its value, or a token that is no option name, may be a path or a secret.
+    name = token.partition("=")[0]
+    named = f" ({name})" if _NODE_OPTION_NAME.fullmatch(name) else ""
+    return BundleAuthorError(
+        f"runtime_node_option_unsupported: {where}{named}; "
+        + (hint or _NODE_OPTION_HINT)
+    )
+
+
+def _node_startup_operands(command: Sequence[str], where: str = "argv") -> list[tuple[int, str, str]]:
+    """The operands Node opens as files to start ``command``, as (argv index, role, value): path-valued
+    preloads, then the entry script. Arguments after the entry script belong to the application.
+
+    An option outside ``_NODE_OPTIONS`` is refused, so no other startup file can be left out of the bundle.
+    """
+    operands: list[tuple[int, str, str]] = []
+    index = 1
+    while index < len(command):
+        token = command[index]
+        if token == "--":
+            index += 1
+            break
+        if token == "-" or not token.startswith("-"):
+            break
+        # Node splits `=` only off a long option, and reads `_` in a long name as `-`.
+        name, joined, value = token.partition("=") if token.startswith("--") else (token, "", "")
+        arity = _NODE_OPTIONS.get("--" + name[2:].replace("_", "-") if name.startswith("--") else name)
+        if arity is None:
+            hint = (
+                "the harness supplies the environment: declare it in runtime.config_files, whose values "
+                "reach the process environment"
+                if name.replace("_", "-").startswith("--env-file")
+                else ""
+            )
+            raise _node_option_unsupported(f"{where}[{index}]", token, hint)
+        if arity in ("value", "preload") and not joined:
+            # Node exits when a separated value is missing or starts with `-`.
+            if index + 1 == len(command) or command[index + 1].startswith("-"):
+                raise _node_option_unsupported(f"{where}[{index}]", token, "the option needs a value")
+            index += 1
+            value = command[index]
+        elif arity == "joined" and not joined:
+            raise _node_option_unsupported(f"{where}[{index}]", token, "write the option's value after `=`")
+        if arity == "preload" and (value in (".", "..") or value.startswith(("./", "../", "/", "file:"))):
+            operands.append((index, f"{name} preload", value))
+        index += 1
+    if index < len(command) and command[index] != "-":
+        operands.append((index, "entry script", command[index]))
+    return operands
+
+
+def _check_node_options_environment(process: SourceProcess) -> None:
+    """Node reads NODE_OPTIONS at start as more options, and the process environment carries the agent's
+    value (alk.yaml runtime.environment, a config file's values) to the spawn: it gets the argv check. A path
+    preload or a quote is refused too, since sealing keeps only the files the command names."""
+    if any("NODE_OPTIONS" in resource.secret_aliases for resource in process.config_files.values()):
+        raise _node_option_unsupported("NODE_OPTIONS (secret)", "", "a secret's value cannot be checked at seal")
+    values = [process.environment.get("NODE_OPTIONS", "")]
+    values += [resource.values.get("NODE_OPTIONS", "") for resource in process.config_files.values()]
+    for value in filter(None, values):
+        if any(char in value for char in "\"'\\"):
+            # Node's NODE_OPTIONS quoting differs from a shell's: refuse it rather than guess the split.
+            raise _node_option_unsupported("NODE_OPTIONS (quoting)", "", "use plain space-separated options")
+        tokens = value.split()
+        for index, role, _value in _node_startup_operands(["node", *tokens], "NODE_OPTIONS"):
+            raise _node_option_unsupported(
+                f"NODE_OPTIONS[{index}]",
+                role.removesuffix(" preload") if role.endswith(" preload") else "",
+                "NODE_OPTIONS may name no file: put a preload in the command",
+            )
+
+
+def _node_resolve(target: Path) -> list[Path]:
+    """The files Node's CommonJS loader reads for ``target``: the file, the file with an extension, then a
+    folder's package.json ``main`` (with that package.json) or its index file."""
+    for candidate in (target.with_name(target.name + ext) for ext in _NODE_EXTENSIONS):
+        if candidate.is_file():
+            return [candidate]
+    if not target.is_dir():
+        return []
+    manifest = target / "package.json"
+    try:
+        main = json.loads(manifest.read_text()).get("main") if manifest.is_file() else None
+    except (ValueError, UnicodeError, AttributeError):
+        main = None
+    if isinstance(main, str) and main:
+        main_path = Path(os.path.normpath(target / main))
+        for candidate in (
+            *(main_path.with_name(main_path.name + ext) for ext in _NODE_EXTENSIONS),
+            *(main_path / f"index{ext}" for ext in _NODE_EXTENSIONS[1:]),
+        ):
+            if candidate.is_file():
+                return [manifest, candidate]
+    for candidate in (target / f"index{ext}" for ext in _NODE_EXTENSIONS[1:]):
+        if candidate.is_file():
+            return [*([manifest] if manifest.is_file() else []), candidate]
+    return []
+
+
+def _node_startup_files(root: Path, command: Sequence[str]) -> list[str]:
+    """The files under ``root`` that Node loads to start ``command`` there. Admission and sealing both use it.
+
+    v1 seals one npm package at the launch folder, so an operand that resolves outside it is refused. A
+    missing file is not listed: Node reports it at start.
+    """
+    root, files = root.resolve(), []
+    for index, role, value in _node_startup_operands(command):
+        target = Path(os.path.normpath(root / value))
+        found = [] if value.startswith("file:") else _node_resolve(target)
+        if value.startswith("file:") or not all(
+            path.is_relative_to(root) and path.resolve().is_relative_to(root) for path in (target, *found)
+        ):
+            raise BundleAuthorError(
+                f"runtime_node_entrypoint_outside_workdir: argv[{index}] ({role}) is outside "
+                "runtime.workdir; v1 runs one npm package, so its entry script and preloads must be inside it"
+            )
+        files.extend(path.relative_to(root).as_posix() for path in found)
+    return files
+
+
+def _plan_node_process(source: Path, **kwargs: Any) -> SourceProcess:
+    """v1 Node: one npm package at the launch folder, installed from its own package-lock.json."""
+    command = list(kwargs.get("run_override") or [])
+    if command[:1] != ["node"]:
+        raise BundleAuthorError("runtime_node_command_required: expected node argv")
+    if (
+        kwargs.get("extras")
+        or kwargs.get("requirements_files")
+        or kwargs.get("livekit_download")
+    ):
+        raise BundleAuthorError("runtime_node_python_options_invalid")
+    source, root = source.resolve(), kwargs["root"].resolve()
+    if not root.is_relative_to(source):
+        raise BundleAuthorError("runtime_node_workdir_outside_source")
+    _node_startup_files(root, command)
+    manifest_path = root / "package.json"
+    if not manifest_path.is_file():
+        raise BundleAuthorError(
+            "runtime_node_package_manager_missing: no package.json in the launch folder"
+        )
+    manifest = _node_manifest(manifest_path)
+    manager = manifest.get("packageManager")
+    manager = manager if isinstance(manager, str) else ""
+    has_lock = (root / "package-lock.json").is_file()
+    if (
+        manager.startswith(("pnpm@", "yarn@"))
+        or "workspaces" in manifest
+        or any((root / name).exists() for name in _NODE_FOREIGN_LAYOUT)
+    ):
+        raise BundleAuthorError(_NODE_LAYOUT_UNSUPPORTED)
+    for parent in root.parents:
+        if not parent.is_relative_to(source):
+            break
+        # A parent workspace, or a parent lock the workdir lacks, means npm would install the parent's tree.
+        if (parent / "pnpm-workspace.yaml").exists() or (
+            not has_lock and any((parent / name).exists() for name in _NODE_PARENT_LOCKS)
+        ):
+            raise BundleAuthorError(_NODE_LAYOUT_UNSUPPORTED)
+        if (parent / "package.json").is_file() and "workspaces" in _node_manifest(
+            parent / "package.json"
+        ):
+            raise BundleAuthorError(_NODE_LAYOUT_UNSUPPORTED)
+    if "packageManager" not in manifest:
+        raise BundleAuthorError("runtime_node_package_manager_missing")
+    if not re.fullmatch(
+        r"npm@[0-9]+\.[0-9]+\.[0-9]+(?:\+sha(?:1|224|256|384|512)\.[0-9a-f]+)?", manager
+    ):
+        raise BundleAuthorError("runtime_node_package_manager_unpinned")
+    locks = [
+        name
+        for name in ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb")
+        if (root / name).is_file()
+    ]
+    if locks != ["package-lock.json"]:
+        raise BundleAuthorError(
+            "runtime_node_lock_required: expected exactly one source lockfile, package-lock.json"
+        )
+    for path in (manifest_path, root / "package-lock.json"):
+        if path.is_symlink() or not path.resolve().is_relative_to(source):
+            raise BundleAuthorError("runtime_node_manifest_unsafe")
+    process = _python_process(
+        name=kwargs["name"],
+        working_directory=root.relative_to(source).as_posix(),
+        entry=None,
+        control=kwargs["control"],
+        needs_secrets=kwargs["needs_secrets"],
+        port=kwargs.get("port"),
+        environment=kwargs.get("environment"),
+        depends_on=kwargs.get("depends_on"),
+    )
+    return process.model_copy(
+        update={
+            "build_commands": [
+                ["python3", "-I", "-c", _NODE_TOOLCHAIN_PROBE],
+                list(_NPM_INSTALL),
+            ],
+            "run_command": command,
+            "source_component": ".",
+        }
+    )
+
+
 def _plan_source_process(
     source: Path, *, language: str = "", **kwargs: Any
 ) -> SourceProcess:
     root = kwargs["root"]
     command = kwargs.get("run_override") or []
+    if _is_node(language, command):
+        return _plan_node_process(source, **kwargs)
     is_bun = language.lower() == "bun" or (
         not language and command and command[0] == "bun"
     )
@@ -1615,7 +1893,7 @@ def _plan_source_process(
     return process.model_copy(
         update={
             "build_commands": [
-                ["python3", "-c", verify, version],
+                ["python3", "-I", "-c", verify, version],
                 ["bun", "install", "--frozen-lockfile"],
             ],
             "run_command": run,
@@ -1745,6 +2023,23 @@ def _dockerfile_run(root: Path, project: Path | None = None) -> list[str] | None
     ):
         argv[0] = f".venv/bin/{argv[0]}"
     return argv
+
+
+def _undeclared_node_dockerfile_run(root: Path, workdir: str) -> list[str] | None:
+    """The ``node`` CMD of the Dockerfile in runtime.workdir, for a process that declares no language.
+
+    That CMD can be the only sign of a Node agent. It is read only when the root Dockerfile has no
+    CMD; any other CMD, or one that does not parse, is not read.
+    """
+    folder = (root / workdir.strip()).resolve()
+    if folder == root or not folder.is_relative_to(root) or not folder.is_dir():
+        return None
+    try:
+        command = _dockerfile_run(folder)
+    except BundleAuthorError:
+        # Not proven Node: the plan goes on with no command, as before the Node lane.
+        return None
+    return command if command and _is_node("", command) else None
 
 
 # LiveKit's CLI needs a subcommand: `agent.py` alone prints usage and exits without registering.
@@ -1986,8 +2281,13 @@ def _install_root_for(root: Path, run_folder: Path, found: Path) -> tuple[Path, 
     return run_folder, found.relative_to(run_folder).as_posix()
 
 
-def _runtime_component(root: Path, configured_workdir: str) -> Path:
-    """Resolve a source-declared workdir to its nearest installable project root."""
+def _runtime_component(
+    root: Path, configured_workdir: str, *, python_project: bool = True
+) -> Path:
+    """Resolve a source-declared workdir to its nearest installable project root.
+
+    A Node process installs in the workdir itself, so it keeps it.
+    """
 
     configured = configured_workdir.strip()
     component = (
@@ -1995,6 +2295,8 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     )
     if not component.is_relative_to(root) or not component.is_dir():
         raise BundleAuthorError(f"runtime_workdir_invalid: {configured_workdir or '.'}")
+    if not python_project:
+        return component
     for candidate in (component, *component.parents):
         if not candidate.is_relative_to(root):
             break
@@ -3005,9 +3307,9 @@ def resolve_environment_plan(
         raise BundleAuthorError(
             "runtime_dockerfile_unsupported: process lane cannot execute a selected Dockerfile"
         )
-    if runtime_model.language.lower() not in {"", "python", "py", "bun"}:
+    if runtime_model.language.lower() not in {"", "python", "py", "bun", *_NODE_LANGUAGES}:
         raise BundleAuthorError(
-            "runtime_language_unsupported: process lane supports Python or pinned Bun source"
+            "runtime_language_unsupported: process lane supports Python, pinned Bun or pinned Node source"
         )
     provider_connect_only = (
         job.source.kind is SourceKind.PROVIDER
@@ -3054,13 +3356,30 @@ def resolve_environment_plan(
     # The repository's exec-form Dockerfile CMD is an explicit source-owned declaration; use it
     # before falling back to a guessed agent.py entrypoint. This works for any HTTP framework.
     if not runtime_command and interface.get("kind") == "http" and not compose:
-        runtime_command = (
-            _dockerfile_run(
-                run_folder,
-                project=_runtime_component(root, runtime_workdir) if subfolder else None,
+        language = runtime_model.language.lower()
+        if subfolder:
+            runtime_command = (
+                _dockerfile_run(run_folder, project=_runtime_component(root, runtime_workdir)) or []
             )
-            or []
-        )
+        elif language in _NODE_LANGUAGES:
+            # A declared Node process launches in runtime.workdir, so that Dockerfile is the one.
+            runtime_command = (
+                _dockerfile_run(_runtime_component(root, runtime_workdir, python_project=False))
+                or []
+            )
+        else:
+            # The root Dockerfile first, as before the Node lane; a workdir `node` CMD only fills its gap.
+            runtime_command = (
+                _dockerfile_run(run_folder)
+                or (not language and _undeclared_node_dockerfile_run(root, runtime_workdir))
+                or []
+            )
+    # Node is read after the Dockerfile CMD fill: that CMD can be the only sign of a Node agent.
+    js_runtime = (
+        "bun"
+        if is_bun_runtime
+        else "node" if _is_node(runtime_model.language, runtime_command) else ""
+    )
     interface_port = interface.get("port")
     interface_health_path = str(interface.get("health_path") or "/health")
 
@@ -3212,16 +3531,36 @@ def resolve_environment_plan(
             declared_runtime = service_name == declared_control
             if declared_runtime:
                 port = int(interface_port) if interface_port else port
+            service_language = runtime_model.language if declared_runtime else ""
+            service_command = (
+                runtime_command
+                or _compose_command(service.get("command"))
+                or _dockerfile_run(service_root)
+            ) if declared_runtime else (
+                _compose_command(service.get("command"))
+                or _dockerfile_run(service_root)
+            )
+            service_node = _is_node(service_language, service_command or [])
+            if service_node and service_name == control_name and contract_interface_kind != "http":
+                # As in the native lane: only an HTTP route reaches a Node control service.
+                raise BundleAuthorError("runtime_node_http_interface_required")
+            # A Node control service, declared or inferred, starts in runtime.workdir when that folder
+            # is inside its build context; else in the context, as every Compose service does on dev.
+            start = (
+                _runtime_component(root, runtime_workdir, python_project=False)
+                if service_node and service_name == control_name and runtime_workdir.strip()
+                else service_root
+            )
             process = _plan_source_process(
                 root,
-                language=runtime_model.language if declared_runtime else "",
+                language=service_language,
                 version=(
                     runtime_model.version
                     if declared_runtime and runtime_model.language.lower() == "bun"
                     else ""
                 ),
                 name=service_name,
-                root=service_root,
+                root=start if start.is_relative_to(service_root) else service_root,
                 entry=entry,
                 control=service_name == control_name,
                 needs_secrets=needs_target_secrets and service_name == control_name,
@@ -3233,16 +3572,7 @@ def resolve_environment_plan(
                 install=runtime_model.install if service_name == control_name else "",
                 requirements_files=runtime_model.requirements_files if service_name == control_name else [],
                 context_excludes=tuple(runtime_model.context_excludes) if service_name == control_name else (),
-                run_override=(
-                    runtime_command
-                    or _compose_command(service.get("command"))
-                    or _dockerfile_run(service_root)
-                )
-                if declared_runtime
-                else (
-                    _compose_command(service.get("command"))
-                    or _dockerfile_run(service_root)
-                ),
+                run_override=service_command,
             )
             if (
                 port
@@ -3313,7 +3643,8 @@ def resolve_environment_plan(
                         ),
                     }
                 )
-            if not (declared_runtime and runtime_model.language.lower() == "bun"):
+            # A Node or declared Bun process already starts from its own package folder.
+            if not (service_node or (declared_runtime and runtime_model.language.lower() == "bun")):
                 process = _python_component_command(source=root, component=service_root, process=process)
             processes.append(process)
             if port:
@@ -3347,7 +3678,10 @@ def resolve_environment_plan(
         ) == "callable"
         discovered_callback = (
             None
-            if is_livekit or (runtime_model.execution == "native" and runtime_command)
+            # A Python example's callback is not a declared Node server's entry point.
+            if is_livekit
+            or js_runtime == "node"
+            or (runtime_model.execution == "native" and runtime_command)
             else _discover_callback_entrypoint(run_folder)
         )
         graph_entrypoint = (
@@ -3382,7 +3716,11 @@ def resolve_environment_plan(
         )
         entry = "agent.py"
         if is_declared_runtime or is_graph:
-            component = server_start_folder(root, contract_runtime, _runtime_component(root, runtime_workdir))
+            component = server_start_folder(
+                root,
+                contract_runtime,
+                _runtime_component(root, runtime_workdir, python_project=js_runtime != "node"),
+            )
             entry = next(
                 (
                     item
@@ -3458,15 +3796,15 @@ def resolve_environment_plan(
                     "ALK_CALLBACK_ENTRYPOINT": callback_entrypoint,
                 }
             )
-        if is_bun_runtime and not is_http_runtime:
-            raise BundleAuthorError("runtime_bun_http_interface_required")
+        if js_runtime and not is_http_runtime:
+            raise BundleAuthorError(f"runtime_{js_runtime}_http_interface_required")
         process = _plan_source_process(
             root,
             language=runtime_model.language,
             name=control_name,
-            # Bun walks up to its own package root, so it starts from the run folder.
+            # Bun walks up to its package root from the run folder; Node's package is that folder.
             root=(
-                (run_folder if is_bun_runtime else component)
+                (run_folder if js_runtime else component)
                 if subfolder
                 else root if is_callback else component
             ),
@@ -3492,7 +3830,7 @@ def resolve_environment_plan(
                     else _dockerfile_run(component)
                 )
             ),
-            run_folder=run_folder if subfolder and not is_bun_runtime else None,
+            run_folder=run_folder if subfolder and not js_runtime else None,
         )
         if is_graph:
             python_command = process.run_command
@@ -3574,7 +3912,7 @@ def resolve_environment_plan(
                 final_run_command, process.environment, component, root
             )
             process = process.model_copy(update=update)
-        if not is_bun_runtime:
+        if not js_runtime:
             process = _python_component_command(
                 source=root,
                 component=(
@@ -3667,8 +4005,8 @@ def resolve_environment_plan(
         packaging = (
             "dockerfile"
             if (run_folder / "Dockerfile").is_file()
-            else "generated_bun"
-            if is_bun_runtime
+            else f"generated_{js_runtime}"
+            if js_runtime
             else "generated_python"
         )
 
@@ -3791,12 +4129,16 @@ def resolve_environment_plan(
     for process in processes:
         if _SPANS_NEWLY_ON in (getattr(process, "environment", None) or {}):
             raise BundleAuthorError(f"runtime_environment_reserved_name: {_SPANS_NEWLY_ON}")
+        if isinstance(process, SourceProcess) and _NPM_INSTALL in process.build_commands:
+            _check_node_options_environment(process)
 
     # A Compose agent, selected or authored, gets the framework observation too, but not import-mode tool bindings.
     compose = isinstance(selected, ComposeSelection) or runtime_model.execution == "compose"
     voice = str(contract_modality or "").strip().lower() == "voice"
     trace_environment: dict[str, str] = {}
-    if (runtime_model.command or compose) and not voice:
+    # Read from the planned control process: a Compose command or Dockerfile CMD can be all that makes it Node.
+    node_control = _node_control(processes, control_name)
+    if (runtime_model.command or compose) and not voice and not node_control:
         trace_environment = _source_tool_trace_environment(
             root,
             runtime_model,
@@ -3935,6 +4277,17 @@ def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
     )
 
 
+def _node_control(processes: Sequence[Any], control_service: str) -> bool:
+    """Whether the control process is a Node one (its build runs ``npm ci``). The Python tool
+    tracer and the in-process door never reach it, whatever language the contract names."""
+    return any(
+        isinstance(process, SourceProcess)
+        and process.name == control_service
+        and _NPM_INSTALL in process.build_commands
+        for process in processes
+    )
+
+
 def _binds_source_tools(processes: Sequence[Any]) -> bool:
     return any(
         "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
@@ -3961,14 +4314,24 @@ def _package_process_sources(
                 f"generated_runtime_component_invalid: {process.working_directory}"
             )
         selected_runtime = runtime if process.name == plan.control_service else None
-        required = list(
-            selected_runtime.command if selected_runtime else process.run_command
-        )
-        if selected_runtime is not None:
-            required.extend(selected_runtime.requirements_files)
         declared_component = (component / process.source_component).resolve()
         if not declared_component.is_relative_to(component):
             raise GeneratedRuntimeError("generated_runtime_context_component_mismatch")
+        if _NPM_INSTALL in process.build_commands:
+            # `npm ci` needs the lockfile admission checked, and Node the entry script and preloads it
+            # resolves, also from a Dockerfile CMD. An application argument stays the author's to exclude.
+            command = process.run_command
+            if command[:2] == ["sh", "-c"] and len(command) == 3:
+                command = shlex.split(command[2])  # a listen port rewritten by _consumable_source_process
+            if command[:1] != ["node"]:
+                raise GeneratedRuntimeError("generated_runtime_node_command_unparsed")
+            required = ["package-lock.json", *_node_startup_files(declared_component, command)]
+        else:
+            required = list(
+                selected_runtime.command if selected_runtime else process.run_command
+            )
+            if selected_runtime is not None:
+                required.extend(selected_runtime.requirements_files)
         prefix = declared_component.relative_to(component)
         exclusion_runtime = selected_runtime or Runtime()
         runtime_excludes = tuple(
@@ -4478,11 +4841,12 @@ def author_bundle_v2(
         tool_entrypoints=contract_body.get("tool_entrypoints"),
         dependencies=contract_body.get("dependencies"),
     )
+    node_control = _node_control(plan.processes, plan.control_service or "")
     trace_bindings = (
         _source_tool_trace_bindings(
             contract_body, watch_unreachable=not _observed_by_frameworks(plan.processes)
         )
-        if contract_modality == "chat"
+        if contract_modality == "chat" and not node_control
         else []
     )
     if trace_bindings and not _binds_source_tools(plan.processes):
@@ -4497,7 +4861,7 @@ def author_bundle_v2(
     plan = with_in_process_door(
         plan,
         contract_body.get("tool_entrypoints"),
-        str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+        "node" if node_control else str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
     )
     plan = with_in_process_workers(plan, contract_body)
     if contract_body:
@@ -5070,12 +5434,17 @@ def _carry_contract(
         and str(interface.get("kind") or "").strip().lower() == "command"
         and _binds_source_tools(processes)
     )
+    node_control = _node_control(processes, manifest.runtime.control_service or "")
     if (
         str(body.get("modality") or "").strip().lower() == "chat"
         and not traced_command
     ):
-        bindings = _source_tool_trace_bindings(
-            body, watch_unreachable=not _observed_by_frameworks(processes)
+        bindings = (
+            []
+            if node_control
+            else _source_tool_trace_bindings(
+                body, watch_unreachable=not _observed_by_frameworks(processes)
+            )
         )
         processes = list(
             _with_source_tool_trace(
@@ -5092,7 +5461,7 @@ def _carry_contract(
         processes,
         control_service=manifest.runtime.control_service or "",
         tool_entrypoints=body.get("tool_entrypoints"),
-        language=str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
+        language="node" if node_control else str((runtime if isinstance(runtime, dict) else {}).get("language") or "python"),
     )
     return True, processes, metadata
 

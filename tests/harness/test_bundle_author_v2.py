@@ -6728,6 +6728,479 @@ def test_native_bun_rejects_ambiguous_and_symlink_lock(tmp_path: Path) -> None:
         _plan_source_process(tmp_path, **kwargs)
 
 
+_NODE_CHAT_SERVER = """\
+const http = require("node:http");
+
+const orders = { A1: { status: "shipped", total: 42 } };
+const tools = {
+  lookup_order: ({ order_id }) => orders[order_id] ?? null,
+  refund_order: ({ order_id }) => {
+    if (!orders[order_id]) throw new Error("unknown order " + order_id);
+    orders[order_id].status = "refunded";
+    return { refunded: order_id };
+  },
+};
+
+function run(id, name, args) {
+  try {
+    return { id, name, arguments: args, result: tools[name](args), error: false };
+  } catch (error) {
+    return { id, name, arguments: args, result: { message: error.message }, error: true };
+  }
+}
+
+http
+  .createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/health") {
+      response.writeHead(200).end("ok");
+      return;
+    }
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      const { message } = JSON.parse(body);
+      const rows = [run("call-1", "lookup_order", { order_id: "A1" })];
+      if (message.includes("refund")) rows.push(run("call-2", "refund_order", { order_id: "B2" }));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ reply: "Order A1 is " + rows[0].result.status + ".", tools: rows }));
+    });
+  })
+  .listen(Number(process.env.PORT ?? 8080), "127.0.0.1");
+"""
+
+_NODE_JSON_INTERFACE = {
+    "kind": "http",
+    "port": 8080,
+    "path": "/chat",
+    "health_path": "/health",
+    "protocol": "json_template",
+    "include_tools": False,
+    "request_template": {"message": "{{new_message_content}}"},
+    "response_path": "reply",
+    "completed_tools": {
+        "items_path": "tools",
+        "id_path": "id",
+        "name_path": "name",
+        "arguments_path": "arguments",
+        "result_path": "result",
+        "error_path": "error",
+    },
+}
+
+
+def _node_package(root: Path, *, manager: str = "npm@10.9.2", **extra) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    manifest = {"name": "order-chat", "packageManager": manager, **extra}
+    (root / "package.json").write_text(json.dumps(manifest))
+    (root / "package-lock.json").write_text('{"lockfileVersion": 3}')
+
+
+def _node_plan_kwargs(root: Path, **changes):
+    return {
+        "language": "node",
+        "name": "agent",
+        "root": root,
+        "entry": None,
+        "control": True,
+        "needs_secrets": False,
+        "run_override": ["node", "server.js"],
+        **changes,
+    }
+
+
+_NPM_INSTALL_ARGV = ["env", "COREPACK_ENV_FILE=0", "corepack", "npm", "ci", "--ignore-scripts"]
+
+
+@pytest.mark.parametrize("workdir", [".", "apps/chat"])
+def test_native_node_plan_installs_and_starts_in_its_workdir(
+    tmp_path: Path, workdir: str
+) -> None:
+    component = tmp_path / workdir
+    _node_package(component)
+    (component / "server.js").write_text(_NODE_CHAT_SERVER)
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "version": "22",
+            "execution": "native",
+            "workdir": workdir,
+            "command": ["node", "server.js"],
+            "install": "touch /tmp/must-not-execute",
+            "workspaces": {"project": "files"},
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+    assert plan.packaging == "generated_node"
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == workdir
+    assert agent.workspaces == {"project": "files"}
+    probe, install = agent.build_commands
+    assert probe[:3] == ["python3", "-I", "-c"] and len(probe) == 4
+    assert install == _NPM_INSTALL_ARGV
+    assert agent.run_command == ["node", "server.js"]
+    assert "must-not-execute" not in repr(agent.build_commands)
+    # ALK binds no JavaScript tools: evidence comes from the completed rows, not a Python tracer.
+    assert "HARNESS_TOOL_TRACE" not in agent.environment
+
+
+def test_native_node_is_read_from_its_command_without_python_tracing(
+    tmp_path: Path,
+) -> None:
+    _node_package(tmp_path)
+    (tmp_path / "server.js").write_text(_NODE_CHAT_SERVER)
+    runtime = {
+        "execution": "native",
+        "command": ["node", "server.js"],
+        "interface": _NODE_JSON_INTERFACE,
+    }
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert plan.packaging == "generated_node"
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+    assert len(agent.build_commands) == 2
+    assert "HARNESS_TOOL_TRACE" not in agent.environment
+    with pytest.raises(BundleAuthorError, match="runtime_node_http_interface_required"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime={
+                **runtime,
+                "language": "node",
+                "interface": {"kind": "command", "protocol": "fi.alk"},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "manifest,files,changes,error",
+    [
+        ({}, ["package-lock.json"], {}, "package_manager_missing"),
+        ({"packageManager": "npm@latest"}, ["package-lock.json"], {}, "package_manager_unpinned"),
+        ({"packageManager": "npm@10"}, ["package-lock.json"], {}, "package_manager_unpinned"),
+        ({"packageManager": "bun@1.3.14"}, ["bun.lock"], {}, "package_manager_unpinned"),
+        ({"packageManager": "npm@10.9.2"}, [], {}, "lock_required"),
+        ({"packageManager": "npm@10.9.2"}, ["npm-shrinkwrap.json"], {}, "lock_required"),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "bun.lock"],
+            {},
+            "lock_required",
+        ),
+        # v1 is a single npm package: pnpm, yarn and workspaces are refused by name.
+        ({"packageManager": "pnpm@9.15.4"}, ["pnpm-lock.yaml"], {}, "layout_unsupported"),
+        ({"packageManager": "pnpm@9.15.4"}, ["package-lock.json"], {}, "layout_unsupported"),
+        ({"packageManager": "yarn@4.5.0"}, ["yarn.lock"], {}, "layout_unsupported"),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "pnpm-lock.yaml"],
+            {},
+            "layout_unsupported",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "yarn.lock"],
+            {},
+            "layout_unsupported",
+        ),
+        (
+            {"packageManager": "npm@10.9.2", "workspaces": ["packages/*"]},
+            ["package-lock.json"],
+            {},
+            "layout_unsupported",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json", "pnpm-workspace.yaml"],
+            {},
+            "layout_unsupported",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json"],
+            {"run_override": ["npm", "start"]},
+            "command_required",
+        ),
+        (
+            {"packageManager": "npm@10.9.2"},
+            ["package-lock.json"],
+            {"extras": ["voice"]},
+            "python_options_invalid",
+        ),
+        ([], ["package-lock.json"], {}, "manifest_invalid"),
+    ],
+)
+def test_native_node_rejects_invalid_source(
+    tmp_path: Path, manifest, files, changes, error: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text(json.dumps(manifest))
+    for name in files:
+        (tmp_path / name).write_text("{}")
+    with pytest.raises(BundleAuthorError, match="runtime_node_" + error) as refused:
+        _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path, **changes))
+    if error == "layout_unsupported":
+        assert "Use a single npm package with package-lock.json" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "parent",
+    [
+        {"package.json": {"name": "root", "workspaces": ["apps/*"]}},
+        {"package.json": {"name": "root", "workspaces": {"packages": ["apps/chat"]}}},
+        {"pnpm-workspace.yaml": "packages:\n  - 'apps/*'\n"},
+        # A parent lock with none in the workdir: npm would install the parent's tree.
+        {"package.json": {"name": "root"}, "package-lock.json": {}, "member_lock": False},
+        {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n", "member_lock": False},
+    ],
+)
+def test_native_node_refuses_a_member_of_a_parent_workspace(
+    tmp_path: Path, parent: dict
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    parent = dict(parent)
+    member_lock = parent.pop("member_lock", True)
+    for name, body in parent.items():
+        (tmp_path / name).write_text(body if isinstance(body, str) else json.dumps(body))
+    member = tmp_path / "apps" / "chat"
+    _node_package(member)
+    if not member_lock:
+        (member / "package-lock.json").unlink()
+    with pytest.raises(BundleAuthorError, match="runtime_node_layout_unsupported"):
+        _plan_source_process(tmp_path, **_node_plan_kwargs(member))
+
+
+def test_native_node_admits_a_package_nested_under_an_unrelated_parent(tmp_path: Path) -> None:
+    """A parent package.json with no workspaces does not own the nested package's install."""
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"name": "docs-site", "private": true}')
+    member = tmp_path / "apps" / "chat"
+    _node_package(member)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(member))
+    assert process.working_directory == "apps/chat"
+    assert process.run_command == ["node", "server.js"]
+
+
+def test_native_node_accepts_corepack_hash_pin_and_rejects_symlink_lock(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    _node_package(tmp_path, manager="npm@10.9.2+sha512." + "ab" * 64)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+    assert process.build_commands[-1] == _NPM_INSTALL_ARGV
+    (tmp_path / "package-lock.json").unlink()
+    (tmp_path / "package-lock.json").symlink_to(tmp_path / "package.json")
+    with pytest.raises(BundleAuthorError, match="runtime_node_manifest_unsafe"):
+        _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+
+
+def test_native_node_install_ignores_a_source_corepack_env_file(tmp_path: Path) -> None:
+    """A source ``.corepack.env`` or declared environment must not pick the installer's registry."""
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    _node_package(tmp_path)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+    bin_directory = tmp_path / "bin"
+    bin_directory.mkdir()
+    corepack = bin_directory / "corepack"
+    corepack.write_text('#!/bin/sh\necho "COREPACK_ENV_FILE=$COREPACK_ENV_FILE $*"\n')
+    corepack.chmod(0o755)
+    install = subprocess.run(
+        process.build_commands[-1],
+        cwd=tmp_path,
+        env={"PATH": f"{bin_directory}:/usr/bin:/bin", "COREPACK_ENV_FILE": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert install.returncode == 0, install.stderr
+    assert install.stdout.strip() == "COREPACK_ENV_FILE=0 npm ci --ignore-scripts"
+
+
+def test_native_node_requires_node_and_corepack_on_path(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    bin_directory = tmp_path / "bin"
+    bin_directory.mkdir()
+    _node_package(tmp_path)
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+
+    def probe() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, *process.build_commands[0][1:]],
+            env={"PATH": str(bin_directory)},
+            capture_output=True,
+            text=True,
+        )
+
+    def tool(name: str, output: str) -> None:
+        binary = bin_directory / name
+        binary.write_text(f"#!/bin/sh\necho {output}\n")
+        binary.chmod(0o755)
+
+    missing = probe()
+    assert missing.returncode != 0
+    assert missing.stderr.startswith("runtime_unsupported: runtime_node_toolchain_missing")
+    tool("node", "v22.11.0")
+    no_corepack = probe()
+    assert no_corepack.returncode != 0
+    assert "runtime_node_toolchain_missing" in no_corepack.stderr
+    tool("corepack", "0.31.0")
+    matching = probe()
+    assert matching.returncode == 0, matching.stderr
+    assert matching.stdout.strip() == "Node toolchain v22.11.0"
+
+
+def test_native_node_probe_ignores_modules_planted_in_the_source(tmp_path: Path) -> None:
+    """The probe runs in the source tree, so a submitted ``shutil.py`` must not stand in for the stdlib."""
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    _node_package(tmp_path)
+    (tmp_path / "shutil.py").write_text(
+        "import sys\nprint('Node toolchain v99.0.0', flush=True)\nsys.exit(0)\n"
+    )
+    process = _plan_source_process(tmp_path, **_node_plan_kwargs(tmp_path))
+    probe = subprocess.run(
+        [sys.executable, *process.build_commands[0][1:]],
+        cwd=tmp_path,
+        env={"PATH": str(tmp_path / "no-bin")},
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0
+    assert "runtime_node_toolchain_missing" in probe.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs a local node binary")
+def test_plain_node_json_route_reports_completed_tool_rows(tmp_path: Path) -> None:
+    """A stdlib ``node:http`` agent's own JSON route is the ingress, and its completed rows are
+    the tool evidence: ALK neither binds nor re-runs a JavaScript tool."""
+    import asyncio
+    import socket
+    import time
+    import urllib.request
+
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+    from fi.alk.harness.contract import RuntimeInterface
+    from fi.simulate.agent.wrapper import AgentInput
+
+    (tmp_path / "server.js").write_text(_NODE_CHAT_SERVER)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = subprocess.Popen(
+        ["node", "server.js"],
+        cwd=tmp_path,
+        env={**os.environ, "PORT": str(port)},
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(base + "/health", timeout=1).read()
+                break
+            except OSError:
+                time.sleep(0.05)
+        wrapper = create_chat_wrapper(
+            RuntimeInterface(**_NODE_JSON_INTERFACE), base, secret_values={}
+        )
+        response = asyncio.run(
+            wrapper.call(
+                AgentInput(
+                    thread_id="one",
+                    messages=[],
+                    new_message={"content": "refund order B2"},
+                )
+            )
+        )
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
+    assert response.content == "Order A1 is shipped."
+    rows = response.metadata["native_completed_tools"]
+    assert [(row["name"], row["ok"]) for row in rows] == [
+        ("lookup_order", True),
+        ("refund_order", False),
+    ]
+    assert rows[0]["result"] == {"status": "shipped", "total": 42}
+    assert rows[1]["result"] == {"message": "unknown order B2"}
+    assert not response.tool_calls
+
+
+def test_native_node_json_agent_seals_into_a_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _node_package(source, dependencies={"ms": "2.1.3"})
+    # A real lock: its integrity hashes must pass the source secret scan.
+    (source / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": "order-chat",
+                "lockfileVersion": 3,
+                "requires": True,
+                "packages": {
+                    "": {"name": "order-chat", "dependencies": {"ms": "2.1.3"}},
+                    "node_modules/ms": {
+                        "version": "2.1.3",
+                        "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+                        "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+                        "license": "MIT",
+                    },
+                },
+            },
+            indent=2,
+        )
+    )
+    (source / "server.js").write_text(_NODE_CHAT_SERVER)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "version": "22",
+                    "execution": "native",
+                    "command": ["node", "server.js"],
+                    "interface": _NODE_JSON_INTERFACE,
+                },
+                "data_store": {"kind": "none"},
+                "tools": [
+                    {"name": "lookup_order", "args": ["order_id"]},
+                    {"name": "refund_order", "args": ["order_id"]},
+                ],
+            }
+        )
+    )
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=output
+    )
+    agent = next(
+        p for p in manifest.processes if p.name == manifest.runtime.control_service
+    )
+    assert agent.run_command == ["node", "server.js"]
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+    context = output / agent.working_directory
+    assert (context / "server.js").read_text() == _NODE_CHAT_SERVER
+    assert (context / "package-lock.json").is_file()
+    load_bundle_v2(output)
+
+
 def test_native_process_runs_from_scanned_bundle_context(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -8895,3 +9368,1006 @@ def test_a_leftover_that_does_not_parse_never_becomes_the_callback(tmp_path, lef
         (tmp_path / f"{name}.py").write_text(text, encoding="utf-8")
 
     assert _discover_callback_entrypoint(tmp_path) is None
+
+
+def test_subfolder_node_runs_from_subfolder(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/server.js": _NODE_CHAT_SERVER,
+        },
+    )
+    _node_package(source / "agents/a")
+    runtime = {
+        "language": "node",
+        "execution": "native",
+        "command": ["node", "server.js"],
+        "interface": _NODE_JSON_INTERFACE,
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.working_directory == "agents/a"
+    assert agent.run_command == ["node", "server.js"]
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+
+
+def test_compose_node_sidecar_installs_in_its_build_context(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agent.py": "print('agent')\n",
+            "requirements.txt": "\n",
+            "tools/api/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  tools-api:\n"
+                "    build: ./tools/api\n"
+                "    command: [node, server.js]\n"
+                "  agent:\n"
+                "    build: .\n"
+                "    depends_on: [tools-api]\n"
+            ),
+        },
+    )
+    _node_package(source / "tools/api")
+
+    plan = resolve_environment_plan(source, _job(connector="auto"))
+
+    tools = next(process for process in plan.processes if process.name == "tools-api")
+    assert tools.working_directory == "tools/api"
+    assert tools.run_command == ["node", "server.js"]
+    assert tools.build_commands[-1] == _NPM_INSTALL_ARGV
+
+
+def test_subfolder_node_from_its_dockerfile_cmd_starts_in_its_folder(tmp_path):
+    """With no declared language or command, the Dockerfile CMD makes it Node, run from its own folder."""
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/server.js": _NODE_CHAT_SERVER,
+            "agents/a/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+        },
+    )
+    _node_package(source / "agents/a")
+    runtime = {"interface": _NODE_JSON_INTERFACE}
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.working_directory == "agents/a"
+    assert agent.run_command == ["node", "server.js"]
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+
+
+def test_node_reads_the_dockerfile_in_its_workdir(tmp_path):
+    """With no subfolder, the launch folder is runtime.workdir, so its Dockerfile CMD is the one read."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "agent/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+        },
+    )
+    _node_package(source / "agent")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={"workdir": "agent", "interface": _NODE_JSON_INTERFACE},
+    )
+
+    agent = _agent_of(plan)
+    assert plan.packaging == "generated_node"
+    assert agent.working_directory == "agent"
+    assert agent.run_command == ["node", "server.js"]
+
+
+def _plan_with_workdir(source: Path, runtime: dict):
+    return resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+
+
+@pytest.mark.parametrize("language", ["", "python"])
+@pytest.mark.parametrize(
+    "workdir_dockerfile",
+    [None, 'FROM python:3.12\nCMD ["python", "app_server.py"]\n', "FROM python:3.12\nCMD python x.py\n"],
+    ids=["root-only", "both", "shell-form-workdir"],
+)
+def test_python_with_a_workdir_reads_the_root_dockerfile(tmp_path, language, workdir_dockerfile):
+    """Only Node launches from runtime.workdir: Python reads the root CMD and launches it for the root project."""
+    files = {
+        "Dockerfile": 'FROM python:3.12\nCMD ["python", "root_server.py"]\n',
+        "app/root_server.py": "app = object()\n",
+        "app/app_server.py": "app = object()\n",
+        "app/requirements.txt": "flask\n",
+    }
+    if workdir_dockerfile:
+        files["app/Dockerfile"] = workdir_dockerfile
+    runtime = {"workdir": "app", "interface": {"kind": "http", "port": 8080}}
+    if language:
+        runtime["language"] = language
+
+    plan = _plan_with_workdir(_repo(tmp_path, files), runtime)
+
+    agent = _agent_of(plan)
+    assert plan.packaging == "dockerfile"
+    assert agent.working_directory == "app"
+    assert agent.run_command == ["uv", "run", "--no-sync", "python", "root_server.py"]
+
+
+def test_an_undeclared_python_cmd_in_the_workdir_is_not_read(tmp_path):
+    """With no language, a workdir Dockerfile counts only when its CMD is ``node``."""
+    source = _repo(
+        tmp_path,
+        {
+            "app/server.py": "app = object()\n",
+            "app/Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+        },
+    )
+
+    with pytest.raises(BundleAuthorError, match="runtime_http_command_missing"):
+        _plan_with_workdir(source, {"workdir": "app", "interface": {"kind": "http", "port": 8080}})
+
+
+@pytest.mark.parametrize(
+    "workdir_dockerfile",
+    [None, 'FROM oven/bun:1\nCMD ["bun", "run", "chat.ts"]\n'],
+    ids=["root-only", "both"],
+)
+def test_bun_with_a_workdir_reads_the_root_dockerfile(tmp_path, workdir_dockerfile):
+    """Bun is unchanged by the Node lane: its CMD comes from the root Dockerfile."""
+    server = "Bun.serve({fetch: () => new Response('ok')})"
+    files = {
+        "package.json": json.dumps({"name": "workspace-bot", "packageManager": "bun@1.3.14"}),
+        "bun.lock": '{"lockfileVersion": 1}',
+        "Dockerfile": 'FROM oven/bun:1\nCMD ["bun", "run", "server.ts"]\n',
+        "chat/package.json": '{"name":"chat"}',
+        "chat/server.ts": server,
+        "chat/chat.ts": server,
+    }
+    if workdir_dockerfile:
+        files["chat/Dockerfile"] = workdir_dockerfile
+    runtime = {
+        "language": "bun",
+        "version": "1.3.14",
+        "workdir": "chat",
+        "interface": {"kind": "http", "port": 8001},
+    }
+
+    plan = _plan_with_workdir(_repo(tmp_path, files), runtime)
+
+    agent = _agent_of(plan)
+    assert plan.packaging == "dockerfile"
+    assert agent.working_directory == "."
+    assert agent.run_command == [*_STARTED, "chat", "bun", "run", "server.ts"]
+
+
+def test_a_python_callback_example_does_not_displace_the_declared_node_server(tmp_path):
+    """A Python example that exports ``agent_callback`` is not this Node agent's entry point."""
+    source = _repo(
+        tmp_path,
+        {
+            "server.js": _NODE_CHAT_SERVER,
+            "examples/python_client.py": "def agent_callback(message):\n    return message\n",
+        },
+    )
+    _node_package(source)
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "command": ["node", "server.js"],
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    assert plan.packaging == "generated_node"
+    assert _agent_of(plan).run_command == ["node", "server.js"]
+
+
+def test_node_workdir_under_a_python_root_starts_in_its_workdir(tmp_path):
+    """A Python marker above a Node workdir must not move the Node process to the Python root."""
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "apps/chat/server.js": _NODE_CHAT_SERVER,
+        },
+    )
+    _node_package(source / "apps/chat")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "execution": "native",
+            "workdir": "apps/chat",
+            "command": ["node", "server.js"],
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "apps/chat"
+    assert agent.run_command == ["node", "server.js"]
+
+
+def test_compose_node_control_service_requires_an_http_interface(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: ./agent\n"
+                "    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source / "agent")
+    runtime = {
+        "language": "node",
+        "execution": "compose",
+        "compose_file": "compose.yml",
+        "service": "agent",
+        "command": [],
+    }
+
+    with pytest.raises(BundleAuthorError, match="runtime_node_http_interface_required"):
+        resolve_environment_plan(
+            source,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime={
+                **runtime,
+                "interface": {"kind": "command", "protocol": "fi.alk"},
+            },
+        )
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={**runtime, "interface": _NODE_JSON_INTERFACE},
+    )
+    assert _agent_of(plan).run_command == ["node", "server.js"]
+
+
+@pytest.mark.parametrize("declared", [True, False])
+def test_compose_bun_control_service_admission_is_unchanged(tmp_path, declared):
+    """The Node HTTP guard is Node's alone: a Compose Bun service with no interface plans as before."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/package.json": '{"name":"agent","packageManager":"bun@1.3.14"}',
+            "agent/bun.lock": '{"lockfileVersion": 1}',
+            "agent/server.ts": "Bun.serve({fetch: () => new Response('ok')})",
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: ./agent\n"
+                "    command: [bun, run, server.ts]\n"
+            ),
+        },
+    )
+    runtime = (
+        {
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "compose",
+            "compose_file": "compose.yml",
+            "service": "agent",
+            "command": [],
+        }
+        if declared
+        else None
+    )
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat", contract_runtime=runtime
+    )
+
+    agent = _agent_of(plan)
+    assert ["bun", "install", "--frozen-lockfile"] in agent.build_commands
+    assert agent.working_directory == "agent"
+
+
+def test_compose_node_control_service_starts_in_runtime_workdir(tmp_path):
+    """A Compose build context at the repository root still launches the Node package at runtime.workdir."""
+    source = _repo(
+        tmp_path,
+        {
+            "server.js": "throw new Error('root marker must not start');\n",
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: .\n"
+                "    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source)
+    _node_package(source / "agent")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "node",
+            "execution": "compose",
+            "compose_file": "compose.yml",
+            "service": "agent",
+            "workdir": "agent",
+            "command": ["node", "server.js"],
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "agent"
+    assert agent.run_command == ["node", "server.js"]
+
+
+def test_compose_node_control_service_gets_no_python_tracer(tmp_path):
+    """Only the Compose command makes this agent Node, so no runtime field can switch the Python tracer off."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  agent:\n"
+                "    build: ./agent\n"
+                "    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source / "agent")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "execution": "compose",
+            "compose_file": "compose.yml",
+            "service": "agent",
+            "interface": _NODE_JSON_INTERFACE,
+        },
+    )
+
+    agent = _agent_of(plan)
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+    assert "HARNESS_TOOL_TRACE" not in agent.environment
+    assert "ALK_OBSERVE_FRAMEWORKS" not in agent.environment
+
+
+@pytest.mark.parametrize(
+    "excluded", ["package-lock.json", "package.json", "*.json", "*-lock.json"]
+)
+def test_native_node_bundle_refuses_to_exclude_its_admitted_lockfile(tmp_path, excluded):
+    """Admission checked the lockfile, so the sealed context must carry it to ``npm ci``."""
+    source = tmp_path / "source"
+    source.mkdir()
+    _node_package(source)
+    (source / "server.js").write_text(_NODE_CHAT_SERVER)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "execution": "native",
+                    "command": ["node", "server.js"],
+                    "interface": _NODE_JSON_INTERFACE,
+                    "context_excludes": [excluded],
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    with pytest.raises(Exception, match="generated_runtime_context_exclude_required"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=tmp_path / "bundle",
+        )
+
+
+@pytest.mark.parametrize("lane", ["python", "bun"])
+def test_an_unused_javascript_lockfile_can_still_be_excluded(tmp_path, lane):
+    """Only the lockfile the selected installer reads is required; a stray one stays excludable."""
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "package-lock.json").write_text('{"lockfileVersion": 3}')
+    if lane == "python":
+        (source / "agent.py").write_text("print('agent')\n")
+        (source / "requirements.txt").write_text("\n")
+        runtime = {"execution": "native", "command": ["python", "agent.py"]}
+    else:
+        (source / "package.json").write_text('{"name":"chat","packageManager":"bun@1.3.14"}')
+        (source / "bun.lock").write_text('{"lockfileVersion": 1}')
+        (source / "server.ts").write_text("Bun.serve({fetch: () => new Response('ok')})")
+        runtime = {
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "native",
+            "command": ["bun", "run", "server.ts"],
+        }
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    **runtime,
+                    "interface": {"kind": "http", "port": 8080, "path": "/chat"},
+                    "context_excludes": ["package-lock.json"],
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=output
+    )
+    agent = next(p for p in manifest.processes if p.name == manifest.runtime.control_service)
+    assert not (output / agent.working_directory / "package-lock.json").exists()
+
+
+def test_a_root_bun_cmd_still_wins_over_a_workdir_node_cmd(tmp_path):
+    """With no language, the root Dockerfile is read first, as on dev; a workdir ``node`` CMD only fills a gap."""
+    server = "Bun.serve({fetch: () => new Response('ok')})"
+    source = _repo(
+        tmp_path,
+        {
+            "Dockerfile": 'FROM oven/bun:1\nCMD ["bun", "run", "server.ts"]\n',
+            "chat/package.json": json.dumps({"name": "chat", "packageManager": "bun@1.3.14"}),
+            "chat/bun.lock": '{"lockfileVersion": 1}',
+            "chat/server.ts": server,
+            "chat/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+        },
+    )
+
+    plan = _plan_with_workdir(
+        source, {"workdir": "chat", "interface": {"kind": "http", "port": 8001}}
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "chat"
+    assert agent.run_command == ["bun", "run", "server.ts"]
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+
+
+def test_a_node_bundle_refuses_to_exclude_its_dockerfile_entry_script(tmp_path):
+    """A start script read from the Dockerfile CMD is as required in the sealed context as a declared one."""
+    source = _repo(
+        tmp_path,
+        {
+            "dist/server.js": _NODE_CHAT_SERVER,
+            "Dockerfile": 'FROM node:22\nCMD ["node", "dist/server.js"]\n',
+        },
+    )
+    _node_package(source)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "interface": _NODE_JSON_INTERFACE,
+                    "context_excludes": ["dist"],
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+
+    with pytest.raises(Exception, match="generated_runtime_context_exclude_required"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=tmp_path / "bundle",
+        )
+
+
+def _compose_node_plan(source: Path, runtime: dict, subfolder: str | None = None):
+    return resolve_environment_plan(
+        source,
+        _github_job(subfolder) if subfolder else _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={"execution": "compose", "interface": _NODE_JSON_INTERFACE, **runtime},
+    )
+
+
+def test_a_compose_node_control_keeps_its_build_context_under_the_default_workdir(tmp_path):
+    """With a source subfolder, runtime.workdir defaults to that folder; the Compose build context still wins."""
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/server/server.js": _NODE_CHAT_SERVER,
+            "agents/a/compose.yml": (
+                "services:\n  agent:\n    build: ./server\n    command: [node, server.js]\n"
+            ),
+        },
+    )
+    _node_package(source / "agents/a/server")
+
+    plan = _compose_node_plan(
+        source,
+        {"language": "node", "compose_file": "agents/a/compose.yml", "service": "agent"},
+        subfolder="agents/a",
+    )
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "agents/a/server"
+    assert agent.run_command == ["node", "server.js"]
+
+
+def test_a_compose_node_control_never_starts_outside_its_build_context(tmp_path):
+    """A runtime.workdir outside the service's build context is not where it starts; the context is, as on dev."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "other/server.js": "throw new Error('outside the build context');\n",
+            "compose.yml": "services:\n  agent:\n    build: ./agent\n    command: [node, server.js]\n",
+        },
+    )
+    _node_package(source / "agent")
+    _node_package(source / "other")
+
+    plan = _compose_node_plan(
+        source,
+        {"language": "node", "compose_file": "compose.yml", "service": "agent", "workdir": "other"},
+    )
+
+    assert _agent_of(plan).working_directory == "agent"
+
+
+def test_an_inferred_compose_node_control_starts_in_runtime_workdir(tmp_path):
+    """No control service is declared, so the command alone makes it Node; runtime.workdir still applies."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": "services:\n  agent:\n    build: .\n    command: [node, server.js]\n",
+        },
+    )
+    _node_package(source / "agent")
+
+    # Auto selection finds the Compose file and names no control service.
+    plan = _plan_with_workdir(source, {"workdir": "agent", "interface": _NODE_JSON_INTERFACE})
+
+    agent = _agent_of(plan)
+    assert agent.working_directory == "agent"
+    assert agent.build_commands[-1] == _NPM_INSTALL_ARGV
+
+
+def _node_tool_wiring(process, plan_processes) -> dict[str, object]:
+    return {
+        "trace": sorted(
+            key for key in process.environment if key in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
+        ),
+        "door": "ALK_WORLD_DOOR_URL" in process.environment
+        or any(p.name == "world-door" for p in plan_processes),
+    }
+
+
+@pytest.mark.parametrize("language", ["", "node"])
+def test_a_node_control_gets_no_python_tool_wiring_at_seal_or_reseal(tmp_path, language):
+    """Python import bindings (the tool tracer, the in-process door) never reach a Node process."""
+    source = tmp_path / "source"
+    source.mkdir()
+    _node_package(source)
+    (source / "server.js").write_text(_NODE_CHAT_SERVER)
+    authoring = _authoring(tmp_path)
+    runtime = {
+        "execution": "native",
+        "command": ["node", "server.js"],
+        "interface": _NODE_JSON_INTERFACE,
+    }
+    if language:
+        runtime["language"] = language
+    contract = {
+        "modality": "chat",
+        "runtime": runtime,
+        "data_store": {"kind": "none"},
+        "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+        "tool_entrypoints": [
+            {"tool": "lookup_order", "mode": "import", "module": "tools", "callable": "lookup_order"}
+        ],
+    }
+    contract_path = authoring / "contract.json"
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+
+    sealed = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=bundle
+    )
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert _node_tool_wiring(control, sealed.processes) == {"trace": [], "door": False}
+
+    contract["tools"].append({"name": "cancel_order", "args": ["order_id"]})
+    contract["tool_entrypoints"].append(
+        {"tool": "cancel_order", "mode": "import", "module": "tools", "callable": "cancel_order"}
+    )
+    contract_path.write_text(json.dumps(contract))
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    control = next(
+        p for p in resealed.processes if p.name == resealed.runtime.control_service
+    )
+    assert _node_tool_wiring(control, resealed.processes) == {"trace": [], "door": False}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["node", "../server.js"],
+        ["node", "--require", "../setup.js", "server.js"],
+        ["node", "--require=../setup.js", "server.js"],
+        ["node", "--import=../setup.js", "server.js"],
+    ],
+)
+def test_a_node_entrypoint_outside_runtime_workdir_is_refused_at_admission(tmp_path, command):
+    """v1 seals one npm package, at runtime.workdir: a file the command names outside it would be left out."""
+    source = _repo(
+        tmp_path,
+        {
+            "server.js": _NODE_CHAT_SERVER,
+            "setup.js": "module.exports = {};\n",
+            "agent/server.js": _NODE_CHAT_SERVER,
+        },
+    )
+    _node_package(source / "agent")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "execution": "native",
+                    "workdir": "agent",
+                    "command": command,
+                    "interface": _NODE_JSON_INTERFACE,
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+
+    with pytest.raises(BundleAuthorError, match="runtime_node_entrypoint_outside_workdir") as refused:
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=tmp_path / "bundle",
+        )
+    # The diagnostic names the operand by position and role, never by its submitted value.
+    assert "../" not in str(refused.value)
+    assert not (tmp_path / "bundle").exists()
+
+
+def _seal_node(tmp_path, files: dict[str, str], command: list[str], excludes=(), runtime=None, **manifest):
+    source = _repo(tmp_path, {"server.js": _NODE_CHAT_SERVER, **files})
+    _node_package(source, **manifest)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "execution": "native",
+                    "command": command,
+                    "interface": _NODE_JSON_INTERFACE,
+                    "context_excludes": list(excludes),
+                    **(runtime or {}),
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    return author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=tmp_path / "bundle"
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["node", "server.js", "--route=/chat"],
+        ["node", "server.js", "/chat"],
+        ["node", "server.js", "--require=../not-a-preload.js"],
+        ["node", "--title", "/chat", "server.js"],
+        ["node", "--require", "dotenv/config", "server.js"],
+    ],
+)
+def test_a_node_command_keeps_its_application_argv_through_seal_and_reload(tmp_path, command):
+    """Arguments after the script belong to the agent, and a bare preload is an installed package: neither is a file."""
+    sealed = _seal_node(tmp_path, {}, command)
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.run_command == command
+    reloaded = load_bundle_v2(tmp_path / "bundle")
+    control = next(p for p in reloaded.processes if p.name == reloaded.runtime.control_service)
+    assert control.run_command == command
+
+
+_NODE_PRELOAD = "require('./lib/hook.cjs');\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["node", "--require", "./boot.cjs", "--import=./lib/hook.cjs", "."],
+        ["node", "--require=./boot.cjs", "--import", "./lib/hook.cjs", "dist/chat"],
+    ],
+)
+def test_a_sealed_node_bundle_carries_its_entry_script_and_every_preload(tmp_path, command):
+    files = {"boot.cjs": _NODE_PRELOAD, "lib/hook.cjs": "\n", "dist/chat.js": _NODE_CHAT_SERVER}
+    sealed = _seal_node(tmp_path, files, command, main="dist/chat.js")
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    context = tmp_path / "bundle" / control.working_directory
+    assert control.run_command == command
+    for name, text in files.items():
+        assert (context / name).read_text() == text
+    load_bundle_v2(tmp_path / "bundle")
+
+
+@pytest.mark.parametrize(
+    ("command", "excluded"),
+    [
+        (["node", "--require=./boot.cjs", "server.js"], "boot.cjs"),
+        (["node", "--import=./lib/hook.cjs", "server.js"], "lib"),
+        (["node", "."], "dist/chat.js"),
+        (["node", "dist"], "dist/*.js"),
+        (["node", "dist/chat"], "dist/chat.js"),
+        (["node", "--require", "./boot", "server.js"], "boot.js"),
+    ],
+)
+def test_a_node_bundle_refuses_to_exclude_a_resolved_entry_or_preload(tmp_path, command, excluded):
+    """Node resolves `.`, a folder, a bare name and a joined preload to files; the bundle must keep each one."""
+    files = {
+        "boot.cjs": _NODE_PRELOAD,
+        "boot.js": _NODE_PRELOAD,
+        "lib/hook.cjs": "\n",
+        "dist/chat.js": _NODE_CHAT_SERVER,
+        "dist/package.json": json.dumps({"main": "chat.js"}),
+    }
+    with pytest.raises(Exception, match="generated_runtime_context_exclude_required"):
+        _seal_node(tmp_path, files, command, excludes=[excluded], main="dist/chat.js")
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_a_node_application_argument_that_names_a_file_stays_excludable(tmp_path):
+    """Only the files Node loads to start are required; an argument the agent reads is the author's to exclude."""
+    command = ["node", "server.js", "fixtures/orders.json"]
+    sealed = _seal_node(tmp_path, {"fixtures/orders.json": "[]"}, command, excludes=["fixtures"])
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.run_command == command
+    assert not (tmp_path / "bundle" / control.working_directory / "fixtures").exists()
+
+
+def test_a_node_tools_api_with_a_rewritten_port_still_seals_its_entry_script(tmp_path):
+    """A pinned `--port` on a tools-api is rewritten to `sh -c`; sealing still reads the Node argv inside it."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent.py": "print('agent')\n",
+            "requirements.txt": "\n",
+            "tools/api/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  tools-api:\n"
+                "    build: ./tools/api\n"
+                "    command: [node, server.js, --port, '8080']\n"
+                "  agent:\n"
+                "    build: .\n"
+                "    command: [python, agent.py]\n"
+                "    depends_on: [tools-api]\n"
+            ),
+        },
+    )
+    _node_package(source / "tools/api")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "execution": "compose",
+                    "compose_file": "compose.yml",
+                    "service": "agent",
+                    "interface": {"kind": "http", "port": 9000, "path": "/chat"},
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=tmp_path / "bundle"
+    )
+    tools = next(process for process in manifest.processes if process.name == "tools-api")
+    assert tools.run_command == ["sh", "-c", "node server.js --port $FI_TOOLS_PORT"]
+    assert (tmp_path / "bundle" / tools.working_directory / "server.js").is_file()
+
+
+@pytest.mark.parametrize(
+    ("option", "files", "excluded"),
+    [
+        ("--experimental-config-file=node.config.json", {"node.config.json": "{}"}, "node.config.json"),
+        # Reads the implicit ./node.config.json.
+        ("--experimental-default-config-file", {"node.config.json": "{}"}, "node.config.json"),
+        ("--snapshot-blob=snapshot.blob", {"snapshot.blob": "blob"}, "snapshot.blob"),
+    ],
+)
+def test_a_node_startup_file_the_bundle_would_drop_is_refused_at_admission(tmp_path, option, files, excluded):
+    """Node exits before the server starts when one of these files is missing (9 for the config, 14 for
+    the snapshot), and context_excludes could drop it: v1 refuses the option instead of sealing it."""
+    name = option.partition("=")[0]
+    with pytest.raises(BundleAuthorError, match=r"runtime_node_option_unsupported: argv\[1\]") as refused:
+        _seal_node(tmp_path, files, ["node", option, "server.js"], excludes=[excluded])
+    assert f"({name})" in str(refused.value)
+    assert excluded not in str(refused.value).replace(name, "")
+    assert not (tmp_path / "bundle").exists()
+
+
+# Every Node 22 option v1 refuses that reads or writes a file, or changes what starts; then spellings.
+_NODE_REFUSED_OPTIONS = [
+    (["--env-file=.env"], "--env-file"),
+    (["--env-file", ".env"], "--env-file"),
+    (["--env-file-if-exists=.env"], "--env-file-if-exists"),
+    (["--experimental-config-file", "node.config.json"], "--experimental-config-file"),
+    (["--snapshot_blob=snapshot.blob"], "--snapshot_blob"),
+    (["--build-snapshot"], "--build-snapshot"),
+    (["--build-snapshot-config=snapshot.json"], "--build-snapshot-config"),
+    (["--experimental-sea-config=sea.json"], "--experimental-sea-config"),
+    (["--watch"], "--watch"),
+    (["--watch-path=lib"], "--watch-path"),
+    (["--diagnostic-dir=diag"], "--diagnostic-dir"),
+    (["--redirect-warnings=warnings.log"], "--redirect-warnings"),
+    (["--report-dir=reports"], "--report-dir"),
+    (["--report-on-signal"], "--report-on-signal"),
+    (["--cpu-prof"], "--cpu-prof"),
+    (["--heap-prof"], "--heap-prof"),
+    (["--heapsnapshot-signal=SIGUSR2"], "--heapsnapshot-signal"),
+    (["--icu-data-dir=icu"], "--icu-data-dir"),
+    (["--openssl-config=openssl.cnf"], "--openssl-config"),
+    (["--openssl-shared-config"], "--openssl-shared-config"),
+    (["--use-openssl-ca"], "--use-openssl-ca"),
+    (["--enable-fips"], "--enable-fips"),
+    (["--tls-keylog=keys.log"], "--tls-keylog"),
+    (["--secure-heap=4096"], "--secure-heap"),
+    (["--localstorage-file=storage.json"], "--localstorage-file"),
+    (["--trace-event-file-pattern=trace.log"], "--trace-event-file-pattern"),
+    (["--trace-env"], "--trace-env"),
+    (["--test"], "--test"),
+    (["--test-reporter-destination=out.txt"], "--test-reporter-destination"),
+    (["--permission"], "--permission"),
+    (["--allow-fs-read=lib"], "--allow-fs-read"),
+    (["--inspect"], "--inspect"),
+    (["--entry-url"], "--entry-url"),
+    (["--preserve-symlinks"], "--preserve-symlinks"),
+    (["-C", "development"], "-C"),
+    (["-e", "require('./server.js')"], "-e"),
+    (["--run=serve"], "--run"),
+    (["--check"], "--check"),
+    (["-i"], "-i"),
+    # Unknown means refused, also a V8 flag v1 does not list.
+    (["--no-such-option"], "--no-such-option"),
+    (["--harmony"], "--harmony"),
+    # Node rejects `-r=x`; the diagnostic still names only the option.
+    (["-r=./boot.cjs"], "-r"),
+    # Node exits 9: a V8 value needs `=`, and a Node value cannot start with `-`.
+    (["--max-old-space-size", "512"], "--max-old-space-size"),
+    (["--title", "--snapshot-blob=snapshot.blob"], "--title"),
+]
+
+
+@pytest.mark.parametrize(("options", "name"), _NODE_REFUSED_OPTIONS)
+def test_a_node_option_outside_the_v1_list_is_refused_at_admission(tmp_path, options, name):
+    files = {".env": "ORDERS_REGION=eu\n", "boot.cjs": _NODE_PRELOAD}
+    with pytest.raises(BundleAuthorError, match=r"runtime_node_option_unsupported: argv\[1\]") as refused:
+        _seal_node(tmp_path, files, ["node", *options, "server.js"])
+    message = str(refused.value)
+    assert f"({name})" in message
+    # The diagnostic names the option, never its value.
+    for value in [option.partition("=")[2] for option in options if "=" in option] + options[1:]:
+        assert value not in message.replace(name, "")
+    if name.startswith("--env-file"):
+        assert "runtime.config_files" in message
+    assert not (tmp_path / "bundle").exists()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--title", "orders"],
+        ["--max-old-space-size=512"],
+        ["--max_old_space_size=512"],
+        ["--enable-source-maps"],
+        ["--no-warnings", "--stack-trace-limit=50", "--unhandled-rejections", "strict"],
+    ],
+)
+def test_a_node_command_with_a_v1_option_seals_and_reloads(tmp_path, options):
+    command = ["node", *options, "server.js"]
+    sealed = _seal_node(tmp_path, {}, command)
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.run_command == command
+    assert (tmp_path / "bundle" / control.working_directory / "server.js").is_file()
+    reloaded = load_bundle_v2(tmp_path / "bundle")
+    control = next(p for p in reloaded.processes if p.name == reloaded.runtime.control_service)
+    assert control.run_command == command
+
+
+def _node_options_from(channel: str, value: str) -> tuple[dict[str, str], dict]:
+    """NODE_OPTIONS as the agent declares it: in alk.yaml runtime.environment, or a config file's values."""
+    if channel == "alk.yaml":
+        return {"alk.yaml": f"runtime:\n  environment:\n    NODE_OPTIONS: '{value}'\n"}, {}
+    return {}, {"config_files": {".env": {"values": {"NODE_OPTIONS": value}}}}
+
+
+@pytest.mark.parametrize("channel", ["alk.yaml", "config_files"])
+@pytest.mark.parametrize(
+    ("value", "name"),
+    [
+        ("--require=../setup.js", "--require"),
+        ("--snapshot-blob=snapshot.blob", "--snapshot-blob"),
+        ("--enable-source-maps --experimental-default-config-file", "--experimental-default-config-file"),
+        ('--title="a --snapshot-blob=snapshot.blob"', "quoting"),
+    ],
+)
+def test_a_node_options_value_from_the_agent_is_checked_like_argv(tmp_path, channel, value, name):
+    """Node reads NODE_OPTIONS at start as more argv, and the process environment carries it to the spawn."""
+    files, runtime = _node_options_from(channel, value)
+    files = {**files, "snapshot.blob": "blob"}
+    with pytest.raises(BundleAuthorError, match=r"runtime_node_option_unsupported: NODE_OPTIONS") as refused:
+        _seal_node(tmp_path, files, ["node", "server.js"], runtime=runtime)
+    assert f"({name})" in str(refused.value)
+    assert "snapshot.blob" not in str(refused.value) and "../" not in str(refused.value)
+    assert not (tmp_path / "bundle").exists()
+
+
+@pytest.mark.parametrize("channel", ["alk.yaml", "config_files"])
+def test_a_node_options_value_with_v1_options_still_seals(tmp_path, channel):
+    value = "--max-old-space-size=512 --enable-source-maps --require dotenv/config"
+    files, runtime = _node_options_from(channel, value)
+    sealed = _seal_node(tmp_path, files, ["node", "server.js"], runtime=runtime)
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.environment["NODE_OPTIONS"] == value
