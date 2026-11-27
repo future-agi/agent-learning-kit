@@ -4651,7 +4651,7 @@ def test_a_prompt_that_cannot_be_encoded_is_not_whole_and_the_reading_is_asked_f
     assert first.get("is_error")
     assert "provider definition" in text_of(first)
     assert not submit(bare).get("is_error")
-    assert saved(destination)["system_prompt_copied"] is False
+    assert "system_prompt_copied" not in saved(destination)
 
 
 def test_a_reading_under_a_profile_with_a_whole_prompt_is_not_asked_for_one(tmp_path, root):

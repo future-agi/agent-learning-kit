@@ -256,7 +256,12 @@ def whole_prompt(profile: Mapping[str, Any]) -> str | None:
         return None
     if not all(text.strip() for text in texts):
         return None
-    if sum(len(text.encode("utf-8")) for text in texts) + joins > _LARGEST_WHOLE_PROMPT:
+    try:
+        encoded = sum(len(text.encode("utf-8")) for text in texts)
+    except UnicodeEncodeError:
+        # A lone surrogate, which JSON can carry and UTF-8 can't: no whole text to send.
+        return None
+    if encoded + joins > _LARGEST_WHOLE_PROMPT:
         return None
     return "\n\n".join(texts)
 
@@ -1249,9 +1254,15 @@ def _clone_retell(
 
 
 def provider_profile_digest(profile: Mapping[str, Any]) -> str:
-    """The identity of an inspected (redacted) provider profile: prompt, model, voice and tools."""
+    """The identity of an inspected (redacted) provider profile: prompt, model, voice and tools.
+
+    The fetch's record of its prompt check is left out: it says what this kit did with the
+    prompt, not what the assistant is, and a binding sealed by a kit that kept no such record
+    must still match the same assistant.
+    """
+    identity = {key: value for key, value in profile.items() if key != PROMPT_CHECK}
     encoded = json.dumps(
-        profile, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
