@@ -646,6 +646,97 @@ def test_file_tool_trace_clear_removes_previous_attempt(tmp_path: Path) -> None:
     assert not trace.exists()
 
 
+def _kept(monkeypatch: pytest.MonkeyPatch, trace: Path) -> None:
+    """The runner may read the trace file but not remove it, as where the agent's own user owns its folder."""
+    unlink = Path.unlink
+
+    def refused(self: Path, missing_ok: bool = False) -> None:
+        if self == trace:
+            raise PermissionError(13, "Permission denied", str(self))
+        unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refused)
+
+
+def _agent_calls(trace: Path, count: int, at: float) -> None:
+    with trace.open("a", encoding="utf-8") as lines:
+        for index in range(count):
+            lines.write(
+                json.dumps(
+                    {"name": "look_up_order", "arguments": {"order_id": "1043"}, "output": "shipped",
+                     "is_error": False, "at": at + index}
+                )
+                + "\n"
+            )
+
+
+def test_a_trial_reads_only_its_own_calls_when_the_trace_file_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One world, three trials one after another, with 1, 2 and 2 calls of their own: the file keeps growing, and each
+    # trial still reads only what was written after it started, never an earlier trial's calls.
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _kept(monkeypatch, trace)
+    read = []
+    for trial, own in enumerate((1, 2, 2)):
+        cr._clear_file_tool_calls(runtime)
+        _agent_calls(trace, own, at=1000.0 * (trial + 1))
+        read.append(len(cr.collect_file_tool_calls(runtime, strict=True)))
+    assert read == [1, 2, 2]
+
+
+def test_a_trace_file_replaced_during_the_trial_is_read_from_its_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 3, at=100.0)
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    # Someone with the folder's rights removed the file; the agent's next call starts a new one.
+    monkeypatch.undo()
+    trace.unlink()
+    _agent_calls(trace, 1, at=200.0)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0]
+
+
+def test_a_trial_whose_trace_cannot_be_cleared_or_measured_reads_as_a_failed_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 2, at=100.0)
+    _kept(monkeypatch, trace)
+    stat = Path.stat
+
+    def unmeasured(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if self == trace:
+            raise PermissionError(13, "Permission denied", str(self))
+        return stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", unmeasured)
+    cr._clear_file_tool_calls(runtime)
+    monkeypatch.setattr(Path, "stat", stat)
+    _agent_calls(trace, 1, at=200.0)
+    # Never the earlier trial's two calls as this one's: the capture failed.
+    with pytest.raises(cr.ToolCaptureFailed):
+        cr.collect_file_tool_calls(runtime, strict=True)
+    assert cr.collect_file_tool_calls(runtime) == ()
+
+
+def test_an_earlier_trial_s_unrecorded_hand_off_is_not_this_trial_s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    trace.write_text(json.dumps({"kind": cr.HAND_OFF_UNRECORDED}) + "\n", encoding="utf-8")
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    _agent_calls(trace, 1, at=200.0)
+    assert cr.hand_off_notices(runtime) == []
+
+
 def test_provider_reported_tool_call_is_used_when_guest_trace_is_empty(
     tmp_path: Path,
 ) -> None:
