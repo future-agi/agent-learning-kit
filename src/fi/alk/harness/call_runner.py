@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import dataclasses
 import gc
+import hashlib
 import inspect
 import json
 import random
@@ -3134,14 +3135,34 @@ def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
 
 # Where each trial's part of the agent's trace file begins, by the file's path, set when the trial starts. The agent's
 # process appends to the file for its world's life; where the runner cannot remove the file, a trial reads only what
-# was written after its start: the file's device, inode and length then, and its last bytes before that length, which
-# tell the same file from one truncated or recreated in its place. None when the start could not be measured.
-_TRACE_STARTS: dict[str, tuple[int, int, int, bytes] | None] = {}
-_TRACE_MARK_BYTES = 64
+# was written after its start. The mark is the file's device, inode and length then, a digest of every byte before
+# that length, and whether the last of them left a line unended. None when the start could not be measured.
+_TRACE_STARTS: dict[str, tuple[int, int, int, bytes, bool] | None] = {}
 
 
 class TraceStartUnknown(OSError):
     """Where this trial's part of the trace file begins is unknown: what it holds may be an earlier trial's."""
+
+
+class TraceRewritten(TraceStartUnknown):
+    """The trace file is the one marked when the trial began, but its bytes before the mark are no longer the ones that
+    were there: truncated, recreated in place, or rewritten with earlier records changed."""
+
+
+def _first_bytes(handle: Any, length: int) -> tuple[bytes, int, bytes]:
+    """The digest of the first ``length`` bytes of the file open as ``handle``, how many of them were there, and the
+    last of them. Leaves ``handle`` just after them."""
+    digest = hashlib.sha256()
+    handle.seek(0)
+    left, last = length, b""
+    while left > 0:
+        chunk = handle.read(min(left, 1 << 16))
+        if not chunk:
+            break
+        digest.update(chunk)
+        left -= len(chunk)
+        last = chunk[-1:]
+    return digest.digest(), length - left, last
 
 
 def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
@@ -3163,8 +3184,10 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
         path.stat()
         with path.open("rb") as handle:
             info = os.fstat(handle.fileno())
-            handle.seek(max(0, info.st_size - _TRACE_MARK_BYTES))
-            last = handle.read(_TRACE_MARK_BYTES)
+            # Only the bytes the file had when measured: a line written after that is past the mark.
+            digest, measured, last = _first_bytes(handle, info.st_size)
+            if measured != info.st_size:
+                raise OSError("the tool trace file shrank while it was measured")
     except FileNotFoundError:
         _TRACE_STARTS.pop(key, None)
         return
@@ -3175,7 +3198,7 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
             type(exc).__name__,
         )
         return
-    _TRACE_STARTS[key] = (info.st_dev, info.st_ino, info.st_size, last)
+    _TRACE_STARTS[key] = (info.st_dev, info.st_ino, info.st_size, digest, last not in (b"", b"\n"))
 
 
 def _a_record(line: bytes) -> bool:
@@ -3187,29 +3210,37 @@ def _a_record(line: bytes) -> bool:
 
 def _trial_trace_text(path: Path) -> str:
     """This trial's part of the trace file at ``path``: what was written after the trial began, or the whole file where
-    the trial removed it or it is no longer the file that was marked (another inode, shorter than the mark, or other
-    bytes just before the mark: truncated or recreated in place). Raises `OSError` when it cannot be read,
-    `TraceStartUnknown` when the trial's start could not be marked."""
+    the trial removed it or another file (another inode) now has its path. Raises `OSError` when it cannot be read,
+    `TraceStartUnknown` when the trial's start could not be marked, and `TraceRewritten` when the marked file's bytes
+    before the mark changed."""
     key = str(path)
     if key in _TRACE_STARTS and _TRACE_STARTS[key] is None:
         raise TraceStartUnknown("where this trial's part of the tool trace begins is unknown")
     start = _TRACE_STARTS.get(key)
     if start is None:
         return path.read_text(encoding="utf-8")
-    device, inode, offset, last = start
+    device, inode, offset, digest, mid_line = start
     with path.open("rb") as handle:
         info = os.fstat(handle.fileno())
-        same = (info.st_dev, info.st_ino) == (device, inode) and info.st_size >= offset
-        if same:
-            handle.seek(offset - len(last))
-            same = handle.read(len(last)) == last
-        if not same:
-            handle.seek(0)
-        elif last and not last.endswith(b"\n"):
+        if (info.st_dev, info.st_ino) != (device, inode):
+            # The file was removed and a new one started: all of it was written after this trial began. A writer that
+            # replaced it with a copy keeping earlier records would be read whole; the kit's writers only append.
+            return handle.read().decode("utf-8")
+        # The same file with other or fewer bytes before the mark was truncated and regrown, recreated under the same inode
+        # number, or rewritten with its earlier records changed. These cannot be told apart, and neither the mark nor
+        # the file's start is then where this trial's part begins: the read fails rather than count another trial's
+        # calls as this one's.
+        if _first_bytes(handle, offset)[:2] != (digest, offset):
+            raise TraceRewritten("the tool trace file no longer holds what it held when this trial began")
+        if mid_line:
             # The trial began on a line not yet ended. Where an earlier writer was still writing it, what follows the
-            # mark ends that line, is no record and is that trial's. Where the writer died instead, no newline ever
-            # came and this trial's first record starts at the mark: it is kept.
-            if _a_record(handle.readline()):
+            # mark ends that line with a newline, is no record and is that trial's: it is dropped. Where the writer
+            # died instead, no newline ever came and this trial's first line starts at the mark: it is kept when it
+            # reads as a record or has no newline yet (this trial's own line, cut, which then fails the capture). The
+            # trade: a cut line of this trial's that its next line ran on from ends in a newline as an earlier line's
+            # end does, and is dropped with that next line.
+            rest = handle.readline()
+            if _a_record(rest) or not rest.endswith(b"\n"):
                 handle.seek(offset)
         return handle.read().decode("utf-8")
 
