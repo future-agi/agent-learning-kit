@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -193,6 +195,20 @@ def test_runner_is_world_agnostic_over_a_third_party_environment() -> None:
         "adapter": "contract_probe_world",
         "target": "SENTINEL_TARGET",
     }
+
+
+def test_public_environment_plugin_example_runs() -> None:
+    example = Path(__file__).parents[2] / "examples" / "sdk_environment_plugin.py"
+    spec = importlib.util.spec_from_file_location("sdk_environment_plugin", example)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = module.run()
+
+    assert result["status"] == "RunStatus.COMPLETED"
+    assert result["environment"] == "order_status_world"
+    assert "Order A-104 is packed" in result["transcript"]
 
 
 def test_unknown_environment_yields_failed_report_not_crash() -> None:
