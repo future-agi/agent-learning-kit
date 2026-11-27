@@ -701,10 +701,13 @@ def test_a_trace_file_replaced_during_the_trial_is_read_from_its_start(
     _agent_calls(trace, 3, at=100.0)
     _kept(monkeypatch, trace)
     cr._clear_file_tool_calls(runtime)
-    # Someone with the folder's rights removed the file; the agent's next call starts a new one.
+    # Someone with the folder's rights removed the file; the agent's next call starts a new one. The old file is held
+    # open meanwhile, so the new one cannot take its inode number (ext4 reuses a freed one at once).
     monkeypatch.undo()
-    trace.unlink()
-    _agent_calls(trace, 1, at=200.0)
+    with trace.open("rb") as old:
+        trace.unlink()
+        _agent_calls(trace, 1, at=200.0)
+        assert trace.stat().st_ino != os.fstat(old.fileno()).st_ino
     assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0]
 
 
@@ -825,8 +828,11 @@ def test_a_trace_file_replaced_by_a_longer_one_is_read_from_its_start(
     _agent_calls(trace, 2, at=100.0)
     _kept(monkeypatch, trace)
     cr._clear_file_tool_calls(runtime)
-    os.remove(trace)
-    _agent_calls(trace, 4, at=500.0)
+    # The old file held open, so the new one has another inode number (ext4 reuses a freed one at once).
+    with trace.open("rb") as old:
+        os.remove(trace)
+        _agent_calls(trace, 4, at=500.0)
+        assert trace.stat().st_ino != os.fstat(old.fileno()).st_ino
     assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [500.0, 501.0, 502.0, 503.0]
 
 
