@@ -1,0 +1,86 @@
+{
+  "name": "v15_s03_quantity_already_returned_duplicate",
+  "scenario_key": "v15-s03-quantity-already-returned-duplicate",
+  "scenario_id": "",
+  "use_case": "Return status inquiry and duplicate prevention",
+  "branch": "Return request on order O02 where the purchased quantity (1 unit) of SH02 has already been returned",
+  "tests": "the agent identifies prior return on order O02 and prevents duplicate return authorization for already-returned item SH02",
+  "instruction": "You purchased a pair of Trail Running Shoes (SKU: SH02) in order O02. You already submitted a return for this pair previously, but want to check status or request returning it again.\n\nYour details:\n- Name: Bob Smith\n- Email: bob.smith@example.com\n- Postal Code: 10001\n- Order ID: O02\n- Item: Trail Running Shoes (SKU: SH02)",
+  "keywords": [
+    "ownership_verification"
+  ],
+  "persona": {
+    "name": "Bob Smith",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I have order O02. I want to return the trail running shoes (SKU SH02) or see what happened with my return.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C02",
+    "order_id": "O02",
+    "sku": "SH02",
+    "return_id": "RET-O02-01"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O02",
+        "customer_id": "C02",
+        "email": "bob.smith@example.com",
+        "postal_code": "10001"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C02",
+        "order_id": "caller: order number O02"
+      }
+    },
+    {
+      "tool": "get_return_status",
+      "arguments": {
+        "order_id": "O02",
+        "return_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O02"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "disposition": "already_returned",
+    "task": "inquire_return_status",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "counterparty": "verified_owner",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "subgoal_return_status_retrieved",
+    "subgoal_policy_abuse_prevented"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

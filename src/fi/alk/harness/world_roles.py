@@ -9,7 +9,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import NamedTuple
 
-from .bundle_v2 import EnvironmentBundleV2, ProcessUser
+from .bundle_v2 import EnvironmentBundleV2, ProcessUser, SourceProcess
+from .mcp_servers import READER_ROLE
 
 # The world's door (`svc-door`) reaches the database through a role of its own, in this group: a member of the world
 # group, so it changes the world's rows as the agent's tools do, and the only one with rights on the harness's tables.
@@ -24,6 +25,9 @@ STORE_ROLE_PREFIX = "alk_s"
 # the harness (a check's events, a reset's sentinel), pinned and read-only.
 LOG_ROLE_PREFIX = "alk_l"
 LOG_ROLE_GROUP = "alk_world_log"
+# World N's reader: the login its attached MCP servers read the tables the release lists with (`mcp_servers`), in the
+# reader group and nothing else.
+READER_ROLE_PREFIX = "alk_r"
 # The harness's own relations, by name, in SQL over `pg_class c`: its `_alk_*` tables and the seed's marker.
 HARNESS_RELNAME = "(c.relname LIKE '\\_alk\\_%' OR c.relname = 'harness_seed_sentinel')"
 # The door's address, rendered only into the door's own processes.
@@ -32,6 +36,8 @@ WORLD_DOOR_DATABASE_URL = "WORLD_DOOR_DATABASE_URL"
 # tool's statement) are written with it, so a customer trigger fired by them runs with no right on the harness's
 # tables. The door's role writes only the harness's tables.
 WORLD_RECORDS_DATABASE_URL = "WORLD_RECORDS_DATABASE_URL"
+# The reader's address, given to the tool server of a release whose attached servers read the world's tables.
+WORLD_READER_DATABASE_URL = "WORLD_READER_DATABASE_URL"
 # The harness's tables in a world database, and what the door may do on each. The agent's own tools have no right on
 # any of them: they hold the call log grading reads, who may do what, and this trial's faults.
 DOOR_TABLE_RIGHTS = {
@@ -66,6 +72,22 @@ def store_role_name(world_index: int) -> str:
 def door_role_name(world_index: int) -> str:
     """World N's door's own login role."""
     return f"{DOOR_ROLE_PREFIX}{world_index}"
+
+
+def reader_role_name(world_index: int) -> str:
+    """World N's reader (`READER_ROLE_PREFIX`)."""
+    return f"{READER_ROLE_PREFIX}{world_index}"
+
+
+def has_world_reader(manifest: EnvironmentBundleV2) -> bool:
+    """Whether a process of this bundle takes the reader's address."""
+    token = f"{{{{{WORLD_READER_DATABASE_URL}}}}}"
+    return any(
+        token in value
+        for process in manifest.processes
+        if isinstance(process, SourceProcess)
+        for value in process.environment.values()
+    )
 
 
 def has_world_door(manifest: EnvironmentBundleV2) -> bool:
@@ -144,7 +166,8 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
     """The queries for a world group ``world_group``, the group every world's role is a member of."""
     our_role = (
         f"(r.rolname IN ('{world_group}', '{DOOR_ROLE_GROUP}', '{LOG_ROLE_GROUP}') "
-        f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX}|{STORE_ROLE_PREFIX}|{LOG_ROLE_PREFIX})[0-9]+$')"
+        f"OR r.rolname ~ '^({WORLD_ROLE_PREFIX}|{DOOR_ROLE_PREFIX}|{STORE_ROLE_PREFIX}|{LOG_ROLE_PREFIX}"
+        f"|{READER_ROLE_PREFIX})[0-9]+$')"
     )
     our_roles = (
         "SELECT 'role ' || r.rolname || ' has an attribute the harness never gives it', '' "
@@ -156,6 +179,7 @@ def seed_escalation_queries(world_group: str) -> SeedEscalationQueries:
         f"WHERE {our_role} AND NOT ("
         f"(g.rolname = '{world_group}' AND (r.rolname ~ '^({WORLD_ROLE_PREFIX}|{STORE_ROLE_PREFIX})[0-9]+$' "
         f"OR r.rolname = '{DOOR_ROLE_GROUP}')) "
+        f"OR (g.rolname = '{READER_ROLE}' AND r.rolname ~ '^{READER_ROLE_PREFIX}[0-9]+$') "
         f"OR (g.rolname = '{LOG_ROLE_GROUP}' AND r.rolname ~ '^{LOG_ROLE_PREFIX}[0-9]+$') "
         f"OR (g.rolname = '{DOOR_ROLE_GROUP}' AND r.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$'))"
     )

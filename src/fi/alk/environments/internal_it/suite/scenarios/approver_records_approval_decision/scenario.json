@@ -1,0 +1,88 @@
+{
+  "name": "approver_records_approval_decision",
+  "scenario_key": "approver-records-approval-decision",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Designated approver Evan Wright E05 approves pending request AR-101 for Laura Croft; decision is recorded and token generated.",
+  "tests": "Does the agent verify approver E05 and record the approval decision for AR-101?",
+  "instruction": "You are Evan Wright (employee ID E05), analytics director, Laura Croft's manager and designated approver for request AR-101 (Laura Croft, APP-PROD, readonly). In chat, confirm you are approving request AR-101 and ask the IT desk to record your approval decision.",
+  "keywords": [
+    "approval_decision"
+  ],
+  "persona": {
+    "name": "Evan Wright",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello IT desk, Evan Wright here (E05). I am approving access request AR-101 for Laura Croft. Please record my approval decision.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approver_id": "E05",
+    "decision": "approve",
+    "request_id": "AR-101",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-101"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "record_approval_decision",
+      "arguments": {
+        "decision": "approve",
+        "request_id": "AR-101",
+        "approver_id": "E05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "approver_id": "caller: Evan Wright (E05)",
+        "request_id": "caller: AR-101",
+        "decision": "caller: approve"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "complete_approved_access",
+    "counterparty": "manager_requester",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "disposition": "valid_approval_action",
+    "interface": "chat",
+    "interaction": "collaborative"
+  },
+  "sub_goals": [
+    "approval_decision_recorded"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

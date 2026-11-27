@@ -1,0 +1,107 @@
+{
+  "name": "exc_higher_price_upgrade",
+  "scenario_key": "exc-higher-price-upgrade",
+  "scenario_id": "",
+  "use_case": "Exchange an item or use store credit",
+  "branch": "Customer C409 exchanges French Terry Sweatshirt AP07 ($48) for higher-priced Merino Wool Sweater AP09 ($88) on order O409 with a $40 difference charged",
+  "tests": "the agent creates an exchange of AP07 for AP09 on order O409 and explains the $40 charge without calling it a refund",
+  "instruction": "You ordered an Everyday French Terry Sweatshirt (SKU AP07, $48.00) in order O409. You want to exchange it for a Merino Wool Crewneck Sweater (SKU AP09, $88.00). You understand and agree that the $40.00 price difference will be charged before the replacement item ships, and you confirm the exchange.\n\nYour details:\n- Name: Sophia Turner\n- Email: sophia.turner@example.com\n- Postal Code: 30301\n- Order ID: O409\n- Original SKU: AP07 (Quantity 1)\n- Replacement SKU: AP09 (Quantity 1)",
+  "keywords": [
+    "exchange_item",
+    "price_upgrade"
+  ],
+  "persona": {
+    "name": "Sophia Turner",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to exchange my sweatshirt (AP07) from order O409 for the merino wool sweater (AP09). I agree to pay the $40 difference.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "replacement_sku": "AP09",
+    "origin": "generated",
+    "order_id": "O409",
+    "original_sku": "AP07",
+    "customer_id": "C409"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O409",
+        "postal_code": "30301"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O409"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "AP09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_exchange",
+      "arguments": {
+        "request_key": "REQ-EXC-O409-AP07",
+        "original_sku": "AP07",
+        "quantity": 1,
+        "replacement_sku": "AP09",
+        "order_id": "O409",
+        "customer_id": "C409",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "quantity": "caller: quantity 1",
+        "confirmed": "caller: customer confirmation",
+        "order_id": "caller: order O409",
+        "customer_id": "record: customer C409",
+        "replacement_sku": "caller: replacement AP09",
+        "original_sku": "record: item AP07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "price_upgrade",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "task": "exchange_item",
+    "counterparty": "verified_owner",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "exchange_created_as_confirmed",
+    "exchange_not_called_refund"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

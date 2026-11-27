@@ -24,12 +24,12 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..simulator_voice import fixture_caller_phone
 from ..catalogue import load_catalogue
-from ..checks import Outcome, run_check
+from ..checks import Outcome, reference_of, run_check
 from ..folder import apply_setup, check_ready
 from ..scenario import Scenario
 from ..simulator import fill, load_simulator_prompt
+from ..simulator_voice import fixture_caller_phone
 from ..world.runtime import GeneratedWorld
 from ..world.snapshot import restore
 from .voice import WorldWebhook, repoint_assistant
@@ -159,9 +159,20 @@ def grade(scenario: Scenario, world: GeneratedWorld, world_root: Path) -> LiveRu
         sub_goal = catalogue.named(name)
         if sub_goal is None:
             run.problems.append(f"{name} is not in the catalogue")
-        elif sub_goal.deterministic():
-            run.settled.append(run_check(sub_goal.check, world, world.calls, name=name))
-        else:
+            continue
+        if sub_goal.deterministic():
+            run.settled.append(
+                run_check(
+                    sub_goal.check,
+                    world,
+                    world.calls,
+                    name=name,
+                    reference=reference_of(scenario.solution),
+                )
+            )
+        # A `both` goal has a judged half as well as its check: the check sees the records, the
+        # judge what the agent said, and the goal holds only when both do.
+        if sub_goal.judged.strip() or not sub_goal.deterministic():
             run.judged.append(name)
     run.calls = [
         f"{call.name}({call.arguments}) -> "

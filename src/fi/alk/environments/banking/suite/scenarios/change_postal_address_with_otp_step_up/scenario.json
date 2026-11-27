@@ -1,0 +1,115 @@
+{
+  "name": "change_postal_address_with_otp_step_up",
+  "scenario_key": "change-postal-address-with-otp-step-up",
+  "scenario_id": "",
+  "use_case": "Change contact details with step-up verification",
+  "branch": "The customer moved. Passcode, OTP step-up, then the postal address is changed to the one confirmed, exactly as given.",
+  "tests": "passes when the agent verifies, completes the OTP step-up, and sets the address to '77 Lakeview Drive, Apt 4, Madison, WI 53703'.",
+  "instruction": "You moved last week. Your new address is 77 Lakeview Drive, Apt 4, Madison, WI 53703. Provide passcode 3302 when asked and one-time passcode 958147 when told it was sent. Confirm the address when read back; correct it if any part is wrong.\n\nYour details:\n- Name: Diego Moreno\n- Customer ID: C362\n- Session ID: SESS362\n- New address: 77 Lakeview Drive, Apt 4, Madison, WI 53703\n- Passcode: 3302\n- One-time passcode: 958147",
+  "keywords": [
+    "contact_change",
+    "step_up"
+  ],
+  "persona": {
+    "name": "Diego Moreno",
+    "gender": "female",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I've moved and need to update my address.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C362",
+    "session_id": "SESS362",
+    "field": "address",
+    "new_value": "77 Lakeview Drive, Apt 4, Madison, WI 53703",
+    "passcode": "3302",
+    "otp": "958147"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C362",
+        "session_id": "SESS362",
+        "challenge_type": "passcode",
+        "challenge_response": "3302"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C362",
+        "session_id": "record: SESS362",
+        "challenge_response": "caller: 3302",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C362",
+        "session_id": "SESS362",
+        "challenge_type": "otp",
+        "challenge_response": "958147"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C362",
+        "session_id": "record: SESS362",
+        "challenge_response": "caller: one-time passcode 958147",
+        "challenge_type": "rule: 'Contact-detail changes require a one-time passcode step-up on the verified session'"
+      }
+    },
+    {
+      "tool": "update_contact_details",
+      "arguments": {
+        "customer_id": "C362",
+        "session_id": "SESS362",
+        "field": "address",
+        "new_value": "77 Lakeview Drive, Apt 4, Madison, WI 53703",
+        "request_key": "REQ-C362-ADDRESS-1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C362",
+        "session_id": "record: SESS362",
+        "field": "caller: address",
+        "new_value": "caller: 77 Lakeview Drive, Apt 4, Madison, WI 53703"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "change_contact_details",
+    "disposition": "address",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "contact_details_updated_after_step_up",
+    "step_up_explained_and_enforced"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

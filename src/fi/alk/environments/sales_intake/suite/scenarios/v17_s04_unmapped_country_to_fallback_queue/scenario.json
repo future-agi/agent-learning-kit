@@ -1,0 +1,86 @@
+{
+  "name": "v17_s04_unmapped_country_to_fallback_queue",
+  "scenario_key": "v17-s04-unmapped-country-to-fallback-queue",
+  "scenario_id": "",
+  "use_case": "Route leads by territory with a fallback queue",
+  "branch": "Sales lead Dana Whitfield asks the desk to give Vale Verde Varejo's qualified lead L04 to the best rep; Brazil has no territory owner, so it goes to the SDR fallback queue",
+  "tests": "the agent reads the routing rules, finds no owner for Brazil, and assigns L04 to Q-SDR-FALLBACK rather than to a rep",
+  "instruction": "You are Dana Whitfield, BrightDesk's sales lead. Vale Verde Varejo in Brazil (lead L04) is qualified and nobody owns it. Ask the desk to assign it to the best rep. If the desk explains that Brazil has no owner and the lead goes to the fallback queue, agree.\n\nYour details:\n- Name: Dana Whitfield\n- Role: Sales lead\n- Lead: L04",
+  "keywords": [
+    "routing",
+    "fallback",
+    "workbook"
+  ],
+  "persona": {
+    "name": "Dana Whitfield",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Sales Manager",
+    "location": "United Kingdom",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Lead L04 from Vale Verde in Brazil is unassigned. Can you assign it to the best rep?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L04",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_routing_rules",
+      "arguments": {
+        "country": "Brazil"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "assign_owner",
+      "arguments": {
+        "lead_id": "L04",
+        "queue_id": "Q-SDR-FALLBACK"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: L04",
+        "queue_id": "rule: Brazil has no owner; the fallback queue"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "route_lead",
+    "disposition": "exception",
+    "interaction": "multi_turn",
+    "counterparty": "colleague",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "owner_assigned_by_territory"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

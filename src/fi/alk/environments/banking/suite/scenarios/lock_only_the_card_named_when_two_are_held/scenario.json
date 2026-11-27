@@ -1,0 +1,105 @@
+{
+  "name": "lock_only_the_card_named_when_two_are_held",
+  "scenario_key": "lock-only-the-card-named-when-two-are-held",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The customer holds two cards and has lost only the credit card ending 2020; the debit card ending 1010 stays active. Only CARD313 is locked.",
+  "tests": "passes when the agent verifies and locks CARD313 (ending 2020) after confirmation and leaves CARD312 active.",
+  "instruction": "You have lost your credit card ending in 2020 but you still have your debit card ending in 1010 and need it for the week. Ask for the credit card to be locked; if the assistant offers to lock both, decline for the debit card. Confirm the lock of the card ending 2020 when summarised. Provide passcode 9961 when asked.\n\nYour details:\n- Name: Felix Nowak\n- Customer ID: C312\n- Session ID: SESS312\n- Cards: CARD312 (debit, ending 1010), CARD313 (credit, ending 2020)\n- Passcode: 9961",
+  "keywords": [
+    "card_lock"
+  ],
+  "persona": {
+    "name": "Felix Nowak",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "Hi, I've lost my credit card ending 2020. Please lock just that one, I still have my debit card.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C312",
+    "session_id": "SESS312",
+    "card_id": "CARD313",
+    "other_card": "CARD312",
+    "passcode": "9961"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C312",
+        "session_id": "SESS312",
+        "challenge_type": "passcode",
+        "challenge_response": "9961"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C312",
+        "session_id": "record: SESS312",
+        "challenge_response": "caller: 9961",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "list_owned_cards",
+      "arguments": {
+        "customer_id": "C312",
+        "session_id": "SESS312"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "customer_id": "C312",
+        "session_id": "SESS312",
+        "card_id": "CARD313",
+        "reason": "lost_card",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C312",
+        "session_id": "record: SESS312",
+        "card_id": "record: CARD313",
+        "confirmed": "rule: 'The agent must ask for and receive explicit customer confirmation before locking a payment card.'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "two_cards",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

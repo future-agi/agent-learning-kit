@@ -1,0 +1,80 @@
+{
+  "name": "policy_defective_clearance_exceptions",
+  "scenario_key": "policy-defective-clearance-exceptions",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Customer asks if a clearance item that arrived defective or damaged can be returned under the Final Sale Exceptions policy.",
+  "tests": "Verifies the agent reads the Final Sale Exceptions document from Drive and cites its rules regarding defective clearance items.",
+  "instruction": "Ask Northgate Outfitters customer support about returning a clearance final-sale item that arrived with a manufacturer defect. You want to know if the Final Sale Exceptions policy allows returns or exchanges for defective items.",
+  "keywords": [
+    "policy_inquiry"
+  ],
+  "persona": {
+    "name": "Alex Rivera",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, if I purchase a clearance item and it arrives defective or damaged, can I return or exchange it under your final sale exceptions policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "document": "final_sale_exceptions",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "excludeContentSnippets": false,
+        "query": "title contains 'Final Sale Exceptions'",
+        "pageToken": null,
+        "pageSize": 10
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "revisionId": null,
+        "includeComments": false,
+        "fileId": "final_sale_exceptions"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files.file_id for final sale exceptions policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "counterparty": "prospective_buyer",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "answer_policy_questions",
+    "disposition": "disputing_policy"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
