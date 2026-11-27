@@ -231,7 +231,7 @@ async def _communicate(
 def _held_parents(directory: Path) -> bool:
     """No other account can rename or replace ``directory``: every directory above it is root's or this account's,
     and writable by no one else unless sticky (where only an entry's owner may move it)."""
-    for parent in Path(os.path.realpath(directory.parent), "_").parents:
+    for parent in Path(directory.parent, "_").parents:
         found = os.stat(parent)
         if found.st_uid not in (0, os.geteuid()):
             return False
@@ -245,6 +245,9 @@ def _private_directory(directory: Path) -> tuple[Path, bool]:
     it is a link, or a directory above it lets another account move it), a new private one in its place: a worker's result is written inside it, so such a directory
     could be made to hand back another result."""
     directory.parent.mkdir(parents=True, exist_ok=True)
+    # Checked and used by its real path: a link above it, in a directory another account may change, can then be
+    # swapped without moving where the worker writes.
+    directory = Path(os.path.realpath(directory.parent), directory.name)
     with contextlib.suppress(FileExistsError):
         directory.mkdir(mode=0o700)
     found = os.lstat(directory)

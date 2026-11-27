@@ -3726,3 +3726,68 @@ def test_rows_in_a_partition_or_an_unlogged_table_never_outlive_a_reset(door_wor
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
+
+
+_DEFINER_SETUP = (
+    "CREATE DOMAIN public.amount AS int NOT NULL DEFAULT 1",
+    "CREATE TABLE public.ledger (id int, v public.amount)",
+    "CREATE TABLE public.audit (id int, v public.amount)",
+    "GRANT ALL ON public.ledger, public.audit TO PUBLIC",
+    "INSERT INTO public.ledger VALUES (1, 5)",
+    "CREATE FUNCTION public.plus_one(x int) RETURNS int LANGUAGE sql AS $f$ SELECT coalesce(x, 0) + 1 $f$",
+)
+_DEFINER_CHANGES = {
+    "function made strict": ("ALTER FUNCTION public.plus_one(int) STRICT", "functions"),
+    "domain default": ("ALTER DOMAIN public.amount SET DEFAULT 42", "types"),
+    "domain not null dropped": ("ALTER DOMAIN public.amount DROP NOT NULL", "types"),
+    "table made to inherit": ("ALTER TABLE public.audit INHERIT public.ledger", "inheritance"),
+    "database setting": (
+        "DO $d$ BEGIN EXECUTE format('ALTER DATABASE %I SET app.note TO %L', current_database(), 'the answer'); "
+        "END $d$",
+        "database settings",
+    ),
+    "membership granted to the agent's role": (
+        "DO $d$ BEGIN EXECUTE format('GRANT pg_read_all_data TO %I', session_user); END $d$",
+        "own roles",
+    ),
+}
+
+
+@real_postgres
+@pytest.mark.parametrize("owner", ("migrator", "superuser"))
+@pytest.mark.parametrize("change", sorted(_DEFINER_CHANGES))
+def test_a_definition_a_definer_function_changes_never_survives_a_reset(door_worlds, monkeypatch, change, owner):
+    """A definer function owned by the world's migrator, or by a superuser, changes a definition beyond the columns
+    once picked to read (a function made STRICT, a domain's default, a table made to inherit, a database setting, a
+    role given to the agent's): the digest reads whole definitions, so the reset refuses the world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness import process_runtime as runtime
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    statement, kind = _DEFINER_CHANGES[change]
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        for setup in _DEFINER_SETUP:
+            connection.execute(setup)
+        connection.execute(
+            psycopg.sql.SQL(
+                "CREATE FUNCTION public.act() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE {}; END $$"
+            ).format(psycopg.sql.Literal(statement))
+        )
+        if owner == "migrator":
+            connection.execute(
+                f"DO $$ BEGIN CREATE ROLE {runtime.MIGRATOR_ROLE}; EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+            )
+            for made in ("DOMAIN public.amount", "TABLE public.ledger", "TABLE public.audit",
+                         "FUNCTION public.plus_one(int)", "FUNCTION public.act()"):
+                connection.execute(f"ALTER {made} OWNER TO {runtime.MIGRATOR_ROLE}")
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        try:
+            agent.execute("SELECT public.act()")
+        except psycopg.errors.InsufficientPrivilege:
+            pytest.skip("the migrator may not make this change")
+    with pytest.raises(WorldResetRefused, match=kind):
+        store.restore(snapshot)

@@ -338,3 +338,20 @@ def test_a_private_work_directory_under_a_parent_others_may_write_is_used_only_i
     result = asyncio.run(run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=work))
     assert result["marker"] == "parent"
     assert Path(result["tmp"]).resolve().is_relative_to(work.resolve()) is used
+
+
+def test_a_work_directory_reached_through_a_link_others_may_swap_is_used_by_its_real_path(tmp_path, worker_env):
+    """The path names a link in a directory anyone may change, to a private directory: the worker runs in the real
+    directory, so swapping the link afterwards changes nothing it reads or writes."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    (shared / "link").symlink_to(private)
+    result = asyncio.run(
+        run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=shared / "link" / "workers")
+    )
+    assert result["marker"] == "parent"
+    scratch = Path(result["tmp"])
+    assert scratch.is_relative_to(Path(os.path.realpath(private))) and not scratch.is_relative_to(shared)

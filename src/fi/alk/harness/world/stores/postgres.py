@@ -638,10 +638,14 @@ class PostgresStore(ContainerStore):
             rows = connection.execute(
                 "SELECT a.rolname, coalesce(a.rolpassword, ''), coalesce((SELECT string_agg(concat_ws(':', "
                 "s.setdatabase, s.setconfig::text), ',' ORDER BY s.setdatabase) FROM pg_db_role_setting s "
-                "WHERE s.setrole = a.oid), '') FROM pg_authid a WHERE a.rolname = ANY(%s) ORDER BY a.rolname",
+                "WHERE s.setrole = a.oid), ''), "
+                # The roles each is a member of: a grant made since would give the next trial its rights.
+                "coalesce((SELECT string_agg(concat_ws(':', m.roleid::regrole, m.admin_option), ',' ORDER BY 1) "
+                "FROM pg_auth_members m WHERE m.member = a.oid), '') "
+                "FROM pg_authid a WHERE a.rolname = ANY(%s) ORDER BY a.rolname",
                 (names,),
             ).fetchall()
-        for name, verifier, _settings in rows:
+        for name, verifier, _settings, _memberships in rows:
             self._verifiers.setdefault(str(name), str(verifier))
         return hashlib.sha256(repr(rows).encode()).hexdigest()
 
