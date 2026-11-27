@@ -2227,6 +2227,50 @@ def test_the_scenario_s_limits_keep_an_explicit_no_limit_and_its_model_plays_eve
     assert not dispatcher._turn_left(watcher)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_a_proof_follows_the_actors_switch_as_a_run_does(
+    monkeypatch, tmp_path, enabled
+):
+    """Off, a scenario is proved without its actors, pre-run, first speaker and faults, as `as_played` runs it."""
+    from fi.alk.harness import prove as prove_module
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.job import ActorsSwitch
+    from fi.alk.harness.scenario import Scenario
+
+    scenario = Scenario(
+        name="acme",
+        instruction="x",
+        pre_run=[
+            {
+                "actors": ["priya"],
+                "where": {"action": "slack.post", "arguments": {}},
+                "about": "Acme",
+            }
+        ],
+        faults=[{"action": "issue_refund", "mode": "unavailable", "on_call": 1}],
+    )
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def checks_for(played, catalogue):
+        seen.append(played)
+        raise Stop
+
+    monkeypatch.setattr(prove_module, "checks_for", checks_for)
+    monkeypatch.setattr(
+        prove_module,
+        "current_actors_switch",
+        lambda: ActorsSwitch(enabled=enabled, share=[0.0, 1.0]),
+    )
+    with pytest.raises(Stop):
+        prove_module.prove(scenario, Catalogue(sub_goals=[]), tmp_path)
+
+    [played] = seen
+    assert bool(played.pre_run) is enabled and bool(played.faults) is enabled
+    # The scenario itself is never changed.
+    assert scenario.pre_run and scenario.faults
 @pytest.mark.parametrize("written", [{"decision": "approved"}, {"set": {"status": "denied"}}, {"approved": True}])
 def test_an_approver_s_record_never_says_its_verdict_by_the_words_in_its_fields(written):
     """The verdict is the one the actor gave or a declining timeout's; words a record happens to hold are not one."""

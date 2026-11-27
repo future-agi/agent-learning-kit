@@ -84,9 +84,10 @@ def test_adapter_reports_complete_value_free_failure_set() -> None:
         "generated_column_authored",
         "unknown_column",
     ]
-    assert {item.owner for item in diagnostics} == {
-        RepairOwner.COMPILER,
-        RepairOwner.AUTHORING,
+    # A generated column the authoring wrote is the authoring's to repair, like an unknown column.
+    assert {item.code: item.owner for item in diagnostics} == {
+        "generated_column_authored": RepairOwner.AUTHORING,
+        "unknown_column": RepairOwner.AUTHORING,
     }
     serialized = "".join(item.model_dump_json() for item in diagnostics)
     assert "customer-secret" not in serialized

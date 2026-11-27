@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
+import pytest
+
 from fi.alk.harness.diagnostic_adapters.postgres import diagnose_postgres_error
-from fi.alk.harness.diagnostics import RepairOwner
+from fi.alk.harness.diagnostics import RepairOwner, diagnostic_policy
 from fi.alk.harness.job import HarnessStage
 
 
@@ -61,7 +64,108 @@ def test_array_failure_is_identified_from_datatype_not_message() -> None:
     )
 
     assert diagnostic.code == "array_shape_mismatch"
-    assert diagnostic.owner is RepairOwner.COMPILER
+    assert diagnostic.owner is RepairOwner.AUTHORING
+
+
+def test_a_value_the_column_type_cannot_parse_goes_to_authoring_repair() -> None:
+    # The shape PostgreSQL really sends for 22P02: no table, column or datatype.
+    diagnostic = diagnose_postgres_error(
+        DatabaseError(
+            "22P02",
+            Diag(message_primary='invalid input syntax for type uuid: "rider-1"'),
+        ),
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+    )
+
+    assert diagnostic.code == "value_shape_mismatch"
+    assert diagnostic.owner is RepairOwner.AUTHORING
+    assert diagnostic.location.datatype == "uuid"
+    assert "rider-1" not in diagnostic.redacted_message
+
+
+# Values that hold PostgreSQL's own quoting: an embedded quote, a backslash, a newline.
+_AWKWARD = ('prefix"TOPSECRET', 'a\\b"TOPSECRET', 'x\n"TOPSECRET\n')
+
+
+@pytest.mark.parametrize("value", _AWKWARD)
+def test_a_parse_failure_s_message_holds_no_part_of_an_awkward_value(
+    value: str,
+) -> None:
+    diagnostic = diagnose_postgres_error(
+        DatabaseError(
+            "22P02",
+            Diag(message_primary=f'invalid input syntax for type uuid: "{value}"'),
+        ),
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+    )
+
+    assert diagnostic.code == "value_shape_mismatch"
+    assert diagnostic.location.datatype == "uuid"
+    assert diagnostic.redacted_message == (
+        "PostgreSQL 22P02: an authored value does not fit its column (type uuid)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("column_type", "value", "code", "datatype"),
+    [
+        ("uuid", "rider-1", "value_shape_mismatch", "uuid"),
+        ("text[]", "blue", "array_shape_mismatch", None),
+        *(("uuid", value, "value_shape_mismatch", "uuid") for value in _AWKWARD),
+        ("text[]", 'blue"TOPSECRET', "array_shape_mismatch", None),
+        ("integer", "99999999999", "unsupported_source_construct", "integer"),
+    ],
+)
+def test_a_real_postgresql_parse_failure_names_the_table_and_type_but_never_the_value(
+    column_type: str, value: str, code: str, datatype: str | None
+) -> None:
+    dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("set ALK_TEST_POSTGRES_DSN to run against a real PostgreSQL")
+    psycopg = pytest.importorskip("psycopg")
+    from fi.alk.harness.compile.postgres import (
+        PostgresApplyError,
+        PostgresCompileResult,
+        PostgresInsert,
+        apply_postgres,
+    )
+
+    operation = PostgresInsert(
+        table="riders",
+        row_identity="riders:1",
+        columns=("id",),
+        statement="INSERT INTO diag_test.riders (id) VALUES (%s)",
+        params=(value,),
+    )
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute("DROP SCHEMA IF EXISTS diag_test CASCADE")
+        connection.execute("CREATE SCHEMA diag_test")
+        connection.execute(f"CREATE TABLE diag_test.riders (id {column_type})")
+        try:
+            with pytest.raises(PostgresApplyError) as raised:
+                apply_postgres(
+                    connection,
+                    PostgresCompileResult.model_construct(
+                        operations=(operation,), sequence_resets=()
+                    ),
+                )
+        finally:
+            connection.execute("DROP SCHEMA IF EXISTS diag_test CASCADE")
+
+    # The driver's own error travels inside, with the table PostgreSQL does not name.
+    assert (
+        isinstance(raised.value.error, psycopg.Error) and raised.value.table == "riders"
+    )
+    diagnostic = diagnose_postgres_error(
+        raised.value, stage=HarnessStage.VALIDATING_ENVIRONMENT
+    )
+    assert diagnostic.code == code
+    assert diagnostic.owner is diagnostic_policy(code).owner
+    assert diagnostic.location.table == "riders"
+    assert diagnostic.location.datatype == datatype
+    assert value not in diagnostic.redacted_message
+    assert "TOPSECRET" not in diagnostic.redacted_message
+    assert "99999999999" not in diagnostic.redacted_message
 
 
 def test_constraint_codes_have_stable_ownership() -> None:

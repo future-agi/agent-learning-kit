@@ -251,9 +251,10 @@ what the gates check. Then:
 - **Actors**, where `add_actor` is offered: `add_actor` and `drop_actor` change the
   environment's list of who might be around its users, and no scenario changes with it. Including one
   in scenarios changes what they test: give each its `actors` entry and resubmit it. A share of
-  scenarios the person asks for, whether every one, none or a range, goes to `aim_for` as `actor_share` and
-  replaces the default; brief the sub-agents with it. When a request does not say whether it means the list or
-  scenarios, ask. An entry you write follows the write-scenarios rules for actors. When an actor
+  scenarios the person asks for, whether every one, none or a range, goes to `aim_for` as `actor_share` with
+  `change_actor_share` and replaces the environment's share; brief the sub-agents with it. Adding or editing
+  cases never passes `actor_share`: the environment's share stays as the person set it. When a request
+  does not say whether it means the list or scenarios, ask. An entry you write follows the write-scenarios rules for actors. When an actor
   or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
   which one and why, offer what can be used instead, and change it only once they agree.
 - **World actors**, where `add_actor` is offered: `add_actor` adds someone who acts through the world's own

@@ -41,6 +41,9 @@ from .backends import tool, tool_server
 from .backends.files import secret_text
 
 from .contract import (
+    conversational_flag,
+    field_value,
+    has_text,
     prompt_quote,
     CALL_DIRECTIONS,
     AgentContract,
@@ -656,14 +659,11 @@ def without_local_state(contract: AgentContract) -> AgentContract:
 
 
 def _provider_prompt_copied(
-    contract: AgentContract, profile: dict[str, Any] | None
+    contract: AgentContract, whole: str | None
 ) -> AgentContract:
     """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
-    profile is in force and code can take every text of it. Otherwise it is left as checked:
-    the reading's quote, nothing marked."""
-    from .provider_import import whole_prompt
-
-    whole = whole_prompt(profile) if profile is not None else None
+    profile is in force and code could take every text of it (``whole``). Otherwise it is left
+    as checked: the reading's quote, nothing marked."""
     if whole is None:
         return contract
     return contract.model_copy(
@@ -883,6 +883,28 @@ def _needs_a_browser(destination: Path) -> bool:
     return contract is not None and "browser" in contract.environment_needs
 
 
+# The ask for a conversational agent's prompt and rules when the save has neither, by where the
+# reading found the agent.
+PROMPT_ASK_FROM_DEFINITION = (
+    "no hard_constraints and no system_prompt_excerpt, for a conversational agent. Its prompt "
+    "and rules are in the provider definition you were shown: quote the prompt in "
+    "system_prompt_excerpt, with ... where you leave text out, and record its rules in "
+    "hard_constraints."
+)
+PROMPT_ASK_UNREADABLE_DEFINITION = (
+    "no hard_constraints and no system_prompt_excerpt, for a conversational agent. The build "
+    "named a provider definition for it, but that definition could not be read, so its prompt "
+    "is not available here and lines in this repository are not it. Record in hard_constraints "
+    "any rules you can tell the agent follows, or send the contract again as it is."
+)
+PROMPT_ASK_FROM_SOURCE = (
+    "no hard_constraints and no system_prompt_excerpt, for a conversational agent. Its prompt "
+    "usually exists and often lives away from the main agent file — search the whole source "
+    "for a long instructions string before deciding there is none. If you find it, name its "
+    "lines in system_prompt_from so it is copied whole."
+)
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
@@ -912,6 +934,13 @@ def contract_tools(
     # Here rather than at the top: the checker's child imports this module.
     from . import save_checker
     from .save_checker import SAVE_DEADLINE, ChildKeepsEnding, NotInTime, Saved
+    from .provider_import import whole_prompt
+
+    # The provider's whole prompt, when one is in force and code can take every text of it:
+    # taken once, here, and copied by every save of this stage.
+    provider_prompt = (
+        whole_prompt(provider_profile) if provider_profile is not None else None
+    )
 
     events_schema = CompletedToolEvents.model_json_schema()
     events_schema["properties"]["failure_events"]["items"] = (
@@ -2172,18 +2201,23 @@ def contract_tools(
         thin = [
             (
                 "prompt",
-                bool(payload.get("conversational", True))
-                and not payload.get("hard_constraints")
+                # As the contract will read the flag: only a false opts out, null is the default.
+                conversational_flag(payload)
+                # Rules under any name the contract accepts for them, and not blank.
+                and not has_text(field_value(payload, "hard_constraints"))
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
                 and not payload.get("system_prompt_from")
-                # With a provider's definition in force, its prompt is the one; lines aren't.
-                and provider_profile is None,
-                "no hard_constraints and no system_prompt_excerpt, for a conversational agent. "
-                "Its prompt usually exists and often lives away from the main agent file — "
-                "search the whole source for a long instructions string before deciding there "
-                "is none. If you find it, name its lines in system_prompt_from so it is copied "
-                "whole.",
+                # A provider's whole prompt is copied at the save, so it is not missing.
+                and provider_prompt is None,
+                (
+                    PROMPT_ASK_FROM_DEFINITION
+                    if provider_profile
+                    # Named by the build but unreadable: in force, empty, and never shown.
+                    else PROMPT_ASK_UNREADABLE_DEFINITION
+                    if provider_profile is not None
+                    else PROMPT_ASK_FROM_SOURCE
+                ),
             ),
             (
                 "data",
@@ -2278,8 +2312,14 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        kept = without_local_state(checked.contract) if provider_owned_state else checked.contract
-        result = _save_contract(_provider_prompt_copied(kept, provider_profile), destination)
+        kept = (
+            without_local_state(checked.contract)
+            if provider_owned_state
+            else checked.contract
+        )
+        result = _save_contract(
+            _provider_prompt_copied(kept, provider_prompt), destination
+        )
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result
