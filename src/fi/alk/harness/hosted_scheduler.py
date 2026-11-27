@@ -257,6 +257,10 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
+    # The calls came from a trace this harness wrote (the world's `_alk_tool_trace`) and reading
+    # it succeeded, so an empty `calls` means the agent made none: the scenario is graded rather
+    # than retried as missing evidence.
+    evidence_collected: bool = False
     # Per actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
     call_actors: tuple[dict[str, Any], ...] = ()
     # Every action an actor took in the world this trial, with when and its outcome.
@@ -2633,15 +2637,21 @@ class HostedScheduler:
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
         if not calls and (
-            self._require_tool_workflow
-            or getattr(scenario, "requires_tool_evidence", True)
-            or call_outcome.tool_capture_failed
+            call_outcome.tool_capture_failed
+            or (
+                not call_outcome.evidence_collected
+                and (
+                    self._require_tool_workflow
+                    or getattr(scenario, "requires_tool_evidence", True)
+                )
+            )
         ):
             # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
             # whether the simulator observed a turn (world-handle-interface.md "Coverage
-            # guarantee": "An empty list is never handed to checks"). A scenario that needs no
-            # tool call still stops here when capture failed: a call nothing recorded can hold
-            # what its claim forbids.
+            # guarantee": "An empty list is never handed to checks"), unless the trace this
+            # harness itself wrote was read in full (`evidence_collected`): then no call is a
+            # result, and the scenario is graded. A scenario that needs no tool call still stops
+            # here when capture failed: a call nothing recorded can hold what its claim forbids.
             failure = _failure(
                 "evidence_missing",
                 "tool capture failed for this scenario's call"

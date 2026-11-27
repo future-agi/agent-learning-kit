@@ -1,0 +1,82 @@
+{
+  "name": "v13_s03_insufficient_leave_balance",
+  "scenario_key": "v13-s03-insufficient-leave-balance",
+  "scenario_id": "",
+  "use_case": "Handle leave request boundaries such as insufficient balance, overlaps, or exceptions via HR case",
+  "branch": "The employee requests five days of paid annual leave when only two days remain in their available balance, requiring the assistant to refuse paid booking and explain options.",
+  "tests": "Explains the leave balance shortage (2 days available vs 5 requested) without approving ungranted paid leave.",
+  "instruction": "You want to take 5 days of paid annual leave from Monday, November 16, 2026 to Friday, November 20, 2026. You believe you might have enough days left. If your balance is insufficient, you want to know how many days you currently have available and what your options are.\n\nYour details:\n- Employee ID: EMP-901\n- Name: Marcus Vance\n- Region: US\n- Requested Leave: 5 days annual leave (2026-11-16 to 2026-11-20)",
+  "keywords": [
+    "insufficient_balance",
+    "leave_balance",
+    "unpaid_leave",
+    "leave_policy"
+  ],
+  "persona": {
+    "name": "Marcus Vance",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Direct and concise",
+    "initial_message": "Can you approve 5 days of paid annual leave for me from November 16 to November 20, 2026?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "employee_id": "EMP-901",
+    "requested_days": 5,
+    "origin": "generated",
+    "available_balance": 2
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "EMP-901"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "employee_id": "EMP-901",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: EMP-901",
+        "leave_type": "caller: annual"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "task": "handle_boundary_exception",
+    "counterparty": "employee_us",
+    "disposition": "insufficient_balance",
+    "overlay": "none",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "leave_balance_checked",
+    "insufficient_balance_explained_with_alternatives"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

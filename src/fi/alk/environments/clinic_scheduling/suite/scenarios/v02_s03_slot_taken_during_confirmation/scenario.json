@@ -1,0 +1,117 @@
+{
+  "name": "v02_s03_slot_taken_during_confirmation",
+  "scenario_key": "v02-s03-slot-taken-during-confirmation",
+  "scenario_id": "",
+  "use_case": "Waitlist, concurrency and failure recovery",
+  "branch": "Grace Okafor confirms Tuesday 27 October 10:00 with Dr. Sofia Morales, but another caller takes it first; the desk says nothing was booked and books the 10:30 she accepts",
+  "tests": "the agent reports the failed booking truthfully, re-checks availability and books the alternative the patient accepts",
+  "instruction": "You want a dermatology appointment with Dr. Sofia Morales tomorrow morning, Tuesday 27 October, ideally at 10:00. Say yes to 10:00 when offered. If you are told it has just gone, accept the next time that morning.\n\nYour details:\n- Name: Grace Okafor\n- Date of birth: 1968-09-30",
+  "keywords": [
+    "concurrency",
+    "workbook"
+  ],
+  "persona": {
+    "name": "Grace Okafor",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, can I see Dr. Morales tomorrow morning, around 10?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P05",
+    "slot_id": "SL-D03-20261027-1030",
+    "origin": "setup"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Grace Okafor",
+        "dob": "1968-09-30"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D03",
+        "date_from": "2026-10-27",
+        "date_to": "2026-10-27",
+        "patient_id": "P05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "patient_id": "P05",
+        "slot_id": "SL-D03-20261027-1000",
+        "reason": "Skin check",
+        "confirmed": true,
+        "request_key": "REQ-P05-D03-1000"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D03",
+        "date_from": "2026-10-27",
+        "date_to": "2026-10-27",
+        "patient_id": "P05"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "patient_id": "P05",
+        "slot_id": "SL-D03-20261027-1030",
+        "reason": "Skin check",
+        "confirmed": true,
+        "request_key": "REQ-P05-D03-1030"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller",
+        "slot_id": "caller accepted 10:30"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "book",
+    "disposition": "concurrency",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "alternatives_offered_after_conflict"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

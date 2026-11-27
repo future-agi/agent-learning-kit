@@ -1,0 +1,111 @@
+{
+  "name": "withdraw_dispute_after_merchant_refund",
+  "scenario_key": "withdraw-dispute-after-merchant-refund",
+  "scenario_id": "",
+  "use_case": "Follow up a dispute: status, list, withdrawal",
+  "branch": "The garage refunded the difference directly, so the customer wants dispute D340 withdrawn. The consequence (the charge stands) is explained; D340 is withdrawn after confirmation.",
+  "tests": "passes when the agent verifies and withdraws D340 after confirmation, and no other dispute is touched.",
+  "instruction": "You opened dispute D340 for a $320.00 Elm Street Garage charge on your debit card ending 7788 because they overcharged you. The garage has since refunded the difference, so you want the dispute withdrawn. Confirm the withdrawal when the assistant explains what it means. Provide passcode 9915 when asked.\n\nYour details:\n- Name: Patrick Doyle\n- Customer ID: C340\n- Session ID: SESS340\n- Dispute: D340 (TX340, $320.00)\n- Passcode: 9915",
+  "keywords": [
+    "withdraw_dispute"
+  ],
+  "persona": {
+    "name": "Patrick Doyle",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I'd like to withdraw dispute D340, the garage has refunded me directly.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C340",
+    "session_id": "SESS340",
+    "dispute_id": "D340",
+    "passcode": "9915"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C340",
+        "session_id": "SESS340",
+        "challenge_type": "passcode",
+        "challenge_response": "9915"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C340",
+        "session_id": "record: SESS340",
+        "challenge_response": "caller: 9915",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_dispute_status",
+      "arguments": {
+        "customer_id": "C340",
+        "session_id": "SESS340",
+        "dispute_id": "D340"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C340",
+        "session_id": "record: SESS340",
+        "dispute_id": "record: D340"
+      }
+    },
+    {
+      "tool": "withdraw_dispute",
+      "arguments": {
+        "customer_id": "C340",
+        "session_id": "SESS340",
+        "dispute_id": "D340",
+        "reason": "Merchant refunded the difference directly",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C340",
+        "session_id": "record: SESS340",
+        "dispute_id": "record: D340",
+        "confirmed": "rule: 'The agent confirms the withdrawal and its consequence first'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "follow_up_dispute",
+    "disposition": "withdrawal",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_status_retrieved",
+    "dispute_withdrawn_as_requested",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

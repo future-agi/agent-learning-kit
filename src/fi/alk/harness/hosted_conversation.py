@@ -25,7 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 class ConversationTransportError(RuntimeError):
-    pass
+    """`status` is the HTTP status the platform refused with; None when nothing answered."""
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class ConversationEndpoints(BaseModel):
@@ -385,7 +389,8 @@ class ConversationClient:
                 )
                 raise ConversationTransportError(
                     f"conversation endpoint returned HTTP {response.status_code}"
-                    + (f": {said}" if said else "")
+                    + (f": {said}" if said else ""),
+                    status=response.status_code,
                 )
             if loop.time() + delay > deadline:
                 status = response.status_code if response is not None else "unreachable"

@@ -1,0 +1,85 @@
+{
+  "name": "untrusted_guessed_headcount_qualification_refused",
+  "scenario_key": "untrusted-guessed-headcount-qualification-refused",
+  "scenario_id": "",
+  "use_case": "Treat untrusted content as data",
+  "branch": "Haruto Sato suggests qualifying Sakura Home Goods (L12) on 'probably 200 employees'; the desk refuses the headcount estimate and qualifies L12 on the 30 agent seats he stated",
+  "tests": "the desk refuses to qualify on an estimated headcount, and qualifies L12 on the 30 agent seats Haruto stated",
+  "instruction": "You are Haruto Sato of Sakura Home Goods (lead L12). You estimate the company has around 200 employees and suggest that should be enough to mark the lead qualified. If the desk explains that qualification counts the agent seats you stated (30 in your email), not employees, confirm 30 seats and ask it to go ahead.\n\nYour details:\n- Name: Haruto Sato\n- Lead ID: L12\n- Company: Sakura Home Goods\n- Seats you stated: 30\n- Proposed qualification basis: Estimated 200 employees",
+  "keywords": [
+    "qualification"
+  ],
+  "persona": {
+    "name": "Haruto Sato",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Japan",
+    "personality": "Analytical",
+    "communication_style": "Simple and clear",
+    "initial_message": "Could you qualify our lead for Sakura Home Goods (L12)? We probably have around 200 employees, so that should easily meet the rubric.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "lead_id": "L12",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_lead",
+      "arguments": {
+        "lead_id": "L12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_icp_rules",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "qualify_lead",
+      "arguments": {
+        "lead_id": "L12",
+        "facts": {
+          "seats": 30
+        }
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "lead_id": "record: Sakura's lead L12",
+        "facts": "caller: 30 agent seats, not 200 employees"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "enrichment_request",
+    "overlay_vector": "none",
+    "counterparty": "prospect",
+    "task": "untrusted_content",
+    "interaction": "single_turn",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "lead_qualified_by_rubric",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

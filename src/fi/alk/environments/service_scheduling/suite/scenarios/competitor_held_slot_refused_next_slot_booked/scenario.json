@@ -1,0 +1,110 @@
+{
+  "name": "competitor_held_slot_refused_next_slot_booked",
+  "scenario_key": "competitor-held-slot-refused-next-slot-booked",
+  "scenario_id": "",
+  "use_case": "Answer availability from the staff calendars and hold slots",
+  "branch": "Customer asks for Tuesday 27 October 15:00 London with Tom (held by H002 for CU07); desk declines 15:00 as held, offers 15:30, customer books 15:30.",
+  "tests": "passes when the desk explains 15:00 is held and successfully books Carlos Mendez for 15:30 with Tom Whitaker.",
+  "instruction": "You want to book a 30-minute Haircut with Tom Whitaker at Shoreditch Studio on Tuesday 27 October 2026 at 3:00 PM (15:00). When you ask, the desk will explain that 3:00 PM is currently held by another customer and will offer the next available slot at 3:30 PM (15:30). You agree to take the 3:30 PM slot and confirm the booking.\n\nYour details:\n- Name: Carlos Mendez\n- Email: carlos.mendez@example.com\n- Phone: +44 20 7946 0410\n- Service: Haircut\n- Staff: Tom Whitaker\n- Studio location: Shoreditch Studio\n- Date: Tuesday 27 October 2026\n- Initial requested time: 15:00 (3:00 PM)\n- Accepted alternative time: 15:30 (3:30 PM)",
+  "keywords": [
+    "held_slot",
+    "booking",
+    "haircut",
+    "alternative"
+  ],
+  "persona": {
+    "name": "Carlos Mendez",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Accountant",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I would like to book a Haircut with Tom Whitaker at the Shoreditch Studio on Tuesday 27 October at 3:00 PM.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "carlos.mendez@example.com",
+    "service": "Haircut (SV3)",
+    "phone": "+44 20 7946 0410",
+    "start_time": "2026-10-27T15:30",
+    "staff": "Tom Whitaker (ST05)",
+    "date": "2026-10-27",
+    "origin": "generated",
+    "location": "Shoreditch Studio (L2)",
+    "customer_id": "CU410"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0410",
+        "email": "carlos.mendez@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV3",
+        "location_id": "L2",
+        "staff_id": "ST05",
+        "date": "2026-10-27"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "service_id": "SV3",
+        "confirmed": true,
+        "utc_offset": "+00:00",
+        "customer_id": "CU410",
+        "location_id": "L2",
+        "hold_id": null,
+        "request_key": "REQ-BK-CARLOS-1530",
+        "start_time": "2026-10-27T15:30",
+        "staff_id": "ST05"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "confirmed": "rule: \"Book an appointment after the customer confirmed it\"",
+        "staff_id": "record: staff.staff_id where name='Tom Whitaker'",
+        "start_time": "caller: Tuesday 27 October at 15:30",
+        "service_id": "caller: Haircut (SV3)",
+        "location_id": "record: locations.location_id where name='Shoreditch Studio'",
+        "customer_id": "caller: Carlos Mendez (CU410)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "task": "book_appointment",
+    "overlay": "none",
+    "disposition": "held_slot_declined",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "counterparty": "individual",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed",
+    "declined_action_explained"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

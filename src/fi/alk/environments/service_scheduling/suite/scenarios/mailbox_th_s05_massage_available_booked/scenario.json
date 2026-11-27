@@ -1,0 +1,114 @@
+{
+  "name": "mailbox_th_s05_massage_available_booked",
+  "scenario_key": "mailbox-th-s05-massage-available-booked",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "Mailbox thread th_s403_callum_massage asks for Thursday 29 October massage at Midtown or waitlist; Olivia is free at 10:00 AM, so booking is made.",
+  "tests": "passes when the desk reads thread th_s403_callum_massage, finds the available slot, and books Callum Wilson for Massage Therapy on Thursday 29 October at 10:00.",
+  "instruction": "You sent an email inquiry to the bookings desk (thread th_s403_callum_massage) stating: \"Is there any massage at Midtown on Thursday 29 October? If it is full, please put me on the waiting list.\" You follow up via chat to ensure your booking request is processed and that you are booked for the open 10:00 AM slot with Olivia Bennett.\n\nYour details:\n- Name: Callum Wilson\n- Email: callum.wilson@example.com\n- Phone: +44 20 7946 0416\n- Studio Location: Midtown Studio\n- Service: Massage Therapy\n- Date: Thursday 29 October 2026\n- Thread ID: th_s403_callum_massage",
+  "keywords": [
+    "mailbox",
+    "email_request",
+    "booking",
+    "massage"
+  ],
+  "persona": {
+    "name": "Callum Wilson",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I sent an email inquiry in thread th_s403_callum_massage requesting a massage on Thursday 29 October at Midtown. Could you process it and book the open slot?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_s403_callum_massage",
+    "service": "Massage Therapy (SV2)",
+    "origin": "generated",
+    "customer_id": "CU416"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s403_callum_massage",
+        "messageFormat": "FULL_CONTENT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads.id where subject='Massage availability Thursday'"
+      }
+    },
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+44 20 7946 0416",
+        "email": "callum.wilson@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "service_id": "SV2",
+        "date": "2026-10-29",
+        "location_id": "L1",
+        "staff_id": "ST01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "location_id": "L1",
+        "confirmed": true,
+        "service_id": "SV2",
+        "utc_offset": "-04:00",
+        "staff_id": "ST01",
+        "customer_id": "CU416",
+        "hold_id": null,
+        "request_key": "REQ-MAIL-CALLUM-TH03",
+        "start_time": "2026-10-29T10:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customers.customer_id where email='callum.wilson@example.com'",
+        "confirmed": "rule: \"Book an appointment after the customer confirmed it\"",
+        "location_id": "record: locations.location_id where name='Midtown Studio'",
+        "service_id": "record: services.service_id where name='Massage Therapy'",
+        "staff_id": "record: staff.staff_id where name='Olivia Bennett'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_request",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "disposition": "mailbox_booking_request",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "task": "book_appointment",
+    "counterparty": "returning_customer"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

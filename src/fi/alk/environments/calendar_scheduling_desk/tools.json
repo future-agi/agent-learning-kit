@@ -1,0 +1,1230 @@
+[
+  {
+    "name": "list_calendars",
+    "description": "The calendars the user has access to, with their IDs; resolves a calendar name to its calendar_id. accessRole says what the user may do on each.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "description": "Max results per page. Default 100, max 250."
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "calendars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeZone": {
+                "type": "string"
+              },
+              "accessRole": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "summary",
+              "timeZone",
+              "accessRole"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "calendars"
+      ]
+    }
+  },
+  {
+    "name": "list_events",
+    "description": "Events on a calendar matching the constraints. Set startTime and endTime only when a specific timeframe is requested. For open-ended keyword searches on the primary calendar use search_events.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "Max events per page (default 100, max 250). Recommended: 10."
+        },
+        "pageToken": {
+          "type": "string"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start of the timeframe (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "End of the timeframe (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "orderBy": {
+          "type": "string",
+          "description": "default, startTime, startTimeDesc or lastModified."
+        },
+        "fullText": {
+          "type": "string",
+          "description": "Free-form search over title, description, location and attendees (all terms must match)."
+        },
+        "eventType": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated": {
+          "type": "string"
+        },
+        "timeZone": {
+          "type": "string"
+        },
+        "accessRole": {
+          "type": "string"
+        },
+        "defaultReminders": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "htmlLink": {
+                "type": "string"
+              },
+              "created": {
+                "type": "string"
+              },
+              "updated": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "location": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "recurrence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recurringEventId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "responseStatus": {
+                      "type": "string"
+                    },
+                    "organizer": {
+                      "type": "boolean"
+                    },
+                    "optionalAttendee": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "responseStatus"
+                  ]
+                }
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "start",
+              "end",
+              "attendees",
+              "version"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "timeZone",
+        "accessRole",
+        "events"
+      ]
+    }
+  },
+  {
+    "name": "get_event",
+    "description": "A single event on a calendar.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "Event ID."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "search_events",
+    "description": "Searches events on the user's primary calendar by keywords (case-insensitive).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Query string to search for events."
+        },
+        "pageSize": {
+          "type": "integer"
+        },
+        "pageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "htmlLink": {
+                "type": "string"
+              },
+              "created": {
+                "type": "string"
+              },
+              "updated": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "location": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "recurrence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recurringEventId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "responseStatus": {
+                      "type": "string"
+                    },
+                    "organizer": {
+                      "type": "boolean"
+                    },
+                    "optionalAttendee": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "responseStatus"
+                  ]
+                }
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "start",
+              "end",
+              "attendees",
+              "version"
+            ]
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "events"
+      ]
+    }
+  },
+  {
+    "name": "suggest_time",
+    "description": "Suggests free time slots across the attendees' calendars within a query interval, respecting the configured buffer between events. A suggestion reserves nothing: create the event after the user confirms.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "attendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Attendee emails to find free time for."
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Query interval start (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "Query interval end (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "durationMinutes": {
+          "type": "integer",
+          "description": "Default 30."
+        },
+        "preferences": {
+          "type": "object",
+          "properties": {
+            "startHour": {
+              "type": "string",
+              "description": "HH:mm, 24-hour."
+            },
+            "endHour": {
+              "type": "string",
+              "description": "HH:mm, 24-hour."
+            },
+            "excludeWeekends": {
+              "type": "boolean"
+            },
+            "pageSize": {
+              "type": "integer",
+              "description": "Number of slots; default 5."
+            }
+          }
+        }
+      },
+      "required": [
+        "attendeeEmails",
+        "startTime",
+        "endTime"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "timeSlots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "end": {
+                "type": "object",
+                "properties": {
+                  "dateTime": {
+                    "type": "string"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "timeZone": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          }
+        }
+      },
+      "required": [
+        "timeSlots"
+      ]
+    }
+  },
+  {
+    "name": "create_event",
+    "description": "Creates an event on a calendar. Attendees must be reachable within the attendee domain policy; conflicts with confirmed events are refused. Needs the user's approval of this exact event (approval_id).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Title."
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "End time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          }
+        },
+        "attendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Deprecated: use attendees."
+        },
+        "recurrenceData": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "RRULE, RDATE or EXDATE strings (RFC 5545)."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "description": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "allDay": {
+          "type": "boolean"
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "notificationLevel": {
+          "type": "string",
+          "description": "NONE, EXTERNAL_ONLY or ALL."
+        },
+        "addGoogleMeetUrl": {
+          "type": "boolean"
+        },
+        "visibility": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change: the acting user's, for this operation on this calendar (create) or event, unexpired and used once. Required while the environment requires approval for mutations."
+        }
+      },
+      "required": [
+        "summary",
+        "startTime",
+        "endTime"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "update_event",
+    "description": "Updates an event; fields that are not set are not changed. Moving only the start preserves the duration. Needs approval_id, and expected_version must match the event's current version.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "The ID of the event to update."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "New start time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "endTime": {
+          "type": "string",
+          "description": "New end time (ISO 8601, for example '2026-04-30T10:00:00Z')."
+        },
+        "allDay": {
+          "type": "boolean"
+        },
+        "timeZone": {
+          "type": "string",
+          "description": "IANA Time Zone Database name (for example America/Los_Angeles)."
+        },
+        "addedAttendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          }
+        },
+        "addedAttendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Deprecated: use addedAttendees."
+        },
+        "removedAttendeeEmails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notificationLevel": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change: the acting user's, for this operation on this calendar (create) or event, unexpired and used once. Required while the environment requires approval for mutations."
+        },
+        "expected_version": {
+          "type": "integer",
+          "description": "The event version the change was decided on (from the event's version); a stale version is refused."
+        }
+      },
+      "required": [
+        "eventId",
+        "expected_version"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "delete_event",
+    "description": "Cancels an event. For a recurring event, recurring_action says whether this occurrence (default) or the whole series is cancelled. Needs approval_id.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "The ID of the event to delete."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Calendar ID from list_calendars. Default: the primary calendar."
+        },
+        "notificationLevel": {
+          "type": "string"
+        },
+        "approval_id": {
+          "type": "string",
+          "description": "The approval authorizing this change: the acting user's, for this operation on this calendar (create) or event, unexpired and used once. Required while the environment requires approval for mutations."
+        },
+        "recurring_action": {
+          "type": "string",
+          "description": "this_event (default) or all_events."
+        }
+      },
+      "required": [
+        "eventId"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "htmlLink": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "dateTime": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            }
+          }
+        },
+        "recurrence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurringEventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "responseStatus": {
+                "type": "string"
+              },
+              "organizer": {
+                "type": "boolean"
+              },
+              "optionalAttendee": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "email",
+              "responseStatus"
+            ]
+          }
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "start",
+        "end",
+        "attendees",
+        "version"
+      ]
+    }
+  }
+]

@@ -1,0 +1,87 @@
+{
+  "name": "slack_role_correction_status_check",
+  "scenario_key": "slack-role-correction-status-check",
+  "scenario_id": "",
+  "use_case": "manage_existing_access_and_idempotency",
+  "branch": "Pam's #it-access thread goes back and forth (edit first, then a correction to view only, with a colleague's tip in between); the agent reads the whole thread, finds her latest intent is viewer, and confirms from the access system that AR-103 is viewer and pending.",
+  "tests": "Does the agent read the whole thread, work out that Pam's last word is view only, and confirm from get_approval_status that AR-103 is a pending viewer request?",
+  "instruction": "You are Pam Beesly (employee ID E16). In #it-access you asked for the reporting dashboards (AR-103) and went back and forth in the thread about whether you needed to view or edit them. Ask the IT access desk to read your thread and confirm AR-103 is logged for what you settled on in the end. Do not say which role that was; if the desk asks, say it should match your last message in the thread (it was viewer).",
+  "keywords": [
+    "slack_thread",
+    "status_check"
+  ],
+  "persona": {
+    "name": "Pam Beesly",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Customer Service",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi IT access desk, I am Pam Beesly (E16). I went back and forth in my #it-access thread about the reporting dashboards (ts 1792764600.000004). Can you read it and confirm AR-103 is logged for what I settled on in the end?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "request_id": "AR-103",
+    "slack_thread": "1792764600.000004",
+    "origin": "seed",
+    "employee_id": "E16"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "cursor": "",
+        "message_ts": "1792764600.000004",
+        "latest": "",
+        "oldest": "",
+        "response_format": "text",
+        "limit": 10,
+        "channel_id": "CH_ITACCESS"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "message_ts": "caller: ts: 1792764600.000004",
+        "channel_id": "record: slack_channels.channel_id where name='it-access'"
+      }
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-103"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "request_id": "caller: AR-103"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "standard_employee",
+    "overlay_vector": "none",
+    "interaction": "collaborative",
+    "task": "manage_existing_access_and_idempotency",
+    "disposition": "role_correction",
+    "interface": "chat",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "status_reported_from_access_system",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

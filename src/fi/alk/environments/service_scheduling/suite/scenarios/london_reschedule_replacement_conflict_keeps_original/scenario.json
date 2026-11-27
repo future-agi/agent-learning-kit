@@ -1,0 +1,92 @@
+{
+  "name": "london_reschedule_replacement_conflict_keeps_original",
+  "scenario_key": "london-reschedule-replacement-conflict-keeps-original",
+  "scenario_id": "",
+  "use_case": "Concurrency, clock changes and failures",
+  "branch": "Hana Sato wants to move A007 with Priya from 2026-11-03 09:00 to 2026-11-04 11:00 UTC; BC405 blocks the replacement time; reschedule fails and original A007 stays booked.",
+  "tests": "the agent handles replacement contention on reschedule by leaving the original appointment booked and claiming no success",
+  "instruction": "You have an existing Initial Consultation appointment (A007) with Priya at Shoreditch Studio on Tuesday 3 November at 9:00 am. You want to reschedule it to Wednesday 4 November at 11:00 am (2026-11-04T11:00). When the agent attempts to move the appointment, if the agent reports that the replacement slot was just taken and that your original appointment on Tuesday remains booked, acknowledge and keep your original Tuesday appointment.\n\nYour details:\n- Name: Hana Sato\n- Email: hana.sato@example.com\n- Phone: +44 20 7946 0108\n- Customer ID: CU08\n- Appointment ID: A007\n- New Start Time: 2026-11-04T11:00\n- Location: Shoreditch Studio (L2)",
+  "keywords": [
+    "concurrency",
+    "reschedule",
+    "atomic_reschedule",
+    "replacement_conflict",
+    "shoreditch"
+  ],
+  "persona": {
+    "name": "Hana Sato",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, I need to reschedule my consultation (A007) with Priya at Shoreditch to Wednesday November 4th at 11:00 am please.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "phone": "+44 20 7946 0108",
+    "email": "hana.sato@example.com",
+    "contention_id": "BC405",
+    "origin": "mixed",
+    "appointment_id": "A007",
+    "location_id": "L2",
+    "customer_id": "CU08"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "email": "hana.sato@example.com",
+        "phone": "+44 20 7946 0108"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "new_staff_id": "ST04",
+        "confirmed": true,
+        "utc_offset": "+00:00",
+        "customer_id": "CU08",
+        "request_key": "REQ-MOVE-BC405",
+        "new_start_time": "2026-11-04T11:00",
+        "appointment_id": "A007"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A007",
+        "new_start_time": "caller: 2026-11-04T11:00"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "individual_customer",
+    "overlay_vector": "none",
+    "task": "concurrency",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "disposition": "replacement_fails"
+  },
+  "sub_goals": [
+    "original_kept_when_replacement_fails",
+    "no_success_claimed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

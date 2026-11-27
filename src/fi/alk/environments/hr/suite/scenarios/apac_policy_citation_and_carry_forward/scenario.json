@@ -1,0 +1,89 @@
+{
+  "name": "apac_policy_citation_and_carry_forward",
+  "scenario_key": "apac-policy-citation-and-carry-forward",
+  "scenario_id": "",
+  "use_case": "Check leave policy and carry-forward rules for an employee's region and effective date",
+  "branch": "An employee asks about the active APAC leave policy document, version, and annual carry-forward allowance; the agent looks up the regional policy and cites the active document and version.",
+  "tests": "The agent queries the active APAC annual leave policy, citing version v1.0 and explaining the 7-day annual carry-forward limit.",
+  "instruction": "You are an employee in the APAC region planning your annual leave management for the upcoming year. You want to understand the exact policy terms governing annual leave for your region.\n\nAsk the HR assistant:\n1. What the current official policy document name and version are for APAC annual leave.\n2. What the maximum carry-forward allowance is for unused annual leave into the next calendar year.\n\nYour details:\n- Name: Hamish Clarke\n- Employee ID: E420\n- Region: APAC\n- Inquiry Topic: Annual leave policy details and carry-forward rules",
+  "keywords": [
+    "apac_policy",
+    "policy_citation",
+    "carry_forward",
+    "version"
+  ],
+  "persona": {
+    "name": "Hamish Clarke",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi HR, could you tell me the active policy document title, version, and carry-forward limit for annual leave in the APAC region?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "region": "APAC",
+    "requester_id": "E420",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "actor_id": "E420",
+        "employee_id": "E420"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "actor_id": "caller: E420",
+        "employee_id": "caller: E420"
+      }
+    },
+    {
+      "tool": "search_hr_policy",
+      "arguments": {
+        "region": "APAC",
+        "topic": "annual_leave",
+        "effective_date": "2026-10-26"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "caller: APAC",
+        "topic": "record: annual_leave"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "themselves",
+    "overlay": "none",
+    "task": "check_leave_policy",
+    "overlay_vector": "none",
+    "interaction": "fresh",
+    "disposition": "policy_citation",
+    "interface": "clean"
+  },
+  "sub_goals": [
+    "employee_profile_retrieved",
+    "policy_searched_for_region_and_topic",
+    "effective_policy_consulted",
+    "policy_source_cited",
+    "accurate_policy_terms_and_version_explained"
+  ],
+  "max_turns": 5,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

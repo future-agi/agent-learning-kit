@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -364,6 +365,88 @@ harness_chat:
     assert question["payload"]["options"] == ["app/api.py", "worker.py"]
 
 
+@pytest.mark.parametrize("status", [400, 409, None])
+def test_only_a_platform_that_lacks_question_answered_may_refuse_it(tmp_path, status):
+    from fi.alk.harness.hosted_conversation import ConversationTransportError
+
+    class Platform(QuestionClient):
+        async def emit(self, kind, **kwargs):
+            if kind == "question_answered":
+                raise ConversationTransportError("refused", status=status)
+            return await super().emit(kind, **kwargs)
+
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    reception:
+      enabled: true
+  lifecycle:
+    request_user_input: true
+    interrupt_response: true
+""",
+        encoding="utf-8",
+    )
+    runtime = HostedChatRuntime(
+        client=Platform(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    asked = runtime._ask("AskUserQuestion", {"question": "Which entrypoint?"}, None)
+
+    if status == 400:
+        assert asyncio.run(asked)["content"][0]["text"] == "app/api.py"
+    else:
+        with pytest.raises(ConversationTransportError):
+            asyncio.run(asked)
+
+
+def test_the_adaptation_approval_carries_its_review_as_data(tmp_path):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    reception:
+      enabled: true
+  lifecycle:
+    request_user_input: true
+    interrupt_response: true
+""",
+        encoding="utf-8",
+    )
+    # Typed, not picked: code reads the answer as it was given.
+    client = QuestionClient("yes", "typed")
+    runtime = HostedChatRuntime(
+        client=client,  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    data = {"mapped": [], "unscorable": [], "total": 1, "scorable": 1}
+    runtime.workbench = SimpleNamespace(approval_data=lambda: data)
+    answer = asyncio.run(runtime._approve("Use this binding?", ["yes", "no"]))
+    assert answer == "yes"
+    assert client.events[0]["payload"] == {
+        "prompt": "Use this binding?",
+        "options": ["yes", "no"],
+        "data": data,
+    }
+    # A question the model asks never carries data, whatever its input says.
+    client.events.clear()
+    (tmp_path / ".futureagi-pending-question.json").unlink(missing_ok=True)
+    asyncio.run(
+        runtime._ask("AskUserQuestion", {"question": "Which?", "data": data}, None)
+    )
+    assert "data" not in client.events[0]["payload"]
+
+
 def test_typed_text_sent_while_a_question_is_open_reaches_the_model_as_possibly_a_new_request(tmp_path):
     """The live shape: asked how to restore one case, the person typed a request about another; the chat sent it as
     the answer, and the builder took it as one."""
@@ -721,9 +804,10 @@ def test_definite_conversation_errors_do_not_retry(status, monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", unexpected_sleep)
     transport = Transport()
     client = ConversationClient(_capabilities(), transport=transport)
-    with pytest.raises(ConversationTransportError, match=f"HTTP {status}"):
+    with pytest.raises(ConversationTransportError, match=f"HTTP {status}") as refused:
         asyncio.run(client._request("GET", client.capabilities.endpoints.commands))
     assert transport.calls == 1
+    assert refused.value.status == status
 
 
 def test_unavailable_requests_stop_before_platform_stale_window(monkeypatch):

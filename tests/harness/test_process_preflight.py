@@ -399,6 +399,18 @@ def test_the_door_s_database_address_is_refused_to_any_process_but_the_door(tmp_
         )
 
 
+def test_the_reader_s_database_address_needs_the_world_s_database(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["READER_DB"] = "{{WORLD_READER_DATABASE_URL}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="unknown_placeholder"):
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
+
+
 def test_a_port_placeholder_naming_an_unknown_process_is_rejected(
     tmp_path: Path,
 ) -> None:
