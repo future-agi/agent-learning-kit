@@ -739,10 +739,10 @@ these the first time.
 Only when `add_actor` is offered. An actor is someone on the person's side who is not the
 person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
 while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
-tested, so the run never plays them. Read the contract and add one for each channel `add_actor` offers
-that this agent's users could have around them, and one for each decision the agent's own material says someone else
-owns (an approval, a refusal, a grant of access): the cast is what lets the suite test more than one kind of other
-person.
+tested, so the run never plays them. Add one only where the agent's own contract or
+material shows someone else is part of its users' situation (someone with them who speaks up or takes over) or owns a
+decision the agent depends on (an approval, a refusal, a grant of access). A channel `add_actor` offers is not a
+reason to add anyone: an agent whose material names no one else gets no cast, and that is a complete environment.
 
 The list says who each one is: an ordinary, invented name that is never the person's and never a known public
 figure, a `role` (their relationship to the

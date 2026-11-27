@@ -434,8 +434,8 @@ When the environment lists actors, their presence is a condition on some scenari
 as levels on the axes that already hold conditions: someone else speaking or taking over is a competing
 signal on `interface`, in the forms the kind file gives this channel, and an actor pushing the agent
 to act for someone who is not the person it serves is an `overlay`. Give each actor such a level, named for it. Together,
-the scenarios that include an actor reach the share `aim_for` reports, never the two or three a rare
-level gets; when the person's request says in any words how many scenarios include an actor,
+the scenarios that include an actor aim for the share `aim_for` reports, only where the situation has someone else in
+it, never the two or three a rare level gets; when the person's request says in any words how many scenarios include an actor,
 whether every one, none or a range, pass that share to `aim_for` as `actor_share`. Deal them to scenarios whose situation has someone else around, never to one where
 the person would be alone. Such a level sits on top of whatever else the scenario tests, so it costs no scenario of
 its own: deal each one, even in a small suite, alongside another coordinate. A brief, or a scenario you
@@ -975,7 +975,7 @@ The worker is called `scenario_writer`. **Every brief MUST carry, for each cell 
   would use;
 - where the environment lists actors, which of this slice's scenarios include which actor, on
   top of their other conditions and with the moment each enters, so that across all slices the suite
-  reaches its actor share; a sub-agent never adds one it was not dealt;
+  approaches its actor share where the situations allow; a sub-agent never adds one it was not dealt;
 - the one difficulty each scenario carries, distinct from every other in the brief, stated as
   something that happens in the call that a competent agent could get wrong; the person's place,
   accent, surroundings or the venue they name are never the difficulty, and two scenarios that differ

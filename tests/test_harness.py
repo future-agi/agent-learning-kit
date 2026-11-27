@@ -11140,37 +11140,6 @@ def test_a_call_actor_s_name_is_found_only_as_a_name(
     assert bool(refused) is names
 
 
-def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_person_set_another():
-    from types import SimpleNamespace
-
-    from fi.alk.harness.scenario_tools import _call_actors_short
-
-    with_one = SimpleNamespace(name="a", actors=[SimpleNamespace(id="near")])
-    alone = [SimpleNamespace(name=f"p{i}", actors=[]) for i in range(8)]
-    plain = {"name": "next"}
-    # 9 written of 10, one with an actor; a 20% share needs 2, so the last one must include one.
-    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"], {"near"})
-    assert (
-        "1 of the 10 scenarios" in refused
-        and "at least 2 must" in refused
-        and "near" in refused
-    )
-    assert (
-        _call_actors_short(
-            {**plain, "actors": [{"id": "near"}]},
-            [with_one, *alone],
-            10,
-            0.2,
-            ["near"],
-            {"near"},
-        )
-        == ""
-    )
-    # Room left: the share can still be met by the scenarios still to come.
-    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"], {"near"}) == ""
-    # None asked for, or nothing this agent can be reached by: no share to keep.
-    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"], {"near"}) == ""
-    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, [], {"near"}) == ""
 
 
 def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
@@ -11197,7 +11166,7 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     share = default_share(str(root))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
     assert (
-        f"At least {at_least(share, 40)} of the 40 scenarios include an actor"
+        f"Aim for about {at_least(share, 40)} of the 40 scenarios to include an actor"
         in said()
     )
     job = next(
@@ -11207,11 +11176,11 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     )
     monkeypatch.setenv("ALK_HARNESS_JOB_ID", job)
     assert (
-        f"At least {at_least(default_share(job), 40)} of the 40 scenarios include an actor"
+        f"Aim for about {at_least(default_share(job), 40)} of the 40 scenarios to include an actor"
         in said()
     )
     monkeypatch.delenv("ALK_HARNESS_JOB_ID")
-    assert "At least 16 of the 40" in said(actor_share={"min": 0.4, "max": 0.4})
+    assert "16 of the 40 scenarios include an actor or a fault, as the person asked" in said(actor_share={"min": 0.4, "max": 0.4})
     assert "No scenario includes an actor, as the person asked" in said(
         actor_share={"min": 0, "max": 0}
     )
