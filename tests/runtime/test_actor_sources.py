@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from fi.simulate.agent.wrapper import AgentWrapper
+from fi.simulate.agent.wrappers import OpenAIAgentWrapper
 from fi.simulate.endpoints import actor_sources
 from fi.simulate.endpoints.actor_sources import ActorSourceError
 from fi.simulate.endpoints.profiles import get_profile
@@ -168,3 +171,29 @@ def test_local_import_object_end_to_end(monkeypatch) -> None:
     )
     report = asyncio.run(SimulationRunner().run(spec, target=target))
     assert report.status == RunStatus.COMPLETED
+
+
+class _RecordingCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def test_openai_wrapper_default_model_is_served() -> None:
+    # gpt-4-turbo was shut down on 2026-10-23.
+    completions = _RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    asyncio.run(OpenAIAgentWrapper(client).call(SimpleNamespace(messages=[])))
+    assert completions.requests[0]["model"] == "gpt-5.6-sol"
+
+
+def test_system_prompt_actor_default_model_is_served(monkeypatch) -> None:
+    fake_openai = SimpleNamespace(AsyncOpenAI=lambda **kwargs: object())
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    actor = actor_sources.resolve_system_prompt({"system_prompt": "hi"})
+    assert actor.model == "gpt-5.6-sol"

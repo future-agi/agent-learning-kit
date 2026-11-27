@@ -6,11 +6,11 @@ class OpenAIAgentWrapper(AgentWrapper):
     Wrapper for OpenAI-based agents.
     Automatically handles message conversion to OpenAI format.
     """
-    def __init__(self, client: Any, model: str = "gpt-4-turbo", system_prompt: str = None):
+    def __init__(self, client: Any, model: str = "gpt-5.6-sol", system_prompt: str = None):
         """
         Args:
             client: The OpenAI client instance (AsyncOpenAI or OpenAI).
-            model: The model name to use (e.g., "gpt-4-turbo").
+            model: The model name to use (e.g., "gpt-5.6-sol").
             system_prompt: Optional system instructions for the agent.
         """
         self.client = client
