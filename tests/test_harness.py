@@ -8246,7 +8246,9 @@ def test_a_fetched_vapi_prompt_is_graded_only_when_every_message_came_through_wh
     assert contract.system_prompt_copied is graded
 
     verdicts, sent = _judged_suite(monkeypatch, contract)
-    task = {verdict.kind: verdict for verdict in verdicts}["customer_agent_task_completion"]
+    task = {verdict.kind: verdict for verdict in verdicts}[
+        "customer_agent_task_completion"
+    ]
     if graded:
         assert dict(sent)["customer_agent_task_completion"]["agent_prompt"] == (
             "You are Ava.\n\nRead this first."

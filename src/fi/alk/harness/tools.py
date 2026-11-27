@@ -41,7 +41,9 @@ from .backends import tool, tool_server
 from .backends.files import secret_text
 
 from .contract import (
+    conversational_flag,
     field_value,
+    has_text,
     prompt_quote,
     CALL_DIRECTIONS,
     AgentContract,
@@ -656,7 +658,9 @@ def without_local_state(contract: AgentContract) -> AgentContract:
     )
 
 
-def _provider_prompt_copied(contract: AgentContract, whole: str | None) -> AgentContract:
+def _provider_prompt_copied(
+    contract: AgentContract, whole: str | None
+) -> AgentContract:
     """The contract with the provider's whole prompt as its excerpt, recorded as copied, when a
     profile is in force and code could take every text of it (``whole``). Otherwise it is left
     as checked: the reading's quote, nothing marked."""
@@ -934,7 +938,9 @@ def contract_tools(
 
     # The provider's whole prompt, when one is in force and code can take every text of it:
     # taken once, here, and copied by every save of this stage.
-    provider_prompt = whole_prompt(provider_profile) if provider_profile is not None else None
+    provider_prompt = (
+        whole_prompt(provider_profile) if provider_profile is not None else None
+    )
 
     events_schema = CompletedToolEvents.model_json_schema()
     events_schema["properties"]["failure_events"]["items"] = (
@@ -2192,14 +2198,13 @@ def contract_tools(
                 )
             payload["chosen_evals"] = wanted
 
-        # As the contract will read it: only an explicit false opts out, null is the default.
-        conversational = payload.get("conversational")
         thin = [
             (
                 "prompt",
-                (conversational is None or bool(conversational))
-                # Rules under any name the contract accepts for them.
-                and not field_value(payload, "hard_constraints")
+                # As the contract will read the flag: only a false opts out, null is the default.
+                conversational_flag(payload)
+                # Rules under any name the contract accepts for them, and not blank.
+                and not has_text(field_value(payload, "hard_constraints"))
                 and not excerpt
                 # Lines named are the prompt, found: copied whole, with no quote needed.
                 and not payload.get("system_prompt_from")
@@ -2307,8 +2312,14 @@ def contract_tools(
                 "Not saved: a contract submitted after this one, in the same turn, was saved "
                 "instead. Don't submit this one again."
             )
-        kept = without_local_state(checked.contract) if provider_owned_state else checked.contract
-        result = _save_contract(_provider_prompt_copied(kept, provider_prompt), destination)
+        kept = (
+            without_local_state(checked.contract)
+            if provider_owned_state
+            else checked.contract
+        )
+        result = _save_contract(
+            _provider_prompt_copied(kept, provider_prompt), destination
+        )
         # After the write: if it raised, nothing was saved for an earlier call to defer to.
         saved = mine
         return result

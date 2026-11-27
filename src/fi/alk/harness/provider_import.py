@@ -213,6 +213,12 @@ PROMPT_CHECK = "prompt_check"
 _FETCHED = frozenset({"retell", "vapi"})
 
 
+def without_prompt_check(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """The profile as the assistant is, without this kit's record of its prompt check: what a
+    reading is shown, and what a binding's digest is taken over."""
+    return {key: value for key, value in profile.items() if key != PROMPT_CHECK}
+
+
 def _prompt_texts(profile: Mapping[str, Any]) -> list[Any] | None:
     """The texts that together are the agent's prompt in a provider profile, or None where they
     are not one prompt.
@@ -1260,7 +1266,7 @@ def provider_profile_digest(profile: Mapping[str, Any]) -> str:
     prompt, not what the assistant is, and a binding sealed by a kit that kept no such record
     must still match the same assistant.
     """
-    identity = {key: value for key, value in profile.items() if key != PROMPT_CHECK}
+    identity = without_prompt_check(profile)
     encoded = json.dumps(
         identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")

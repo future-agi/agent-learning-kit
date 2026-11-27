@@ -71,6 +71,8 @@ def profile_in_force(source: AgentSource) -> dict[str, Any] | None:
 
 def _provider_import_briefing() -> str:
     """Load the sanitized external-provider definition prepared by the control process."""
+    from .provider_import import without_prompt_check
+
     profile = _named_provider_profile()
     if not profile:
         return ""
@@ -80,7 +82,7 @@ def _provider_import_briefing() -> str:
         "The externally hosted assistant definition below is equally authoritative for its "
         "conversation, prompt, model, voice, and tool schemas. Reconcile both sources. Do not "
         "invent behavior or tool inputs that conflict with the provider definition.\n\n"
-        f"```json\n{json.dumps(profile, indent=2, sort_keys=True)}\n```"
+        f"```json\n{json.dumps(without_prompt_check(profile), indent=2, sort_keys=True)}\n```"
     )
 
 

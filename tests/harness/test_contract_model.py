@@ -4626,7 +4626,9 @@ def test_a_reading_under_a_profile_with_no_whole_prompt_is_asked_once_from_the_d
     destination = tmp_path / "out"
     submit = provider_submitter(destination, _STAGED, root)
     # Lines alone, which can't be the prompt here, and no rules.
-    bare = payload(system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}])
+    bare = payload(
+        system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}]
+    )
 
     first = submit(bare)
     assert first.get("is_error")
@@ -4651,7 +4653,9 @@ def test_a_prompt_that_cannot_be_encoded_is_not_whole_and_the_reading_is_asked_f
 
     destination = tmp_path / "out"
     submit = provider_submitter(destination, broken, root)
-    bare = payload(system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}])
+    bare = payload(
+        system_prompt_from=[{"path": "agent.py", "start_line": 1, "end_line": 2}]
+    )
     first = submit(bare)
     assert first.get("is_error")
     assert PROMPT_ASK_FROM_DEFINITION in text_of(first)
@@ -4659,7 +4663,9 @@ def test_a_prompt_that_cannot_be_encoded_is_not_whole_and_the_reading_is_asked_f
     assert "system_prompt_copied" not in saved(destination)
 
 
-def test_a_reading_under_a_profile_with_a_whole_prompt_is_not_asked_for_one(tmp_path, root):
+def test_a_reading_under_a_profile_with_a_whole_prompt_is_not_asked_for_one(
+    tmp_path, root
+):
     destination = tmp_path / "out"
     result = provider_submitter(destination, _PHONE, root)(payload())
 
@@ -4667,7 +4673,9 @@ def test_a_reading_under_a_profile_with_a_whole_prompt_is_not_asked_for_one(tmp_
     assert saved(destination)["system_prompt_excerpt"] == "Take bookings. Be brief."
 
 
-@pytest.mark.parametrize("alias", ["rules", "constraints", "policies", "policy", "guardrails"])
+@pytest.mark.parametrize(
+    "alias", ["rules", "constraints", "policies", "policy", "guardrails"]
+)
 def test_rules_under_any_name_save_on_the_first_call(tmp_path, root, alias):
     destination = tmp_path / "out"
     result = provider_submitter(destination, _STAGED, root)(
@@ -4679,7 +4687,9 @@ def test_rules_under_any_name_save_on_the_first_call(tmp_path, root, alias):
 
 
 @pytest.mark.parametrize("alias", ["hard_constraints", "rules", "policy"])
-@pytest.mark.parametrize("blank", [[""], ["  ", ""], "  "], ids=["empty", "spaces", "string"])
+@pytest.mark.parametrize(
+    "blank", [[""], ["  ", ""], "  "], ids=["empty", "spaces", "string"]
+)
 def test_blank_rules_under_any_name_are_asked_for(tmp_path, root, alias, blank):
     destination = tmp_path / "out"
     first = provider_submitter(destination, _STAGED, root)(payload(**{alias: blank}))
@@ -4689,7 +4699,9 @@ def test_blank_rules_under_any_name_are_asked_for(tmp_path, root, alias, blank):
 
 
 @pytest.mark.parametrize("profile", [None, _STAGED])
-def test_a_null_conversational_flag_is_asked_like_an_omitted_one(tmp_path, root, profile):
+def test_a_null_conversational_flag_is_asked_like_an_omitted_one(
+    tmp_path, root, profile
+):
     destination = tmp_path / "out"
     submit = (
         submitter(destination, root)
@@ -4712,7 +4724,9 @@ def test_a_null_conversational_flag_is_asked_like_an_omitted_one(tmp_path, root,
 @pytest.mark.parametrize("flag", [False, "false", "no", "0", "off"])
 def test_an_explicitly_not_conversational_agent_is_not_asked(tmp_path, root, flag):
     destination = tmp_path / "out"
-    result = provider_submitter(destination, _STAGED, root)(payload(conversational=flag))
+    result = provider_submitter(destination, _STAGED, root)(
+        payload(conversational=flag)
+    )
 
     assert not result.get("is_error"), result
     # As the contract reads the flag.
@@ -4734,7 +4748,9 @@ def test_a_named_profile_that_could_not_be_read_is_not_said_to_have_been_shown(
     assert PROMPT_ASK_FROM_SOURCE not in said and "system_prompt_from" not in said
 
 
-def test_the_providers_whole_prompt_is_taken_once_for_a_stage(tmp_path, root, monkeypatch):
+def test_the_providers_whole_prompt_is_taken_once_for_a_stage(
+    tmp_path, root, monkeypatch
+):
     from fi.alk.harness import provider_import
 
     calls = []
@@ -4749,7 +4765,9 @@ def test_the_providers_whole_prompt_is_taken_once_for_a_stage(tmp_path, root, mo
     submit = provider_submitter(destination, _PHONE, root)
     # Two saves in one stage: the prompt is taken when the stage opens, not at each save.
     assert not submit(payload(hard_constraints=["Be brief."])).get("is_error")
-    assert not submit(payload(hard_constraints=["Be brief.", "Confirm the time."])).get("is_error")
+    assert not submit(payload(hard_constraints=["Be brief.", "Confirm the time."])).get(
+        "is_error"
+    )
 
     assert saved(destination)["system_prompt_copied"] is True
     assert saved(destination)["hard_constraints"] == ["Be brief.", "Confirm the time."]
@@ -4791,7 +4809,9 @@ def test_a_contract_not_copied_dumps_without_the_record():
     ] is True
 
 
-def test_the_definition_the_reading_is_shown_leaves_out_the_prompt_check(tmp_path, monkeypatch):
+def test_the_definition_the_reading_is_shown_leaves_out_the_prompt_check(
+    tmp_path, monkeypatch
+):
     # The record is this kit's own bookkeeping, not part of the assistant, as in the digest.
     from fi.alk.harness.provider_import import PROMPT_CHECK
     from fi.alk.harness.sources import ProviderSource
