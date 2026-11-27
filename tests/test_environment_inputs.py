@@ -195,7 +195,7 @@ def test_inferred_policy_only_acceptance_without_a_record_schema():
     assert reviewed.sources[0].pin.role == "policy"
 
 
-def _reviewed():
+def _reviewed(personal_data_mode="synthetic_replace"):
     draft = prepare_environment_inputs(_sources(), destination_schema=_schema())
     public_policy = next(
         source
@@ -223,7 +223,7 @@ def _reviewed():
             RecordReview(
                 source_id="customers",
                 visibility="agent_visible",
-                personal_data_mode="synthetic_replace",
+                personal_data_mode=personal_data_mode,
                 fields=(
                     FieldMapping(
                         "customer_id",
@@ -238,7 +238,7 @@ def _reviewed():
             RecordReview(
                 source_id="orders",
                 visibility="agent_visible",
-                personal_data_mode="synthetic_replace",
+                personal_data_mode=personal_data_mode,
                 fields=(
                     FieldMapping(
                         "buyer_id",
@@ -640,6 +640,31 @@ def test_cross_file_synthetic_identity_is_consistent() -> None:
     assert records["customers"]["name"] == "Person 0001"
     assert "C17" not in json.dumps(records)
     assert reviewed.private_replacement_receipt
+
+
+def test_kept_personal_data_is_stored_unchanged() -> None:
+    _, reviewed = _reviewed(personal_data_mode="keep")
+    records = {
+        source.pin.source_id: source.records[0].as_dict()
+        for source in reviewed.sources
+        if hasattr(source, "records")
+    }
+
+    assert records["customers"]["customer_id"] == "C17"
+    assert records["orders"]["customer_id"] == "C17"
+    assert not reviewed.private_replacement_receipt
+
+
+def test_text_contact_data_can_be_kept_as_is() -> None:
+    content = b"Contact alice@example.com for approval."
+    source = EnvironmentSource("p", "a.txt", "text/plain", content, "reference")
+    draft = prepare_environment_inputs((source,), keep_text_sources=("p",))
+    assert not draft.diagnostics
+    assert draft.sources[0].pages[0].text == content.decode()
+    with pytest.raises(EnvironmentInputError, match="one privacy treatment"):
+        prepare_environment_inputs(
+            (source,), keep_text_sources=("p",), redact_text_sources=("p",)
+        )
 
 
 def test_compile_keeps_hidden_material_out_of_agent_projection() -> None:

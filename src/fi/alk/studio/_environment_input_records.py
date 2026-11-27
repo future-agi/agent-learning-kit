@@ -258,11 +258,11 @@ def _validate_field_mappings(
         )
     if (
         any(field.personal_data for field in review.fields)
-        and review.personal_data_mode != "synthetic_replace"
+        and review.personal_data_mode not in {"synthetic_replace", "keep"}
     ):
         raise EnvironmentInputError(
             "source_privacy_unresolved",
-            f"{source.pin.source_id} contains personal data and requires synthetic replacement",
+            f"{source.pin.source_id} contains personal data; replace it or choose to keep it",
         )
 
 
@@ -392,6 +392,11 @@ def _apply_synthetic_replacements(
                         visible_original_values.add(value)
     for keys in group_keys.values():
         if not any(mapping_by_key[key].personal_data for key in keys):
+            continue
+        # Joined fields share one value space, so any replaced source replaces the group.
+        if not any(
+            reviews[key[0]].personal_data_mode == "synthetic_replace" for key in keys
+        ):
             continue
         visible_keys = [
             key for key in keys if sources[key[0]].audience.untrusted_recipients

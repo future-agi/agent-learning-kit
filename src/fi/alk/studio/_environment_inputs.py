@@ -102,6 +102,7 @@ def prepare_environment_inputs(
     schema_repairs: tuple[SimulationSchemaRepair, ...] = (),
     redact_text_sources: tuple[str, ...] = (),
     synthetic_text_sources: tuple[str, ...] = (),
+    keep_text_sources: tuple[str, ...] = (),
 ) -> EnvironmentInputDraft:
     if destination_schema is not None and (
         not isinstance(destination_schema, DestinationSchema)
@@ -124,9 +125,10 @@ def prepare_environment_inputs(
         for source in source_items
         if source.role in {"policy", "reference"}
     }
-    if set(redact_text_sources) & set(synthetic_text_sources):
+    treatments = (set(redact_text_sources), set(synthetic_text_sources), set(keep_text_sources))
+    if sum(len(chosen) for chosen in treatments) != len(set().union(*treatments)):
         raise EnvironmentInputError("source_request_invalid", "Choose one privacy treatment per source")
-    if (set(redact_text_sources) | set(synthetic_text_sources)) - text_sources:
+    if set().union(*treatments) - text_sources:
         raise EnvironmentInputError(
             "source_request_invalid",
             "Select a policy or reference source for text redaction",
@@ -179,7 +181,8 @@ def prepare_environment_inputs(
         if isinstance(parsed, RawPolicyDocument):
             policy_source, policy_diagnostics = _prepare_policy_source(
                 source, pin, parsed, redact=source.source_id in redact_text_sources,
-                synthetic=source.source_id in synthetic_text_sources
+                synthetic=source.source_id in synthetic_text_sources,
+                keep=source.source_id in keep_text_sources,
             )
             parsed_sources.append(policy_source)
             diagnostics.extend(policy_diagnostics)
@@ -640,6 +643,7 @@ def _prepare_policy_source(
     *,
     redact: bool = False,
     synthetic: bool = False,
+    keep: bool = False,
 ) -> tuple[ParsedPolicySource | FailedEnvironmentSource, tuple[SourceDiagnostic, ...]]:
     replacements = _synthetic_contacts(parsed) if synthetic else {}
 
@@ -693,7 +697,7 @@ def _prepare_policy_source(
                     span=SourceSpan(source_id=source.source_id, page=page.page),
                 )
             )
-        if not (redact or synthetic) and any(_contact_key(m) for m in _POLICY_CONTACT.finditer(page.text)):
+        if not (redact or synthetic or keep) and any(_contact_key(m) for m in _POLICY_CONTACT.finditer(page.text)):
             diagnostics.append(
                 SourceDiagnostic(
                     code="source_privacy_unresolved",

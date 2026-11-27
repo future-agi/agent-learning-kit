@@ -19,7 +19,8 @@ SourceRole: TypeAlias = Literal["policy", "reference", "seed_records"]
 
 SourceVisibility: TypeAlias = Literal["agent_visible", "evaluator_only"]
 
-PersonalDataMode: TypeAlias = Literal["none", "synthetic_replace"]
+# "keep": the reviewer saw the personal data and chose to store it unchanged.
+PersonalDataMode: TypeAlias = Literal["none", "synthetic_replace", "keep"]
 
 DataType: TypeAlias = Literal[
     "string", "integer", "number", "boolean", "date", "datetime"

@@ -289,8 +289,12 @@ def load_evidence(workspace: Path, design: Design) -> dict[str, Any]:
 
 def proposal_rule_sources(rules: list[str], evidence: dict[str, Any]) -> list[dict]:
     """Link an unchanged approved clause to its document page, never a derived plan item."""
+    kinds = "agent_policy|system_invariant|configurable_environment_policy"
+
     def wording(text: str) -> str:
-        text = re.sub(r"^\s*\[(?:agent_policy|system_invariant|configurable_environment_policy)\]\s*", "", text)
+        text = re.sub(rf"^\s*\[(?:{kinds})\]\s*", "", text)
+        # The builder also writes the rule's kind after it: "… approved". (agent_policy)".
+        text = re.sub(rf"\s*\((?:{kinds})\)\s*$", "", text)
         return re.sub(r"^\s*\d+[.)]\s+", "", text).strip().casefold().rstrip(".")
 
     # PDF line wrapping can split a word or leave its final punctuation on a line alone.
@@ -326,9 +330,18 @@ def proposal_rule_sources(rules: list[str], evidence: dict[str, Any]) -> list[di
 
 
 def source_server(evidence: dict[str, Any]) -> ToolServer:
+    # Chat turns get no brief with the counts, so the tool states them itself.
+    available = ", ".join(
+        f"{section} 1-{len(evidence.get(section, []))}"
+        if evidence.get(section)
+        else f"no {section}"
+        for section in ("documents", "records", "cases")
+    )
+
     @tool(
         "read_source",
-        "Read approved documents, mapped records or scenario cases. Use the counts in the brief. "
+        "Read approved documents, mapped records or scenario cases. "
+        f"Available now: {available}. "
         "Sections: documents, records, cases. Index is one-based. Paginate long entries with offset.",
         schema({"section": str, "index": int, "offset": int}, ["section", "index"]),
     )
@@ -340,7 +353,9 @@ def source_server(evidence: dict[str, Any]) -> ToolServer:
             evidence[section]
         ):
             return {
-                "content": [{"type": "text", "text": "No such source entry."}],
+                "content": [
+                    {"type": "text", "text": f"No such source entry. Available: {available}."}
+                ],
                 "is_error": True,
             }
         text = json.dumps(evidence[section][index], ensure_ascii=False)

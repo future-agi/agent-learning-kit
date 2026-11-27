@@ -810,6 +810,38 @@ def test_proposal_matches_complete_numbered_items_on_a_single_approved_page():
     ]
 
 
+def test_proposal_links_rules_that_carry_a_trailing_kind_tag():
+    from fi.alk.harness.design.reviewed_sources import proposal_rule_sources
+
+    evidence = {"documents": [{
+        "source": "policy", "metadata": {"page": 1},
+        "content": 'Acme refund policy\n1. Refund responses must contain "approved".\n'
+        "2. Refunds above $425 require human escalation with code ORCHID-72.",
+    }]}
+    rules = ['1. Refund responses must contain "approved". (agent_policy)',
+             "2. Refunds above $425 require human escalation with code ORCHID-72. (agent_policy)"]
+    assert proposal_rule_sources(rules, evidence) == [
+        {"rule_index": 0, "source_id": "policy", "page": 1},
+        {"rule_index": 1, "source_id": "policy", "page": 1},
+    ]
+
+def test_read_source_states_what_exists_so_a_chat_turn_can_correct_itself():
+    import asyncio
+
+    from fi.alk.harness.design.reviewed_sources import source_server
+
+    evidence = {"documents": [{"content": "Policy"}], "records": [], "cases": [{"id": "c1"}, {"id": "c2"}]}
+    [read] = source_server(evidence).tools
+    assert "documents 1-1, no records, cases 1-2" in read.description
+
+    ok = asyncio.run(read.handler({"section": "cases", "index": 2}))
+    assert "is_error" not in ok and '"c2"' in ok["content"][0]["text"]
+    missing = asyncio.run(read.handler({"section": "cases", "index": 5}))
+    assert missing["is_error"] is True
+    assert missing["content"][0]["text"] == (
+        "No such source entry. Available: documents 1-1, no records, cases 1-2."
+    )
+
 def test_build_approval_requires_resolving_every_dependency(tmp_path):
     from fi.alk.harness.design.tools import settle_proposal
 

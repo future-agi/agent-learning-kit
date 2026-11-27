@@ -103,6 +103,7 @@ class PrepareRequest(_ImmutableValue):
     schema_repairs: tuple[SimulationSchemaRepair, ...] = ()
     redact_text_sources: tuple[str, ...] = ()
     synthetic_text_sources: tuple[str, ...] = ()
+    keep_text_sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -713,6 +714,7 @@ def execute_request(payload: bytes) -> dict[str, Any]:
                 schema_repairs=request.schema_repairs,
                 redact_text_sources=request.redact_text_sources,
                 synthetic_text_sources=request.synthetic_text_sources,
+                keep_text_sources=request.keep_text_sources,
             )
             result = {"draft": draft, "schema_digest": draft.schema_digest}
         elif isinstance(request, GenerateScenariosRequest):
