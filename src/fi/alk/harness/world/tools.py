@@ -691,13 +691,13 @@ def world_actor_tools(
         "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
         "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
         "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
-        "decided by this list, never by what anyone says. `role` is who they are to the people around them in a few "
-        "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
-        "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
-        "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does. An actor is the "
-        "same in every scenario, so `role` names people by their part (someone with the caller, the manager who "
-        "approves), never by "
-        "one scenario's names."
+        "decided by this list, never by what anyone says. Every actor has an invented person's `name` and a `role`: "
+        'their part, as a short singular title such as "Sales manager" or "Teammate", never their name. Two '
+        "people in the same part get exactly the same `role` text, so the cast reads by role. What they bring that "
+        "the agent has to handle goes in `goal`: a fact that can differ from the person's, a request of their own, "
+        'a decision only they make. "Chimes in with the pickup details" gives the agent nothing to handle; '
+        '"Sometimes remembers the pickup differently from the caller" does. An actor is the same in every '
+        "scenario, so neither names one scenario's people."
         + (f" The world's actions: {', '.join(listed)}." if listed else "")
         + (f" Record changes: {', '.join(records)}." if records else ""),
         actor_input_schema(),
@@ -719,6 +719,49 @@ def world_actor_tools(
                 f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
                 "`surface` is where it acts in the world."
             )
+        unified = ""
+        if "role" in given or current is None:
+            if not isinstance(given.get("role", ""), str):
+                return _err(
+                    'Not added: `role` is text, their part as a short singular title such as "Teammate".'
+                )
+            role = " ".join(str(given.get("role") or "").split())
+            if not role:
+                return _err(
+                    'Not added: an actor needs a role, their part as a short singular title such as "Teammate".'
+                )
+            # The same part is written the same way for everyone in it, so the cast reads by role. Only other
+            # actors count, so an actor can correct its own role's casing.
+            same = next(
+                (
+                    one.role
+                    for one in listing.actors
+                    if one.id != str(given.get("id") or "")
+                    and " ".join(one.role.split()).casefold() == role.casefold()
+                ),
+                None,
+            )
+            if same is not None and same != role:
+                unified = f" Role written as {same!r}, as for the others in that part."
+            given["role"] = same if same is not None else role
+        if "role" in given or "name" in given:
+            # A role is the part, never the person: checked whichever of the two this call changes.
+            name = " ".join(
+                str(
+                    given.get("name") or (current.name if current is not None else "")
+                ).split()
+            )
+            role = " ".join(
+                str(
+                    given.get("role") or (current.role if current is not None else "")
+                ).split()
+            )
+            if name and role and role.casefold() == name.casefold():
+                changed = "`role`" if "role" in given else "`name`"
+                return _err(
+                    f"Not added: the {changed} sent makes the role {role!r} the same as the name; `role` is "
+                    'their part, such as "Teammate", and `name` the person.'
+                )
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
             # A nested field merges the keys sent into what it has, as the top level does.
@@ -821,7 +864,7 @@ def world_actor_tools(
                 f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
                 "refuses it; send `permitted_actions` again with actions from that list."
             )
-        return _ok(reply)
+        return _ok(reply + unified)
 
     @tool(
         "drop_actor",
