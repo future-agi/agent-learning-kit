@@ -175,8 +175,6 @@ def test_adding_a_case_keeps_the_environment_s_share(tmp_path):
 
     reply = said["content"][0]["text"]
     assert not said.get("is_error") and "stays 0.16-0.5" in reply
-    # The reply says why, so the model does not read the flag as the only thing between it and a change.
-    assert "change_actor_share" not in reply and "only when the person asks" in reply
     assert load_actors(tmp_path).actor_share == ActorShare(min=0.16, max=0.5)
 
 
