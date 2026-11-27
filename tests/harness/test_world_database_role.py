@@ -3668,6 +3668,8 @@ def test_a_sequence_a_definer_function_alters_refuses_the_reset(door_worlds, mon
         ("GRANT CREATE ON SCHEMA public TO PUBLIC", "schemas"),
         ("COMMENT ON TABLE public.notes IS 'the answer is 42'", "comments"),
         ("CREATE PUBLICATION leak", "publications"),
+        ("CREATE EXTENSION IF NOT EXISTS pg_trgm", "extensions"),
+        ("ALTER TABLE public.notes OWNER TO pg_monitor", "relations"),
         ("CREATE OR REPLACE FUNCTION public.helper() RETURNS int LANGUAGE sql AS $f$ SELECT 2 $f$", "functions"),
     ),
 )
