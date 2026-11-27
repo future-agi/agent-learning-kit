@@ -2589,5 +2589,289 @@
    "name": "gpt-4o",
    "setting": "LLM_MODEL"
   }
+ },
+ {
+  "id": "export-default-model-gpt-4o-mini-async-fetch-request-env-const-l-line4-setting",
+  "files": {
+   "a.ts": "export default {\n  model: \"gpt-4o-mini\",\n  async fetch(request, env) {\n    const llm = process.env.LLM_MODEL ?? \"gpt-4o\";\n  },\n};\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "export-default-model-gpt-4o-mini-async-fetch-request-env-const-l-line4-name+setting",
+  "files": {
+   "a.ts": "export default {\n  model: \"gpt-4o-mini\",\n  async fetch(request, env) {\n    const llm = process.env.LLM_MODEL ?? \"gpt-4o\";\n  },\n};\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "function-makeagent-return-model-gpt-4o-mini-run-async-const-llm-line5-setting",
+  "files": {
+   "a.ts": "function makeAgent() {\n  return {\n    model: \"gpt-4o-mini\",\n    run: async () => {\n      const llm = process.env.LLM_MODEL ?? \"gpt-4o\";\n    },\n  };\n}\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 5
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "function-makeagent-return-model-gpt-4o-mini-run-async-const-llm-line5-name+setting",
+  "files": {
+   "a.ts": "function makeAgent() {\n  return {\n    model: \"gpt-4o-mini\",\n    run: async () => {\n      const llm = process.env.LLM_MODEL ?? \"gpt-4o\";\n    },\n  };\n}\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 5
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "val-bot-bot-model-gpt-4o-mini-handler-ctx-val-llm-system-getenv-line4-setting",
+  "files": {
+   "A.kt": "val bot = Bot(\n    model = \"gpt-4o-mini\",\n    handler = { ctx ->\n        val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n    },\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "A.kt",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "val-bot-bot-model-gpt-4o-mini-handler-ctx-val-llm-system-getenv-line4-name+setting",
+  "files": {
+   "A.kt": "val bot = Bot(\n    model = \"gpt-4o-mini\",\n    handler = { ctx ->\n        val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n    },\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "A.kt",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "export-default-model-nova-3-async-fetch-request-env-const-llm-pr-line4-setting",
+  "files": {
+   "a.ts": "export default {\n  model: \"nova-3\",\n  async fetch(request, env) {\n    const llm = process.env.LLM_MODEL ?? \"gpt-4o\";\n  },\n};\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "export-default-model-nova-3-async-fetch-request-env-const-llm-pr-line4-name+setting",
+  "files": {
+   "a.ts": "export default {\n  model: \"nova-3\",\n  async fetch(request, env) {\n    const llm = process.env.LLM_MODEL ?? \"gpt-4o\";\n  },\n};\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "val-bot-bot-model-nova-3-handler-ctx-val-llm-system-getenv-llm-m-line4-setting",
+  "files": {
+   "A.kt": "val bot = Bot(\n    model = \"nova-3\",\n    handler = { ctx ->\n        val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n    },\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "A.kt",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "val-bot-bot-model-nova-3-handler-ctx-val-llm-system-getenv-llm-m-line4-name+setting",
+  "files": {
+   "A.kt": "val bot = Bot(\n    model = \"nova-3\",\n    handler = { ctx ->\n        val llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n    },\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "A.kt",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "let-agent-voiceagent-model-whisper-1-onstart-let-llm-processinfo-line4-setting",
+  "files": {
+   "a.swift": "let agent = VoiceAgent(\n    model: \"whisper-1\",\n    onStart: {\n        let llm = ProcessInfo.processInfo.environment[\"LLM_MODEL\"] ?? \"gpt-4o\"\n    }\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.swift",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "let-agent-voiceagent-model-whisper-1-onstart-let-llm-processinfo-line4-name+setting",
+  "files": {
+   "a.swift": "let agent = VoiceAgent(\n    model: \"whisper-1\",\n    onStart: {\n        let llm = ProcessInfo.processInfo.environment[\"LLM_MODEL\"] ?? \"gpt-4o\"\n    }\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.swift",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "pipeline-pipeline-model-whisper-1-on-start-lambda-llm-os-getenv-line4-setting",
+  "files": {
+   "a.py": "pipeline = Pipeline(\n    model=\"whisper-1\",\n    on_start=lambda: LLM(\n        os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "pipeline-pipeline-model-whisper-1-on-start-lambda-llm-os-getenv-line4-name+setting",
+  "files": {
+   "a.py": "pipeline = Pipeline(\n    model=\"whisper-1\",\n    on_start=lambda: LLM(\n        os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-model-nova-3-handler-def-llm-system-getenv-llm-model-gpt-4-line2-setting",
+  "files": {
+   "a.groovy": "agent(model: \"nova-3\", handler: {\n    def llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n})\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.groovy",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-model-nova-3-handler-def-llm-system-getenv-llm-model-gpt-4-line2-name+setting",
+  "files": {
+   "a.groovy": "agent(model: \"nova-3\", handler: {\n    def llm = System.getenv(\"LLM_MODEL\") ?: \"gpt-4o\"\n})\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.groovy",
+   "line": 2
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "let-cfg-config-model-gpt-4o-into-timeout-env-var-llm-timeout-ok-line3-setting",
+  "files": {
+   "a.rs": "let cfg = Config {\n    model: \"gpt-4o\".into(),\n    timeout: env::var(\"LLM_TIMEOUT\").ok(),\n};\n"
+  },
+  "model": {
+   "setting": "LLM_TIMEOUT",
+   "path": "a.rs",
+   "line": 3
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_TIMEOUT"
+  },
+  "why": "a { after a type's name whose first line is a key opens a struct literal, so the setting is read in the literal that writes the model on an earlier line, as its one-line form always was"
  }
 ]
