@@ -6781,6 +6781,15 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             id="rust-struct-literal",
         ),
         pytest.param(
+            "main.rs",
+            "let cfg = Config {\n"
+            "    // the chat model\n"
+            '    model: "gpt-4o".into(),\n'
+            '    timeout: env::var("LLM_TIMEOUT").ok(),\n'
+            "};\n",
+            id="rust-struct-literal-with-a-comment-before-its-first-key",
+        ),
+        pytest.param(
             "main.go",
             "cfg := Config{\n"
             '\tmodel: "gpt-4o",\n'
