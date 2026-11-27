@@ -51,6 +51,16 @@ setTimeout(() => {
 <input id=csc aria-label="Security code" autocomplete="section-a billing cc-csc">
 <input id=otp aria-label="Code" autocomplete="one-time-code">
 </body></html>""",
+    # Masked by the page itself: dots on screen, though not a password field.
+    "/masked": """<html><body>
+<input id=pin aria-label="PIN" type=text autocomplete=off style="-webkit-text-security: disc">
+<input id=note aria-label="Note" type=text>
+</body></html>""",
+    # A one-time code split over one-character boxes, the code's autofill name on the first box only.
+    "/otp-boxes": """<html><body><form><div>
+<input id=b0 maxlength=1 autocomplete="one-time-code"><input id=b1 maxlength=1><input id=b2 maxlength=1>
+<input id=b3 maxlength=1><input id=b4 maxlength=1><input id=b5 maxlength=1>
+</div><input id=q aria-label="Search" maxlength=1></form></body></html>""",
     "/card-switched": """<html><body><script>
 const num = document.createElement('input'); num.id = 'num'; num.setAttribute('aria-label', 'Card number');
 num.setAttribute('autocomplete', 'cc-number'); document.body.appendChild(num); num.setAttribute('autocomplete', 'off');
@@ -69,7 +79,12 @@ class _Page(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        content = _PAGES.get(self.path, f"<html><body>page {self.path}</body></html>").encode()
+        if self.path.startswith("/fill/"):
+            token = self.path.removeprefix("/fill/")
+            page = f'<html><body><input id=f aria-label="Field" autocomplete="{token}"></body></html>'
+        else:
+            page = _PAGES.get(self.path, f"<html><body>page {self.path}</body></html>")
+        content = page.encode()
         self.send_response(200)
         self.send_header("content-type", "text/html")
         self.send_header("content-length", str(len(content)))
@@ -521,6 +536,67 @@ def test_card_numbers_security_codes_and_one_time_codes_are_never_kept_as_text(b
     held = json.dumps([{key: value for key, value in row.items() if key != "at"} for row in body["rows"]])
     for kept in ("4111111111111111", "737", "482913"):
         assert kept not in held
+
+
+# The autofill names the HTML spec gives secrets: written out here, so one dropped from the kit's list is caught.
+_SECRET_FILLS = (
+    "current-password", "new-password", "one-time-code",
+    "cc-number", "cc-csc", "cc-exp", "cc-exp-month", "cc-exp-year",
+)
+
+
+@pytest.mark.parametrize("token", _SECRET_FILLS)
+def test_a_field_with_any_secret_autofill_name_is_never_kept_as_text(browser, token) -> None:
+    kit, _ = browser
+    url = f"http://shop.test/fill/{token}"
+
+    async def steps(page):
+        await page.open(url)
+        await page.click("#f")
+        await page.type("MADEUP-4821")
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == url]
+    assert typed and all(row["secret"] is True and row["text"] is None for row in typed)
+    assert "MADEUP-4821" not in json.dumps(body)
+
+
+def test_a_field_the_page_masks_itself_is_never_kept_as_text(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/masked")
+        for field, text in (("#pin", "MADEUP-PIN-4821"), ("#note", "plain words")):
+            await page.click(field)
+            await page.type(text)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == "http://shop.test/masked"]
+    assert [(row["target"].get("label"), row["secret"], row["text"]) for row in typed] == [
+        ("PIN", True, None),
+        ("Note", False, "plain words"),
+    ]
+    assert "MADEUP-PIN-4821" not in json.dumps(body)
+
+
+def test_every_box_of_a_split_one_time_code_is_never_kept_as_text(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/otp-boxes")
+        for index, digit in enumerate("731904"):
+            await page.click(f"#b{index}")
+            await page.type(digit)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == "http://shop.test/otp-boxes"]
+    assert len(typed) >= 6 and all(row["secret"] is True and row["text"] is None for row in typed)
+    held = json.dumps([{key: value for key, value in row.items() if key != "at"} for row in body["rows"]])
+    for digit in "731904":
+        assert f'"text": "{digit}"' not in held
 
 
 def test_a_card_field_the_page_stops_marking_stays_one(browser) -> None:

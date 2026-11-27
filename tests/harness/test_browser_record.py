@@ -1317,6 +1317,18 @@ def test_a_capped_refusal_list_leaves_the_sealed_record_saying_it_was_capped() -
     assert [one["host"] for one in agent["blocked"]] == ["a.example.com"]
 
 
+def test_the_listener_counts_every_autofill_name_the_spec_gives_a_secret() -> None:
+    # The listener's secret names are the kit's list: each of the spec's eight is in it, and in the page's script.
+    spec = {
+        "current-password", "new-password", "one-time-code",
+        "cc-number", "cc-csc", "cc-exp", "cc-exp-month", "cc-exp-year",
+    }
+    assert spec <= browser_record.SECRET_AUTOFILL
+    listener = browser_record.listener_for("bexample")
+    for token in spec:
+        assert f'"{token}"' in listener
+
+
 # Typed text and the run's artifact level
 
 
