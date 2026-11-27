@@ -6343,6 +6343,96 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             2,
             id="read-before-a-call-beside-it",
         ),
+        # A read in a function, method or lambda body given inside a literal or call that
+        # writes another component's model: the body is the agent's code, not that literal.
+        pytest.param(
+            "worker.ts",
+            "export default {\n"
+            '  model: "nova-3",\n'
+            "  async fetch(request, env) {\n"
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  },\n"
+            "};\n",
+            4,
+            id="ts-method-body-in-an-exported-literal",
+        ),
+        pytest.param(
+            "worker.ts",
+            "export default {\n"
+            '  model: "nova-3",\n'
+            "  async fetch(request, env) {\n"
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            + "    log(llm);\n" * 30
+            + "  },\n"
+            "};\n",
+            4,
+            id="ts-long-method-body-in-an-exported-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "function make() {\n"
+            "  return {\n"
+            '    model: "nova-3",\n'
+            "    run: async () => {\n"
+            '      const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "    },\n"
+            "  };\n"
+            "}\n",
+            5,
+            id="ts-arrow-body-in-a-returned-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const agent = createVoiceAgent({\n"
+            '  model: "nova-3",\n'
+            "  onStart: async () => {\n"
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  },\n"
+            "});\n",
+            4,
+            id="ts-arrow-body-in-a-literal-given-to-a-call",
+        ),
+        pytest.param(
+            "Bot.kt",
+            "val bot = Bot(\n"
+            '    model = "nova-3",\n'
+            "    handler = { ctx ->\n"
+            '        val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "    },\n"
+            ")\n",
+            4,
+            id="kotlin-lambda-given-to-a-call",
+        ),
+        pytest.param(
+            "Agent.swift",
+            "let agent = VoiceAgent(\n"
+            '    model: "whisper-1",\n'
+            "    onStart: {\n"
+            '        let llm = ProcessInfo.processInfo.environment["LLM_MODEL"] ?? "gpt-4o"\n'
+            "    }\n"
+            ")\n",
+            4,
+            id="swift-closure-given-to-a-call",
+        ),
+        pytest.param(
+            "agent.groovy",
+            'agent(model: "nova-3", handler: {\n'
+            '    def llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "})\n",
+            2,
+            id="groovy-closure-given-to-a-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "pipeline = Pipeline(\n"
+            '    model="whisper-1",\n'
+            "    on_start=lambda: LLM(\n"
+            '        os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            4,
+            id="python-lambda-given-to-a-call",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -6573,6 +6663,22 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             'const llm = new ChatOpenAI({ model: "gpt-4o", callbacks: [() => { log(); }], '
             "timeout: process.env.LLM_TIMEOUT });\n",
             id="a-semicolon-inside-a-function-given-to-the-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            '    timeout=lambda: os.getenv("LLM_TIMEOUT"),\n'
+            ")\n",
+            id="read-as-a-lambdas-value-in-the-call",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const llm = new ChatOpenAI({\n"
+            '  model: "gpt-4o",\n'
+            "  configuration: { timeout: process.env.LLM_TIMEOUT },\n"
+            "});\n",
+            id="read-in-a-literal-given-in-the-call-on-one-line",
         ),
     ],
 )

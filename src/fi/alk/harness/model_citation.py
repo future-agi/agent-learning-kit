@@ -878,6 +878,54 @@ def _brackets(
         yield at, char, holds
 
 
+# What starts a lambda's or closure's body on the line of its {: its parameters, then -> (Kotlin,
+# Groovy) or in (Swift).
+_LAMBDA_PARAMETERS = re.compile(
+    r"\s*(?:\([^()\n]*\)|[\w$][\w$ \t,:<>?.\[\]]*?)\s*(?:->|\bin\b)"
+)
+# A statement opening a { that is given as a value: a closure's body, not a literal's key.
+_FIRST_STATEMENT = re.compile(
+    r"(?:val|var|let|const|def|fun|func|return|if|for|while|switch|try|await|throw)\b(?!\s*:)"
+)
+# A Python lambda's parameters up to its colon.
+_LAMBDA_HEAD = re.compile(r"\blambda\b[\w \t,*=]*$")
+
+
+def _opens_a_body(text: str, at: int, char: str, holds: bool) -> bool:
+    """Whether the bracket at ``at`` opens code rather than a literal or a call's arguments: a
+    block's { (a function or method body), a lambda's or closure's { (``{ ctx ->``, ``{ ctx in``,
+    or one whose first line is a statement such as ``val llm = …``), or the call a Python lambda
+    returns (``on_start=lambda: LLM(``). Each step looks at a few characters beside the bracket,
+    or the spaces after a {, so a text costs about its length."""
+    if char == "{":
+        if not holds:
+            return True
+        end = text.find("\n", at + 1)
+        end = len(text) if end < 0 else end
+        if _LAMBDA_PARAMETERS.match(text, at + 1, min(end, at + 200)):
+            return True
+        after = at + 1
+        while after < len(text):
+            if text[after] in " \t\r\n":
+                after += 1
+            elif text.startswith("//", after) or text[after] == "#":
+                stop = text.find("\n", after)
+                after = len(text) if stop < 0 else stop
+            else:
+                break
+        return bool(_FIRST_STATEMENT.match(text, after, after + 40))
+    before = at - 1
+    while before >= 0 and (text[before].isalnum() or text[before] in "_."):
+        before -= 1
+    while before >= 0 and text[before] in " \t":
+        before -= 1
+    return (
+        before >= 0
+        and text[before] == ":"
+        and bool(_LAMBDA_HEAD.search(text, max(0, before - 80), before))
+    )
+
+
 def _enclosing_statement(
     lines: list[str], index: int, block: str | None, scan
 ) -> tuple[str, list[tuple[int, int, list[tuple[int, int]], list[tuple[int, int]]]], int] | None:
@@ -975,28 +1023,40 @@ def _written_in_the_call_read_in(
     )
     # The open brackets, whether each holds arguments or a value, how many of them opened before
     # the cited line (always the first ones), and how many of the first ones are around a read:
-    # those count, each as it closes, so no read walks the brackets still open.
+    # those count, each as it closes, so no read walks the brackets still open. A read inside a
+    # body (a method, a lambda) given in a literal or call is the body's code, not that literal's
+    # value, so the brackets outside the innermost body around a read (``bodies``) don't count
+    # for it: from ``floor`` up.
     stack: list[int] = []
     braces: list[bool] = []
     holding: list[bool] = []
+    bodies: list[int] = []
     earlier = 0
     around = 0
+    floor = len(text)
     value_in: list[int] = []
     calls: set[int] = set()
     for at, kind, char, holds in marks:
         if kind == 2:
             if char in "([{":
+                if _opens_a_body(text, at, char, holds):
+                    # A call a lambda returns is a body only around a read inside it, not as
+                    # the read itself: lambda: os.getenv("LLM_MODEL") is the read given as a
+                    # value, as llm=os.getenv("LLM_MODEL") is.
+                    bodies.append(len(stack) if char == "{" else -len(stack) - 1)
                 stack.append(at)
                 braces.append(char == "{")
                 holding.append(holds)
                 if at < shift:
                     earlier = len(stack)
             elif stack:
-                if len(stack) <= around and holding[-1]:
+                if floor < len(stack) <= around and holding[-1]:
                     calls.add(stack[-1])
                 stack.pop()
                 braces.pop()
                 holding.pop()
+                if bodies and bodies[-1] in (len(stack), -len(stack) - 1):
+                    bodies.pop()
                 earlier = min(earlier, len(stack))
                 around = min(around, len(stack))
         elif kind == 0:
@@ -1004,7 +1064,16 @@ def _written_in_the_call_read_in(
                 value_in.append(stack[-1])
         else:
             around = max(around, earlier)
-    calls.update(stack[index] for index in range(around) if holding[index])
+            inner = next(
+                (
+                    index if index >= 0 else -index - 1
+                    for index in reversed(bodies[-2:])
+                    if index >= 0 or -index - 1 < len(stack) - 1
+                ),
+                0,
+            )
+            floor = min(floor, inner)
+    calls.update(stack[index] for index in range(floor, around) if holding[index])
     return any(bracket in calls for bracket in value_in)
 
 
