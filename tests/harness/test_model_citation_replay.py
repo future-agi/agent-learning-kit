@@ -76,5 +76,5 @@ def test_every_changed_answer_says_what_it_was_and_why():
     assert all(reading.get("why") for reading in changed)
     assert all("earlier" in reading for reading in READINGS if "why" in reading)
     # Only these readings changed on purpose; a new one needs its own entry and reason.
-    assert len(changed) == 27
-    assert len(READINGS) == 149
+    assert len(changed) == 29
+    assert len(READINGS) == 155

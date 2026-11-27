@@ -2482,5 +2482,112 @@
    "setting": "LLM_TIMEOUT"
   },
   "why": "the setting is read in the same call or literal that writes the model on an earlier line, so it sets something of that model's, not which model the agent uses"
+ },
+ {
+  "id": "agent-agent-model-gpt-4o-mini-llm-llm-os-getenv-llm-model-line4-setting",
+  "files": {
+   "a.py": "agent = Agent(\n    model=\"gpt-4o-mini\",\n    llm=LLM(\n        os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  },
+  "why": "the read is the only value of a call given to another call that writes a model on an earlier line, with no model key of its own, so it is read beside that model, as its one-line form always was; given under its own model key it is still kept"
+ },
+ {
+  "id": "agent-agent-model-gpt-4o-mini-llm-llm-os-getenv-llm-model-line4-name+setting",
+  "files": {
+   "a.py": "agent = Agent(\n    model=\"gpt-4o-mini\",\n    llm=LLM(\n        os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": true
+  },
+  "earlier": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  },
+  "why": "the read is the only value of a call given to another call that writes a model on an earlier line, with no model key of its own, so it is read beside that model, as its one-line form always was; given under its own model key it is still kept"
+ },
+ {
+  "id": "agent-agent-model-gpt-4o-mini-llm-llm-model-os-getenv-llm-model-line4-setting",
+  "files": {
+   "a.py": "agent = Agent(\n    model=\"gpt-4o-mini\",\n    llm=LLM(\n        model=os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n)\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "agent-agent-model-gpt-4o-mini-llm-llm-model-os-getenv-llm-model-line4-name+setting",
+  "files": {
+   "a.py": "agent = Agent(\n    model=\"gpt-4o-mini\",\n    llm=LLM(\n        model=os.getenv(\"LLM_MODEL\", \"gpt-4o\"),\n    ),\n)\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.py",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "const-session-new-agentsession-model-gpt-4o-mini-llm-new-llm-model-line4-setting",
+  "files": {
+   "a.ts": "const session = new AgentSession({\n  model: \"gpt-4o-mini\",\n  llm: new LLM({\n    model: process.env.LLM_MODEL ?? \"gpt-4o\",\n  }),\n});\n"
+  },
+  "model": {
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "",
+   "setting": "LLM_MODEL"
+  }
+ },
+ {
+  "id": "const-session-new-agentsession-model-gpt-4o-mini-llm-new-llm-model-line4-name+setting",
+  "files": {
+   "a.ts": "const session = new AgentSession({\n  model: \"gpt-4o-mini\",\n  llm: new LLM({\n    model: process.env.LLM_MODEL ?? \"gpt-4o\",\n  }),\n});\n"
+  },
+  "model": {
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL",
+   "path": "a.ts",
+   "line": 4
+  },
+  "expected": {
+   "refused": false,
+   "name": "gpt-4o",
+   "setting": "LLM_MODEL"
+  }
  }
 ]
