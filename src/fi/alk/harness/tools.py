@@ -879,6 +879,28 @@ def _needs_a_browser(destination: Path) -> bool:
     return contract is not None and "browser" in contract.environment_needs
 
 
+# The ask for a conversational agent's prompt and rules when the save has neither, by where the
+# reading found the agent.
+PROMPT_ASK_FROM_DEFINITION = (
+    "no hard_constraints and no system_prompt_excerpt, for a conversational agent. Its prompt "
+    "and rules are in the provider definition you were shown: quote the prompt in "
+    "system_prompt_excerpt, with ... where you leave text out, and record its rules in "
+    "hard_constraints."
+)
+PROMPT_ASK_UNREADABLE_DEFINITION = (
+    "no hard_constraints and no system_prompt_excerpt, for a conversational agent. The build "
+    "named a provider definition for it, but that definition could not be read, so its prompt "
+    "is not available here and lines in this repository are not it. Record in hard_constraints "
+    "any rules you can tell the agent follows, or send the contract again as it is."
+)
+PROMPT_ASK_FROM_SOURCE = (
+    "no hard_constraints and no system_prompt_excerpt, for a conversational agent. Its prompt "
+    "usually exists and often lives away from the main agent file — search the whole source "
+    "for a long instructions string before deciding there is none. If you find it, name its "
+    "lines in system_prompt_from so it is copied whole."
+)
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
@@ -2184,23 +2206,12 @@ def contract_tools(
                 # A provider's whole prompt is copied at the save, so it is not missing.
                 and provider_prompt is None,
                 (
-                    "no hard_constraints and no system_prompt_excerpt, for a conversational "
-                    "agent. Its prompt and rules are in the provider definition you were shown: "
-                    "quote the prompt in system_prompt_excerpt, with ... where you leave text "
-                    "out, and record its rules in hard_constraints."
+                    PROMPT_ASK_FROM_DEFINITION
                     if provider_profile
                     # Named by the build but unreadable: in force, empty, and never shown.
-                    else "no hard_constraints and no system_prompt_excerpt, for a "
-                    "conversational agent. The build named a provider definition for it, but "
-                    "that definition could not be read, so its prompt is not available here and "
-                    "lines in this repository are not it. Record in hard_constraints any rules "
-                    "you can tell the agent follows, or send the contract again as it is."
+                    else PROMPT_ASK_UNREADABLE_DEFINITION
                     if provider_profile is not None
-                    else "no hard_constraints and no system_prompt_excerpt, for a conversational "
-                    "agent. Its prompt usually exists and often lives away from the main agent "
-                    "file — search the whole source for a long instructions string before "
-                    "deciding there is none. If you find it, name its lines in system_prompt_from "
-                    "so it is copied whole."
+                    else PROMPT_ASK_FROM_SOURCE
                 ),
             ),
             (
