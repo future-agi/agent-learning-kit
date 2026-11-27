@@ -1839,6 +1839,17 @@ def validate_runtime_plan_patch(
     updates = {"runtime": runtime}
     if patch.runtime_dependencies is not None:
         updates["runtime_dependencies"] = patch.runtime_dependencies
+    before = contract.runtime
+    if before is None or (before.language, before.workdir, before.command) != (
+        runtime.language,
+        runtime.workdir,
+        runtime.command,
+    ):
+        # The saved instrumentation is read the way the runtime runs the agent, so a repair
+        # that changes how it runs reads it again.
+        from .tools import saved_instrumentation
+
+        updates["instrumentation"] = saved_instrumentation(root, runtime, recorded or None)
     candidate = contract.model_copy(update=updates)
     # Revalidate the whole contract so nested updates cannot bypass canonical validators.
     candidate = AgentContract.model_validate(candidate.model_dump(mode="python"))
