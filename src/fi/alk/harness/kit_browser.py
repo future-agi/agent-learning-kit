@@ -38,6 +38,7 @@ import select
 import shutil
 import socket
 import stat
+import sys
 import threading
 import time
 import uuid
@@ -156,6 +157,13 @@ def chromium_arguments(binary: str, *, profile: Path, proxy_url: str) -> list[st
         *(f"--{switch}={housekeeping}" for switch in _SERVICE_URLS),
         "about:blank",
     ]
+
+
+# Chromium keeps one browser to a profile through a socket under its temporary folder (the profile here):
+# <TMPDIR>/org.chromium.Chromium.XXXXXX/SingletonSocket. On Linux a socket's path holds at most 107 bytes, and a
+# longer one stops the browser at start, so the profile's own name is short.
+_SINGLETON_SOCKET_TAIL = len("/org.chromium.Chromium.XXXXXX/SingletonSocket")
+_SOCKET_PATH_MAX = 107
 
 
 def browser_environment(*, home: Path) -> dict[str, str]:
@@ -471,7 +479,13 @@ class KitBrowser:
                 shutil.rmtree(self.directory)
             except OSError:
                 logger.warning("browser: the last profile under %s could not be removed", self.directory)
-        profile = self.directory / f"profile-{uuid.uuid4().hex}"
+        profile = self.directory / f"p{uuid.uuid4().hex[:8]}"
+        room = _SOCKET_PATH_MAX - _SINGLETON_SOCKET_TAIL
+        if sys.platform.startswith("linux") and len(str(profile)) > room:
+            raise RuntimeError(
+                f"the browser's folder {self.directory} is too long for the browser: its profile's path takes "
+                f"{len(str(profile))} bytes, and Chromium's socket under it leaves room for {room}"
+            )
         profile.mkdir(parents=True)
         self._prepare(profile)
         argv = chromium_arguments(
