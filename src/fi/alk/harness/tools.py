@@ -63,7 +63,13 @@ from .contract import (
 )
 from .failure_file import FAILURE_FILE, write_failure_file
 from .job import FailureDomain, HarnessFailure, HarnessStage
-from .instrumentation_evidence import detect_instrumentation
+from .generated_runtime import GeneratedRuntimeError, planned_component
+from .instrumentation_evidence import (
+    detect_instrumentation,
+    detect_node_instrumentation,
+    reads_python,
+    runs_javascript,
+)
 from .runtime_selection import (
     COMPOSE_SERVICE_OUTSIDE_FOLDER,
     PathLookupsSpent,
@@ -550,17 +556,76 @@ def _checked_against_source(
     stage_ended("runtime", None)
     if problems:
         return _problems(problems, arrived)
-    if instrumentation is None:
-        # With a folder, what it imports from elsewhere is read too, as the other scans do.
-        instrumentation = (
-            detect_instrumentation(
-                agent_folder(source_root, subfolder),
-                code_the_agent_reaches(source_root, subfolder) if reached is None else reached,
-            )
-            if source_root and subfolder
-            else detect_instrumentation(source_root)
-        )
+    instrumentation = saved_instrumentation(
+        source_root, runtime, subfolder, reached=reached, found=instrumentation
+    )
     return contract.model_copy(update={"instrumentation": instrumentation, "runtime": runtime})
+
+
+def saved_instrumentation(
+    source_root: Path | None,
+    runtime: Runtime | None,
+    subfolder: str | None,
+    *,
+    reached: list[Path] | None = None,
+    found: str | None = None,
+) -> str:
+    """The contract's instrumentation, read the way the selected runtime runs the agent.
+    ``found`` is the session's answer, read before the runtime was known.
+
+    A Node or Bun agent is read from the package.json of the component the planner builds,
+    whatever Python helpers its folder holds; any other known runtime from its Python imports
+    only; an unknown one from its imports, else its folder's package.json.
+    """
+    if source_root is None:
+        return found or "none"
+    reader, package = _instrumentation_reader(source_root, runtime, subfolder)
+    if reader == "node":
+        return detect_node_instrumentation(source_root, package)
+    if not subfolder:
+        if found is not None and reader == "other" and found != "none":
+            # The session read package.json only where it found no Python file to read.
+            return found if reads_python(source_root) else "none"
+        return found or detect_instrumentation(source_root, manifests=reader == "unknown")
+    folder = agent_folder(source_root, subfolder)
+    if found is not None and (reader == "unknown" or found == "none" or reads_python(folder)):
+        return found
+    # With a folder, what it imports from elsewhere is read too, as the other scans do.
+    reached = code_the_agent_reaches(source_root, subfolder) if reached is None else reached
+    if found is not None:
+        return found if reads_python(folder, reached) else "none"
+    return detect_instrumentation(folder, reached, manifests=reader == "unknown")
+
+
+def _instrumentation_reader(
+    source_root: Path, runtime: Runtime | None, subfolder: str | None
+) -> tuple[str, str]:
+    """``("node", <workdir>)`` for a Node or Bun runtime, with the component folder the planner
+    builds; ``("other", "")`` for another runtime; ``("unknown", "")`` when the runtime names no
+    language or command and the planner cannot choose one."""
+    if runtime is None:
+        return "unknown", ""
+    javascript = runs_javascript(runtime.language, _launch_command(source_root, runtime, subfolder))
+    if javascript is False:
+        return "other", ""
+    root = source_root.resolve()
+    try:
+        language, component = planned_component(root, runtime)
+    except (GeneratedRuntimeError, OSError):
+        language, component = "", None
+    if javascript is None:
+        if not language:
+            return "unknown", ""
+        if language != "node":
+            return "other", ""
+    elif language and language != "node" and not (runtime.command or runtime.language.strip()):
+        # Only a Dockerfile CMD made it Node, and the planner builds another language: that
+        # Dockerfile is another component's (a frontend's), and its CMD never runs the agent.
+        return "other", ""
+    if component is None:
+        # The planner refuses this component; its workdir is read as written.
+        return "node", runtime.workdir
+    return "node", component.relative_to(root).as_posix()
 
 
 def _modules_as_the_process_imports_them(
@@ -814,6 +879,30 @@ def _stop_message(destination: Path) -> str:
 
 # alk.yaml and the Compose files together; the largest real Compose file seen is 53 KB.
 _SAVE_YAML_BYTES = 128 * 1024
+
+
+def _launch_command(source_root: Path, runtime: Runtime, subfolder: str | None) -> list[str]:
+    """The command the planner starts: ``runtime.command``, else, with no language either, the
+    Dockerfile CMD it reads. That is the start folder's (the repository root, or the bound workdir
+    in a subfolder), then the one in ``runtime.workdir``."""
+    if runtime.command or runtime.language.strip():
+        return list(runtime.command)
+    from .bundle_author_v2 import BundleAuthorError, _dockerfile_run
+
+    root = source_root.resolve()
+    workdir = (root / runtime.workdir.strip()).resolve() if runtime.workdir.strip() else root
+    for folder in dict.fromkeys((workdir,) if subfolder else (root, workdir)):
+        if not folder.is_relative_to(root) or not folder.is_dir():
+            continue
+        try:
+            command = _dockerfile_run(folder)
+        except BundleAuthorError:
+            # A CMD the planner refuses (shell form, not JSON) names no runtime to read by;
+            # the save's evidence falls back to the folder's own files.
+            continue
+        if command:
+            return command
+    return []
 
 
 def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> str | None:
