@@ -841,34 +841,96 @@ def _kit_seeing_its_launch(directory, tmp_path, launched):
     )
 
 
-def test_the_browser_s_temporary_folder_leaves_room_for_chromium_s_socket_under_the_hosted_work_folder(
-    tmp_path,
+def _socket_path_bytes(temporary: str) -> int:
+    return len(os.fsencode(temporary)) + _SINGLETON_TAIL
+
+
+# As a Linux runner's pytest folders are, and longer than any socket path: the work folder must not matter.
+_LONG = "pytest-of-runner/pytest-0/" + "a_test_with_a_long_name_" * 4
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_a_browser_under_a_long_work_folder_starts_with_a_temporary_folder_of_its_own(
+    tmp_path, monkeypatch, platform
 ) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
     launched: list[dict] = []
-    directory = tmp_path / "browser"
+    directory = tmp_path / _LONG / "worlds" / "w0" / ".kit-browser"
+    assert len(os.fsencode(directory)) + _SINGLETON_TAIL > _SOCKET_PATH_MAX
     kit = _kit_seeing_its_launch(directory, tmp_path, launched)
+    try:
+        kit.start()
+        [env] = launched
+        temporary = Path(env["TMPDIR"])
+        assert temporary.is_dir()
+        assert directory not in temporary.parents
+        assert _socket_path_bytes(env["TMPDIR"]) <= _SOCKET_PATH_MAX, env["TMPDIR"]
+    finally:
+        kit.close()
+    assert not temporary.exists()
+
+
+def test_each_start_has_a_new_temporary_folder_and_the_last_one_is_gone(tmp_path) -> None:
+    launched: list[dict] = []
+    kit = _kit_seeing_its_launch(tmp_path / "browser", tmp_path, launched)
+    try:
+        kit.start()
+        kit.start()
+        first, second = (Path(env["TMPDIR"]) for env in launched)
+        assert first != second
+        assert not first.exists()
+        assert second.is_dir()
+        kit.stop()
+        assert not second.exists()
+    finally:
+        kit.close()
+
+
+def test_the_browser_s_temporary_folder_is_handed_to_its_user_with_its_profile(tmp_path) -> None:
+    launched: list[dict] = []
+    prepared: list[Path] = []
+
+    def launch(argv, cwd, env, log_path):
+        launched.append(env)
+        (cwd / "DevToolsActivePort").write_text("9333\n/devtools/browser/x\n")
+        return object()
+
+    kit = KitBrowser(
+        binary="/opt/alk-chromium",
+        sites=["shop.test"],
+        log=MemoryLog(),
+        directory=tmp_path / "browser",
+        state_path=tmp_path / "state.json",
+        launch=launch,
+        stop=lambda handle: None,
+        prepare=prepared.append,
+    )
     try:
         kit.start()
     finally:
         kit.close()
     [env] = launched
-    added = len(env["TMPDIR"]) - len(str(directory))
-    for hosted in ("/work/worlds/w0/.kit-browser", "/work/worlds/w99/.kit-browser"):
-        assert len(hosted) + added + _SINGLETON_TAIL <= _SOCKET_PATH_MAX, (hosted, env["TMPDIR"])
+    assert sorted(prepared) == sorted([Path(env["HOME"]), Path(env["TMPDIR"])])
 
 
 @pytest.mark.parametrize("platform, refused", [("linux", True), ("darwin", False)])
-def test_a_browser_folder_too_long_for_chromium_s_socket_fails_at_start_on_linux_and_says_so(
+def test_a_temporary_folder_too_long_for_chromium_s_socket_fails_at_start_on_linux_and_says_so(
     tmp_path, monkeypatch, platform, refused
 ) -> None:
     monkeypatch.setattr(sys, "platform", platform)
+    # Counted in bytes, as a socket's path is: 40 characters, 80 bytes.
+    base = tmp_path / ("é" * 40)
+    base.mkdir()
+    monkeypatch.setattr(kit_browser, "_BROWSER_TEMPORARY_BASE", str(base))
     launched: list[dict] = []
-    kit = _kit_seeing_its_launch(tmp_path / ("x" * 100), tmp_path, launched)
+    kit = _kit_seeing_its_launch(tmp_path / "browser", tmp_path, launched)
     try:
         if refused:
-            with pytest.raises(RuntimeError, match="too long for the browser"):
+            with pytest.raises(RuntimeError, match="too long for the browser") as raised:
                 kit.start()
             assert launched == []
+            assert "bytes" in str(raised.value)
+            assert list(base.iterdir()) == []
         else:
             kit.start()
             assert len(launched) == 1

@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -304,9 +306,27 @@ def test_the_kit_runs_the_browser_as_the_agent_s_user_with_nothing_of_its_own(
     assert (launch["user"], launch["group"]) == (1234, 5678)
     assert set(launch["env"]) <= {"PATH", "HOME", "TMPDIR", "LANG", "FONTCONFIG_PATH"}
     profile = next(one.split("=", 1)[1] for one in launch["argv"] if one.startswith("--user-data-dir="))
-    assert chowned == [(profile, 1234, 5678)]
+    assert sorted(chowned) == sorted([(profile, 1234, 5678), (launch["env"]["TMPDIR"], 1234, 5678)])
     # Its state is where the kit writes and the agent's user does not.
     assert browser.metadata()["state_path"] == str(tmp_path / "browser-state" / "w0.json")
+
+
+def test_a_world_under_a_long_work_folder_starts_its_browser_on_linux(tmp_path, monkeypatch) -> None:
+    # A local run's work folder is a long temporary name; the browser's socket must not depend on it.
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(kit_browser, "chromium_binary", lambda: "/opt/alk-chromium")
+    work = tmp_path / ("alk-local-certified-0123abcd-" + "x" * 60)
+    work.mkdir()
+    context, launched, _ = _factory_context(
+        work, resolver=_fake_user_resolver({"svc-agent": (1234, 5678)})
+    )
+    browser = br.kit_browser_factory(context)(0, None)
+    try:
+        browser.start()
+    finally:
+        browser.close()
+    [launch] = launched
+    assert len(os.fsencode(launch["env"]["TMPDIR"])) + len("/org.chromium.Chromium.XXXXXX/SingletonSocket") <= 107
 
 
 def test_a_hosted_world_with_no_agent_user_starts_no_browser(tmp_path, monkeypatch) -> None:
