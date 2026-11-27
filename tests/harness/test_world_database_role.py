@@ -3638,6 +3638,69 @@ def test_a_materialized_view_a_definer_function_refreshes_refuses_the_reset(door
 
 
 @real_postgres
+def test_a_user_mapping_a_definer_function_alters_refuses_the_reset(door_worlds, monkeypatch):
+    """The migrator owns a foreign server, and its definer function changes the server's public user mapping (the
+    remote password): mappings are no row a reset puts back and ordinary roles may not read their options, so they
+    are read as the harness and a changed mapping refuses the world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness import process_runtime as runtime
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            f"DO $$ BEGIN CREATE ROLE {runtime.MIGRATOR_ROLE}; EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+        )
+        connection.execute("CREATE FOREIGN DATA WRAPPER ledger_wrapper")
+        connection.execute(f"GRANT USAGE ON FOREIGN DATA WRAPPER ledger_wrapper TO {runtime.MIGRATOR_ROLE}")
+        connection.execute("CREATE SERVER ledger_server FOREIGN DATA WRAPPER ledger_wrapper")
+        connection.execute("CREATE USER MAPPING FOR PUBLIC SERVER ledger_server OPTIONS (user 'reader', password 'seeded')")
+        connection.execute(f"ALTER SERVER ledger_server OWNER TO {runtime.MIGRATOR_ROLE}")
+        connection.execute(
+            "CREATE FUNCTION public.rotate() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS "
+            "$$ BEGIN ALTER USER MAPPING FOR PUBLIC SERVER ledger_server OPTIONS (SET password 'answer'); END $$"
+        )
+        connection.execute(f"ALTER FUNCTION public.rotate() OWNER TO {runtime.MIGRATOR_ROLE}")
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute("SELECT public.rotate()")
+    with pytest.raises(WorldResetRefused, match="user mappings"):
+        store.restore(snapshot)
+
+
+@real_postgres
+def test_a_subscription_a_definer_function_alters_refuses_the_reset(door_worlds, monkeypatch):
+    """A definer function changes a subscription's connection string, which ordinary roles may not read: this
+    database's subscriptions are read as the harness, so a changed one refuses the world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "CREATE SUBSCRIPTION ledger_feed CONNECTION 'host=127.0.0.1 dbname=seeded' PUBLICATION ledger "
+            "WITH (connect = false, slot_name = NONE, enabled = false)"
+        )
+        connection.execute(
+            "CREATE FUNCTION public.repoint() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS "
+            "$$ BEGIN ALTER SUBSCRIPTION ledger_feed CONNECTION 'host=127.0.0.1 dbname=answer'; END $$"
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    try:
+        with psycopg.connect(world, autocommit=True) as agent:
+            agent.execute("SELECT public.repoint()")
+        with pytest.raises(WorldResetRefused, match="subscriptions"):
+            store.restore(snapshot)
+    finally:
+        with psycopg.connect(superuser, autocommit=True) as connection:
+            connection.execute("DROP SUBSCRIPTION ledger_feed")
+
+
+@real_postgres
 def test_a_sequence_a_definer_function_alters_refuses_the_reset(door_worlds, monkeypatch):
     """A definer function alters a sequence its owner owns (its step): the reset puts the counter back but not the
     step, so the sequence's parameters are in the digest and a changed one refuses the world."""

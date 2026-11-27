@@ -495,7 +495,7 @@ class PostgresStore(ContainerStore):
                 return harness_state_digest(connection)
 
     def _verify_harness_state(self, snapshot: Snapshot) -> None:
-        """After a reset commits: the contents its rows do not hold (large objects, materialized views) as the
+        """After a reset commits: the state its rows do not hold (large objects, materialized views, user mappings, subscriptions) as the
         snapshot found them, read as the harness; otherwise the world is refused and never graded again."""
         # A snapshot that read none (taken another way) is compared on nothing.
         held = {kind: digest for kind, digest in snapshot.catalog.items() if kind in _HARNESS_STATE_KINDS}

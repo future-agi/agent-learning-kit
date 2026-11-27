@@ -135,11 +135,19 @@ def catalog_digest(connection: Connection[Any]) -> dict[str, str]:
 
 
 # State only the harness may read whole, outside the rows a reset puts back: every large object's contents (a world
-# role may be let write one it may not read) and every materialized view's contents (code running as the view's owner
-# may refresh it). Read on the harness's own connection, after a reset commits as well as at the snapshot.
+# role may be let write one it may not read), every materialized view's contents (code running as the view's owner
+# may refresh it), and the catalogs whose rows ordinary roles may not read: user mappings (a foreign server's owner may
+# change a mapping's remote user and password) and this database's subscriptions (their connection strings). Read on
+# the harness's own connection, after a reset commits as well as at the snapshot.
 _LARGE_OBJECTS = (
     "SELECT md5(coalesce(string_agg(concat_ws('|', l.oid, md5(lo_get(l.oid))), E'\\n' ORDER BY l.oid), '')) "
     "FROM pg_largeobject_metadata l"
+)
+_RESTRICTED = (
+    "SELECT md5(coalesce(string_agg(row_to_json(u)::text, E'\\n' ORDER BY row_to_json(u)::text), '')) "
+    "FROM pg_user_mapping u WHERE u.umserver::oid >= 16384",
+    "SELECT md5(coalesce(string_agg(row_to_json(s)::text, E'\\n' ORDER BY row_to_json(s)::text), '')) "
+    "FROM pg_subscription s WHERE s.subdbid = (SELECT d.oid FROM pg_database d WHERE d.datname = current_database())",
 )
 _MATERIALIZED_VIEWS = (
     "SELECT n.nspname, c.relname, c.relispopulated FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
@@ -147,12 +155,12 @@ _MATERIALIZED_VIEWS = (
 )
 
 
-HARNESS_STATE_KINDS = ("large object contents", "materialized view contents")
+HARNESS_STATE_KINDS = ("large object contents", "materialized view contents", "user mappings", "subscriptions")
 
 
 def harness_state_digest(connection: Connection[Any]) -> dict[str, str]:
-    """The contents of the world's large objects and materialized views, a digest per kind, read as the harness
-    (call inside a transaction: the search path is set for it only)."""
+    """The contents of the world's large objects and materialized views, and its user mappings and subscriptions,
+    a digest per kind, read as the harness (call inside a transaction: the search path is set for it only)."""
     from psycopg import sql
 
     connection.execute("SET LOCAL search_path = pg_catalog")
@@ -168,5 +176,6 @@ def harness_state_digest(connection: Connection[Any]) -> dict[str, str]:
             ).fetchone()
             contents = str(row[0]) if row else ""
         views.append(f"{schema}.{name}|{contents}")
-    contents = str(objects), hashlib.md5("\n".join(views).encode(), usedforsecurity=False).hexdigest()
+    restricted = tuple(str((connection.execute(query).fetchone() or ("",))[0]) for query in _RESTRICTED)
+    contents = str(objects), hashlib.md5("\n".join(views).encode(), usedforsecurity=False).hexdigest(), *restricted
     return dict(zip(HARNESS_STATE_KINDS, contents, strict=True))
