@@ -13,6 +13,7 @@ import ast
 import hashlib
 import json
 import logging
+import os
 import re
 import shlex
 import shutil
@@ -1510,6 +1511,33 @@ _NODE_LAYOUT_UNSUPPORTED = (
 # Files that make the launch folder, or a folder above it, part of a layout v1 does not install.
 _NODE_FOREIGN_LAYOUT = ("pnpm-lock.yaml", "pnpm-workspace.yaml", "yarn.lock")
 _NODE_PARENT_LOCKS = ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb", *_NODE_FOREIGN_LAYOUT)
+# Node options that load a module before the entry script. A relative or absolute value is a file in the
+# package; a bare value (`dotenv/config`) is a dependency `npm ci` installs.
+_NODE_PRELOAD_OPTIONS = frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader"})
+# Options after which Node runs no entry script.
+_NODE_INLINE_OPTIONS = frozenset({"-e", "--eval", "-p", "--print", "--run", "--test"})
+# Node 22 (`node --help`) options that read their value from the next argument when written without `=`.
+_NODE_VALUE_OPTIONS = frozenset(
+    {
+        *_NODE_PRELOAD_OPTIONS, *(_NODE_INLINE_OPTIONS - {"--test"}),
+        "--allow-fs-read", "--allow-fs-write", "--build-snapshot-config", "-C", "--conditions",
+        "--cpu-prof-dir", "--cpu-prof-interval", "--cpu-prof-name", "--diagnostic-dir", "--disable-proto",
+        "--disable-warning", "--dns-result-order", "--env-file", "--env-file-if-exists",
+        "--experimental-config-file", "--experimental-default-type", "--experimental-sea-config",
+        "--experimental-test-isolation", "--heap-prof-dir", "--heap-prof-interval", "--heap-prof-name",
+        "--heapsnapshot-near-heap-limit", "--heapsnapshot-signal", "--icu-data-dir", "--input-type",
+        "--inspect-publish-uid", "--localstorage-file", "--max-http-header-size",
+        "--max-old-space-size-percentage", "--network-family-autoselection-attempt-timeout",
+        "--openssl-config", "--redirect-warnings", "--report-filename", "--report-signal", "--secure-heap",
+        "--secure-heap-min", "--snapshot-blob", "--test-concurrency", "--test-coverage-branches",
+        "--test-coverage-exclude", "--test-coverage-functions", "--test-coverage-include",
+        "--test-coverage-lines", "--test-name-pattern", "--test-reporter", "--test-reporter-destination",
+        "--test-shard", "--test-skip-pattern", "--test-timeout", "--title", "--tls-cipher-list",
+        "--tls-keylog", "--trace-event-categories", "--trace-event-file-pattern", "--trace-require-module",
+        "--unhandled-rejections", "--use-largepages", "--v8-pool-size", "--watch-kill-signal", "--watch-path",
+    }
+)
+_NODE_EXTENSIONS = ("", ".js", ".json", ".node")
 
 
 def _is_node(language: str, command: Sequence[str]) -> bool:
@@ -1530,6 +1558,82 @@ def _node_manifest(path: Path) -> dict[str, Any]:
     return manifest
 
 
+def _node_startup_operands(command: Sequence[str]) -> list[tuple[int, str, str]]:
+    """The operands Node opens as files to start ``command``, as (argv index, role, value): path-valued
+    preloads, then the entry script. Arguments after the entry script belong to the application."""
+    operands: list[tuple[int, str, str]] = []
+    inline, index = False, 1
+    while index < len(command):
+        token = command[index]
+        if token == "--":
+            index += 1
+            break
+        if token == "-" or not token.startswith("-"):
+            break
+        # Node splits `=` only off a long option; it rejects `-r=x`.
+        name, joined, value = token.partition("=") if token.startswith("--") else (token, "", "")
+        if not joined and name in _NODE_VALUE_OPTIONS and index + 1 < len(command):
+            index += 1
+            value = command[index]
+        if name in _NODE_PRELOAD_OPTIONS and (
+            value in (".", "..") or value.startswith(("./", "../", "/", "file:"))
+        ):
+            operands.append((index, f"{name} preload", value))
+        inline = inline or name in _NODE_INLINE_OPTIONS
+        index += 1
+    if not inline and index < len(command) and command[index] != "-":
+        operands.append((index, "entry script", command[index]))
+    return operands
+
+
+def _node_resolve(target: Path) -> list[Path]:
+    """The files Node's CommonJS loader reads for ``target``: the file, the file with an extension, then a
+    folder's package.json ``main`` (with that package.json) or its index file."""
+    for candidate in (target.with_name(target.name + ext) for ext in _NODE_EXTENSIONS):
+        if candidate.is_file():
+            return [candidate]
+    if not target.is_dir():
+        return []
+    manifest = target / "package.json"
+    try:
+        main = json.loads(manifest.read_text()).get("main") if manifest.is_file() else None
+    except (ValueError, UnicodeError, AttributeError):
+        main = None
+    if isinstance(main, str) and main:
+        main_path = Path(os.path.normpath(target / main))
+        for candidate in (
+            *(main_path.with_name(main_path.name + ext) for ext in _NODE_EXTENSIONS),
+            *(main_path / f"index{ext}" for ext in _NODE_EXTENSIONS[1:]),
+        ):
+            if candidate.is_file():
+                return [manifest, candidate]
+    for candidate in (target / f"index{ext}" for ext in _NODE_EXTENSIONS[1:]):
+        if candidate.is_file():
+            return [*([manifest] if manifest.is_file() else []), candidate]
+    return []
+
+
+def _node_startup_files(root: Path, command: Sequence[str]) -> list[str]:
+    """The files under ``root`` that Node loads to start ``command`` there. Admission and sealing both use it.
+
+    v1 seals one npm package at the launch folder, so an operand that resolves outside it is refused. A
+    missing file is not listed: Node reports it at start.
+    """
+    root, files = root.resolve(), []
+    for index, role, value in _node_startup_operands(command):
+        target = Path(os.path.normpath(root / value))
+        found = [] if value.startswith("file:") else _node_resolve(target)
+        if value.startswith("file:") or not all(
+            path.is_relative_to(root) and path.resolve().is_relative_to(root) for path in (target, *found)
+        ):
+            raise BundleAuthorError(
+                f"runtime_node_entrypoint_outside_workdir: argv[{index}] ({role}) is outside "
+                "runtime.workdir; v1 runs one npm package, so its entry script and preloads must be inside it"
+            )
+        files.extend(path.relative_to(root).as_posix() for path in found)
+    return files
+
+
 def _plan_node_process(source: Path, **kwargs: Any) -> SourceProcess:
     """v1 Node: one npm package at the launch folder, installed from its own package-lock.json."""
     command = list(kwargs.get("run_override") or [])
@@ -1544,15 +1648,7 @@ def _plan_node_process(source: Path, **kwargs: Any) -> SourceProcess:
     source, root = source.resolve(), kwargs["root"].resolve()
     if not root.is_relative_to(source):
         raise BundleAuthorError("runtime_node_workdir_outside_source")
-    # v1 seals one npm package, at the launch folder: a file the command names outside it is left
-    # out of the bundle, so the process could not start. `--require=../x` names one too.
-    for token in command[1:]:
-        named = token.partition("=")[2] if token.startswith("-") else token
-        if named and (Path(named).is_absolute() or not (root / named).resolve().is_relative_to(root)):
-            raise BundleAuthorError(
-                f"runtime_node_entrypoint_outside_workdir: {token}; v1 runs one npm package, "
-                "so the command may name only files inside runtime.workdir"
-            )
+    _node_startup_files(root, command)
     manifest_path = root / "package.json"
     if not manifest_path.is_file():
         raise BundleAuthorError(
@@ -4049,18 +4145,24 @@ def _package_process_sources(
                 f"generated_runtime_component_invalid: {process.working_directory}"
             )
         selected_runtime = runtime if process.name == plan.control_service else None
-        required = list(
-            selected_runtime.command if selected_runtime else process.run_command
-        )
-        if selected_runtime is not None:
-            required.extend(selected_runtime.requirements_files)
-        if _NPM_INSTALL in process.build_commands:
-            # Admission checked this lockfile; `npm ci` needs it in the sealed context. The start
-            # script is required too, also when it came from a Dockerfile CMD, not runtime.command.
-            required.extend(["package-lock.json", *process.run_command])
         declared_component = (component / process.source_component).resolve()
         if not declared_component.is_relative_to(component):
             raise GeneratedRuntimeError("generated_runtime_context_component_mismatch")
+        if _NPM_INSTALL in process.build_commands:
+            # `npm ci` needs the lockfile admission checked, and Node the entry script and preloads it
+            # resolves, also from a Dockerfile CMD. An application argument stays the author's to exclude.
+            command = process.run_command
+            if command[:2] == ["sh", "-c"] and len(command) == 3:
+                command = shlex.split(command[2])  # a listen port rewritten by _consumable_source_process
+            if command[:1] != ["node"]:
+                raise GeneratedRuntimeError("generated_runtime_node_command_unparsed")
+            required = ["package-lock.json", *_node_startup_files(declared_component, command)]
+        else:
+            required = list(
+                selected_runtime.command if selected_runtime else process.run_command
+            )
+            if selected_runtime is not None:
+                required.extend(selected_runtime.requirements_files)
         prefix = declared_component.relative_to(component)
         exclusion_runtime = selected_runtime or Runtime()
         runtime_excludes = tuple(

@@ -9812,7 +9812,12 @@ def test_a_node_control_gets_no_python_tool_wiring_at_seal_or_reseal(tmp_path, l
 
 @pytest.mark.parametrize(
     "command",
-    [["node", "../server.js"], ["node", "--require", "../setup.js", "server.js"]],
+    [
+        ["node", "../server.js"],
+        ["node", "--require", "../setup.js", "server.js"],
+        ["node", "--require=../setup.js", "server.js"],
+        ["node", "--import=../setup.js", "server.js"],
+    ],
 )
 def test_a_node_entrypoint_outside_runtime_workdir_is_refused_at_admission(tmp_path, command):
     """v1 seals one npm package, at runtime.workdir: a file the command names outside it would be left out."""
@@ -9843,11 +9848,158 @@ def test_a_node_entrypoint_outside_runtime_workdir_is_refused_at_admission(tmp_p
         )
     )
 
-    with pytest.raises(BundleAuthorError, match="runtime_node_entrypoint_outside_workdir"):
+    with pytest.raises(BundleAuthorError, match="runtime_node_entrypoint_outside_workdir") as refused:
         author_bundle_v2(
             source=source,
             authoring=authoring,
             job=_job(connector="auto"),
             output=tmp_path / "bundle",
         )
+    # The diagnostic names the operand by position and role, never by its submitted value.
+    assert "../" not in str(refused.value)
     assert not (tmp_path / "bundle").exists()
+
+
+def _seal_node(tmp_path, files: dict[str, str], command: list[str], excludes=(), **manifest):
+    source = _repo(tmp_path, {"server.js": _NODE_CHAT_SERVER, **files})
+    _node_package(source, **manifest)
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "node",
+                    "execution": "native",
+                    "command": command,
+                    "interface": _NODE_JSON_INTERFACE,
+                    "context_excludes": list(excludes),
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    return author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=tmp_path / "bundle"
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["node", "server.js", "--route=/chat"],
+        ["node", "server.js", "/chat"],
+        ["node", "server.js", "--require=../not-a-preload.js"],
+        ["node", "--title", "/chat", "server.js"],
+        ["node", "--require", "dotenv/config", "server.js"],
+    ],
+)
+def test_a_node_command_keeps_its_application_argv_through_seal_and_reload(tmp_path, command):
+    """Arguments after the script belong to the agent, and a bare preload is an installed package: neither is a file."""
+    sealed = _seal_node(tmp_path, {}, command)
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.run_command == command
+    reloaded = load_bundle_v2(tmp_path / "bundle")
+    control = next(p for p in reloaded.processes if p.name == reloaded.runtime.control_service)
+    assert control.run_command == command
+
+
+_NODE_PRELOAD = "require('./lib/hook.cjs');\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["node", "--require", "./boot.cjs", "--import=./lib/hook.cjs", "."],
+        ["node", "--require=./boot.cjs", "--import", "./lib/hook.cjs", "dist/chat"],
+    ],
+)
+def test_a_sealed_node_bundle_carries_its_entry_script_and_every_preload(tmp_path, command):
+    files = {"boot.cjs": _NODE_PRELOAD, "lib/hook.cjs": "\n", "dist/chat.js": _NODE_CHAT_SERVER}
+    sealed = _seal_node(tmp_path, files, command, main="dist/chat.js")
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    context = tmp_path / "bundle" / control.working_directory
+    assert control.run_command == command
+    for name, text in files.items():
+        assert (context / name).read_text() == text
+    load_bundle_v2(tmp_path / "bundle")
+
+
+@pytest.mark.parametrize(
+    ("command", "excluded"),
+    [
+        (["node", "--require=./boot.cjs", "server.js"], "boot.cjs"),
+        (["node", "--import=./lib/hook.cjs", "server.js"], "lib"),
+        (["node", "."], "dist/chat.js"),
+        (["node", "dist"], "dist/*.js"),
+        (["node", "dist/chat"], "dist/chat.js"),
+        (["node", "--require", "./boot", "server.js"], "boot.js"),
+    ],
+)
+def test_a_node_bundle_refuses_to_exclude_a_resolved_entry_or_preload(tmp_path, command, excluded):
+    """Node resolves `.`, a folder, a bare name and a joined preload to files; the bundle must keep each one."""
+    files = {
+        "boot.cjs": _NODE_PRELOAD,
+        "boot.js": _NODE_PRELOAD,
+        "lib/hook.cjs": "\n",
+        "dist/chat.js": _NODE_CHAT_SERVER,
+        "dist/package.json": json.dumps({"main": "chat.js"}),
+    }
+    with pytest.raises(Exception, match="generated_runtime_context_exclude_required"):
+        _seal_node(tmp_path, files, command, excludes=[excluded], main="dist/chat.js")
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_a_node_application_argument_that_names_a_file_stays_excludable(tmp_path):
+    """Only the files Node loads to start are required; an argument the agent reads is the author's to exclude."""
+    command = ["node", "server.js", "fixtures/orders.json"]
+    sealed = _seal_node(tmp_path, {"fixtures/orders.json": "[]"}, command, excludes=["fixtures"])
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.run_command == command
+    assert not (tmp_path / "bundle" / control.working_directory / "fixtures").exists()
+
+
+def test_a_node_tools_api_with_a_rewritten_port_still_seals_its_entry_script(tmp_path):
+    """A pinned `--port` on a tools-api is rewritten to `sh -c`; sealing still reads the Node argv inside it."""
+    source = _repo(
+        tmp_path,
+        {
+            "agent.py": "print('agent')\n",
+            "requirements.txt": "\n",
+            "tools/api/server.js": _NODE_CHAT_SERVER,
+            "compose.yml": (
+                "services:\n"
+                "  tools-api:\n"
+                "    build: ./tools/api\n"
+                "    command: [node, server.js, --port, '8080']\n"
+                "  agent:\n"
+                "    build: .\n"
+                "    command: [python, agent.py]\n"
+                "    depends_on: [tools-api]\n"
+            ),
+        },
+    )
+    _node_package(source / "tools/api")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "execution": "compose",
+                    "compose_file": "compose.yml",
+                    "service": "agent",
+                    "interface": {"kind": "http", "port": 9000, "path": "/chat"},
+                },
+                "data_store": {"kind": "none"},
+                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+            }
+        )
+    )
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=tmp_path / "bundle"
+    )
+    tools = next(process for process in manifest.processes if process.name == "tools-api")
+    assert tools.run_command == ["sh", "-c", "node server.js --port $FI_TOOLS_PORT"]
+    assert (tmp_path / "bundle" / tools.working_directory / "server.js").is_file()
