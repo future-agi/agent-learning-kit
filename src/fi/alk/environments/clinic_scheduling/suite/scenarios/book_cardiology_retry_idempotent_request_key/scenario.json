@@ -1,0 +1,121 @@
+{
+  "name": "book_cardiology_retry_idempotent_request_key",
+  "scenario_key": "book-cardiology-retry-idempotent-request-key",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "P411 retries cardiology booking after disconnection; idempotent request key ensures exactly one appointment is created",
+  "tests": "passes when the agent verifies P411, checks referral, and books the confirmed cardiology slot with idempotent request key",
+  "instruction": "You were previously booking a cardiology appointment with Dr. Ethan Brooks for Monday 2 November at 15:00 when your chat dropped just as you were confirming, so you do not know whether the booking went through. You are anxious to be booked once, without a duplicate appointment. Provide your details and confirm the booking for Dr. Brooks at 15:00.\n\nYour details:\n- Full name: Oliver Higgins\n- Date of birth: 1950-10-10\n- Insurance: Bupa, Member ID: BU-100241\n- Referral: Active cardiology referral from St Jude Practice\n- Provider: Dr. Ethan Brooks\n- Slot: Monday 2 November 2026, 15:00 (Riverbank Central)",
+  "keywords": [
+    "cardiology",
+    "booking",
+    "idempotent_retry",
+    "resumed_chat"
+  ],
+  "persona": {
+    "name": "Oliver Higgins",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "Canada",
+    "personality": "Anxious",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, my chat disconnected while booking Dr. Ethan Brooks on Monday 2 November at 15:00. Can we confirm that booking?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "created_records": [
+      "patients.P411",
+      "insurance.P411",
+      "referrals.RF411"
+    ]
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Oliver Higgins",
+        "dob": "1950-10-10"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "patient_id": "P411",
+        "specialty": "cardiology"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "date_from": "2026-11-02",
+        "provider_id": "D04",
+        "date_to": "2026-11-02",
+        "patient_id": "P411"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "confirmed": true,
+        "request_key": "REQ-P411-D04-1102",
+        "reason": "Cardiology review",
+        "slot_id": "SL-D04-20261102-1500",
+        "self_pay": false,
+        "patient_id": "P411"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P411",
+        "slot_id": "record: the slot the caller confirmed"
+      }
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "reason": "Cardiology review",
+        "patient_id": "P411",
+        "self_pay": false,
+        "slot_id": "SL-D04-20261102-1500",
+        "request_key": "REQ-P411-D04-1102",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "patient",
+    "overlay_intensity": "absent",
+    "interaction": "resumed",
+    "overlay_vector": "none",
+    "task": "book_appointment",
+    "overlay": "none",
+    "interface": "anxious",
+    "disposition": "active_referral"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

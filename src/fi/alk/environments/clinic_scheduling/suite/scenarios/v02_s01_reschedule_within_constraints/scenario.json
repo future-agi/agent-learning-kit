@@ -1,0 +1,103 @@
+{
+  "name": "v02_s01_reschedule_within_constraints",
+  "scenario_key": "v02-s01-reschedule-within-constraints",
+  "scenario_id": "",
+  "use_case": "Reschedule an appointment within the clinic's constraints",
+  "branch": "Marcus Vance moves his Monday primary-care appointment A01 to Dr. Rohan Patel on Tuesday 3 November at 14:00, a free slot with a provider who accepts his insurer",
+  "tests": "the agent verifies, confirms the new provider, date, time and location, and moves A01 so the new time is on Dr. Patel's calendar and the original is released",
+  "instruction": "Your annual review A01 is on Monday 2 November at 13:30 with Dr. Alicia Nguyen. You want to move it to next Tuesday, 3 November, at 2 pm with Dr. Rohan Patel instead. Confirm when the desk reads the new details back.\n\nYour details:\n- Name: Marcus Vance\n- Date of birth: 1982-04-12\n- Appointment: A01\n- Wanted: Tuesday 3 November, 14:00, Dr. Rohan Patel",
+  "keywords": [
+    "reschedule",
+    "workbook"
+  ],
+  "persona": {
+    "name": "Marcus Vance",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'd like to move my appointment A01 to next Tuesday at 2 pm with Dr. Patel.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P01",
+    "appointment_id": "A01",
+    "slot_id": "SL-D02-20261103-1400",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Marcus Vance",
+        "dob": "1982-04-12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_appointment",
+      "arguments": {
+        "appointment_id": "A01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D02",
+        "date_from": "2026-11-03",
+        "date_to": "2026-11-03",
+        "patient_id": "P01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "reschedule_appointment",
+      "arguments": {
+        "appointment_id": "A01",
+        "new_slot_id": "SL-D02-20261103-1400",
+        "confirmed": true,
+        "request_key": "REQ-P01-A01-RESCHED"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A01",
+        "new_slot_id": "caller: Tuesday 3 November 14:00 with D02",
+        "confirmed": "caller said yes"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reschedule",
+    "disposition": "happy_path",
+    "interaction": "multi_turn",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "appointment_rescheduled_atomically",
+    "confirmation_obtained_before_change"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

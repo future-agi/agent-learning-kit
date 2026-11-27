@@ -1,0 +1,111 @@
+{
+  "name": "ret_apparel_near_window_end",
+  "scenario_key": "ret-apparel-near-window-end",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Customer C405 returns apparel item AP06 delivered 28 days ago on order O405, within the 30-day apparel return window",
+  "tests": "the agent creates a return for apparel AP06 delivered 28 days ago within the 30-day window",
+  "instruction": "You bought Relaxed Fit Chino Trousers (SKU AP06) in order O405, delivered 28 days ago. You want to return them for a refund.\n\nYour details:\n- Name: Liam O'Connor\n- Email: liam.oconnor@example.com\n- Postal Code: 97201\n- Order ID: O405\n- Item: SKU AP06 (Quantity 1)\n- Reason: Did not fit",
+  "keywords": [
+    "return_authorization",
+    "apparel_window"
+  ],
+  "persona": {
+    "name": "Liam O'Connor",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Student",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey! I want to return the chino trousers (AP06) from order O405. It's been about four weeks since delivery so I want to make sure I can still send them back.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O405",
+    "customer_id": "C405",
+    "origin": "generated",
+    "sku": "AP06"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O405",
+        "postal_code": "97201"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O405"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O405",
+        "items": [
+          {
+            "quantity": 1,
+            "reason": "did_not_fit",
+            "sku": "AP06"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "order_id": "O405",
+        "customer_id": "C405",
+        "items": [
+          {
+            "quantity": 1,
+            "reason": "did_not_fit",
+            "sku": "AP06"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "caller: order number O405",
+        "customer_id": "record: customer C405",
+        "items": "the items and quantities the customer settled on"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "disposition": "cooperative",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "return_eligible_item",
+    "counterparty": "verified_owner",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,88 @@
+{
+  "name": "approver_records_rejection_decision",
+  "scenario_key": "approver-records-rejection-decision",
+  "scenario_id": "",
+  "use_case": "complete_approved_access",
+  "branch": "Finance owner Fiona Gallagher E06 rejects pending finance request AR-401 for E415.",
+  "tests": "Does the agent verify approver E06 and record the rejection decision for AR-401?",
+  "instruction": "You are Fiona Gallagher (employee ID E06), finance department head and approver for request AR-401 (Sam Thorne E415, APP-FIN, accountant). In chat, state that you are rejecting access request AR-401 and ask the IT desk to record your rejection decision.",
+  "keywords": [
+    "rejection_decision"
+  ],
+  "persona": {
+    "name": "Fiona Gallagher",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello IT desk, Fiona Gallagher (E06) here. I am rejecting request AR-401 for Sam Thorne. Please record my rejection in the system.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "request_id": "AR-401",
+    "approver_id": "E06",
+    "decision": "reject"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_approval_status",
+      "arguments": {
+        "request_id": "AR-401"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "record_approval_decision",
+      "arguments": {
+        "decision": "reject",
+        "request_id": "AR-401",
+        "approver_id": "E06"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "decision": "caller: reject",
+        "request_id": "caller: AR-401",
+        "approver_id": "caller: Fiona Gallagher (E06)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "counterparty": "manager_requester",
+    "interaction": "collaborative",
+    "disposition": "rejection_decision",
+    "interface": "chat",
+    "overlay_intensity": "absent",
+    "task": "complete_approved_access",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "approval_decision_recorded"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

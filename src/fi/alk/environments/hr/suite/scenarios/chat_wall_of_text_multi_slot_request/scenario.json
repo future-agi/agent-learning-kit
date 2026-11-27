@@ -1,0 +1,114 @@
+{
+  "name": "chat_wall_of_text_multi_slot_request",
+  "scenario_key": "chat-wall-of-text-multi-slot-request",
+  "scenario_id": "",
+  "use_case": "Check leave balance and submit a leave request with manager approval routing",
+  "branch": "An employee submits a multi-slot wall of text containing dates, leave type, employee ID, and reason, requiring complete extraction and workflow execution.",
+  "tests": "Extracts full parameters from wall of text and successfully submits leave request to manager M04.",
+  "instruction": "You want to take two days off on November 24 and November 25, 2026 for annual leave. In your message, you type out a dense block of text providing your employee ID (E10), dates (2026-11-24 to 2026-11-25), leave category (annual), and reason (Attending regional tech summit). You want the assistant to verify your balance, calculate the working days (2 days), confirm the details, and route the request to your manager Mei Lin.\n\nYour details:\n- Employee ID: E10\n- Name: Jun Park\n- Region: APAC\n- Leave Type: annual\n- Start Date: 2026-11-24\n- End Date: 2026-11-25\n- Reason: Attending regional tech summit",
+  "keywords": [
+    "leave_submission",
+    "leave_balance",
+    "working_days",
+    "manager_approval"
+  ],
+  "persona": {
+    "name": "Jun Park",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello HR Desk, I need to submit a leave request: Employee ID E10 (Jun Park, APAC), annual leave from 2026-11-24 to 2026-11-25 for Attending regional tech summit. Please check my balance and submit to manager Mei Lin.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "manager_id": "M04",
+    "origin": "seed",
+    "region": "APAC",
+    "employee_id": "E10",
+    "working_days": 2,
+    "requested_span": "2026-11-24 to 2026-11-25"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E10"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E10"
+      }
+    },
+    {
+      "tool": "get_leave_balance",
+      "arguments": {
+        "employee_id": "E10",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: E10",
+        "leave_type": "caller: annual"
+      }
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "start_date": "2026-11-24",
+        "end_date": "2026-11-25",
+        "region": "APAC"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "submit_leave_request",
+      "arguments": {
+        "start_date": "2026-11-24",
+        "reason": "Attending regional tech summit",
+        "employee_id": "E10",
+        "end_date": "2026-11-25",
+        "leave_type": "annual"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "leave_type": "caller: annual",
+        "end_date": "caller: 2026-11-25",
+        "employee_id": "caller: E10",
+        "start_date": "caller: 2026-11-24"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "counterparty": "employee_apac",
+    "task": "submit_leave_request",
+    "disposition": "disputed_balance",
+    "overlay": "none",
+    "interaction": "correction_after_reply",
+    "interface": "wall_of_text"
+  },
+  "sub_goals": [
+    "leave_request_submitted_correctly",
+    "truthful_status_and_approval_workflow_explained",
+    "details_confirmed_before_submission"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

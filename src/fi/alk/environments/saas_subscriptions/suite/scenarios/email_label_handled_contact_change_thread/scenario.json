@@ -1,0 +1,83 @@
+{
+  "name": "email_label_handled_contact_change_thread",
+  "scenario_key": "email-label-handled-contact-change-thread",
+  "scenario_id": "",
+  "use_case": "Pick up a billing request that arrived by email",
+  "branch": "Labeling an email thread as handled after processing contact change",
+  "tests": "Can the agent mark an email thread with the 'handled' label upon request?",
+  "instruction": "You are David Data (user U04_ADMIN, tenant T04). Ask the Cloudnest billing desk to inspect email thread th_b09_contact_change and add the 'handled' label to it now that the contact change is done.\n\nYour details:\n- Name: David Data\n- Role: Billing Admin\n- Email: david@dataflow.com\n- Tenant ID: T04\n- Thread ID: th_b09_contact_change\n- Label ID: handled",
+  "keywords": [
+    "email_billing_request"
+  ],
+  "persona": {
+    "name": "David Data",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, please check email thread th_b09_contact_change and add the handled label to it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "th_b09_contact_change",
+    "tenant_id": "T04",
+    "origin": "seed",
+    "actor_id": "U04_ADMIN",
+    "label": "handled"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_b09_contact_change"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "caller: Thread ID th_b09_contact_change"
+      }
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "labelIds": [
+          "handled"
+        ],
+        "threadId": "th_b09_contact_change"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "labelIds": "caller: Label ID handled",
+        "threadId": "caller: Thread ID th_b09_contact_change"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "billing_admin",
+    "overlay": "none",
+    "interface": "clean_chat",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "task": "email_billing_request",
+    "disposition": "label_thread",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "thread_label_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

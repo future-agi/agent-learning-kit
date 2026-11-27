@@ -1,0 +1,93 @@
+{
+  "name": "cancel_subscription_immediate_refused_term_end_scheduled",
+  "scenario_key": "cancel-subscription-immediate-refused-term-end-scheduled",
+  "scenario_id": "",
+  "use_case": "Cancel at term end or explain renewal",
+  "branch": "Leo Lunar U12_ADMIN asks for immediate cancellation; immediate is refused and term-end cancellation is scheduled after agreement",
+  "tests": "Refuses immediate subscription cancellation and schedules cancellation at term end upon user agreement",
+  "instruction": "You are Leo Lunar, Billing Admin for LunarOps (Tenant ID: T12, Actor ID: U12_ADMIN). You want your subscription cancelled immediately today. The billing desk should explain that immediate cancellation is not supported and offer cancellation at term end. Agree to the term-end cancellation and confirm.\n\nYour details:\n- Tenant ID: T12 (LunarOps)\n- Admin Actor ID: U12_ADMIN",
+  "keywords": [
+    "cancellation_at_term_end"
+  ],
+  "persona": {
+    "name": "Leo Lunar",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Business Owner",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I am Leo Lunar, billing admin for LunarOps (T12, actor ID U12_ADMIN). Cancel our subscription immediately today.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "records": {
+      "tenant_id": "T12",
+      "admin_id": "U12_ADMIN",
+      "subscription_id": "sub_12"
+    }
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T12",
+        "actor_id": "U12_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_renewal_terms",
+      "arguments": {
+        "actor_id": "U12_ADMIN",
+        "tenant_id": "T12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "schedule_cancellation",
+      "arguments": {
+        "actor_id": "U12_ADMIN",
+        "confirmation_code": "confirmed",
+        "tenant_id": "T12",
+        "request_key": "req_cancel_12",
+        "effective_timing": "end_of_term"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T12"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "cancel_now_requested",
+    "task": "cancel_subscription",
+    "overlay": "none",
+    "interface": "clean_chat",
+    "overlay_intensity": "absent",
+    "counterparty": "billing_admin",
+    "interaction": "resumed"
+  },
+  "sub_goals": [
+    "cancellation_scheduled_at_term_end",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,123 @@
+{
+  "name": "referral_cardiology_confirmed_by_email_booked",
+  "scenario_key": "referral-cardiology-confirmed-by-email-booked",
+  "scenario_id": "",
+  "use_case": "Referral and eligibility constraints",
+  "branch": "P11 asks to book cardiology now that his practice confirmed (th_c03_referral_p11, fix); desk checks and books Dr. Brooks on Wednesday 28 October afternoon (13:30).",
+  "tests": "the desk checks the practice confirmation email and verified referral record before booking the confirmed cardiology appointment",
+  "instruction": "Your doctor at Harbour Family Practice emailed Riverbank Clinics confirming your cardiology referral for Dr. Ethan Brooks. You want to book an appointment with Dr. Brooks on Wednesday 28 October in the afternoon. Ask the chat desk to check the email and book you in for the Wednesday afternoon slot (13:30). When the details (Dr. Ethan Brooks, Riverbank North, Wednesday 28 October 2026 at 13:30, slot SL-D04-20261028-1330) are presented for your confirmation, confirm and complete the booking.\n\nYour details:\n- Full name: Oliver Grant\n- Date of birth: 10 October 1950 (1950-10-10)\n- Practice: Harbour Family Practice\n- Email thread: Referral confirmed: Oliver Grant, cardiology\n- Preferred specialist: Dr. Ethan Brooks (Cardiology)\n- Preferred slot: SL-D04-20261028-1330 (Wednesday 28 October 2026 at 13:30)",
+  "keywords": [
+    "referral",
+    "cardiology",
+    "booking_confirmed"
+  ],
+  "persona": {
+    "name": "Oliver Grant",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hello, my doctor emailed you confirming my cardiology referral. Can I book an appointment with Dr. Ethan Brooks on Wednesday 28 October afternoon?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "patient_id": "P11",
+    "email_thread": "th_c03_referral_p11",
+    "specialty": "cardiology",
+    "referral_id": "RF04",
+    "origin": "seed",
+    "provider_id": "D04"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "dob": "1950-10-10",
+        "full_name": "Oliver Grant"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "dob": "caller: 1950-10-10",
+        "full_name": "caller: Oliver Grant"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c03_referral_p11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: gmail_threads th_c03_referral_p11"
+      }
+    },
+    {
+      "tool": "get_referral_status",
+      "arguments": {
+        "specialty": "cardiology",
+        "patient_id": "P11"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "caller: Oliver Grant"
+      }
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "provider_id": "D04",
+        "patient_id": "P11",
+        "date_from": "2026-10-28",
+        "date_to": "2026-10-28",
+        "specialty": "cardiology"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "slot_id": "SL-D04-20261028-1330",
+        "self_pay": false,
+        "confirmed": true,
+        "reason": "Cardiology consultation",
+        "patient_id": "P11",
+        "request_key": "REQ-P11-CARD-BOOK"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "slot_id": "caller: SL-D04-20261028-1330",
+        "patient_id": "caller: Oliver Grant"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "counterparty": "verified",
+    "disposition": "referral_active",
+    "task": "book_appointment",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

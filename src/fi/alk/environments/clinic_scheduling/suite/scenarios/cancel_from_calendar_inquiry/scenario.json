@@ -1,0 +1,95 @@
+{
+  "name": "cancel_from_calendar_inquiry",
+  "scenario_key": "cancel-from-calendar-inquiry",
+  "scenario_id": "",
+  "use_case": "Reschedule and cancel",
+  "branch": "Carmela Vega asks whether A410 is still on Dr. Morales's calendar and then cancels it; desk reads get_event EVT-A410 and cancels A410",
+  "tests": "the agent retrieves event EVT-A410, verifies Carmela Vega, and cancels appointment A410",
+  "instruction": "You are Carmela Vega (born 1975-06-21). You want to check if appointment A410 is on Dr. Sofia Morales's calendar, and then cancel it. Confirm when asked.\n\nYour details:\n- Name: Carmela Vega\n- Date of birth: 1975-06-21\n- Appointment ID: A410\n- Provider: Dr. Sofia Morales\n- Calendar Event ID: EVT-A410\n- Location: Riverbank Central",
+  "keywords": [
+    "cancel",
+    "calendar"
+  ],
+  "persona": {
+    "name": "Carmela Vega",
+    "gender": "female",
+    "age_group": "50-60",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Confident",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, can you check if my appointment A410 is on Dr. Morales's calendar? I would like to cancel it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "appointment_id": "A410",
+    "patient_id": "P403",
+    "origin": "generated",
+    "calendar_event_id": "EVT-A410"
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Carmela Vega",
+        "dob": "1975-06-21"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "full_name": "caller: Carmela Vega",
+        "dob": "caller: 1975-06-21"
+      }
+    },
+    {
+      "tool": "get_event",
+      "arguments": {
+        "calendarId": "CAL-D03",
+        "eventId": "EVT-A410"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "eventId": "record: EVT-A410"
+      }
+    },
+    {
+      "tool": "cancel_appointment",
+      "arguments": {
+        "appointment_id": "A410",
+        "reason": "Change of plans",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "appointment_id": "caller: A410",
+        "confirmed": "rule: \"Read back provider, date, time and location (or the insurer details) and get the patient's yes before booking, rescheduling, cancelling or updating.\""
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "task": "cancel",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "disposition": "missing_information",
+    "overlay": "none",
+    "counterparty": "individual_customer",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "appointment_cancelled_as_requested"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -9,8 +9,10 @@ changes the environment only through the tools that prove each change.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -28,18 +30,28 @@ from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
 from .scenario import Scenario, voicemail_enabled
+from .scenario_tools import (
+    SCENARIO_SERVER,
+    attached_tools,
+    load_scenarios,
+    scenario_tools,
+    world_summary,
+)
 from .source_folder import contract_folder
-from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
 from .proofs import load_shown_proofs, proof_key, record_proof, status_lines, utc_stamp
 
 BUILDER = "builder"
+BIND_AGENT = "bind-agent"
+# A design session's own skill: its system prompt in place of the builder's (`fi.alk.harness.design`).
+DESIGNER = "design-environment"
 KNOWLEDGE_SERVER = "knowledge"
 BUILDER_TURNS = 200
-# The builder's own skill is its system prompt; every other skill is loaded when needed.
-_NOT_LOADABLE = {BUILDER}
+
+# A session's own skill is its system prompt; every other skill is loaded when needed.
+_NOT_LOADABLE = {BUILDER, DESIGNER}
 
 
 def _description(path: Path) -> str:
@@ -185,11 +197,13 @@ def suite_server(
     contract: AgentContract | None = None,
     source_root: Path | None = None,
     sealed: bool = True,
+    postgres_proof: Callable[[Any, Any], str] | None = None,
     tab_status: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
 ) -> ToolServer:
     """Whole-suite operations the single-scenario tools would take one call per scenario to do. ``tab_status`` reads
     the Scenarios tab's own states where the platform can be asked: its counts, and the rows of the scenarios
-    named (all of the first page when none are), each with its `lifecycle`."""
+    named (all of the first page when none are), each with its `lifecycle`. ``postgres_proof`` proves the scenarios
+    that call attached servers' tools, as submitting does."""
     # Proofs made from here on are this chat's own; older ones may not be what the Scenarios tab shows.
     opened_at = utc_stamp()
     from .catalogue import load_catalogue
@@ -239,8 +253,18 @@ def suite_server(
             if scenario is None:
                 lines.append(f"{name}: not in the suite")
                 continue
-            proof = prove(scenario, catalogue, out, as_written=True)
+            proof = prove(scenario, catalogue, out, postgres_only=attached_tools(out), as_written=True)
             record_proof(out, proof_key(scenario), proof, solution_steps=len(scenario.solution))
+            if proof.postgres_only and proof.holds:
+                said = (
+                    await asyncio.to_thread(postgres_proof, scenario, catalogue)
+                    if postgres_proof is not None
+                    else "no PostgreSQL proof in this session"
+                )
+                lines.append(
+                    f"{name}: {'holds on PostgreSQL' if not said else 'does not hold on PostgreSQL. ' + said}"
+                )
+                continue
             gates = ", ".join(f"{gate} {'yes' if held else 'no'}" for gate, held in proof.gates().items())
             lines.append(
                 f"{name}: {'holds' if proof.holds else 'does not hold'} ({gates})"
@@ -581,7 +605,8 @@ def suite_health(
     problems: list[str] = []
     catalogue = load_catalogue(out)
     defined = {one.name for one in catalogue.sub_goals}
-    tools = contract.tool_names() if contract is not None else set()
+    attached = attached_tools(out)
+    tools = (contract.tool_names() | attached) if contract is not None else set()
     for scenario in kept:
         problems.extend(
             f"{scenario.name}: {one}"
@@ -625,7 +650,7 @@ def suite_health(
         from .prove import prove
 
         for scenario in kept:
-            proof = prove(scenario, catalogue, out)
+            proof = prove(scenario, catalogue, out, postgres_only=attached)
             if not proof.holds:
                 problems.append(f"{scenario.name}: proof no longer holds. {proof.why()}"[:600])
     return problems
@@ -793,6 +818,75 @@ def open_for_building(
     return Stage(spec, name=BUILDER)
 
 
+def open_for_adapting(
+    workbench: Any,
+    *,
+    approve: Callable[[str, list[str]], Awaitable[str]],
+    ask: Callable[..., Any] | None = None,
+    hosted_prompt: str = "",
+) -> Stage:
+    """The same harness on a prebuilt environment it does not own, binding the person's agent to
+    it. The environment and its suite are sealed: the binding tools are the only way to change
+    anything, and they, not the session, decide whether the binding is proved and sealed."""
+    from .adaptation.workbench import binding_server
+
+    adaptation = binding_server(workbench, approve)
+    spec = SessionSpec(
+        system_prompt=(
+            load_skill(BUILDER)
+            + "\n\n## What you know\n\nLoad any of these with `read_skill` before you answer a "
+            "question it covers or do work it governs.\n\n"
+            + "\n".join(f"- `{name}`: {about}" for name, about in skill_index().items())
+            + "\n\n## The work in front of you now\n\n"
+            + load_skill(BIND_AGENT, preamble=False)
+            + "\n\n## This adaptation\n\n"
+            + workbench.brief()
+            + hosted_prompt
+        ),
+        servers={
+            adaptation.name: adaptation,
+            KNOWLEDGE_SERVER: knowledge_server(None, workbench.output),
+        },
+        builtins=(ASK_TOOL,) if ask is not None else (),
+        cwd=str(workbench.output),
+        max_turns=BUILDER_TURNS,
+        model=chosen_model(),
+        ask=ask,
+    )
+    return Stage(spec, name=BUILDER)
+
+
+def open_for_composition(
+    composition: Any,
+    *,
+    platform: ToolServer | None = None,
+    ask: Callable[..., Any] | None = None,
+    hosted_prompt: str = "",
+    postgres_proof: Callable[[Any, Any], str] | None = None,
+) -> Stage:
+    """The same harness on a composition: a prebuilt environment it does not own, bound to the
+    person's agent. Only the suite changes, so the tools that change the world or the contract
+    are left out; saving seals a child suite and re-proves the binding (`composition_edit`)."""
+    from .composition_edit import FIXED_ENVIRONMENT_TOOLS, trajectory_server
+
+    return open_builder(
+        composition.contract,
+        out=composition.workspace,
+        source_root=None,
+        platform=platform,
+        ask=ask,
+        hosted_prompt=hosted_prompt,
+        brief=composition.brief(),
+        sealed=False,
+        more_servers=(
+            {"composition": trajectory_server(composition)} if composition.routed else None
+        ),
+        files_note=composition.files_note(),
+        without=FIXED_ENVIRONMENT_TOOLS,
+        postgres_proof=postgres_proof,
+    )
+
+
 def open_builder(
     contract: AgentContract,
     *,
@@ -805,14 +899,20 @@ def open_builder(
     brief: str = "",
     sealed: bool = True,
     more_servers: dict[str, ToolServer] | None = None,
+    files_note: str = "",
+    without: frozenset[str] = frozenset(),
+    skill: str = BUILDER,
+    postgres_proof: Callable[[Any, Any], str] | None = None,
     catalogue: Catalogue | None = None,
     removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
     tab_status: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
-    ``catalogue`` is shared with the caller's servers; the stage's ``kept`` is the suite list.
-    """
+    ``without`` names tools this session must not have; ``files_note`` replaces the file listing;
+    ``skill`` is the session's own method (a design's, in place of the builder's);
+    ``postgres_proof`` proves scenarios that call attached servers' tools; ``catalogue`` is shared
+    with the caller's servers; the stage's ``kept`` is the suite list."""
     existing = load_scenarios(out)
     server, kept = scenario_tools(
         contract,
@@ -821,17 +921,31 @@ def open_builder(
         wanted=max(len(existing), 1),
         can_grow=True,
         scenario_problem=scenario_problem,
+        postgres_proof=postgres_proof,
         catalogue=catalogue,
         removed_lookup=removed_lookup,
     )
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,
         KNOWLEDGE_SERVER: knowledge_server(contract, out),
-        "suite": suite_server(out, kept, contract, source_root, sealed=sealed, tab_status=tab_status),
+        "suite": suite_server(
+            out,
+            kept,
+            contract,
+            source_root,
+            sealed=sealed,
+            postgres_proof=postgres_proof,
+            tab_status=tab_status,
+        ),
     }
     if platform is not None:
         servers[platform.name] = platform
     servers.update(more_servers or {})
+    if without:
+        servers = {
+            name: replace(one, tools=[spec for spec in one.tools if spec.name not in without])
+            for name, one in servers.items()
+        }
     health = suite_health(contract, out, kept, sealed=sealed) if kept else []
     health_note = (
         "\n\n## Health when this conversation opened\n\n"
@@ -843,7 +957,7 @@ def open_builder(
         )
     )
     folder = contract_folder(contract)
-    where = (
+    where = files_note or (
         f"\n\nThe environment's files are in {out}: contract.json, sub_goals.json, coverage.json, "
         "simulator_prompt.md, scenarios/ and the sealed environment-bundle/."
         + (f" The agent's own source is in {source_root}." if source_root else "")
@@ -856,7 +970,7 @@ def open_builder(
     )
     spec = SessionSpec(
         system_prompt=(
-            load_skill(BUILDER)
+            load_skill(skill)
             + "\n\n## What you know\n\nLoad any of these with `read_skill` before you answer a "
             "question it covers or do work it governs. Answer internals from them, never from "
             "general knowledge.\n\n"

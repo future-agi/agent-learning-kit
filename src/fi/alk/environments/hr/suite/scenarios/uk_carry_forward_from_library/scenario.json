@@ -1,0 +1,79 @@
+{
+  "name": "uk_carry_forward_from_library",
+  "scenario_key": "uk-carry-forward-from-library",
+  "scenario_id": "",
+  "use_case": "Answer leave policy questions for the employee's region with citations",
+  "branch": "A UK employee asks about statutory annual leave carry-forward limits directly referencing the policy library document.",
+  "tests": "Verifies that the assistant reads the current UK annual leave policy document and reports 8 days carry-forward with citations.",
+  "instruction": "You want to know how many days of unused statutory annual leave you can carry forward into the next calendar year under the current UK policy in the policy library.\n\nYour details:\n- Employee ID: E06\n- Name: Fiona Gallagher\n- Region: UK\n- Question: How many days of annual leave can I carry forward under the current UK policy document?",
+  "keywords": [
+    "leave_policy",
+    "carry_forward",
+    "annual_leave"
+  ],
+  "persona": {
+    "name": "Fiona Gallagher",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi HR Desk, could you check the UK leave policy document in our library and tell me how many days of annual leave carry forward into next year?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "carry_forward_days": 8,
+    "region": "UK",
+    "employee_id": "E06",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E06"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "pol_uk_annual_2026"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: pol_uk_annual_2026"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "task": "check_policy",
+    "counterparty": "employee_uk",
+    "disposition": "standard"
+  },
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
