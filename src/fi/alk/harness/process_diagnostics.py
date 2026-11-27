@@ -496,7 +496,8 @@ def _collapsed(records: Iterable[list[str]]) -> Iterator[str]:
     last: list[str] = []
     held: list[list[str]] | None = []
     for record in chain(records, (None,)):
-        current = _shape(record) if record is not None else None
+        # A record written again as it was is its last copy's shape, with no need to read it again.
+        current = (shape if record == last else _shape(record)) if record is not None else None
         if record is not None and count and current == shape:
             count += 1
             last = record
@@ -524,6 +525,48 @@ def _collapsed(records: Iterable[list[str]]) -> Iterator[str]:
 # How far back a log is read, and how much collapsed text is kept for the retained 8 KB tail.
 _SCANNED_BYTES = 16 * 1024 * 1024
 _KEPT_CHARS = 64 * 1024
+_BACK_CHUNK = 64 * 1024
+
+
+def _lines_before(stream, position: int) -> Iterator[tuple[str, int]]:
+    """The log's lines that end at byte ``position`` (exclusive), last first, each with where it starts; read back
+    in chunks, a line split across two chunks carried to the next."""
+    carry = b""
+    while position > 0:
+        size = min(_BACK_CHUNK, position)
+        position -= size
+        stream.seek(position)
+        buffer = stream.read(size) + carry
+        pieces = buffer.split(b"\n")
+        # The first piece may begin in an earlier chunk.
+        carry = pieces[0]
+        end = position + len(buffer)
+        for piece in reversed(pieces[1:]):
+            begins = end - len(piece)
+            yield piece.decode("utf-8", errors="replace"), begins
+            end = begins - 1
+    if carry:
+        yield carry.decode("utf-8", errors="replace"), 0
+
+
+def _scan_start(stream, size: int) -> int:
+    """Where to start reading: the last _SCANNED_BYTES, moved back past any run of one line that reaches into it
+    (it collapses to one note, so whatever came before it, the error that started it say, is kept)."""
+    offset = max(0, size - _SCANNED_BYTES)
+    if not offset:
+        return 0
+    stream.seek(offset)
+    stream.readline()
+    start = stream.tell()
+    first = stream.readline()
+    if not first:
+        return offset
+    shape = _shape([first.decode("utf-8", errors="replace")])
+    for line, begins in _lines_before(stream, start - 1):
+        if _shape([line + "\n"]) != shape:
+            break
+        start = begins
+    return max(0, start - _KEPT_CHARS)
 
 
 def retain_process_log(
@@ -545,7 +588,7 @@ def retain_process_log(
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode):
                 return
-            offset = max(0, info.st_size - _SCANNED_BYTES)
+            offset = _scan_start(stream, info.st_size)
             stream.seek(offset)
             if offset:
                 # Drop the incomplete first record, including any split credential.

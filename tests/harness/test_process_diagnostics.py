@@ -1379,3 +1379,19 @@ def test_many_short_distinct_repeated_pairs_never_push_out_the_root_error(tmp_pa
 
     # Each pair is shorter than a note would be, so it stays as written, and the whole log fits.
     assert body == (root + pairs).decode()
+
+
+def test_a_root_error_before_more_repeated_noise_than_the_scan_reads_survives(tmp_path):
+    """The root error, then more of one repeated line than the last _SCANNED_BYTES hold: the scan moves back past
+    the run that reaches into its window, so the run collapses and the error before it is kept."""
+    from fi.alk.harness import process_diagnostics
+
+    root = b"ERROR stt: provider returned HTTP 402 Payment Required\n"
+    line = b"INFO poll pending\n"
+    noise = line * (process_diagnostics._SCANNED_BYTES // len(line) + 100_000)
+    assert len(noise) > process_diagnostics._SCANNED_BYTES
+
+    body = _retained_bytes(tmp_path, b"starting worker\n" + root + noise)
+
+    assert root.decode() in body
+    assert body.endswith("INFO poll pending\n")
