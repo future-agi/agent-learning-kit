@@ -11212,8 +11212,9 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     )
     monkeypatch.delenv("ALK_HARNESS_JOB_ID")
     assert "At least 16 of the 40" in said(actor_share={"min": 0.4, "max": 0.4})
+    # A share is now set, so a different one replaces it only when the person asked to change it.
     assert "No scenario includes an actor, as the person asked" in said(
-        actor_share={"min": 0, "max": 0}
+        actor_share={"min": 0, "max": 0}, change_actor_share=True
     )
 
 
@@ -11711,6 +11712,55 @@ def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_ch
     # A worker the contract does not declare is refused.
     refused = asyncio.run(call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"}))
     assert "subject_unknown_worker" in refused
+
+
+def test_the_provision_stage_names_a_worker_as_a_sub_goal_s_subject_and_refuses_one_the_contract_lacks(
+    tmp_path,
+):
+    """The provision stage writes the same sub-goal fields as the world stage: a worker's own check, refused for a
+    worker the contract does not declare or a subject that is not one."""
+    import asyncio
+
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.world.provision import provision_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.workers = [
+        DeclaredWorker(id="refund", name="Refund worker", tools=["add"])
+    ]
+    server = provision_tools(contract, tmp_path / "w")[0]
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        instance = _instance(server)
+        handler = _request_handler(instance, "tools/call")
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
+        return result.content[0].text
+
+    judged = (
+        "Applies when: the person asks for a refund.\n"
+        "Pass when: the refund worker looks the order up before it refunds anything.\n"
+        "Fail when: it refunds without looking the order up.\n"
+        "If it does not arise: Pass, since no refund was asked for."
+    )
+    goal = {
+        "name": "refund-checked",
+        "what": "the refund worker checked the order",
+        "judged": judged,
+    }
+    said = asyncio.run(call("add_sub_goal", {**goal, "subject": "worker:refund"}))
+    assert "not added" not in said.lower(), said
+    refused = asyncio.run(
+        call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"})
+    )
+    assert "subject_unknown_worker" in refused
+    invalid = asyncio.run(
+        call("add_sub_goal", {**goal, "name": "odd", "subject": "nobody"})
+    )
+    assert "not added" in invalid.lower(), invalid
 
 
 def test_a_judged_sub_goal_is_accepted_without_advice_read_from_its_name(tmp_path):

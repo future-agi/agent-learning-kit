@@ -30,7 +30,10 @@ import mcp.types as mcp
 import pytest
 
 from fi.alk.harness.contract import AgentContract, Dependency, Reached
+from fi.alk.harness.actors import Actor, ActorList, save_actors
+from fi.alk.harness.catalogue import load_catalogue
 from fi.alk.harness.environment import SubGoal
+from fi.alk.harness.scenario_tools import scenario_tools
 from fi.alk.harness.tools import contract_tools
 from fi.alk.harness.world.provision import provision_tools
 from fi.alk.harness.world.tools import world_tools
@@ -170,6 +173,84 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(
                 f"{build_server}: add_sub_goal types {name} as "
                 f"{offered[name].get('type')!r}, SubGoal stores {expected!r}"
             )
+
+
+@pytest.mark.parametrize("build_server", ["provision", "world"])
+def test_add_sub_goal_keeps_an_actor_of_this_environment_and_refuses_one_it_lacks(
+    build_server: str, tmp_path
+) -> None:
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="reviewer", name="Robin", role="reviewer")]),
+    )
+    contract = AgentContract(agent="a")
+    server = (
+        provision_tools(contract, tmp_path)[0]
+        if build_server == "provision"
+        else world_tools(contract, tmp_path)[0]
+    )
+    handler = next(one.handler for one in server.tools if one.name == "add_sub_goal")
+    goal = {
+        "what": "The agent waits for the reviewer.",
+        "judged": (
+            "Applies when: the reviewer has not answered yet.\n"
+            "Pass when: the agent tells the person it is waiting for the reviewer.\n"
+            "Fail when: the agent says the request is approved.\n"
+            "If it does not arise: pass, because there was nothing to wait for."
+        ),
+    }
+
+    kept = asyncio.run(
+        handler({"name": "waits_for_reviewer", "actor": "reviewer", **goal})
+    )
+    lacking = asyncio.run(
+        handler({"name": "waits_for_nobody", "actor": "nobody", **goal})
+    )
+
+    assert "not added" not in str(kept).lower()
+    assert "'nobody' is not an actor of this environment" in str(lacking)
+
+
+@pytest.mark.parametrize("stage", ["scenario", "world"])
+def test_a_repair_keeps_a_sub_goal_s_actor_unless_it_names_one_and_can_clear_it(
+    stage: str, tmp_path
+) -> None:
+    """A stage's add_sub_goal repairing a sub-goal keeps its actor when the repair leaves `actor` out, clears it
+    when `actor` is empty, and refuses an actor the environment lacks."""
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="reviewer", name="Robin", role="reviewer")]),
+    )
+    contract = AgentContract(agent="a")
+    server = (
+        scenario_tools(contract, tmp_path, tmp_path, wanted=1)[0]
+        if stage == "scenario"
+        else world_tools(contract, tmp_path)[0]
+    )
+    handler = next(one.handler for one in server.tools if one.name == "add_sub_goal")
+    goal = {
+        "name": "waits_for_reviewer",
+        "what": "The agent waits for the reviewer.",
+        "judged": (
+            "Applies when: the reviewer has not answered yet.\n"
+            "Pass when: the agent tells the person it is waiting for the reviewer.\n"
+            "Fail when: the agent says the request is approved.\n"
+            "If it does not arise: pass, because there was nothing to wait for."
+        ),
+    }
+
+    def actor_now() -> str:
+        return load_catalogue(tmp_path).named("waits_for_reviewer").actor
+
+    asyncio.run(handler({**goal, "actor": "reviewer"}))
+    asyncio.run(handler({**goal, "what": "The agent waits for the reviewer's answer."}))
+    kept = actor_now()
+    asyncio.run(handler({**goal, "actor": ""}))
+    cleared = actor_now()
+    lacking = asyncio.run(handler({**goal, "actor": "nobody"}))
+
+    assert (kept, cleared) == ("reviewer", "")
+    assert "'nobody' is not an actor of this environment" in str(lacking)
 
 
 def test_judged_is_a_reason_not_a_flag() -> None:

@@ -44,19 +44,16 @@ from ..actors import (
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     worker_subjects_note,
-    CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    authored_sub_goal,
     Catalogue,
-    SubGoal,
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
-    settled_by,
-    validate_sub_goal,
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
@@ -1869,7 +1866,12 @@ def world_tools(
         "task sub-goal. "
         "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
         "given only that worker's calls, and is inconclusive when the worker made none."
-        + worker_subjects_note(contract),
+        + worker_subjects_note(contract)
+        + (
+            " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
+            "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
+            "came into. Leave it empty for a sub-goal about the person's task."
+        ),
         schema(
             {
                 "name": str,
@@ -1879,33 +1881,25 @@ def world_tools(
                 "output": str,
                 "overlay": str,
                 "subject": str,
+                "actor": str,
                 **CONTRACT_SCHEMA,
             },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        # Repairing a sub-goal keeps whose result it checks and the actor it depends on unless the repair says
-        # otherwise: a fix to its check never quietly turns a worker's check into the task's.
+        # A repair keeps whose result the sub-goal checks and the actor it depends on unless it says otherwise: a fix
+        # to its check never quietly turns a worker's check into the task's.
         previous = next((one for one in catalogue.sub_goals if one.name == str(args.get("name") or "")), None)
         try:
-            sub_goal = SubGoal(
-                name=str(args.get("name") or ""),
-                what=str(args.get("what") or ""),
-                check=str(args.get("check") or ""),
-                judged=str(args.get("judged") or ""),
-                output=str(args.get("output") or "pass_fail"),
-                overlay=str(args.get("overlay") or ""),
-                subject=str(args.get("subject") or (previous.subject if previous is not None else "task")),
-                actor=previous.actor if previous is not None else "",
-                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            sub_goal, problems = authored_sub_goal(
+                args,
+                previous=previous,
+                worker_ids={one.id for one in contract.workers},
+                actor_ids=set(load_actors(destination).by_id()),
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
-        sub_goal.verifier = settled_by(sub_goal)
-        problems = validate_sub_goal(sub_goal)
-        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
-            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
         if native_runtime and sub_goal.deterministic():
             from ..prove import native_source_problem
 
