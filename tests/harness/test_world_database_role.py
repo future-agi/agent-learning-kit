@@ -3585,3 +3585,77 @@ def test_a_world_s_state_read_as_its_roles_never_reaches_the_harness_s_tables(do
     state = HostedWorld(store, 0, random.Random(0), counts).state()
 
     assert state and not any(name.startswith("_alk_") for name in state)
+
+
+@real_postgres
+def test_a_large_object_the_reset_s_role_cannot_read_carries_no_note_across_trials(door_worlds, monkeypatch):
+    """A large object the seed left writable to the agent's role alone: the reset's own role may not read it, so its
+    contents are read as the harness, and a reset after the agent writes into it refuses the world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        [oid] = connection.execute("SELECT lo_from_bytea(0, 'seeded')").fetchone()
+        connection.execute(
+            psycopg.sql.SQL("GRANT SELECT, UPDATE ON LARGE OBJECT {} TO {}").format(
+                psycopg.sql.Literal(int(oid)), psycopg.sql.Identifier(urlsplit(world).username)
+            )
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute("SELECT lo_put(%s, 0, 'answer')", (oid,))
+    with pytest.raises(WorldResetRefused, match="large object contents"):
+        store.restore(snapshot)
+
+
+@real_postgres
+def test_a_materialized_view_a_definer_function_refreshes_refuses_the_reset(door_worlds, monkeypatch):
+    """A migration's SECURITY DEFINER function (callable by anyone by default) refreshes a view its owner owns: the
+    view's contents are no row a reset puts back, so they are read as the harness and a changed view refuses the
+    world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute(
+            "CREATE MATERIALIZED VIEW public.board AS SELECT coalesce(current_setting('world.note', true), '') AS note"
+        )
+        connection.execute(
+            "CREATE FUNCTION public.post_note(note text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS "
+            "$$ BEGIN PERFORM set_config('world.note', note, true); REFRESH MATERIALIZED VIEW public.board; END $$"
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute("SELECT public.post_note('answer')")
+    with pytest.raises(WorldResetRefused, match="materialized view contents"):
+        store.restore(snapshot)
+
+
+@real_postgres
+def test_a_sequence_a_definer_function_alters_refuses_the_reset(door_worlds, monkeypatch):
+    """A definer function alters a sequence its owner owns (its step): the reset puts the counter back but not the
+    step, so the sequence's parameters are in the digest and a changed one refuses the world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("CREATE SEQUENCE public.ticket_numbers")
+        connection.execute("GRANT ALL ON SEQUENCE public.ticket_numbers TO PUBLIC")
+        connection.execute(
+            "CREATE FUNCTION public.speed_up() RETURNS void LANGUAGE sql SECURITY DEFINER AS "
+            "$$ ALTER SEQUENCE public.ticket_numbers INCREMENT BY 5 $$"
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute("SELECT public.speed_up()")
+    with pytest.raises(WorldResetRefused, match="sequences"):
+        store.restore(snapshot)

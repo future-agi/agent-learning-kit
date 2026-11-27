@@ -28,7 +28,7 @@ from ...source_model import is_harness_table
 from ...world_door import WORLD_ROLE_SESSION
 from ..errors import WorldQueryRejected
 from . import Held, Snapshot, StoreError, WorldResetRefused
-from .catalog_digest import catalog_digest
+from .catalog_digest import catalog_digest, harness_state_digest
 from .container import ContainerStore, docker
 
 if TYPE_CHECKING:
@@ -474,11 +474,34 @@ class PostgresStore(ContainerStore):
             }
             with connection.transaction():
                 catalog = catalog_digest(connection)
+        catalog.update(self._harness_state())
         roles = self._world_roles_state()
         if roles is not None:
             catalog["world roles"] = roles
         return Snapshot(rows=rows, counters=counters, catalog=catalog)
 
+
+    def _harness_state(self) -> dict[str, str]:
+        """The world's state only the harness reads whole (`harness_state_digest`), on the harness's own address
+        (with world roles, the one it keeps for their roles)."""
+        connect = (
+            (lambda: _psycopg().connect(self._roles_admin_dsn, autocommit=True, options=PINNED_SEARCH_PATH))
+            if self._roles_admin_dsn
+            else self._admin_connect
+        )
+        with connect() as connection:
+            with connection.transaction():
+                return harness_state_digest(connection)
+
+    def _verify_harness_state(self, snapshot: Snapshot) -> None:
+        """After a reset commits: the contents its rows do not hold (large objects, materialized views) as the
+        snapshot found them, read as the harness; otherwise the world is refused and never graded again."""
+        changed = sorted(kind for kind, digest in self._harness_state().items() if snapshot.catalog.get(kind) != digest)
+        if changed:
+            raise WorldResetRefused(
+                "the world's " + ", ".join(changed) + " changed since its snapshot, which a reset of its rows does "
+                "not put back: the world is not reused"
+            )
 
     def _verify_reset(self, connection: Connection[Any], snapshot: Snapshot, tables: list[tuple[str, str]]) -> None:
         # Deferred checks of the world's fire now, before what they did is read, never at the commit after it.
@@ -546,6 +569,7 @@ class PostgresStore(ContainerStore):
                     self._put_back(connection, schema, table, snapshot.rows.get(_key(schema, table)) or [])
                 self._set_counters(connection, snapshot.counters)
                 self._verify_reset(connection, snapshot, tables)
+        self._verify_harness_state(snapshot)
 
     def _restore_as_role_itself(self, snapshot: Snapshot) -> None:
         """A reset by the world's store role: its rows bypass row security (the role's own BYPASSRLS), and the world's
@@ -587,6 +611,7 @@ class PostgresStore(ContainerStore):
                 self._set_counters(connection, snapshot.counters)
                 self._verify_reset(connection, snapshot, tables)
         self._settle_world_roles(snapshot)
+        self._verify_harness_state(snapshot)
 
     def _store_role_name(self) -> str | None:
         user = _psycopg().conninfo.conninfo_to_dict(getattr(self, "_reader_dsn", None) or "").get("user")

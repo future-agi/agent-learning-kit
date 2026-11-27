@@ -3,6 +3,7 @@ it, read on `pg_catalog` alone so each is spelled the same whichever session rea
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -65,6 +66,11 @@ _KINDS: tuple[tuple[str, str], ...] = (
          "(SELECT oid FROM pg_roles WHERE rolname = current_user) OR EXISTS (SELECT FROM aclexplode(l.lomacl) a "
          "WHERE a.privilege_type = 'SELECT' AND (a.grantee = 0 OR pg_has_role(current_user, a.grantee, 'USAGE'))) "
          "THEN md5(lo_get(l.oid)) END) FROM pg_largeobject_metadata l"),
+        # A sequence's parameters (its step, bounds, cycling), which an owner's ALTER SEQUENCE changes and a reset of
+        # its counter does not put back.
+        ("sequences", "SELECT concat_ws('|', n.nspname, c.relname, s.seqtypid::regtype, s.seqstart, s.seqincrement, "
+         "s.seqmax, s.seqmin, s.seqcache, s.seqcycle) FROM pg_sequence s JOIN pg_class c ON c.oid = s.seqrelid "
+         f"JOIN pg_namespace n ON n.oid = c.relnamespace WHERE {_IN_WORLD}"),
         # Default privileges carry a grant to whatever is made next.
         ("default privileges", "SELECT concat_ws('|', pg_get_userbyid(a.defaclrole), a.defaclnamespace, "
          "a.defaclobjtype, a.defaclacl::text) FROM pg_default_acl a"),
@@ -80,3 +86,40 @@ def catalog_digest(connection: Connection[Any]) -> dict[str, str]:
     connection.execute("SET LOCAL search_path = pg_catalog")
     rows = connection.execute(_CATALOG, tuple(kind for kind, _rows in _KINDS)).fetchall()
     return {str(kind): str(digest) for kind, digest in rows}
+
+
+# State only the harness may read whole, outside the rows a reset puts back: every large object's contents (a world
+# role may be let write one it may not read) and every materialized view's contents (code running as the view's owner
+# may refresh it). Read on the harness's own connection, after a reset commits as well as at the snapshot.
+_LARGE_OBJECTS = (
+    "SELECT md5(coalesce(string_agg(concat_ws('|', l.oid, md5(lo_get(l.oid))), E'\\n' ORDER BY l.oid), '')) "
+    "FROM pg_largeobject_metadata l"
+)
+_MATERIALIZED_VIEWS = (
+    "SELECT n.nspname, c.relname, c.relispopulated FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+    f"WHERE c.relkind = 'm' AND {_IN_WORLD} ORDER BY 1, 2"
+)
+
+
+def harness_state_digest(connection: Connection[Any]) -> dict[str, str]:
+    """The contents of the world's large objects and materialized views, a digest per kind, read as the harness
+    (call inside a transaction: the search path is set for it only)."""
+    from psycopg import sql
+
+    connection.execute("SET LOCAL search_path = pg_catalog")
+    (objects,) = connection.execute(_LARGE_OBJECTS).fetchone() or ("",)
+    views = []
+    for schema, name, populated in connection.execute(_MATERIALIZED_VIEWS).fetchall():
+        contents = "not populated"
+        if populated:
+            row = connection.execute(
+                sql.SQL("SELECT md5(coalesce(string_agg(v::text, E'\\n' ORDER BY v::text), '')) FROM {} v").format(
+                    sql.Identifier(str(schema), str(name))
+                )
+            ).fetchone()
+            contents = str(row[0]) if row else ""
+        views.append(f"{schema}.{name}|{contents}")
+    return {
+        "large object contents": str(objects),
+        "materialized view contents": hashlib.md5("\n".join(views).encode(), usedforsecurity=False).hexdigest(),
+    }
