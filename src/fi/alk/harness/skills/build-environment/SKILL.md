@@ -745,10 +745,11 @@ decision the agent depends on (an approval, a refusal, a grant of access). A cha
 reason to add anyone: an agent whose material names no one else gets no cast, and that is a complete environment.
 
 The list says who each one is: an ordinary, invented name that is never the person's and never a known public
-figure, a `role` (their relationship to the
-person in a few words; never someone there to help with the person's request), and a
-`persona` in the person's fields, true to who they are in this world, from which their
-voice is chosen. What they do is written by each scenario that includes them, so the list carries no
+figure (Priya Sharma, not "Sales manager"), a `role` that is their part as a short singular title ("Sales
+manager", "Teammate"; never someone there to help with the person's request), and a `persona` in the person's
+fields, true to who they are in this world, from which their voice is chosen. Every actor has a role, and two
+people in the same part get exactly the same role text, so the person reads the cast by role. What each one
+brings that the agent has to handle goes in `goal`, not in the role. What they do is written by each scenario that includes them, so the list carries no
 script. Never add one for a situation the agent's users would not be in.
 
 Someone who acts through the world (a manager who approves, a lead who can reject, someone who grants access) gets

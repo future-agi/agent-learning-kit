@@ -398,6 +398,47 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
 _OUTCOME_ATTRIBUTES = frozenset({"arguments", "args", "result", "error", "refused"})
 
 
+def authored_sub_goal(
+    args: dict[str, Any],
+    *,
+    previous: SubGoal | None,
+    worker_ids: set[str],
+    actor_ids: set[str],
+) -> tuple[SubGoal, list[str]]:
+    """The sub-goal an `add_sub_goal` call writes, and what makes it unusable. Every stage that writes one goes
+    through here. A repair (`previous`) keeps whose result it checks and the actor it depends on when the call leaves
+    `subject` or `actor` out; passing `actor` as empty clears it. Raises ValueError for a field the model refuses."""
+
+    def kept(field: str, default: str) -> str:
+        if field in args:
+            return str(args.get(field) or default)
+        return str(getattr(previous, field)) if previous is not None else default
+
+    sub_goal = SubGoal(
+        name=str(args.get("name") or ""),
+        what=str(args.get("what") or ""),
+        check=str(args.get("check") or ""),
+        judged=str(args.get("judged") or ""),
+        output=str(args.get("output") or "pass_fail"),
+        overlay=str(args.get("overlay") or ""),
+        subject=kept("subject", "task"),
+        actor=kept("actor", ""),
+        **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+    )
+    # Labelled by what runs: a check makes it code, criteria a judge, both makes it both.
+    sub_goal.verifier = settled_by(sub_goal)
+    problems = validate_sub_goal(sub_goal)
+    if sub_goal.worker and sub_goal.worker not in worker_ids:
+        problems.append(
+            f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers"
+        )
+    if sub_goal.actor and sub_goal.actor not in actor_ids:
+        problems.append(
+            f"actor: {sub_goal.actor!r} is not an actor of this environment; add it with add_actor first"
+        )
+    return sub_goal, problems
+
+
 def _reads_outcome(source: str) -> bool:
     """Whether a check reads what happened, rather than only that a call happened.
 

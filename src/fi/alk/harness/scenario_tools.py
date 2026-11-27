@@ -45,21 +45,18 @@ from .call_actor import (
 )
 from .catalogue import (
     worker_subjects_note,
-    CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     NO_OVERLAY,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    authored_sub_goal,
     unused_sub_goals,
     Catalogue,
-    SubGoal,
     load_catalogue,
     save_catalogue,
-    settled_by,
     judged_wording_advisory,
-    validate_sub_goal,
     without_delivery_overlay,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
@@ -2821,7 +2818,6 @@ def scenario_tools(
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
-    scenario_problem: Callable[[dict[str, Any]], str] | None = None,
     postgres_proof: Callable[[Scenario, Catalogue], str] | None = None,
     catalogue: Catalogue | None = None,
     removed_lookup: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
@@ -3203,27 +3199,17 @@ def scenario_tools(
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
+        # A repair keeps whose result the sub-goal checks and its actor unless it says otherwise, as at every stage.
+        previous = catalogue.named(str(args.get("name") or ""))
         try:
-            sub_goal = SubGoal(
-                name=str(args.get("name") or ""),
-                what=str(args.get("what") or ""),
-                check=str(args.get("check") or ""),
-                judged=str(args.get("judged") or ""),
-                output=str(args.get("output") or "pass_fail"),
-                overlay=str(args.get("overlay") or ""),
-                actor=str(args.get("actor") or ""),
-                subject=str(args.get("subject") or "task"),
-                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            sub_goal, problems = authored_sub_goal(
+                args,
+                previous=previous,
+                worker_ids={one.id for one in contract.workers},
+                actor_ids=set(load_actors(world_root).by_id()),
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
-        # Labelled by what runs: a check makes it code, criteria a judge, both makes it both.
-        sub_goal.verifier = settled_by(sub_goal)
-        problems = validate_sub_goal(sub_goal)
-        if sub_goal.actor and sub_goal.actor not in load_actors(world_root).by_id():
-            problems.append(f"actor: {sub_goal.actor!r} is not an actor of this environment; add it with add_actor first")
-        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
-            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
         if native_runtime(world_root) and sub_goal.deterministic():
             if problem := native_source_problem(sub_goal.check, "check"):
                 problems.append(problem)
@@ -3394,7 +3380,8 @@ def scenario_tools(
                         "initial_message": {
                             "type": "string",
                             "description": "The caller's natural opening request, specific to "
-                            "this scenario. Do not use a generic greeting.",
+                            "this scenario, in the first language in their languages, the one the call "
+                            "starts in. Do not use a generic greeting.",
                         },
                         "multilingual": {"type": "boolean"},
                         "metadata": {"type": "object"},
@@ -3598,10 +3585,6 @@ def scenario_tools(
             # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
 
-        if scenario_problem:
-            problem = scenario_problem(args)
-            if problem:
-                return _refuse(problem)
         # A taken name is refused before anything costly runs (a pre-run conversation, the proof).
         same_key = str(args.get("scenario_key") or "").strip()
         clash = _name_clash(
@@ -4094,7 +4077,13 @@ def scenario_tools(
                     "description": "Only when the person's request says how many scenarios should include an "
                     "actor: that share of the suite as fractions, min and max both 1 for every scenario, both 0 "
                     "for none, or the range they gave. It replaces the environment's default share. Leave it out "
-                    "otherwise.",
+                    "otherwise. A share this environment already has is kept unless `change_actor_share` is set.",
+                },
+                "change_actor_share": {
+                    "type": "boolean",
+                    "description": "True only when the person asked in this conversation to change how many "
+                    "scenarios include an actor. Without it, `actor_share` never replaces the share this "
+                    "environment already has.",
                 },
                 "cannot_widen": {
                     "type": "string",
@@ -4156,8 +4145,20 @@ def scenario_tools(
                 else ". No accent, language or location may dominate the suite"
             )
         if args.get("actor_share") is not None and not with_actors:
-            return _err("actor_share is not taken: actors are off for this environment, so no scenario includes one.")
-        if args.get("actor_share") is not None:
+            return _err(
+                "actor_share is not taken: actors are off for this environment, so no scenario includes one."
+            )
+        if (
+            args.get("actor_share") is not None
+            and target.get("actor_share")
+            and not args.get("change_actor_share")
+        ):
+            kept_share = target["actor_share"]
+            said += (
+                f". The environment's actor share stays {kept_share['min']:g}-{kept_share['max']:g}: it changes only "
+                "when the person asks to change how many scenarios include an actor"
+            )
+        elif args.get("actor_share") is not None:
             given = args["actor_share"]
             try:
                 low, high = sorted(min(max(float(given[end]), 0.0), 1.0) for end in ("min", "max"))

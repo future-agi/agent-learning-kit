@@ -8158,6 +8158,108 @@ def test_suite_eval_sends_a_providers_whole_prompt_copied_with_no_lines(monkeypa
     assert [verdict.unmeasured for verdict in verdicts] == ["", ""]
 
 
+@pytest.mark.parametrize(
+    ("later", "graded"),
+    [
+        # Only the later system message is one the sanitizer rewrites.
+        ("https://acme.example/kb?x=1\nRead this first.", False),
+        ("Read this first.", True),
+    ],
+)
+def test_a_fetched_vapi_prompt_is_graded_only_when_every_message_came_through_whole(
+    monkeypatch, tmp_path, later, graded
+):
+    import asyncio
+
+    from fi.alk.harness import authoring_entrypoint, provider_import
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.job import HarnessJob
+    from fi.alk.harness.tools import contract_tools
+
+    def request(method, url, api_key, body):
+        return {
+            "name": "Ava",
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {"role": "system", "content": "You are Ava."},
+                    {"role": "system", "content": later},
+                ],
+            },
+        }
+
+    real = provider_import.inspect_provider_target
+    monkeypatch.setattr(
+        authoring_entrypoint,
+        "inspect_provider_target",
+        lambda provider, **kwargs: real(provider, request=request, **kwargs),
+    )
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "job-1",
+            "run_id": "run-1",
+            "execution": "hosted",
+            "source": {"kind": "archive", "archive_artifact_id": "source-id"},
+            "agent": {
+                "connector": "vapi",
+                "mode": "provider_import",
+                "config": {"assistant_id": "assistant-1"},
+                "secret_refs": {
+                    "VAPI_API_KEY": {
+                        "manager": "platform-vault",
+                        "key": "secret-id",
+                        "purpose": "target_provider",
+                    }
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {"isolation": "dedicated_vm"},
+        }
+    )
+    secrets = tmp_path / "target-secrets.json"
+    secrets.write_text('{"VAPI_API_KEY":"vapi-secret"}', encoding="utf-8")
+    cache = tmp_path / "provider-profile.json"
+    # Fetched once and cached; the reading is given the cached copy.
+    authoring_entrypoint._load_provider_import_profile(job, secrets, cache)
+    profile = authoring_entrypoint._load_provider_import_profile(job, None, cache)
+
+    destination = tmp_path / "out"
+    server = contract_tools(destination, provider_profile=profile)
+    submit = next(one for one in server.tools if one.name == "submit_contract")
+    result = asyncio.run(
+        submit.handler(
+            {
+                "agent": "voice-agent",
+                "modality": "voice",
+                "real_use_cases": ["book a table"],
+                "tools": [],
+                "hard_constraints": ["Confirm the date."],
+                "system_prompt_excerpt": "You are Ava. ...",
+            }
+        )
+    )
+    assert not result.get("is_error"), result
+    contract = AgentContract.model_validate_json(
+        (destination / "contract.json").read_text(encoding="utf-8")
+    )
+    assert contract.system_prompt_copied is graded
+
+    verdicts, sent = _judged_suite(monkeypatch, contract)
+    task = {verdict.kind: verdict for verdict in verdicts}[
+        "customer_agent_task_completion"
+    ]
+    if graded:
+        assert dict(sent)["customer_agent_task_completion"]["agent_prompt"] == (
+            "You are Ava.\n\nRead this first."
+        )
+        assert task.unmeasured == ""
+    else:
+        # The judge is never sent a prompt that may have been cut.
+        assert "customer_agent_task_completion" not in dict(sent)
+        assert task.unmeasured == "no_whole_instructions"
+
+
 def test_suite_eval_sends_the_whole_prompt_when_its_lines_were_copied(monkeypatch):
     verdicts, sent = _judged_suite(
         monkeypatch,
@@ -8370,6 +8472,21 @@ def test_unmeasured_eval_in_summary_and_json():
     conduct = json.loads(as_json([result]))[0]["conduct"]
     assert [item.get("unmeasured") for item in conduct] == [None, "no_whole_instructions"]
     assert json.loads(as_json([result]))[0]["checkpoints_met"] == "2/2"
+
+
+def test_an_unmeasured_reason_sent_to_the_platform_is_capped():
+    from fi.alk.harness import platform
+    from fi.alk.harness.run.grade import Judgement
+
+    long = Judgement(
+        claim="custom_eval",
+        kind="custom_eval",
+        holds=False,
+        why="Not measured: " + "x" * 3000,
+        unmeasured="no_whole_instructions",
+    )
+    [sent] = platform.unmeasured_of(_reported_result(conduct=[long]))
+    assert sent["reason"] == long.why[:2000]
 
 
 def test_unmeasured_eval_reaches_the_platform_as_unmeasured():
@@ -11166,7 +11283,7 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     share = default_share(str(root))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
     assert "No scenario includes an actor, as the person asked" in said(
-        actor_share={"min": 0, "max": 0}
+        actor_share={"min": 0, "max": 0}, change_actor_share=True
     )
 
 
@@ -11203,7 +11320,15 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
         call("add_actor", {"id": "agent", "name": "x", "role": "y"})
     )
     asyncio.run(
-        call("add_actor", {"id": "deputy", "name": "Lee", "on_behalf_of": "reviewer"})
+        call(
+            "add_actor",
+            {
+                "id": "deputy",
+                "name": "Lee",
+                "role": "Deputy",
+                "on_behalf_of": "reviewer",
+            },
+        )
     )
     refused = asyncio.run(call("drop_actor", {"id": "reviewer"}))
     assert refused.startswith("Not dropped") and "on behalf of" in refused
@@ -11658,6 +11783,55 @@ def test_the_build_stage_writes_a_worker_s_own_check_and_a_repair_keeps_whose_ch
     assert "subject_unknown_worker" in refused
 
 
+def test_the_provision_stage_names_a_worker_as_a_sub_goal_s_subject_and_refuses_one_the_contract_lacks(
+    tmp_path,
+):
+    """The provision stage writes the same sub-goal fields as the world stage: a worker's own check, refused for a
+    worker the contract does not declare or a subject that is not one."""
+    import asyncio
+
+    from fi.alk.harness.contract import DeclaredWorker
+    from fi.alk.harness.world.provision import provision_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.workers = [
+        DeclaredWorker(id="refund", name="Refund worker", tools=["add"])
+    ]
+    server = provision_tools(contract, tmp_path / "w")[0]
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        instance = _instance(server)
+        handler = _request_handler(instance, "tools/call")
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
+        return result.content[0].text
+
+    judged = (
+        "Applies when: the person asks for a refund.\n"
+        "Pass when: the refund worker looks the order up before it refunds anything.\n"
+        "Fail when: it refunds without looking the order up.\n"
+        "If it does not arise: Pass, since no refund was asked for."
+    )
+    goal = {
+        "name": "refund-checked",
+        "what": "the refund worker checked the order",
+        "judged": judged,
+    }
+    said = asyncio.run(call("add_sub_goal", {**goal, "subject": "worker:refund"}))
+    assert "not added" not in said.lower(), said
+    refused = asyncio.run(
+        call("add_sub_goal", {**goal, "name": "ghost", "subject": "worker:ghost"})
+    )
+    assert "subject_unknown_worker" in refused
+    invalid = asyncio.run(
+        call("add_sub_goal", {**goal, "name": "odd", "subject": "nobody"})
+    )
+    assert "not added" in invalid.lower(), invalid
+
+
 def test_a_judged_sub_goal_is_accepted_without_advice_read_from_its_name(tmp_path):
     import asyncio
 
@@ -11732,3 +11906,96 @@ def test_the_build_skill_asks_for_a_worker_s_own_check_when_the_contract_lists_w
     assert "for each declared\n   worker whose actions the world records, one sub-goal with `subject: worker:<id>`" in load_skill(
         "build-environment", preamble=False
     )
+
+
+def test_every_actor_gets_a_role_and_one_part_is_written_the_same_way(tmp_path):
+    """The builder names each actor by a person's name and gives each a role; a second person in a part already
+    listed gets that part's exact text, so the cast reads by role."""
+    import asyncio
+
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    server = world_tools(AgentContract(agent="a"), tmp_path)[0]
+    add = next(one.handler for one in server.tools if one.name == "add_actor")
+
+    missing = asyncio.run(add({"id": "priya", "name": "Priya Sharma"}))
+    asyncio.run(add({"id": "priya", "name": "Priya Sharma", "role": "Sales manager"}))
+    asyncio.run(add({"id": "omar", "name": "Omar Haddad", "role": "  sales  MANAGER "}))
+
+    roles = {one.id: (one.name, one.role) for one in load_actors(tmp_path).actors}
+    not_text = asyncio.run(add({"id": "tom", "name": "Tom Reed", "role": 7}))
+
+    assert "needs a role" in str(missing)
+    assert "`role` is text" in str(not_text) and "tom" not in {
+        one.id for one in load_actors(tmp_path).actors
+    }
+    assert roles == {
+        "priya": ("Priya Sharma", "Sales manager"),
+        "omar": ("Omar Haddad", "Sales manager"),
+    }
+
+
+def test_a_role_matches_another_actor_s_whatever_its_spacing_and_never_the_actor_s_own_name(
+    tmp_path,
+):
+    """A stored role with odd spacing still matches a new one; an actor can fix its own casing; a role that is the
+    actor's own name is refused; the reply says when a role was written the way the others in its part have it."""
+    import asyncio
+
+    from fi.alk.harness.actors import Actor, ActorList, load_actors, save_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="david", name="David Chen", role="Family  member")]),
+    )
+    tools = world_tools(AgentContract(agent="a"), tmp_path)[0].tools
+    add = next(one.handler for one in tools if one.name == "add_actor")
+
+    # Alone in its part, an actor can correct its own role; then a new one in that part takes the corrected text.
+    own_case = asyncio.run(add({"id": "david", "role": "Family member"}))
+    joined = asyncio.run(
+        add({"id": "sarah", "name": "Sarah Ortiz", "role": "family   MEMBER"})
+    )
+    named = asyncio.run(
+        add({"id": "omar", "name": "Omar Haddad", "role": "omar  haddad"})
+    )
+    spaced = asyncio.run(
+        add({"id": "lena", "name": "Lena Park", "role": "family member "})
+    )
+
+    roles = {one.id: one.role for one in load_actors(tmp_path).actors}
+    assert roles["david"] == "Family member" and "Not added" not in str(own_case)
+    assert roles["sarah"] == "Family member"
+    assert "Role written as 'Family member'" in str(joined)
+    assert roles["lena"] == "Family member" and "Not added" not in str(spaced)
+    renamed = asyncio.run(add({"id": "david", "name": "family member"}))
+
+    assert "the `role` sent" in str(named) and "omar" not in roles
+    assert "the `name` sent" in str(renamed)
+    assert {one.id: one.name for one in load_actors(tmp_path).actors}[
+        "david"
+    ] == "David Chen"
+
+
+def test_a_stored_role_with_odd_spacing_still_matches_a_new_one(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.actors import Actor, ActorList, load_actors, save_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[Actor(id="marcus", name="Marcus Vance", role="Store  manager")]
+        ),
+    )
+    tools = world_tools(AgentContract(agent="a"), tmp_path)[0].tools
+    add = next(one.handler for one in tools if one.name == "add_actor")
+
+    asyncio.run(add({"id": "ana", "name": "Ana Silva", "role": "store manager"}))
+
+    assert {one.id: one.role for one in load_actors(tmp_path).actors}[
+        "ana"
+    ] == "Store  manager"

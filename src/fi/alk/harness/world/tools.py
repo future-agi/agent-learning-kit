@@ -44,19 +44,16 @@ from ..actors import (
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     worker_subjects_note,
-    CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    authored_sub_goal,
     Catalogue,
-    SubGoal,
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
-    settled_by,
-    validate_sub_goal,
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
@@ -691,13 +688,13 @@ def world_actor_tools(
         "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
         "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
         "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
-        "decided by this list, never by what anyone says. `role` is who they are to the people around them in a few "
-        "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
-        "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
-        "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does. An actor is the "
-        "same in every scenario, so `role` names people by their part (someone with the caller, the manager who "
-        "approves), never by "
-        "one scenario's names."
+        "decided by this list, never by what anyone says. Every actor has an invented person's `name` and a `role`: "
+        'their part, as a short singular title such as "Sales manager" or "Teammate", never their name. Two '
+        "people in the same part get exactly the same `role` text, so the cast reads by role. What they bring that "
+        "the agent has to handle goes in `goal`: a fact that can differ from the person's, a request of their own, "
+        'a decision only they make. "Chimes in with the pickup details" gives the agent nothing to handle; '
+        '"Sometimes remembers the pickup differently from the caller" does. An actor is the same in every '
+        "scenario, so neither names one scenario's people."
         + (f" The world's actions: {', '.join(listed)}." if listed else "")
         + (f" Record changes: {', '.join(records)}." if records else ""),
         actor_input_schema(),
@@ -719,6 +716,49 @@ def world_actor_tools(
                 f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
                 "`surface` is where it acts in the world."
             )
+        unified = ""
+        if "role" in given or current is None:
+            if not isinstance(given.get("role", ""), str):
+                return _err(
+                    'Not added: `role` is text, their part as a short singular title such as "Teammate".'
+                )
+            role = " ".join(str(given.get("role") or "").split())
+            if not role:
+                return _err(
+                    'Not added: an actor needs a role, their part as a short singular title such as "Teammate".'
+                )
+            # The same part is written the same way for everyone in it, so the cast reads by role. Only other
+            # actors count, so an actor can correct its own role's casing.
+            same = next(
+                (
+                    one.role
+                    for one in listing.actors
+                    if one.id != str(given.get("id") or "")
+                    and " ".join(one.role.split()).casefold() == role.casefold()
+                ),
+                None,
+            )
+            if same is not None and same != role:
+                unified = f" Role written as {same!r}, as for the others in that part."
+            given["role"] = same if same is not None else role
+        if "role" in given or "name" in given:
+            # A role is the part, never the person: checked whichever of the two this call changes.
+            name = " ".join(
+                str(
+                    given.get("name") or (current.name if current is not None else "")
+                ).split()
+            )
+            role = " ".join(
+                str(
+                    given.get("role") or (current.role if current is not None else "")
+                ).split()
+            )
+            if name and role and role.casefold() == name.casefold():
+                changed = "`role`" if "role" in given else "`name`"
+                return _err(
+                    f"Not added: the {changed} sent makes the role {role!r} the same as the name; `role` is "
+                    'their part, such as "Teammate", and `name` the person.'
+                )
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
             # A nested field merges the keys sent into what it has, as the top level does.
@@ -821,7 +861,7 @@ def world_actor_tools(
                 f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
                 "refuses it; send `permitted_actions` again with actions from that list."
             )
-        return _ok(reply)
+        return _ok(reply + unified)
 
     @tool(
         "drop_actor",
@@ -1826,7 +1866,12 @@ def world_tools(
         "task sub-goal. "
         "`subject` is `task` (the default) or `worker:<id>` for one of the contract's workers: that check is "
         "given only that worker's calls, and is inconclusive when the worker made none."
-        + worker_subjects_note(contract),
+        + worker_subjects_note(contract)
+        + (
+            " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
+            "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
+            "came into. Leave it empty for a sub-goal about the person's task."
+        ),
         schema(
             {
                 "name": str,
@@ -1836,33 +1881,25 @@ def world_tools(
                 "output": str,
                 "overlay": str,
                 "subject": str,
+                "actor": str,
                 **CONTRACT_SCHEMA,
             },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        # Repairing a sub-goal keeps whose result it checks and the actor it depends on unless the repair says
-        # otherwise: a fix to its check never quietly turns a worker's check into the task's.
+        # A repair keeps whose result the sub-goal checks and the actor it depends on unless it says otherwise: a fix
+        # to its check never quietly turns a worker's check into the task's.
         previous = next((one for one in catalogue.sub_goals if one.name == str(args.get("name") or "")), None)
         try:
-            sub_goal = SubGoal(
-                name=str(args.get("name") or ""),
-                what=str(args.get("what") or ""),
-                check=str(args.get("check") or ""),
-                judged=str(args.get("judged") or ""),
-                output=str(args.get("output") or "pass_fail"),
-                overlay=str(args.get("overlay") or ""),
-                subject=str(args.get("subject") or (previous.subject if previous is not None else "task")),
-                actor=previous.actor if previous is not None else "",
-                **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+            sub_goal, problems = authored_sub_goal(
+                args,
+                previous=previous,
+                worker_ids={one.id for one in contract.workers},
+                actor_ids=set(load_actors(destination).by_id()),
             )
         except ValueError as invalid:
             return _err(f"Not added: {invalid}")
-        sub_goal.verifier = settled_by(sub_goal)
-        problems = validate_sub_goal(sub_goal)
-        if sub_goal.worker and sub_goal.worker not in {one.id for one in contract.workers}:
-            problems.append(f"subject_unknown_worker: {sub_goal.worker} is not one of the contract's workers")
         if native_runtime and sub_goal.deterministic():
             from ..prove import native_source_problem
 
