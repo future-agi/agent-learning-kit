@@ -41,6 +41,9 @@ def test_one_release_workflow():
         "release-pr",
         "template-publish",
         "deployment-bump",
+        "ready-environments-check",
+        "ready-environments-publish",
+        "ready-environments-pin",
     }
 
 
@@ -175,7 +178,7 @@ def test_secrets_stay_in_their_job():
     for job in JOBS:
         dumped = _dump(job)
         assert ("RELEASE_BOT_" in dumped) == (
-            job in {"deployment-bump", "release-pr"}
+            job in {"deployment-bump", "release-pr", "ready-environments-pin"}
         ), job
         assert ("E2B_API_KEY" in dumped) == (job == "template-publish"), job
         assert ("id-token" in dumped) == (job == "sdk-publish"), job
@@ -188,6 +191,7 @@ def test_each_bot_token_reaches_one_repository():
     for job, repository in (
         ("release-pr", "agent-learning-kit"),
         ("deployment-bump", "deployment"),
+        ("ready-environments-pin", "future-agi"),
     ):
         minted = [
             step["with"]
