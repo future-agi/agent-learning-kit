@@ -230,6 +230,9 @@ class ProviderSource:
         return {}
 
     def briefing(self) -> str:
+        from .provider_import import without_prompt_check
+
+        shown = without_prompt_check(self.profile)
         return (
             "This is an external agent, not a repository. The sanitized definition below is "
             "the only supplied source of truth. A phone or LiveKit connection may contain just the "
@@ -240,7 +243,7 @@ class ProviderSource:
             "included: a call transfer or an end-call tool is one of the agent's tools even with "
             "no function or arguments. Record each one in the contract's tools under the same "
             "name, with its destinations and what it does to the call in its effects.\n\n"
-            f"PROVIDER DEFINITION:\n{json.dumps(self.profile, indent=2, sort_keys=True)}"
+            f"PROVIDER DEFINITION:\n{json.dumps(shown, indent=2, sort_keys=True)}"
         )
 
 

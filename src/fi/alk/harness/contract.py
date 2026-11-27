@@ -23,7 +23,15 @@ import typing
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
-from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema
 
 from fi.simulate.agent.wrappers.http_events import (
@@ -1289,18 +1297,53 @@ def _reached(one: Dependency) -> str:
     return "; ".join(said)
 
 
+def field_value(payload: Any, field: str) -> Any:
+    """A field's value in a payload under its own name or the first alias that has one, as
+    AgentContract reads it, or None."""
+    if not isinstance(payload, dict):
+        return None
+    for key in (field, *_ALIASES.get(field, ())):
+        value = payload.get(key)
+        if value:
+            return value
+    return None
+
+
 def prompt_quote(payload: Any) -> str:
     """The quote of the prompt as AgentContract reads it from a payload: under its own name or
     the first alias that has one, a list joined by lines. The save holds it before validating."""
-    if not isinstance(payload, dict):
+    value = field_value(payload, "system_prompt_excerpt")
+    if not value:
         return ""
-    for key in ("system_prompt_excerpt", *_ALIASES["system_prompt_excerpt"]):
-        value = payload.get(key)
-        if value:
-            if isinstance(value, list):
-                return "\n".join(str(item) for item in value)
-            return value if isinstance(value, str) else str(value)
-    return ""
+    if isinstance(value, list):
+        return "\n".join(str(item) for item in value)
+    return value if isinstance(value, str) else str(value)
+
+
+def has_text(value: Any) -> bool:
+    """Whether a value holds any text that is not blank: a blank string, or a list of them,
+    holds none."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return any(has_text(item) for item in value)
+    return bool(value)
+
+
+_FLAG = TypeAdapter(bool)
+
+
+def conversational_flag(payload: Any) -> bool:
+    """Whether a payload's agent is conversational, as AgentContract reads the flag: absent or
+    null is its default, true, and "false", "no", "0" or "off" read as false. A value it can't
+    read as either is taken as true here; the save refuses it."""
+    value = payload.get("conversational") if isinstance(payload, dict) else None
+    if value is None:
+        return True
+    try:
+        return _FLAG.validate_python(value)
+    except ValidationError:
+        return True
 
 
 class AgentContract(BaseModel):

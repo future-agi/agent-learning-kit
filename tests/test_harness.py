@@ -8158,6 +8158,108 @@ def test_suite_eval_sends_a_providers_whole_prompt_copied_with_no_lines(monkeypa
     assert [verdict.unmeasured for verdict in verdicts] == ["", ""]
 
 
+@pytest.mark.parametrize(
+    ("later", "graded"),
+    [
+        # Only the later system message is one the sanitizer rewrites.
+        ("https://acme.example/kb?x=1\nRead this first.", False),
+        ("Read this first.", True),
+    ],
+)
+def test_a_fetched_vapi_prompt_is_graded_only_when_every_message_came_through_whole(
+    monkeypatch, tmp_path, later, graded
+):
+    import asyncio
+
+    from fi.alk.harness import authoring_entrypoint, provider_import
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.job import HarnessJob
+    from fi.alk.harness.tools import contract_tools
+
+    def request(method, url, api_key, body):
+        return {
+            "name": "Ava",
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {"role": "system", "content": "You are Ava."},
+                    {"role": "system", "content": later},
+                ],
+            },
+        }
+
+    real = provider_import.inspect_provider_target
+    monkeypatch.setattr(
+        authoring_entrypoint,
+        "inspect_provider_target",
+        lambda provider, **kwargs: real(provider, request=request, **kwargs),
+    )
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "job-1",
+            "run_id": "run-1",
+            "execution": "hosted",
+            "source": {"kind": "archive", "archive_artifact_id": "source-id"},
+            "agent": {
+                "connector": "vapi",
+                "mode": "provider_import",
+                "config": {"assistant_id": "assistant-1"},
+                "secret_refs": {
+                    "VAPI_API_KEY": {
+                        "manager": "platform-vault",
+                        "key": "secret-id",
+                        "purpose": "target_provider",
+                    }
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {"isolation": "dedicated_vm"},
+        }
+    )
+    secrets = tmp_path / "target-secrets.json"
+    secrets.write_text('{"VAPI_API_KEY":"vapi-secret"}', encoding="utf-8")
+    cache = tmp_path / "provider-profile.json"
+    # Fetched once and cached; the reading is given the cached copy.
+    authoring_entrypoint._load_provider_import_profile(job, secrets, cache)
+    profile = authoring_entrypoint._load_provider_import_profile(job, None, cache)
+
+    destination = tmp_path / "out"
+    server = contract_tools(destination, provider_profile=profile)
+    submit = next(one for one in server.tools if one.name == "submit_contract")
+    result = asyncio.run(
+        submit.handler(
+            {
+                "agent": "voice-agent",
+                "modality": "voice",
+                "real_use_cases": ["book a table"],
+                "tools": [],
+                "hard_constraints": ["Confirm the date."],
+                "system_prompt_excerpt": "You are Ava. ...",
+            }
+        )
+    )
+    assert not result.get("is_error"), result
+    contract = AgentContract.model_validate_json(
+        (destination / "contract.json").read_text(encoding="utf-8")
+    )
+    assert contract.system_prompt_copied is graded
+
+    verdicts, sent = _judged_suite(monkeypatch, contract)
+    task = {verdict.kind: verdict for verdict in verdicts}[
+        "customer_agent_task_completion"
+    ]
+    if graded:
+        assert dict(sent)["customer_agent_task_completion"]["agent_prompt"] == (
+            "You are Ava.\n\nRead this first."
+        )
+        assert task.unmeasured == ""
+    else:
+        # The judge is never sent a prompt that may have been cut.
+        assert "customer_agent_task_completion" not in dict(sent)
+        assert task.unmeasured == "no_whole_instructions"
+
+
 def test_suite_eval_sends_the_whole_prompt_when_its_lines_were_copied(monkeypatch):
     verdicts, sent = _judged_suite(
         monkeypatch,
@@ -8370,6 +8472,21 @@ def test_unmeasured_eval_in_summary_and_json():
     conduct = json.loads(as_json([result]))[0]["conduct"]
     assert [item.get("unmeasured") for item in conduct] == [None, "no_whole_instructions"]
     assert json.loads(as_json([result]))[0]["checkpoints_met"] == "2/2"
+
+
+def test_an_unmeasured_reason_sent_to_the_platform_is_capped():
+    from fi.alk.harness import platform
+    from fi.alk.harness.run.grade import Judgement
+
+    long = Judgement(
+        claim="custom_eval",
+        kind="custom_eval",
+        holds=False,
+        why="Not measured: " + "x" * 3000,
+        unmeasured="no_whole_instructions",
+    )
+    [sent] = platform.unmeasured_of(_reported_result(conduct=[long]))
+    assert sent["reason"] == long.why[:2000]
 
 
 def test_unmeasured_eval_reaches_the_platform_as_unmeasured():

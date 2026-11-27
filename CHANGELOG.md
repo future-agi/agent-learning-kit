@@ -9,11 +9,17 @@ All notable release changes for Agent Learning Kit are tracked here.
   source, as written, or a provider agent's whole prompt from its own definition. The provider's
   prompt is taken for phone and LiveKit connections (the prompt the user gave), for Retell with one
   general prompt and no states, and for Vapi (every system message of the assistant's model, in
-  order). Where a provider definition is in force, repository lines are not used for the prompt;
-  a Retell agent with states or a conversation flow is not marked, nor is a fetched prompt that
-  begins with a web address, which the profile's sanitizer may have cut. Otherwise the eval that needs the
-  instructions is reported as not measured, with the cause `no_whole_instructions` or
-  `no_instructions`, instead of being graded on a quote that may leave text out. A not-measured eval
+  order). Where a provider definition is in force, repository lines are not used for the prompt.
+  Not marked: a Retell agent with states or a conversation flow; a fetched Retell or Vapi prompt
+  the profile's sanitizer changed (it rewrites a text that begins with a web address, and may cut
+  it); and a fetched profile with no record of that check, such as one cached before fetches made
+  the record. Without instructions copied whole, the eval that needs them is reported as not
+  measured, with the cause `no_whole_instructions` or `no_instructions`, instead of being graded on
+  a quote that may leave text out. Separately, a conversational reading with no whole prompt to
+  copy that records neither a prompt nor rules, under any of their accepted names, is reminded once
+  on its first save; a quote
+  it then gives is kept as the excerpt, but it is not a whole copy, so it does not make the eval
+  measured. A not-measured eval
   is neither a pass nor a fail: it is no checkpoint, it is listed with its cause in the summary and
   the JSON output, and it reaches the platform in the call's `harness_unmeasured`, never among
   `harness_evaluations`. An eval that needs any other input it can't be given is unchanged: skipped
