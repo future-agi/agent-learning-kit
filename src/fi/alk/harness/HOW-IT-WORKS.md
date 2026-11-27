@@ -155,9 +155,12 @@ times, the pages the agent's tabs opened, what it clicked and typed (the element
 the sites it was refused, in two lists: a page the agent tried to open off the list, kept whole
 each time (the browser's own retries within 2 s, in one tab, are one attempt), and a request a
 page made off the list, counted for each host. A page that sends its tab off the list itself, by a
-redirect or by script, is counted as the page's request; so is a move the agent makes by running
-script in the page (`location.href` set) rather than by navigating, which is not counted as its
-attempt. The icon the browser asks of a site it was just refused is no request at all. Both lists are capped with the rows. A DevTools client is
+redirect, a refresh (a meta tag or a `Refresh` header) or its own script with no input behind it, is
+counted as the page's request; so is a move the agent makes by running script in the page
+(`location.href` set) rather than by navigating, which is not counted as its attempt. A click of the
+agent's that the page's own handler turns into a move (a button whose script navigates) is the
+agent's attempt: the browser marks the move as set off by input. A page's own timer that fires just
+after an agent's click may carry that mark too, and then reads as the agent's. The icon the browser asks of a site it was just refused is no request at all. Both lists are capped with the rows. A DevTools client is
 not told of the clicks and keys another client sends, so a small listener runs in each page, in a
 script world of its own, and reports only trusted events through a binding; the page's own
 scripts can neither write to the record nor read it. The world's and the binding's names are

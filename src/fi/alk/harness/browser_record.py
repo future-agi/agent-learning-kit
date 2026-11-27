@@ -190,6 +190,10 @@ def _web(url: str) -> bool:
     return url.lower().startswith(("http://", "https://"))
 
 
+# Navigations a page asks for on its own with no script: a meta refresh or a Refresh header (Page.frameRequestedNavigation).
+_PAGE_REFRESHES = frozenset({"metaTagRefresh", "httpHeaderRefresh"})
+
+
 class BrowserRecord:
     """One trial's record of the browser. Safe to feed from the recorder's thread and read from another."""
 
@@ -431,6 +435,8 @@ class BrowserRecorder:
         # place until it is answered, could not be asked for, or its tab closes.
         self._shots_pending: dict[object, str] = {}
         self._urls: dict[str, str] = {}  # session -> its tab's page now
+        # session -> addresses its page asked to refresh to (a meta tag or a Refresh header), not yet requested
+        self._refreshes: dict[str, set[str]] = {}
         self._connect = connect
         self._clock = clock
         self.record = BrowserRecord(self.sites, clock=clock, secret_values=self._secrets)
@@ -461,6 +467,7 @@ class BrowserRecorder:
         self.record = BrowserRecord(self.sites, clock=self._clock, secret_values=self._secrets)
         self._tabs = {}
         self._urls = {}
+        self._refreshes = {}
         self._leaving = False
         self._shots_pending = {}
         try:
@@ -650,6 +657,7 @@ class BrowserRecorder:
             gone = str(params.get("sessionId") or "")
             self._tabs.pop(gone, None)
             self._urls.pop(gone, None)
+            self._refreshes.pop(gone, None)
             for token in [token for token, one in self._shots_pending.items() if one == gone]:
                 del self._shots_pending[token]
         elif method == "Page.frameNavigated":
@@ -682,17 +690,35 @@ class BrowserRecorder:
                 except BaseException:
                     self._shots_pending.pop(token, None)
                     raise
+        elif method == "Page.frameRequestedNavigation":
+            tab = self._tabs.get(session or "")
+            if (
+                tab is not None
+                and params.get("frameId") == tab[1]
+                and params.get("reason") in _PAGE_REFRESHES
+            ):
+                self._refreshes.setdefault(session or "", set()).add(str(params.get("url") or ""))
         elif method == "Network.requestWillBeSent":
             tab = self._tabs.get(session or "")
             if tab is not None:
                 initiator = params.get("initiator") if isinstance(params.get("initiator"), dict) else {}
+                url = str((params.get("request") or {}).get("url") or "")
+                document = params.get("type") == "Document"
+                main_frame = params.get("frameId") == tab[1]
+                refreshed = self._refreshes.get(session or "", set())
+                by_refresh = document and main_frame and url in refreshed
+                refreshed.discard(url)
                 self.record.requested(
                     tab[0],
-                    str((params.get("request") or {}).get("url") or ""),
-                    document=params.get("type") == "Document",
-                    main_frame=params.get("frameId") == tab[1],
-                    # A server's redirect, or the page's own script, moved it: the page asked, not the agent.
-                    by_page=bool(params.get("redirectResponse")) or initiator.get("type") == "script",
+                    url,
+                    document=document,
+                    main_frame=main_frame,
+                    # The page asked, not the agent: a server's redirect, the page's own refresh, or its script
+                    # running with no input behind it. A script the agent's click set off (a button's own handler)
+                    # carries that click's gesture, and the attempt stays the agent's.
+                    by_page=bool(params.get("redirectResponse"))
+                    or by_refresh
+                    or (initiator.get("type") == "script" and not params.get("hasUserGesture")),
                 )
         elif method == "Runtime.bindingCalled" and params.get("name") == self.binding:
             tab = self._tabs.get(session or "")
