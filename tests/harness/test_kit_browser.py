@@ -8,9 +8,11 @@ import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib import error, request
 
 import pytest
+import yaml
 
 from fi.alk.harness import kit_browser
 from fi.alk.harness.call_runner import trial_state_changes
@@ -872,3 +874,16 @@ def test_a_browser_folder_too_long_for_chromium_s_socket_fails_at_start_on_linux
             assert len(launched) == 1
     finally:
         kit.close()
+
+
+def test_ci_runs_the_real_chromium_tests_with_the_hosted_image_s_chromium_and_fails_if_they_skip() -> None:
+    """Chromium's own limits (its socket's path among them) show only in a real browser on Linux: CI installs the
+    hosted image's Chromium for that file, and a skip there fails the job."""
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8"))["jobs"]
+    (job,) = [one for one in jobs.values() if "tests/harness/test_kit_browser_chromium.py" in json.dumps(one)]
+    steps = "\n".join(str(step.get("run", "")) for step in job["steps"])
+    assert "PLAYWRIGHT_VERSION" in steps and "Dockerfile.hosted" in steps
+    assert "playwright install --with-deps --no-shell chromium" in steps
+    assert "ALK_CHROMIUM" in steps and "websockets" in steps
+    assert '! grep -q "skipped"' in steps
