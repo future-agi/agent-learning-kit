@@ -3134,8 +3134,10 @@ def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
 
 # Where each trial's part of the agent's trace file begins, by the file's path, set when the trial starts. The agent's
 # process appends to the file for its world's life; where the runner cannot remove the file, a trial reads only what
-# was written after its start: the file's device, inode and length then. None when that could not be measured either.
-_TRACE_STARTS: dict[str, tuple[int, int, int] | None] = {}
+# was written after its start: the file's device, inode and length then, and its last bytes before that length, which
+# tell the same file from one truncated or recreated in its place. None when the start could not be measured.
+_TRACE_STARTS: dict[str, tuple[int, int, int, bytes] | None] = {}
+_TRACE_MARK_BYTES = 64
 
 
 class TraceStartUnknown(OSError):
@@ -3158,7 +3160,11 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
         _TRACE_STARTS.pop(key, None)
         return
     try:
-        info = path.stat()
+        path.stat()
+        with path.open("rb") as handle:
+            info = os.fstat(handle.fileno())
+            handle.seek(max(0, info.st_size - _TRACE_MARK_BYTES))
+            last = handle.read(_TRACE_MARK_BYTES)
     except FileNotFoundError:
         _TRACE_STARTS.pop(key, None)
         return
@@ -3169,13 +3175,20 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
             type(exc).__name__,
         )
         return
-    _TRACE_STARTS[key] = (info.st_dev, info.st_ino, info.st_size)
+    _TRACE_STARTS[key] = (info.st_dev, info.st_ino, info.st_size, last)
+
+
+def _a_record(line: bytes) -> bool:
+    try:
+        return isinstance(json.loads(line), dict)
+    except ValueError:
+        return False
 
 
 def _trial_trace_text(path: Path) -> str:
     """This trial's part of the trace file at ``path``: what was written after the trial began, or the whole file where
-    the trial removed it or it is no longer the file that was marked (another inode, or shorter than the mark; a file
-    recreated under the same inode number is told only by being shorter). Raises `OSError` when it cannot be read,
+    the trial removed it or it is no longer the file that was marked (another inode, shorter than the mark, or other
+    bytes just before the mark: truncated or recreated in place). Raises `OSError` when it cannot be read,
     `TraceStartUnknown` when the trial's start could not be marked."""
     key = str(path)
     if key in _TRACE_STARTS and _TRACE_STARTS[key] is None:
@@ -3183,14 +3196,21 @@ def _trial_trace_text(path: Path) -> str:
     start = _TRACE_STARTS.get(key)
     if start is None:
         return path.read_text(encoding="utf-8")
-    device, inode, offset = start
+    device, inode, offset, last = start
     with path.open("rb") as handle:
         info = os.fstat(handle.fileno())
-        if (info.st_dev, info.st_ino) == (device, inode) and info.st_size >= offset and offset:
-            handle.seek(offset - 1)
-            if handle.read(1) != b"\n":
-                # The trial began while an earlier trial's line was being written: its end is that trial's too.
-                handle.readline()
+        same = (info.st_dev, info.st_ino) == (device, inode) and info.st_size >= offset
+        if same:
+            handle.seek(offset - len(last))
+            same = handle.read(len(last)) == last
+        if not same:
+            handle.seek(0)
+        elif last and not last.endswith(b"\n"):
+            # The trial began on a line not yet ended. Where an earlier writer was still writing it, what follows the
+            # mark ends that line, is no record and is that trial's. Where the writer died instead, no newline ever
+            # came and this trial's first record starts at the mark: it is kept.
+            if _a_record(handle.readline()):
+                handle.seek(offset)
         return handle.read().decode("utf-8")
 
 
