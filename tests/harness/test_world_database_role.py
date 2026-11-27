@@ -192,9 +192,7 @@ def test_customer_processes_get_the_world_s_role_only_under_isolation():
     )
 
 
-def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(
-    tmp_path: Path, monkeypatch
-):
+def test_the_baseline_grants_its_rows_to_the_group_before_it_is_sealed(tmp_path: Path, monkeypatch):
     # The store's files are run by the driver against a real server; this one records statements only.
     monkeypatch.setattr(pr, "_run_sql_as_login", lambda path, **kwargs: None)
     manifest = runtime_tests._manifest(
@@ -560,16 +558,12 @@ def test_a_reset_makes_the_worlds_reader_login_and_lets_it_in(isolate: bool):
 
     made = next(i for i, one in enumerate(statements) if 'CREATE ROLE "alk_r3" LOGIN IN ROLE "world_reader"' in one)
     assert statements[made + 1 : made + 3] == [
-        'ALTER ROLE "alk_r3" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION '
+        "ALTER ROLE \"alk_r3\" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION "
         f"INHERIT CONNECTION LIMIT -1 VALID UNTIL 'infinity' PASSWORD '{reader.password}'",
         'GRANT CONNECT ON DATABASE "w3" TO "alk_r3"',
     ]
-    assert made > next(
-        i for i, one in enumerate(statements) if one.startswith('CREATE DATABASE "w3"')
-    )
-    assert statements[made + 3 : made + 6] == pr._only_member_of(
-        "alk_r3", "world_reader"
-    )
+    assert made > next(i for i, one in enumerate(statements) if one.startswith('CREATE DATABASE "w3"'))
+    assert statements[made + 3 : made + 6] == pr._only_member_of("alk_r3", "world_reader")
     if isolate:
         assert statements[made + 6] == 'ALTER DATABASE "w3" ALLOW_CONNECTIONS true'
 
@@ -995,12 +989,7 @@ def test_a_migration_that_needs_a_superuser_says_where_the_statement_belongs(tmp
     def apply(path, **kw):
         if kw["relative_path"] == "migrate.sql":
             raise pr.ProcessRuntimeError(
-                "seed",
-                "seed_failed",
-                pr._refused_as_login(
-                    "migrate.sql",
-                    "ERROR:  must be superuser to create an event trigger",
-                ),
+                "seed", "seed_failed", pr._refused_as_login("migrate.sql", "ERROR:  must be superuser to create an event trigger")
             )
 
     monkeypatch.setattr(pr, "_run_sql_as_login", apply)
@@ -1655,10 +1644,7 @@ def test_with_world_roles_the_state_store_runs_the_world_s_code_only_as_its_role
     store.execute("INSERT INTO riders (name) VALUES ('bo')")
     with psycopg.connect(superuser, autocommit=True) as connection:
         # The handler's insert fired the world's trigger as the world's own role.
-        assert {
-            row[0]
-            for row in connection.execute("SELECT who FROM audit.ran_as").fetchall()
-        } == {role}
+        assert {row[0] for row in connection.execute("SELECT who FROM audit.ran_as").fetchall()} == {role}
     # Auditor B, item 14: a trigger set to fire even in replica mode refuses the store role's reset.
     with pytest.raises(StoreError, match="riders.noted"):
         store._store.restore(snapshot)
@@ -2031,15 +2017,9 @@ def test_a_sentinel_is_read_as_the_login_at_the_baseline_and_the_log_reader_at_a
     assert pr.sentinel_credentials(postgres, harness, login=login) is login
     # The log reader runs only the harness's own query; a bundle's own sentinel runs as the store role.
     own = pr.SEED_SENTINEL_QUERY
+    assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=True, query=own) == pr.log_role(harness, 2)
     assert pr.sentinel_credentials(
-        postgres, harness, world_index=2, world_roles=True, query=own
-    ) == pr.log_role(harness, 2)
-    assert pr.sentinel_credentials(
-        postgres,
-        harness,
-        world_index=2,
-        world_roles=True,
-        query="SELECT count(*)::text FROM riders",
+        postgres, harness, world_index=2, world_roles=True, query="SELECT count(*)::text FROM riders"
     ) == pr.store_role(harness, 2)
     assert pr.sentinel_credentials(postgres, harness, world_index=2, world_roles=False) is harness
     other = next(engine for engine in pr.ManagedEngine if engine is not postgres)
@@ -2226,57 +2206,38 @@ def test_a_failed_call_a_default_left_committed_reads_faulted_and_is_never_repla
 
     parts = urlsplit(_REAL)
     database = f"alk_log_{uuid.uuid4().hex[:8]}"
-    admin = dict(
-        host=parts.hostname or "localhost",
-        port=parts.port or 5432,
-        user=parts.username,
-        password=parts.password or "",
-        dbname="postgres",
-    )
+    admin = dict(host=parts.hostname or "localhost", port=parts.port or 5432, user=parts.username,
+                 password=parts.password or "", dbname="postgres")
     _customer_sql(**admin, statement=f'CREATE DATABASE "{database}"')
     try:
-        _customer_sql(
-            **{**admin, "dbname": database},
-            statement=(
-                "CREATE TABLE public._alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-                "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
-                "actor_id text NOT NULL DEFAULT 'agent', idempotency_key text, action text, "
-                "outcome text NOT NULL DEFAULT 'committed'); "
-                "INSERT INTO public._alk_tool_trace (name, arguments, ok, error, at, idempotency_key) "
-                "VALUES ('refund', '{}', false, 'boom', 1.0, 'key-1')"
-            ),
-        )
+        _customer_sql(**{**admin, "dbname": database}, statement=(
+            "CREATE TABLE public._alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+            "actor_id text NOT NULL DEFAULT 'agent', idempotency_key text, action text, "
+            "outcome text NOT NULL DEFAULT 'committed'); "
+            "INSERT INTO public._alk_tool_trace (name, arguments, ok, error, at, idempotency_key) "
+            "VALUES ('refund', '{}', false, 'boom', 1.0, 'key-1')"))
         url = urlunsplit(parts._replace(path=f"/{database}"))
         log = world_door.PostgresLog(url)
         assert [row["outcome"] for row in log.rows()] == ["faulted"]
         assert log.committed("key-1", "agent") is None
         with psycopg.connect(url, autocommit=True) as connection:
-            assert [row["outcome"] for row in _action_log_rows(connection)] == [
-                "faulted"
-            ]
+            assert [row["outcome"] for row in _action_log_rows(connection)] == ["faulted"]
     finally:
-        _customer_sql(
-            **admin, statement=f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)'
-        )
+        _customer_sql(**admin, statement=f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
 
 
 @real_postgres
 def test_a_bundle_made_with_the_older_outcome_default_builds_and_loses_it():
     """A bundle whose migrations made the log as an older harness did (outcome NOT NULL DEFAULT 'committed'): the
     harness takes its log over with today's column, so the build is not refused for the shape it once wrote."""
-    older = author._TOOL_TRACE_DDL.replace(
-        "outcome text,", "outcome text NOT NULL DEFAULT 'committed',", 1
-    )
+    older = author._TOOL_TRACE_DDL.replace("outcome text,", "outcome text NOT NULL DEFAULT 'committed',", 1)
     assert older != author._TOOL_TRACE_DDL
     superuser, _migrator, baseline, _checked, _before, run = _migrated(older, "")
     try:
-        assert run(
-            superuser,
-            baseline,
-            "SELECT a.attnotnull, d.adbin IS NULL FROM pg_attribute a LEFT JOIN pg_attrdef d "
-            "ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = "
-            "'public._alk_tool_trace'::regclass AND a.attname = 'outcome'",
-        ) == [(False, True)]
+        assert run(superuser, baseline, "SELECT a.attnotnull, d.adbin IS NULL FROM pg_attribute a LEFT JOIN pg_attrdef d "
+                   "ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = "
+                   "'public._alk_tool_trace'::regclass AND a.attname = 'outcome'") == [(False, True)]
     finally:
         _dropped(superuser, baseline, run)
 
@@ -2285,22 +2246,16 @@ def test_a_bundle_made_with_the_older_outcome_default_builds_and_loses_it():
 def test_a_door_bundle_whose_world_has_no_action_log_yet_takes_its_grants():
     """A door bundle seeded without the log (its seed makes only the world): the door's grants skip the log's sequence
     rather than fail the build on a table that is not there."""
-    superuser, _migrator, baseline, checked, before, run = _migrated(
-        "CREATE TABLE public.items (id int)", ""
-    )
+    superuser, _migrator, baseline, checked, before, run = _migrated("CREATE TABLE public.items (id int)", "")
     try:
-        assert run(
-            superuser, baseline, "SELECT to_regclass('public._alk_tool_trace')"
-        ) == [(None,)]
+        assert run(superuser, baseline, "SELECT to_regclass('public._alk_tool_trace')") == [(None,)]
         pr._grant_world_role_group(**checked, door=True)
     finally:
         _dropped(superuser, baseline, run)
 
 
 @real_postgres
-def test_a_password_the_world_s_code_gives_the_store_role_during_a_reset_never_takes(
-    door_worlds, monkeypatch
-):
+def test_a_password_the_world_s_code_gives_the_store_role_during_a_reset_never_takes(door_worlds, monkeypatch):
     """Any role may change its own password: a check the reset runs as the store role gives it one of its own. Once
     the reset commits, the harness puts the password back and ends the role's sessions, so the planted one never
     logs in."""
@@ -2316,41 +2271,31 @@ def test_a_password_the_world_s_code_gives_the_store_role_during_a_reset_never_t
         "ALTER TABLE public.notes ADD CONSTRAINT armed CHECK (take_over()) NOT VALID; "
         "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools",
     )
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute("DELETE FROM public.notes")
     store.restore(snapshot)
-    planted = urlunsplit(
-        urlsplit(store_url)._replace(
-            netloc=f"{urlsplit(store_url).username}:taken-over@{urlsplit(store_url).hostname}:{urlsplit(store_url).port}"
-        )
-    )
+    planted = urlunsplit(urlsplit(store_url)._replace(
+        netloc=f"{urlsplit(store_url).username}:taken-over@{urlsplit(store_url).hostname}:{urlsplit(store_url).port}"
+    ))
     with pytest.raises(psycopg.OperationalError):
         psycopg.connect(planted).close()
     with psycopg.connect(store_url) as connection:
-        assert connection.execute("SELECT count(*) FROM public.notes").fetchone() == (
-            1,
-        )
+        assert connection.execute("SELECT count(*) FROM public.notes").fetchone() == (1,)
 
 
 @real_postgres
 @pytest.mark.parametrize("carrier", ("a large object", "default privileges"))
-def test_state_an_agent_leaves_outside_the_rows_refuses_the_reset(
-    door_worlds, monkeypatch, carrier
-):
+def test_state_an_agent_leaves_outside_the_rows_refuses_the_reset(door_worlds, monkeypatch, carrier):
     """A large object, or default privileges, made since the snapshot would carry across trials past a reset of the
     rows: the reset refuses the world instead."""
     from fi.alk.harness import privilege
     from fi.alk.harness.world.stores import WorldResetRefused
 
     superuser, world, _door, _reset = door_worlds(True)
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -2360,10 +2305,7 @@ def test_state_an_agent_leaves_outside_the_rows_refuses_the_reset(
             connection.execute(
                 f'ALTER DEFAULT PRIVILEGES FOR ROLE "{urlsplit(world).username}" GRANT SELECT ON TABLES TO PUBLIC'
             )
-    with pytest.raises(
-        WorldResetRefused,
-        match=carrier.split()[-2] if carrier == "a large object" else "default",
-    ):
+    with pytest.raises(WorldResetRefused, match=carrier.split()[-2] if carrier == "a large object" else "default"):
         store.restore(snapshot)
 
 
@@ -2372,19 +2314,13 @@ def test_no_world_role_can_make_a_large_object(door_worlds):
     """The agent's own role cannot leave itself a large object for the next trial."""
     _superuser, world, _door, _reset = door_worlds(True)
     with psycopg.connect(world, autocommit=True) as connection:
-        for statement in (
-            "SELECT lo_from_bytea(0, 'note')",
-            "SELECT lo_create(0)",
-            "SELECT lo_creat(-1)",
-        ):
+        for statement in ("SELECT lo_from_bytea(0, 'note')", "SELECT lo_create(0)", "SELECT lo_creat(-1)"):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 connection.execute(statement)
 
 
 @real_postgres
-def test_an_agent_s_role_settings_neither_refuse_a_reset_nor_shape_the_harness_s_sessions(
-    door_worlds, monkeypatch
-):
+def test_an_agent_s_role_settings_neither_refuse_a_reset_nor_shape_the_harness_s_sessions(door_worlds, monkeypatch):
     """The agent may give its own role settings (any role may): they refuse no reset, of its world or another's, they
     do not decide the harness's sessions as that role (read-only by default, a search path), and the next world reset
     clears them."""
@@ -2392,25 +2328,19 @@ def test_an_agent_s_role_settings_neither_refuse_a_reset_nor_shape_the_harness_s
     from fi.alk.harness.world_door import PostgresRecords
 
     superuser, world, _door, reset = door_worlds(True)
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     other = door_worlds.other_world_url
     for address in (world, other):
         with psycopg.connect(address, autocommit=True) as connection:
-            connection.execute(
-                "ALTER ROLE CURRENT_USER SET default_transaction_read_only = on"
-            )
+            connection.execute("ALTER ROLE CURRENT_USER SET default_transaction_read_only = on")
             connection.execute("ALTER ROLE CURRENT_USER SET search_path = nowhere")
             connection.execute("ALTER ROLE CURRENT_USER SET TimeZone = 'Asia/Kolkata'")
     # Within the trial: found on the harness's own path, not the role's `nowhere`; times read in UTC; a write, not
     # refused as read-only.
     [seen] = store.query_as_world("SELECT count(*) AS n FROM riders")
-    assert store.query_as_world("SELECT current_setting('TimeZone') AS zone") == [
-        {"zone": "UTC"}
-    ]
+    assert store.query_as_world("SELECT current_setting('TimeZone') AS zone") == [{"zone": "UTC"}]
     assert PostgresRecords(world)("UPDATE riders SET name = name", []) == seen["n"]
     store.restore(snapshot)
     reset(0)
@@ -2422,9 +2352,7 @@ def test_an_agent_s_role_settings_neither_refuse_a_reset_nor_shape_the_harness_s
 
 
 @real_postgres
-def test_a_large_object_the_seed_left_writable_carries_no_note_across_trials(
-    door_worlds, monkeypatch
-):
+def test_a_large_object_the_seed_left_writable_carries_no_note_across_trials(door_worlds, monkeypatch):
     """A large object the seed made and left writable to everyone: the agent's role can write into it (making one is
     refused), so its contents are in the digest and a reset that finds them changed refuses the world."""
     from fi.alk.harness import privilege
@@ -2434,9 +2362,7 @@ def test_a_large_object_the_seed_left_writable_carries_no_note_across_trials(
     with psycopg.connect(superuser, autocommit=True) as connection:
         [oid] = connection.execute("SELECT lo_from_bytea(0, 'seeded')").fetchone()
         connection.execute(f"GRANT SELECT, UPDATE ON LARGE OBJECT {int(oid)} TO PUBLIC")
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(world, autocommit=True) as agent:
@@ -2446,18 +2372,14 @@ def test_a_large_object_the_seed_left_writable_carries_no_note_across_trials(
 
 
 @real_postgres
-def test_what_an_agent_does_to_its_own_role_is_undone_by_the_next_reset(
-    door_worlds, monkeypatch
-):
+def test_what_an_agent_does_to_its_own_role_is_undone_by_the_next_reset(door_worlds, monkeypatch):
     """Any role may change its own settings and password: the agent's role, in one trial, sets a statement timeout
     and a password of its own and keeps a session open. The reset after it clears the settings, puts the password
     back and ends the session, so the next trial's tools connect and run as before."""
     from fi.alk.harness import privilege
 
     superuser, world, _door, _reset = door_worlds(True)
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     kept = psycopg.connect(world, autocommit=True)
@@ -2466,16 +2388,13 @@ def test_what_an_agent_does_to_its_own_role_is_undone_by_the_next_reset(
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute(
-            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole",
-            (urlsplit(world).username,),
+            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole", (urlsplit(world).username,)
         ).fetchone() == (0,)
     with pytest.raises(psycopg.OperationalError):
         kept.execute("SELECT 1")
-    mine = urlunsplit(
-        urlsplit(world)._replace(
-            netloc=f"{urlsplit(world).username}:mine@{urlsplit(world).hostname}:{urlsplit(world).port}"
-        )
-    )
+    mine = urlunsplit(urlsplit(world)._replace(
+        netloc=f"{urlsplit(world).username}:mine@{urlsplit(world).hostname}:{urlsplit(world).port}"
+    ))
     with pytest.raises(psycopg.OperationalError):
         psycopg.connect(mine).close()
     with psycopg.connect(world, autocommit=True) as tools:
@@ -2485,12 +2404,8 @@ def test_what_an_agent_does_to_its_own_role_is_undone_by_the_next_reset(
 
 
 @real_postgres
-@pytest.mark.parametrize(
-    "deferred", ("changes the store role's password", "writes a row")
-)
-def test_a_check_that_tries_to_turn_the_world_s_triggers_back_on_refuses_the_reset(
-    door_worlds, monkeypatch, deferred
-):
+@pytest.mark.parametrize("deferred", ("changes the store role's password", "writes a row"))
+def test_a_check_that_tries_to_turn_the_world_s_triggers_back_on_refuses_the_reset(door_worlds, monkeypatch, deferred):
     """A check the reset runs tries to turn the world's triggers back on, so that a deferred trigger of the world's
     would run at commit: the store role may not, so the reset is refused and rolled back, and neither the row nor the
     password its trigger would have written survives."""
@@ -2517,15 +2432,11 @@ def test_a_check_that_tries_to_turn_the_world_s_triggers_back_on_refuses_the_res
         "ALTER TABLE public.notes ADD CONSTRAINT woken CHECK (wake()) NOT VALID; "
         "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools; TRUNCATE trail.seen",
     )
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
-        connection.execute(
-            "SET session_replication_role = replica; DELETE FROM public.notes"
-        )
+        connection.execute("SET session_replication_role = replica; DELETE FROM public.notes")
     with pytest.raises(WorldResetRefused, match="session_replication_role"):
         store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -2534,24 +2445,15 @@ def test_a_check_that_tries_to_turn_the_world_s_triggers_back_on_refuses_the_res
 
 
 @real_postgres
-def test_putting_the_world_s_roles_back_leaves_the_door_s_sessions_open(
-    door_worlds, monkeypatch
-):
+def test_putting_the_world_s_roles_back_leaves_the_door_s_sessions_open(door_worlds, monkeypatch):
     """The door runs only the harness's own code and keeps a long-lived session (its fault reads): a reset that puts
     the agent's role back ends the agent's sessions, never the door's."""
     from fi.alk.harness import privilege
 
     superuser, world, door, _reset = door_worlds(True)
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
-    endpoint = SimpleNamespace(
-        address=superuser,
-        tool_address=world,
-        store_address=door_worlds.store_url,
-        log_address=door_worlds.log_url,
-        door_address=door,
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    endpoint = SimpleNamespace(address=superuser, tool_address=world, store_address=door_worlds.store_url,
+                               log_address=door_worlds.log_url, door_address=door)
     from fi.alk.harness.world.stores.postgres import attached_world_store
 
     store = attached_world_store(endpoint)
@@ -2564,9 +2466,7 @@ def test_putting_the_world_s_roles_back_leaves_the_door_s_sessions_open(
 
 
 @real_postgres
-def test_no_trigger_of_the_world_s_fires_while_the_store_role_resets(
-    door_worlds, monkeypatch
-):
+def test_no_trigger_of_the_world_s_fires_while_the_store_role_resets(door_worlds, monkeypatch):
     """A check the reset runs tries to turn the world's triggers back on, so that a deferred trigger could re-defer
     itself past the verify and, at commit, write a row and advance a sequence. The store role starts every session
     with triggers suspended and may not change that: nothing fires, nothing drifts, and the reset holds."""
@@ -2595,21 +2495,15 @@ def test_no_trigger_of_the_world_s_fires_while_the_store_role_resets(
         "ALTER TABLE public.notes ADD CONSTRAINT woken CHECK (wake()) NOT VALID; "
         "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools; TRUNCATE trail.seen",
     )
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
-        connection.execute(
-            "SET session_replication_role = replica; DELETE FROM public.notes"
-        )
+        connection.execute("SET session_replication_role = replica; DELETE FROM public.notes")
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
         assert connection.execute("SELECT count(*) FROM trail.seen").fetchone() == (0,)
-        assert connection.execute("SELECT is_called FROM trail.ticks").fetchone() == (
-            False,
-        )
+        assert connection.execute("SELECT is_called FROM trail.ticks").fetchone() == (False,)
         assert connection.execute("SELECT id FROM public.notes").fetchall() == [(1,)]
 
 
@@ -2630,24 +2524,16 @@ def test_a_world_with_an_ordinary_audit_trigger_resets_clean(door_worlds, monkey
         "INSERT INTO public.orders VALUES (1), (2); "
         "GRANT SELECT, INSERT, UPDATE, DELETE ON public.orders TO alk_world_tools",
     )
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     for _trial in range(3):
         with psycopg.connect(superuser, autocommit=True) as connection:
-            connection.execute(
-                "DELETE FROM public.orders WHERE id = 2; INSERT INTO public.orders VALUES (3)"
-            )
+            connection.execute("DELETE FROM public.orders WHERE id = 2; INSERT INTO public.orders VALUES (3)")
         store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
-        assert connection.execute(
-            "SELECT id FROM public.orders ORDER BY id"
-        ).fetchall() == [(1,), (2,)]
-        assert connection.execute("SELECT count(*) FROM public.audit").fetchone() == (
-            2,
-        )
+        assert connection.execute("SELECT id FROM public.orders ORDER BY id").fetchall() == [(1,), (2,)]
+        assert connection.execute("SELECT count(*) FROM public.audit").fetchone() == (2,)
 
 
 _SHOUTING = (
@@ -2753,33 +2639,15 @@ _BUNDLE_SQL = {
     # Every way past the old psql filter, and the ones psql itself would have run: with no psql,
     # each is a build that fails, and the shell never runs.
     "estring": ("SELECT E'\\'';\n\\! touch {marker}\n", False),
-    "copy desync": (
-        "COPY public.items (id) FROM stdin /* x;\n*/ \\! touch {marker}\n",
-        False,
-    ),
+    "copy desync": ("COPY public.items (id) FROM stdin /* x;\n*/ \\! touch {marker}\n", False),
     "unrestrict chain": ("\\restrict k1\n\\unrestrict k1 \\! touch {marker}\n", False),
-    "copy after an unfinished statement": (
-        "SELECT 1\nCOPY public.items (id) FROM stdin;\n\\! touch {marker}\n",
-        False,
-    ),
-    "copy named in a comment": (
-        "COPY (SELECT 1) TO stdout; -- FROM stdin\n\\! touch {marker}\n",
-        False,
-    ),
-    "standard strings off": (
-        "SET standard_conforming_strings = off;\nSELECT '\\'';\n\\! touch {marker}\n",
-        False,
-    ),
+    "copy after an unfinished statement": ("SELECT 1\nCOPY public.items (id) FROM stdin;\n\\! touch {marker}\n", False),
+    "copy named in a comment": ("COPY (SELECT 1) TO stdout; -- FROM stdin\n\\! touch {marker}\n", False),
+    "standard strings off": ("SET standard_conforming_strings = off;\nSELECT '\\'';\n\\! touch {marker}\n", False),
     "gexec": ("SELECT 'x' \\gexec\n", False),
     # pg_dump's own output, which builds.
-    "real copy": (
-        "COPY public.items (id, note) FROM stdin;\n1\ttab\\there\n2\t\\N\n\\.\nSELECT 1;\n",
-        True,
-    ),
-    "pg_dump restrict lines": (
-        "\\restrict AbC123\nSELECT 1;\n\\unrestrict AbC123\n",
-        True,
-    ),
+    "real copy": ("COPY public.items (id, note) FROM stdin;\n1\ttab\\there\n2\t\\N\n\\.\nSELECT 1;\n", True),
+    "pg_dump restrict lines": ("\\restrict AbC123\nSELECT 1;\n\\unrestrict AbC123\n", True),
     "escapes in strings": ("SELECT E'a\\nb', 'c\\d';\n", True),
     "backslash in a comment": ("/* \\! x */ SELECT 1; -- \\! y\n", True),
 }
@@ -2787,17 +2655,13 @@ _BUNDLE_SQL = {
 
 @real_postgres
 @pytest.mark.parametrize("case", sorted(_BUNDLE_SQL))
-def test_a_bundle_s_sql_runs_only_as_sql_and_never_as_a_psql_command(
-    tmp_path: Path, case
-):
+def test_a_bundle_s_sql_runs_only_as_sql_and_never_as_a_psql_command(tmp_path: Path, case):
     """Bundle SQL runs in the harness's own process as the restricted login (psycopg), never through psql, so
     no line of it is a client command: one that would be fails the build, and its shell never runs."""
     text, builds = _BUNDLE_SQL[case]
     marker = tmp_path / "ran"
     build, run, baseline = _seeded(
-        tmp_path,
-        "CREATE TABLE public.items (id int PRIMARY KEY, note text);\n",
-        text.replace("{marker}", str(marker)),
+        tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY, note text);\n", text.replace("{marker}", str(marker))
     )
     try:
         if builds:
@@ -2807,18 +2671,13 @@ def test_a_bundle_s_sql_runs_only_as_sql_and_never_as_a_psql_command(
                 build()
         assert not marker.exists()
         if case == "real copy":
-            assert run(baseline, "SELECT id, note FROM public.items ORDER BY id") == [
-                (1, "tab\there"),
-                (2, None),
-            ]
+            assert run(baseline, "SELECT id, note FROM public.items ORDER BY id") == [(1, "tab\there"), (2, None)]
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
 
 @real_postgres
-def test_bundle_sql_never_reaches_psql_or_a_child_s_environment(
-    tmp_path: Path, monkeypatch
-):
+def test_bundle_sql_never_reaches_psql_or_a_child_s_environment(tmp_path: Path, monkeypatch):
     """No psql, no child process, and no password in any environment a child could inherit."""
     import subprocess
 
@@ -2827,11 +2686,8 @@ def test_bundle_sql_never_reaches_psql_or_a_child_s_environment(
 
     monkeypatch.setattr(subprocess, "run", no_child)
     monkeypatch.setattr(pr.subprocess, "run", no_child)
-    build, run, baseline = _seeded(
-        tmp_path,
-        "CREATE TABLE public.items (id int PRIMARY KEY);\n",
-        "INSERT INTO public.items VALUES (1);\n",
-    )
+    build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n",
+                                   "INSERT INTO public.items VALUES (1);\n")
     try:
         build()
         assert "PGPASSWORD" not in os.environ
@@ -2841,9 +2697,7 @@ def test_bundle_sql_never_reaches_psql_or_a_child_s_environment(
 
 
 @real_postgres
-def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_reset(
-    door_worlds,
-):
+def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_reset(door_worlds):
     """Roles outlive a build, so a membership an older harness granted (a store role in a group that read the
     log) would make every later build refuse; each reset leaves every per-world role in its one group."""
     superuser, _world, _door, reset = door_worlds(True)
@@ -2870,9 +2724,7 @@ def test_a_role_an_older_harness_put_in_another_group_is_put_back_in_its_own_at_
 
 
 @real_postgres
-def test_a_bundle_s_own_sentinel_reading_a_world_table_passes_at_reset_and_no_world_role_can_notify(
-    door_worlds,
-):
+def test_a_bundle_s_own_sentinel_reading_a_world_table_passes_at_reset_and_no_world_role_can_notify(door_worlds):
     """A bundle's own sentinel reads a world table as the store role at a reset (the log reader may not), and
     no world role can call pg_notify to signal another session."""
     superuser, world, _door, _reset = door_worlds(True)
@@ -2891,19 +2743,13 @@ def test_a_bundle_s_own_sentinel_reading_a_world_table_passes_at_reset_and_no_wo
 @real_postgres
 def test_a_seed_that_fails_midway_leaves_the_login_unable_to_log_in(tmp_path: Path):
     """On every exit path after the login is made, it is left with no login, no bypass and no password."""
-    build, run, baseline = _seeded(
-        tmp_path,
-        "CREATE TABLE public.items (id int PRIMARY KEY);\n",
-        "INSERT INTO public.nowhere VALUES (1);\n",
-    )
+    build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.items (id int PRIMARY KEY);\n",
+                                   "INSERT INTO public.nowhere VALUES (1);\n")
     try:
         with pytest.raises(pr.ProcessRuntimeError):
             build()
-        assert run(
-            "postgres",
-            "SELECT rolcanlogin, rolbypassrls, rolpassword IS NULL FROM pg_authid "
-            f"WHERE rolname = '{pr.MIGRATOR_ROLE}'",
-        ) == [(False, False, True)]
+        assert run("postgres", "SELECT rolcanlogin, rolbypassrls, rolpassword IS NULL FROM pg_authid "
+                   f"WHERE rolname = '{pr.MIGRATOR_ROLE}'") == [(False, False, True)]
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
@@ -2916,26 +2762,13 @@ def test_a_held_login_session_is_ended_and_the_baseline_is_not_sealed_with_anoth
     port = parts.port or 5432
     superuser = pr.EngineCredentials(parts.username, parts.password or "")
     baseline = f"alk_baseline_{uuid.uuid4().hex[:8]}"
-    checked = {
-        "port": port,
-        "credentials": superuser,
-        "sql_runner": pr.default_sql_runner,
-        "process_name": "db",
-    }
-    admin = dict(
-        host=parts.hostname or "localhost",
-        port=port,
-        user=superuser.username,
-        password=superuser.password,
-    )
+    checked = {"port": port, "credentials": superuser, "sql_runner": pr.default_sql_runner, "process_name": "db"}
+    admin = dict(host=parts.hostname or "localhost", port=port, user=superuser.username, password=superuser.password)
     _customer_sql(**admin, dbname="postgres", statement=f'CREATE DATABASE "{baseline}"')
     try:
         login = pr.migrator_credentials(**checked, baseline_db=baseline)
-        held = psycopg.connect(
-            **{**admin, "user": login.username, "password": login.password},
-            dbname=baseline,
-            autocommit=True,
-        )
+        held = psycopg.connect(**{**admin, "user": login.username, "password": login.password}, dbname=baseline,
+                               autocommit=True)
         with pytest.raises(pr.ProcessRuntimeError, match=pr.MIGRATOR_ROLE):
             pr._refuse_other_sessions(**checked, baseline_db=baseline)
         pr._end_sessions_of(login, **checked)
@@ -2945,11 +2778,7 @@ def test_a_held_login_session_is_ended_and_the_baseline_is_not_sealed_with_anoth
         pr._refuse_other_sessions(**checked, baseline_db=baseline)
         pr.retire_login(login, **checked)
     finally:
-        _customer_sql(
-            **admin,
-            dbname="postgres",
-            statement=f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)',
-        )
+        _customer_sql(**admin, dbname="postgres", statement=f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
 
 @real_postgres
@@ -2960,49 +2789,26 @@ def test_a_real_pg_dump_schema_dump_builds_through_the_driver(tmp_path: Path):
 
     parts = urlsplit(_REAL)
     source = f"alk_source_{uuid.uuid4().hex[:8]}"
-    admin = dict(
-        host=parts.hostname or "localhost",
-        port=parts.port or 5432,
-        user=parts.username,
-        password=parts.password or "",
-    )
+    admin = dict(host=parts.hostname or "localhost", port=parts.port or 5432, user=parts.username,
+                 password=parts.password or "")
     _customer_sql(**admin, dbname="postgres", statement=f'CREATE DATABASE "{source}"')
     try:
         _customer_sql(**admin, dbname=source, statement=_SHOUTING)
         dumped = subprocess.run(
-            [
-                "pg_dump",
-                "--schema-only",
-                f"--host={parts.hostname}",
-                f"--port={parts.port}",
-                f"--username={parts.username}",
-                source,
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            env={**os.environ, "PGPASSWORD": parts.password or ""},
+            ["pg_dump", "--schema-only", f"--host={parts.hostname}", f"--port={parts.port}",
+             f"--username={parts.username}", source],
+            capture_output=True, text=True, check=True, env={**os.environ, "PGPASSWORD": parts.password or ""},
         ).stdout
-        dumped = "".join(
-            line
-            for line in dumped.splitlines(keepends=True)
-            if not line.startswith("SET transaction_timeout")
-        )
+        dumped = "".join(line for line in dumped.splitlines(keepends=True)
+                         if not line.startswith("SET transaction_timeout"))
         build, run, baseline = _seeded(tmp_path, dumped, _TOGGLED)
         try:
             build()
-            assert run(baseline, "SELECT name FROM public.parent ORDER BY id") == [
-                ("ALPHA",),
-                ("BETA",),
-            ]
+            assert run(baseline, "SELECT name FROM public.parent ORDER BY id") == [("ALPHA",), ("BETA",)]
         finally:
             run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
     finally:
-        _customer_sql(
-            **admin,
-            dbname="postgres",
-            statement=f'DROP DATABASE IF EXISTS "{source}" WITH (FORCE)',
-        )
+        _customer_sql(**admin, dbname="postgres", statement=f'DROP DATABASE IF EXISTS "{source}" WITH (FORCE)')
 
 
 def _world_store(door_worlds, superuser, world, roles: bool = True):
@@ -3019,9 +2825,7 @@ def _world_store(door_worlds, superuser, world, roles: bool = True):
 
 
 @real_postgres
-def test_a_row_in_another_customer_schema_never_outlives_a_reset(
-    door_worlds, monkeypatch
-):
+def test_a_row_in_another_customer_schema_never_outlives_a_reset(door_worlds, monkeypatch):
     """The reset puts back every schema of the world's own, not only public."""
     from fi.alk.harness import privilege
 
@@ -3038,21 +2842,14 @@ def test_a_row_in_another_customer_schema_never_outlives_a_reset(
         agent.execute("INSERT INTO ext.notes VALUES (2, 'from the last trial')")
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
-        assert connection.execute(
-            "SELECT id, body FROM ext.notes ORDER BY id"
-        ).fetchall() == [(1, "seed")]
+        assert connection.execute("SELECT id, body FROM ext.notes ORDER BY id").fetchall() == [(1, "seed")]
 
 
 def _owned_by_the_login(superuser: str, setup: str) -> None:
     """The world as a build leaves it: its tables the restricted login's, nothing created by anyone but a superuser."""
     parts = urlsplit(_REAL)
-    pr.migrator_credentials(
-        port=parts.port or 5432,
-        credentials=pr.EngineCredentials(parts.username, parts.password),
-        baseline_db="postgres",
-        sql_runner=pr.default_sql_runner,
-        process_name="db",
-    )
+    pr.migrator_credentials(port=parts.port or 5432, credentials=pr.EngineCredentials(parts.username, parts.password),
+                            baseline_db="postgres", sql_runner=pr.default_sql_runner, process_name="db")
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute(setup)
         connection.execute(
@@ -3090,9 +2887,7 @@ _ARMED_CHECK = (
 
 
 @real_postgres
-def test_the_world_s_code_a_reset_runs_has_the_store_role_s_rights_and_plants_nothing(
-    door_worlds, monkeypatch
-):
+def test_the_world_s_code_a_reset_runs_has_the_store_role_s_rights_and_plants_nothing(door_worlds, monkeypatch):
     """The reset runs as the store role (never the tables' owner), on `pg_catalog, public` so
     the world's own function is found by its bare name . The CHECK's plant (a new function, an ALWAYS trigger)
     fails for want of rights; rows row security hides come back; FORCE is still set."""
@@ -3100,24 +2895,16 @@ def test_the_world_s_code_a_reset_runs_has_the_store_role_s_rights_and_plants_no
 
     superuser, world, _door, _reset = door_worlds(True)
     _owned_by_the_login(superuser, _ARMED_CHECK)
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
         connection.execute("DELETE FROM public.secrets")
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
-        assert connection.execute(
-            "SELECT id FROM public.secrets ORDER BY id"
-        ).fetchall() == [(1,), (2,)]
-        assert connection.execute(
-            "SELECT to_regproc('public.backdoor')"
-        ).fetchone() == (None,)
-        assert connection.execute(
-            "SELECT tgenabled FROM pg_trigger WHERE tgname = 'stamp'"
-        ).fetchone() == ("O",)
+        assert connection.execute("SELECT id FROM public.secrets ORDER BY id").fetchall() == [(1,), (2,)]
+        assert connection.execute("SELECT to_regproc('public.backdoor')").fetchone() == (None,)
+        assert connection.execute("SELECT tgenabled FROM pg_trigger WHERE tgname = 'stamp'").fetchone() == ("O",)
         assert connection.execute(
             "SELECT relforcerowsecurity FROM pg_class WHERE relname = 'secrets'"
         ).fetchone() == (True,)
@@ -3125,9 +2912,7 @@ def test_the_world_s_code_a_reset_runs_has_the_store_role_s_rights_and_plants_no
 
 @real_postgres
 @pytest.mark.parametrize("plant", ("function", "role setting"))
-def test_a_reset_that_would_change_a_definition_is_rolled_back_and_refused(
-    door_worlds, monkeypatch, plant
-):
+def test_a_reset_that_would_change_a_definition_is_rolled_back_and_refused(door_worlds, monkeypatch, plant):
     """Should any right let the world's code change a definition while a reset runs (here, CREATE granted back to
     the store role, or a setting a role may make on itself), nothing of the reset is kept: the world is refused
     (ours to replace, no check graded) and the plant is gone with the rollback."""
@@ -3146,9 +2931,7 @@ def test_a_reset_that_would_change_a_definition_is_rolled_back_and_refused(
                 "CREATE OR REPLACE FUNCTION public.plant() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN "
                 "EXECUTE 'ALTER ROLE ' || quote_ident(current_user) || ' SET work_mem = ''7MB'''; RETURN true; END $$"
             )
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -3156,13 +2939,9 @@ def test_a_reset_that_would_change_a_definition_is_rolled_back_and_refused(
     with pytest.raises(WorldResetRefused) as refused:
         store.restore(snapshot)
     assert isinstance(refused.value, WorldUnavailable)
-    assert ("functions" if plant == "function" else "role settings") in str(
-        refused.value
-    )
+    assert ("functions" if plant == "function" else "role settings") in str(refused.value)
     with psycopg.connect(superuser, autocommit=True) as connection:
-        assert connection.execute(
-            "SELECT to_regproc('public.backdoor')"
-        ).fetchone() == (None,)
+        assert connection.execute("SELECT to_regproc('public.backdoor')").fetchone() == (None,)
         assert connection.execute(
             # Only the one setting the harness gives the store role.
             "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole "
@@ -3174,9 +2953,7 @@ def test_a_reset_that_would_change_a_definition_is_rolled_back_and_refused(
 
 
 @real_postgres
-def test_a_reset_that_leaves_a_row_its_snapshot_did_not_hold_is_refused(
-    door_worlds, monkeypatch
-):
+def test_a_reset_that_leaves_a_row_its_snapshot_did_not_hold_is_refused(door_worlds, monkeypatch):
     """The world's code a reset runs writes a row (a CHECK that records who ran it): the world is not as its
     snapshot held it, so the reset is rolled back and the world refused."""
     from fi.alk.harness import privilege
@@ -3193,9 +2970,7 @@ def test_a_reset_that_leaves_a_row_its_snapshot_did_not_hold_is_refused(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON public.notes TO alk_world_tools; "
         "INSERT INTO public.notes VALUES (1, 'a'); TRUNCATE trail.seen",
     )
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
@@ -3207,18 +2982,14 @@ def test_a_reset_that_leaves_a_row_its_snapshot_did_not_hold_is_refused(
 
 
 @real_postgres
-def test_a_relation_a_world_role_made_after_the_snapshot_refuses_the_reset(
-    door_worlds, monkeypatch
-):
+def test_a_relation_a_world_role_made_after_the_snapshot_refuses_the_reset(door_worlds, monkeypatch):
     """A table a world role owns that the snapshot never held (made where CREATE was still granted) is no
     store role's to empty or drop: the reset refuses the world rather than leave the trial's changes in place."""
     from fi.alk.harness import privilege
     from fi.alk.harness.world.stores import WorldResetRefused
 
     superuser, world, _door, _reset = door_worlds(True)
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     store = _world_store(door_worlds, superuser, world)
     snapshot = store.freeze()
     world_role = urlsplit(world).username
@@ -3232,9 +3003,7 @@ def test_a_relation_a_world_role_made_after_the_snapshot_refuses_the_reset(
 
 
 @real_postgres
-def test_after_a_build_no_world_schema_takes_a_create_from_anyone_but_a_superuser(
-    tmp_path: Path,
-):
+def test_after_a_build_no_world_schema_takes_a_create_from_anyone_but_a_superuser(tmp_path: Path):
     """A customer schema that granted CREATE to PUBLIC (and `public`, which the login may create in) take
     CREATE from no one but a superuser once the build is done."""
     build, run, baseline = _seeded(
@@ -3244,16 +3013,13 @@ def test_after_a_build_no_world_schema_takes_a_create_from_anyone_but_a_superuse
     )
     try:
         build()
-        assert (
-            run(
-                baseline,
-                "SELECT n.nspname, pg_get_userbyid(a.grantee) FROM pg_namespace n, "
-                "aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a WHERE n.nspname IN ('ext', 'public') "
-                "AND a.privilege_type = 'CREATE' AND (a.grantee = 0 OR NOT (SELECT rolsuper FROM pg_roles "
-                "WHERE oid = a.grantee))",
-            )
-            == []
-        )
+        assert run(
+            baseline,
+            "SELECT n.nspname, pg_get_userbyid(a.grantee) FROM pg_namespace n, "
+            "aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a WHERE n.nspname IN ('ext', 'public') "
+            "AND a.privilege_type = 'CREATE' AND (a.grantee = 0 OR NOT (SELECT rolsuper FROM pg_roles "
+            "WHERE oid = a.grantee))",
+        ) == []
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
@@ -3264,39 +3030,22 @@ def test_the_login_s_settings_an_earlier_build_made_are_gone_before_files_run():
     shape the next build's session."""
     parts = urlsplit(_REAL)
     credentials = pr.EngineCredentials(parts.username, parts.password)
-    pr.migrator_credentials(
-        port=parts.port or 5432,
-        credentials=credentials,
-        baseline_db="postgres",
-        sql_runner=pr.default_sql_runner,
-        process_name="db",
-    )
+    pr.migrator_credentials(port=parts.port or 5432, credentials=credentials, baseline_db="postgres",
+                            sql_runner=pr.default_sql_runner, process_name="db")
     with psycopg.connect(_REAL, autocommit=True) as connection:
-        connection.execute(
-            f'ALTER ROLE "{pr.MIGRATOR_ROLE}" SET search_path = evil, public'
-        )
-        connection.execute(
-            f"ALTER ROLE \"{pr.MIGRATOR_ROLE}\" IN DATABASE postgres SET work_mem = '9MB'"
-        )
-    pr.migrator_credentials(
-        port=parts.port or 5432,
-        credentials=credentials,
-        baseline_db="postgres",
-        sql_runner=pr.default_sql_runner,
-        process_name="db",
-    )
+        connection.execute(f'ALTER ROLE "{pr.MIGRATOR_ROLE}" SET search_path = evil, public')
+        connection.execute(f"ALTER ROLE \"{pr.MIGRATOR_ROLE}\" IN DATABASE postgres SET work_mem = '9MB'")
+    pr.migrator_credentials(port=parts.port or 5432, credentials=credentials, baseline_db="postgres",
+                            sql_runner=pr.default_sql_runner, process_name="db")
     with psycopg.connect(_REAL, autocommit=True) as connection:
         assert connection.execute(
-            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole",
-            (pr.MIGRATOR_ROLE,),
+            "SELECT count(*) FROM pg_db_role_setting WHERE setrole = %s::regrole", (pr.MIGRATOR_ROLE,)
         ).fetchone() == (0,)
 
 
 @real_postgres
 @pytest.mark.parametrize("roles", (True, False))
-def test_identity_and_generated_columns_come_back_on_either_reset(
-    door_worlds, monkeypatch, roles
-):
+def test_identity_and_generated_columns_come_back_on_either_reset(door_worlds, monkeypatch, roles):
     """A GENERATED ALWAYS identity column takes its values back with OVERRIDING SYSTEM VALUE, and a stored
     generated column is left to the table, on the store role's reset and the harness's own (one fixed user)."""
     from fi.alk.harness import privilege
@@ -3310,37 +3059,26 @@ def test_identity_and_generated_columns_come_back_on_either_reset(
             "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO alk_world_tools; "
             "INSERT INTO public.tickets (price) VALUES (5), (7)"
         )
-    mode = (
-        privilege.IsolationMode.PER_USER
-        if roles
-        else privilege.IsolationMode.FIXED_USER
-    )
+    mode = privilege.IsolationMode.PER_USER if roles else privilege.IsolationMode.FIXED_USER
     monkeypatch.setattr(privilege, "isolation_mode", lambda: mode)
     store = _world_store(door_worlds, superuser, world, roles=roles)
     snapshot = store.freeze()
     with psycopg.connect(superuser, autocommit=True) as connection:
-        connection.execute(
-            "DELETE FROM public.tickets WHERE price = 5; INSERT INTO public.tickets (price) VALUES (9)"
-        )
+        connection.execute("DELETE FROM public.tickets WHERE price = 5; INSERT INTO public.tickets (price) VALUES (9)")
     store.restore(snapshot)
     with psycopg.connect(superuser, autocommit=True) as connection:
-        assert connection.execute(
-            "SELECT id, price, doubled FROM public.tickets ORDER BY id"
-        ).fetchall() == [(1, 5, 10), (2, 7, 14)]
-        assert connection.execute(
-            "INSERT INTO public.tickets (price) VALUES (1) RETURNING id"
-        ).fetchone() == (3,)
+        assert connection.execute("SELECT id, price, doubled FROM public.tickets ORDER BY id").fetchall() == [
+            (1, 5, 10), (2, 7, 14)
+        ]
+        assert connection.execute("INSERT INTO public.tickets (price) VALUES (1) RETURNING id").fetchone() == (3,)
 
 
 _CUSTOMER_SQL = {
     # Normal customer SQL that must build as psql would run it.
-    "upper-case STDIN": (
-        "CREATE TABLE public.t (a int);",
-        "COPY public.t (a) FROM STDIN;\n1\n\\.\n",
-    ),
+    "upper-case STDIN": ("CREATE TABLE public.t (a int);", "COPY public.t (a) FROM STDIN;\n1\n\\.\n"),
     "COPY with CSV and HEADER": (
         "CREATE TABLE public.t (a int, b text);",
-        'COPY public.t (a, b) FROM stdin WITH (FORMAT csv, HEADER true);\na,b\n1,"x, y"\n\\.\n',
+        "COPY public.t (a, b) FROM stdin WITH (FORMAT csv, HEADER true);\na,b\n1,\"x, y\"\n\\.\n",
     ),
     "CONCURRENTLY and VACUUM": (
         "CREATE TABLE public.t (a int);\nCREATE INDEX CONCURRENTLY t_a ON public.t (a);",
@@ -3352,22 +3090,17 @@ _CUSTOMER_SQL = {
         "INSERT INTO public.t DEFAULT VALUES;\n",
     ),
     "string line starting with a backslash": (
-        "CREATE TABLE public.t (body text);",
-        "INSERT INTO public.t VALUES ('first\n\\second');\n",
+        "CREATE TABLE public.t (body text);", "INSERT INTO public.t VALUES ('first\n\\second');\n"
     ),
     "COPY named in comments": (
-        "CREATE TABLE public.t (a int);",
-        "-- COPY public.t FROM stdin;\n/* COPY public.t FROM stdin; */\nSELECT 1;\n",
+        "CREATE TABLE public.t (a int);", "-- COPY public.t FROM stdin;\n/* COPY public.t FROM stdin; */\nSELECT 1;\n"
     ),
     "BEGIN ATOMIC body": (
         "CREATE FUNCTION public.two() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT CASE WHEN true THEN 2 END; END;\n"
         "CREATE TABLE public.t (a int);",
         "INSERT INTO public.t VALUES (public.two());\n",
     ),
-    "a byte-order mark": (
-        "CREATE TABLE public.t (a int);",
-        "\ufeffINSERT INTO public.t VALUES (1);\n",
-    ),
+    "a byte-order mark": ("CREATE TABLE public.t (a int);", "\ufeffINSERT INTO public.t VALUES (1);\n"),
     "backslash strings switched on by set_config": (
         "CREATE TABLE public.t (body text);",
         "SELECT set_config('standard_conforming_strings', '0', false);\nSELECT 'a\\';b';\n",
@@ -3377,8 +3110,7 @@ _CUSTOMER_SQL = {
         "SET standard_conforming_strings = false;\nSELECT 'a\\';b';\n",
     ),
     "a name with a byte past ASCII before a dollar": (
-        "CREATE TABLE public.t (a int);",
-        "SELECT 1 AS €$a$;\nCREATE INDEX CONCURRENTLY t_a ON public.t (a);\n",
+        "CREATE TABLE public.t (a int);", "SELECT 1 AS €$a$;\nCREATE INDEX CONCURRENTLY t_a ON public.t (a);\n"
     ),
     # Real migrations, as the frameworks write them.
     "Rails structure.sql": (
@@ -3390,32 +3122,32 @@ _CUSTOMER_SQL = {
         "ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;\n"
         "ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);\n"
         "ALTER TABLE ONLY public.schema_migrations ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);\n"
-        'SET search_path TO "$user", public;\n'
+        "SET search_path TO \"$user\", public;\n"
         "INSERT INTO \"schema_migrations\" (version) VALUES\n('20240101000000'),\n('20240102000000');\n",
         "INSERT INTO public.users (email) VALUES ('a@example.com');\n",
     ),
     "Prisma": (
         "CREATE TYPE \"Role\" AS ENUM ('USER', 'ADMIN');\n"
-        'CREATE TABLE "User" ("id" TEXT NOT NULL, "role" "Role" NOT NULL DEFAULT \'USER\', '
-        'CONSTRAINT "User_pkey" PRIMARY KEY ("id"));\n'
-        'CREATE TABLE "Post" ("id" SERIAL NOT NULL, "authorId" TEXT NOT NULL, CONSTRAINT "Post_pkey" PRIMARY KEY ("id"));\n'
-        'CREATE UNIQUE INDEX "User_id_key" ON "User"("id");\n'
-        'ALTER TABLE "Post" ADD CONSTRAINT "Post_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "User"("id") '
+        "CREATE TABLE \"User\" (\"id\" TEXT NOT NULL, \"role\" \"Role\" NOT NULL DEFAULT 'USER', "
+        "CONSTRAINT \"User_pkey\" PRIMARY KEY (\"id\"));\n"
+        "CREATE TABLE \"Post\" (\"id\" SERIAL NOT NULL, \"authorId\" TEXT NOT NULL, CONSTRAINT \"Post_pkey\" PRIMARY KEY (\"id\"));\n"
+        "CREATE UNIQUE INDEX \"User_id_key\" ON \"User\"(\"id\");\n"
+        "ALTER TABLE \"Post\" ADD CONSTRAINT \"Post_authorId_fkey\" FOREIGN KEY (\"authorId\") REFERENCES \"User\"(\"id\") "
         "ON DELETE RESTRICT ON UPDATE CASCADE;",
-        'INSERT INTO "User" ("id") VALUES (\'u1\');\nINSERT INTO "Post" ("authorId") VALUES (\'u1\');\n',
+        "INSERT INTO \"User\" (\"id\") VALUES ('u1');\nINSERT INTO \"Post\" (\"authorId\") VALUES ('u1');\n",
     ),
     "Django": (
-        'BEGIN;\nCREATE TABLE "shop_order" ("id" bigint NOT NULL PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY, '
-        '"note" varchar(100) NOT NULL);\nCREATE TABLE "shop_line" ("id" bigint NOT NULL PRIMARY KEY GENERATED BY '
-        'DEFAULT AS IDENTITY, "order_id" bigint NOT NULL);\nALTER TABLE "shop_line" ADD CONSTRAINT '
-        '"shop_line_order_id_fk" FOREIGN KEY ("order_id") REFERENCES "shop_order" ("id") DEFERRABLE INITIALLY '
-        'DEFERRED;\nCREATE INDEX "shop_line_order_id" ON "shop_line" ("order_id");\nCOMMIT;',
+        "BEGIN;\nCREATE TABLE \"shop_order\" (\"id\" bigint NOT NULL PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY, "
+        "\"note\" varchar(100) NOT NULL);\nCREATE TABLE \"shop_line\" (\"id\" bigint NOT NULL PRIMARY KEY GENERATED BY "
+        "DEFAULT AS IDENTITY, \"order_id\" bigint NOT NULL);\nALTER TABLE \"shop_line\" ADD CONSTRAINT "
+        "\"shop_line_order_id_fk\" FOREIGN KEY (\"order_id\") REFERENCES \"shop_order\" (\"id\") DEFERRABLE INITIALLY "
+        "DEFERRED;\nCREATE INDEX \"shop_line_order_id\" ON \"shop_line\" (\"order_id\");\nCOMMIT;",
         "BEGIN;\nINSERT INTO shop_line (order_id) VALUES (1);\nINSERT INTO shop_order (id, note) VALUES (1, 'x');\nCOMMIT;\n",
     ),
     "Hasura": (
         "CREATE EXTENSION IF NOT EXISTS pgcrypto;\n"
         "CREATE OR REPLACE FUNCTION public.set_current_timestamp_updated_at() RETURNS TRIGGER AS $$\n"
-        'DECLARE\n  _new record;\nBEGIN\n  _new := NEW;\n  _new."updated_at" = NOW();\n  RETURN _new;\nEND;\n'
+        "DECLARE\n  _new record;\nBEGIN\n  _new := NEW;\n  _new.\"updated_at\" = NOW();\n  RETURN _new;\nEND;\n"
         "$$ LANGUAGE plpgsql;\n"
         "CREATE TABLE public.notes (id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY, body text, "
         "updated_at timestamptz DEFAULT now() NOT NULL);\n"
@@ -3440,24 +3172,16 @@ def test_normal_customer_sql_builds_statement_by_statement(tmp_path: Path, case)
 
 
 @real_postgres
-def test_a_membership_an_older_harness_left_is_gone_before_the_build_checks_anything(
-    tmp_path: Path,
-):
+def test_a_membership_an_older_harness_left_is_gone_before_the_build_checks_anything(tmp_path: Path):
     """At the start of a build, a store role an older harness put in another group no longer refuses the build."""
     build, run, baseline = _seeded(tmp_path, "CREATE TABLE public.t (a int);\n", "")
-    run(
-        "postgres",
-        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_s9') THEN "
+    run("postgres", "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_s9') THEN "
         "CREATE ROLE alk_s9 NOLOGIN; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alk_world_store') "
-        "THEN CREATE ROLE alk_world_store NOLOGIN; END IF; END $$; GRANT alk_world_store TO alk_s9",
-    )
+        "THEN CREATE ROLE alk_world_store NOLOGIN; END IF; END $$; GRANT alk_world_store TO alk_s9")
     try:
         build()
-        assert run(
-            "postgres",
-            "SELECT count(*) FROM pg_auth_members a JOIN pg_roles m ON m.oid = a.member "
-            "WHERE m.rolname = 'alk_s9'",
-        ) == [(0,)]
+        assert run("postgres", "SELECT count(*) FROM pg_auth_members a JOIN pg_roles m ON m.oid = a.member "
+                   "WHERE m.rolname = 'alk_s9'") == [(0,)]
     finally:
         run("postgres", f'DROP DATABASE IF EXISTS "{baseline}" WITH (FORCE)')
 
@@ -3689,9 +3413,6 @@ def test_a_world_s_role_keeps_its_workers_runs_and_stops(worlds):
         assert connection.execute("SELECT worker, reason FROM _alk_worker_stops").fetchall() == [
             ("refunds", "deadline_passed")
         ]
-        assert connection.execute(
-            "SELECT worker, reason FROM _alk_worker_stops"
-        ).fetchall() == [("refunds", "deadline_passed")]
 
 
 def test_the_world_s_reader_is_made_like_every_other_world_role():
@@ -3724,20 +3445,14 @@ def test_a_reader_left_in_another_group_with_its_own_settings_is_put_back_to_its
     reset in the reader group only, with no setting, and can still log in."""
     parts = urlsplit(_REAL)
     host, port = parts.hostname or "localhost", parts.port or 5432
-    superuser = pr.EngineCredentials(
-        parts.username, parts.password or "", world_secret=uuid.uuid4().hex
-    )
+    superuser = pr.EngineCredentials(parts.username, parts.password or "", world_secret=uuid.uuid4().hex)
     reader = pr.reader_role(superuser, 97)
     world_db = f"alk_reader_{uuid.uuid4().hex[:8]}"
     extra = f"alk_extra_{uuid.uuid4().hex[:6]}"
 
     def run(statement: str, dbname: str = "postgres") -> list:
         return _customer_sql(
-            host=host,
-            port=port,
-            user=superuser.username,
-            password=superuser.password,
-            dbname=dbname,
+            host=host, port=port, user=superuser.username, password=superuser.password, dbname=dbname,
             statement=statement,
         )
 
@@ -3748,9 +3463,7 @@ def test_a_reader_left_in_another_group_with_its_own_settings_is_put_back_to_its
             run(statement)
         run(f'GRANT "{extra}" TO "{reader.username}"')
         run(f'ALTER ROLE "{reader.username}" SET search_path = evil')
-        run(
-            f'ALTER ROLE "{reader.username}" IN DATABASE "{world_db}" SET statement_timeout = 1'
-        )
+        run(f'ALTER ROLE "{reader.username}" IN DATABASE "{world_db}" SET statement_timeout = 1')
 
         for statement in pr._reader_login_statements(reader, world_db):
             run(statement)
@@ -3766,11 +3479,7 @@ def test_a_reader_left_in_another_group_with_its_own_settings_is_put_back_to_its
         assert [row[0] for row in groups] == [pr.READER_ROLE]
         assert settings == []
         assert _customer_sql(
-            host=host,
-            port=port,
-            user=reader.username,
-            password=reader.password,
-            dbname=world_db,
+            host=host, port=port, user=reader.username, password=reader.password, dbname=world_db,
             statement="SELECT 1",
         ) == [(1,)]
     finally:
@@ -3779,10 +3488,9 @@ def test_a_reader_left_in_another_group_with_its_own_settings_is_put_back_to_its
         run(f'DROP ROLE IF EXISTS "{extra}"')
 
 
+
 @pytest.mark.parametrize("reader", [None, "postgresql://alk_r3:pw@db/w3"])
-def test_the_world_s_reader_is_settled_after_a_reset_like_the_agent_s_role(
-    monkeypatch, reader
-):
+def test_the_world_s_reader_is_settled_after_a_reset_like_the_agent_s_role(monkeypatch, reader):
     """The world's reader runs the attached servers' code, which may change its own settings and password like any
     role: the store puts it back after every reset with the agent's and the store role. Without one, nothing extra."""
     from types import SimpleNamespace
@@ -3790,9 +3498,7 @@ def test_the_world_s_reader_is_settled_after_a_reset_like_the_agent_s_role(
     from fi.alk.harness import privilege
     from fi.alk.harness.world.stores.postgres import attached_world_store
 
-    monkeypatch.setattr(
-        privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER
-    )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
     endpoint = SimpleNamespace(
         address="postgresql://harness:pw@db/w3",
         tool_address="postgresql://alk_w3:pw@db/w3",
@@ -3803,9 +3509,7 @@ def test_the_world_s_reader_is_settled_after_a_reset_like_the_agent_s_role(
 
     store = attached_world_store(endpoint)
 
-    assert store._world_role_names() == sorted(
-        ["alk_w3", "alk_s3", *(["alk_r3"] if reader else [])]
-    )
+    assert store._world_role_names() == sorted(["alk_w3", "alk_s3", *(["alk_r3"] if reader else [])])
 
 
 @pytest.mark.parametrize("value", ["alk_r3", "it's", "a\\b", "x'\\y", "", "ß 名前"])
