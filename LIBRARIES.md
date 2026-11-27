@@ -41,7 +41,7 @@ For credentials, outputs and tested examples, see [operational evidence by entry
 | `agent-learn`, `alk` | Public | Installed aliases for `fi.alk.cli:main`. Each command states its inputs, credentials, network behavior and output in the CLI reference. | [CLI reference](docs/reference/cli.md), [`cli.py`](src/fi/alk/cli.py), [`pyproject.toml`](pyproject.toml) |
 | `alk-harness-worker` | Private | Hosted job worker. Job-scoped source and secret references come from the hosting system. `tests/harness/test_hosted_entrypoint.py` verifies the entry point. | [`hosted_entrypoint.py`](src/fi/alk/harness/hosted_entrypoint.py), [`tests/harness/test_hosted_entrypoint.py`](tests/harness/test_hosted_entrypoint.py) |
 | `alk-harness-sandbox` | Private | Hosted sandbox HTTP service. Sandbox and job credentials come from the hosting system. | [`sandbox_server.py`](src/fi/alk/harness/sandbox_server.py), [`tests/test_harness_sandbox_server.py`](tests/test_harness_sandbox_server.py), [`Dockerfile.sandbox`](Dockerfile.sandbox) |
-| `@future-agi/agent-learning-kit` workspace | Experimental (source workspace) | TypeScript evaluation workspace with declared root, `/evals`, `/evals/local`, and `/local` exports. The manifest is evidence of source and build configuration, not npm publication or Python runtime parity. | [TypeScript boundaries](#typescript-boundaries), [`package.json`](typescript/agent-learning-kit/package.json), [package README](typescript/agent-learning-kit/README.md) |
+| `@future-agi/agent-learning-kit` workspace | Experimental (source workspace) | TypeScript evaluation workspace with declared root, `/evals`, `/evals/local`, and `/local` exports. The manifest is evidence of source and build configuration, not npm publication or Python runtime parity. | [Evaluate responses in TypeScript](https://docs.futureagi.com/docs/sdk/agent-learning-kit/evaluate-responses-in-typescript), [TypeScript boundaries](#typescript-boundaries), [`package.json`](typescript/agent-learning-kit/package.json), [package README](typescript/agent-learning-kit/README.md) |
 
 ## Operational evidence by entry point
 
@@ -135,6 +135,9 @@ requirements. Do not use `doctor` to infer that a model, service, driver or
 external framework is ready for a live lane.
 
 ## TypeScript boundaries
+
+To install the published npm package and score two replies locally, follow
+[Evaluate responses in TypeScript](https://docs.futureagi.com/docs/sdk/agent-learning-kit/evaluate-responses-in-typescript).
 
 [`typescript/agent-learning-kit/package.json`](typescript/agent-learning-kit/package.json)
 declares `@future-agi/agent-learning-kit`, source version `0.2.0`, with exports:

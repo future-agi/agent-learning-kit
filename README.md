@@ -74,8 +74,9 @@ python -m pip install -e .
 
 The [reference harness](src/fi/alk/harness/README.md) uses a model to read
 agent source and generate an environment. See the [extension guide](docs/simulate/environment-authoring.md#supported-extension-seams)
-to connect a stage backend or register a simulation plugin. For TypeScript
-evaluation, see the [TypeScript workspace](typescript/agent-learning-kit).
+to connect a stage backend or register a simulation plugin. To score responses in Node.js, follow
+[Evaluate responses in TypeScript](https://docs.futureagi.com/docs/sdk/agent-learning-kit/evaluate-responses-in-typescript).
+To contribute to the package, see the [TypeScript workspace](typescript/agent-learning-kit).
 
 If imports fail, run `agent-learn doctor` in the environment where you installed
 ALK. For TLS errors with openai 3 in a minimal image or behind a TLS-inspecting
