@@ -701,6 +701,24 @@ def test_a_trace_file_replaced_during_the_trial_is_read_from_its_start(
     assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0]
 
 
+def test_an_earlier_trial_s_line_still_being_written_at_the_start_is_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 1, at=100.0)
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write('{"name": "look_up_order", "argu')
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    # The earlier trial's last line ends after this trial began; this trial's agent calls no tool.
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write('ments": {}, "at": 101.0}\n')
+    assert cr.collect_file_tool_calls(runtime, strict=True) == ()
+    _agent_calls(trace, 1, at=200.0)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0]
+
+
 def test_a_trial_whose_trace_cannot_be_cleared_or_measured_reads_as_a_failed_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

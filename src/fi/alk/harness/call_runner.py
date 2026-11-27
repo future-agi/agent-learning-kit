@@ -3132,16 +3132,65 @@ def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
     return Path(raw) if isinstance(raw, str) and raw.strip() else None
 
 
+# Where each trial's part of the agent's trace file begins, by the file's path, set when the trial starts. The agent's
+# process appends to the file for its world's life; where the runner cannot remove the file, a trial reads only what
+# was written after its start: the file's device, inode and length then. None when that could not be measured either.
+_TRACE_STARTS: dict[str, tuple[int, int, int] | None] = {}
+
+
+class TraceStartUnknown(OSError):
+    """Where this trial's part of the trace file begins is unknown: what it holds may be an earlier trial's."""
+
+
 def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
+    """Starts this trial's part of the agent's trace file: removes the file, or, where it cannot be removed, marks
+    where this trial's lines begin. Where neither can be done, this trial's trace reads as not captured, never as the
+    calls an earlier trial made."""
     path = _tool_trace_file(runtime)
     if path is None:
         return
+    key = str(path)
     try:
         path.unlink(missing_ok=True)
     except OSError:
-        logger.debug(
-            "file tool_trace clear failed; continuing without blocking the call"
+        pass
+    else:
+        _TRACE_STARTS.pop(key, None)
+        return
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        _TRACE_STARTS.pop(key, None)
+        return
+    except OSError as exc:
+        _TRACE_STARTS[key] = None
+        logger.warning(
+            "the tool trace file could be neither removed nor measured (%s); this trial's trace is not read",
+            type(exc).__name__,
         )
+        return
+    _TRACE_STARTS[key] = (info.st_dev, info.st_ino, info.st_size)
+
+
+def _trial_trace_text(path: Path) -> str:
+    """This trial's part of the trace file at ``path``: what was written after the trial began, or the whole file where
+    the trial removed it or it has been replaced since. Raises `OSError` when it cannot be read, `TraceStartUnknown`
+    when the trial's start could not be marked."""
+    key = str(path)
+    if key in _TRACE_STARTS and _TRACE_STARTS[key] is None:
+        raise TraceStartUnknown("where this trial's part of the tool trace begins is unknown")
+    start = _TRACE_STARTS.get(key)
+    if start is None:
+        return path.read_text(encoding="utf-8")
+    device, inode, offset = start
+    with path.open("rb") as handle:
+        info = os.fstat(handle.fileno())
+        if (info.st_dev, info.st_ino) == (device, inode) and info.st_size >= offset and offset:
+            handle.seek(offset - 1)
+            if handle.read(1) != b"\n":
+                # The trial began while an earlier trial's line was being written: its end is that trial's too.
+                handle.readline()
+        return handle.read().decode("utf-8")
 
 
 # Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
@@ -3224,10 +3273,10 @@ def tool_routes(contract: Mapping[str, Any]) -> dict[str, str]:
 def _read_file_tool_calls(
     runtime: EnvironmentRuntime, *, strict: bool = False, routes: Mapping[str, str] | None = None
 ) -> tuple[list[Call], list[Call]]:
-    """The attempt's tool-trace file: its written lines and its span lines. No file is no
-    evidence either way: the file is removed before the call, and an agent that called no tool
-    never writes it. ``strict`` raises `ToolCaptureFailed` when a file is there and cannot be
-    read, or when it holds records and none of them can be read as a call."""
+    """The attempt's part of the tool-trace file (`_trial_trace_text`): its written lines and its span lines. No
+    file is no evidence either way: the file is removed or marked before the call, and an agent that called no tool
+    never writes it. ``strict`` raises `ToolCaptureFailed` when a file is there and cannot be read, when where this
+    attempt's part begins is unknown, or when it holds records and none of them can be read as a call."""
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
         return [], []
@@ -3240,7 +3289,7 @@ def _read_file_tool_calls(
     # Hand-offs written when the worker started: kept only for a tool call that never wrote its own line.
     opened: list[Call] = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = _trial_trace_text(path).splitlines()
     except OSError as exc:
         if strict:
             raise ToolCaptureFailed(
@@ -3503,7 +3552,7 @@ def hand_off_notices(runtime: Any) -> list[dict[str, Any]]:
     if path is None or not path.is_file():
         return []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = _trial_trace_text(path).splitlines()
     except OSError:
         return [
             {
