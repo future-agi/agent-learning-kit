@@ -719,6 +719,88 @@ def test_an_earlier_trial_s_line_still_being_written_at_the_start_is_not_read(
     assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0]
 
 
+def test_a_trial_s_first_call_after_an_earlier_writer_died_mid_line_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 1, at=100.0)
+    # The earlier writer stopped partway through a line: no newline ever follows.
+    with trace.open("a", encoding="utf-8") as lines:
+        lines.write('{"name": "look_up_order", "argu')
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    _agent_calls(trace, 1, at=200.0)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [200.0]
+
+
+def test_a_trace_file_truncated_in_place_and_grown_past_the_mark_is_read_from_its_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 3, at=100.0)
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    inode = trace.stat().st_ino
+    trace.write_text("", encoding="utf-8")
+    _agent_calls(trace, 4, at=300.0)
+    assert trace.stat().st_ino == inode
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [300.0, 301.0, 302.0, 303.0]
+
+
+def test_a_trace_file_truncated_in_place_to_shorter_than_the_mark_is_read_from_its_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 3, at=100.0)
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    trace.write_text("", encoding="utf-8")
+    _agent_calls(trace, 1, at=300.0)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [300.0]
+
+
+def test_a_trace_file_replaced_by_a_longer_one_is_read_from_its_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 2, at=100.0)
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    os.remove(trace)
+    _agent_calls(trace, 4, at=400.0)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [400.0, 401.0, 402.0, 403.0]
+
+
+def test_a_trace_file_recreated_under_the_same_inode_is_read_from_its_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As ext4 often does: the new file takes the old one's inode number.
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    runtime = _runtime(metadata={"tool_trace_path": str(trace)})
+    _agent_calls(trace, 3, at=100.0)
+    _kept(monkeypatch, trace)
+    cr._clear_file_tool_calls(runtime)
+    old = trace.stat()
+    os.remove(trace)
+    _agent_calls(trace, 4, at=400.0)
+    fstat = os.fstat
+
+    def same_inode(fd: int) -> os.stat_result:
+        info = fstat(fd)
+        if info.st_ino != old.st_ino and info.st_size == trace.stat().st_size:
+            fields = list(info)
+            fields[1], fields[2] = old.st_ino, old.st_dev
+            return os.stat_result(fields)
+        return info
+
+    monkeypatch.setattr(cr.os, "fstat", same_inode)
+    assert [call.at for call in cr.collect_file_tool_calls(runtime, strict=True)] == [400.0, 401.0, 402.0, 403.0]
+
+
 def test_a_trial_whose_trace_cannot_be_cleared_or_measured_reads_as_a_failed_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
