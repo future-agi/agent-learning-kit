@@ -364,11 +364,11 @@ def test_a_seeded_value_in_a_generated_column_goes_to_authoring_repair() -> None
     assert decision.action is RepairAction.PATCH_ENVIRONMENT
 
 
-def test_an_unreadable_generated_world_ir_goes_to_the_compiler_not_authoring(
+def test_an_unreadable_generated_world_ir_ends_the_candidate(
     tmp_path, monkeypatch
 ) -> None:
-    """A corrupt generated world-ir.json is not authored data: authoring repair would have to
-    parse it to patch it, so the controller must regenerate it, not ask authoring."""
+    """A corrupt generated world-ir.json is not authored data, and nothing regenerates it yet:
+    the candidate ends there, never retried unchanged or sent to authoring."""
     import sys
     import types
     from contextlib import nullcontext
@@ -400,4 +400,5 @@ def test_an_unreadable_generated_world_ir_goes_to_the_compiler_not_authoring(
             diagnostics=diagnostics,
         )
     )
-    assert decision.action is RepairAction.RECOMPILE
+    assert decision.action is RepairAction.REJECT
+    assert diagnostics[0].repair_strategy is None

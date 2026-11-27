@@ -25,9 +25,24 @@ _SQLSTATE_CODES = {
 }
 
 
-# A data exception's message quotes the authored value; keep the type, never the value.
-_QUOTED_VALUE = re.compile(r'"(?:[^"\\]|\\.)*"')
-_INPUT_TYPE = re.compile(r"for type ([A-Za-z_][A-Za-z0-9_ ]*?)(?::|$)")
+# A data exception's message quotes the authored value, which may hold quotes of its own:
+# the type is read only from PostgreSQL's text around the value, and the diagnostic's
+# message is a fixed sentence, never a copy of PostgreSQL's.
+_INPUT_TYPE = re.compile(r"for type ([A-Za-z_][A-Za-z0-9_ ]*?)\s*(?::|$)")
+_VALUE_REFUSED = "an authored value does not fit its column"
+_ARRAY_REFUSED = "an authored value is not a valid array literal"
+
+
+def _type_named(message: str) -> str | None:
+    """The type PostgreSQL names before the quoted value or after it."""
+    for part in (
+        message.split('"', 1)[0],
+        message.rsplit('"', 1)[1] if '"' in message else "",
+    ):
+        named = _INPUT_TYPE.search(part)
+        if named:
+            return named.group(1).strip()
+    return None
 
 
 def _text(value: Any) -> str | None:
@@ -55,18 +70,18 @@ def diagnose_postgres_error(
     datatype = _text(getattr(diag, "datatype_name", None)) if diag else None
     primary = _text(getattr(diag, "message_primary", None)) if diag else None
     message = primary or _text(error) or "PostgreSQL operation failed"
+    code = _SQLSTATE_CODES.get(sqlstate or "", "unsupported_source_construct")
     if (sqlstate or "").startswith("22"):
         # PostgreSQL sends no datatype for 22P02; its message names the type.
-        if datatype is None:
-            named = _INPUT_TYPE.search(message)
-            datatype = named.group(1).strip() if named else None
-        message = _QUOTED_VALUE.sub('"<value>"', message)
-    code = _SQLSTATE_CODES.get(sqlstate or "", "unsupported_source_construct")
-    if sqlstate == "22P02" and (
-        (datatype and (datatype.startswith("_") or datatype.endswith("[]")))
-        or message.startswith("malformed array literal")
-    ):
-        code = "array_shape_mismatch"
+        datatype = datatype or _type_named(message)
+        array = message.startswith("malformed array literal") or bool(
+            datatype and (datatype.startswith("_") or datatype.endswith("[]"))
+        )
+        if sqlstate == "22P02" and array:
+            code = "array_shape_mismatch"
+        message = _ARRAY_REFUSED if array else _VALUE_REFUSED
+        if datatype:
+            message += f" (type {datatype})"
     return HarnessDiagnostic.create(
         stage=stage,
         component=component,
