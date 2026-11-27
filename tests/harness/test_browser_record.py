@@ -185,6 +185,27 @@ def test_one_attempt_that_chrome_tries_over_https_first_is_one_attempt() -> None
     assert len(record.body()["blocked_navigations"]) == 1
 
 
+def test_a_page_that_moves_itself_off_the_list_made_that_request_not_the_agent() -> None:
+    record, _ = _record()
+    record.requested("tab-1", "http://www.example.com/after-redirect", document=True, main_frame=True, by_page=True)
+    record.requested("tab-1", "http://www.example.com/landing", document=True, main_frame=True, by_page=True)
+    body = record.body()
+    assert body["blocked_navigations"] == []
+    assert body["blocked_page_requests"] == [{"host": "www.example.com", "count": 2}]
+
+
+def test_the_icon_the_browser_asks_a_refused_host_for_is_no_request_at_all() -> None:
+    record, _ = _record()
+    record.requested("tab-1", "http://www.example.com/deals", document=True, main_frame=True)
+    record.requested("tab-1", "http://www.example.com/favicon.ico", document=False, main_frame=True)
+    # Another tab never showed that refusal, and another file from the host is a page's request.
+    record.requested("tab-2", "http://www.example.com/favicon.ico", document=False, main_frame=True)
+    record.requested("tab-1", "http://www.example.com/app.js", document=False, main_frame=True)
+    body = record.body()
+    assert [one["url"] for one in body["blocked_navigations"]] == ["http://www.example.com/deals"]
+    assert body["blocked_page_requests"] == [{"host": "www.example.com", "count": 2}]
+
+
 def test_requests_a_page_made_off_the_list_are_counted_by_host() -> None:
     record, _ = _record()
     for url in ["http://tracker.example.net/a.gif", "http://tracker.example.net/b.js", "https://cdn.example.org/x.css"]:
