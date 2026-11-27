@@ -926,7 +926,9 @@ def _written_in_the_call_read_in(
     cited line (which starts at ``shift``): a ChatOpenAI( call wrapped over lines, given
     model="gpt-4o" on one and timeout=os.getenv("LLM_TIMEOUT") on the next, does. A model inside
     another call beside the read (an Agent( given stt=STT(model="nova-3") on one line and
-    llm=LLM(os.getenv("LLM_MODEL")) on the next) is another component's and doesn't count. One
+    llm=LLM(os.getenv("LLM_MODEL")) on the next) is another component's and doesn't count. Any
+    call or literal around the read that opened before the cited line counts, not only the
+    nearest: ChatOpenAI( given model="gpt-4o", then http_client=Client( holding the read. One
     pass over the statement. In a { only a key of that literal counts (after the { or a comma,
     as model: or "model":, or model= on the same line), not a statement in a body that opens
     after = or : (Scala's def run(): Unit = {, a case "voice": {, an assigned lambda) holding
@@ -971,12 +973,14 @@ def _written_in_the_call_read_in(
         ((at, 2, char, holds) for at, char, holds in _brackets(text, skipped)),
         ((at, kind, "", False) for at, kind in points),
     )
-    # The open brackets, the nearest of them at or below each that holds arguments, and how many
-    # of them opened before the cited line (always the first ones).
+    # The open brackets, whether each holds arguments or a value, how many of them opened before
+    # the cited line (always the first ones), and how many of the first ones are around a read:
+    # those count, each as it closes, so no read walks the brackets still open.
     stack: list[int] = []
     braces: list[bool] = []
-    holding: list[int | None] = []
+    holding: list[bool] = []
     earlier = 0
+    around = 0
     value_in: list[int] = []
     calls: set[int] = set()
     for at, kind, char, holds in marks:
@@ -984,19 +988,23 @@ def _written_in_the_call_read_in(
             if char in "([{":
                 stack.append(at)
                 braces.append(char == "{")
-                holding.append(at if holds else (holding[-1] if holding else None))
+                holding.append(holds)
                 if at < shift:
                     earlier = len(stack)
             elif stack:
+                if len(stack) <= around and holding[-1]:
+                    calls.add(stack[-1])
                 stack.pop()
                 braces.pop()
                 holding.pop()
                 earlier = min(earlier, len(stack))
+                around = min(around, len(stack))
         elif kind == 0:
             if stack and (not braces[-1] or at in keyed):
                 value_in.append(stack[-1])
-        elif earlier and holding[earlier - 1] is not None:
-            calls.add(holding[earlier - 1])
+        else:
+            around = max(around, earlier)
+    calls.update(stack[index] for index in range(around) if holding[index])
     return any(bracket in calls for bracket in value_in)
 
 

@@ -6258,6 +6258,28 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
             id="ts-block-straight-inside-a-block-with-a-model-constant",
         ),
         pytest.param(
+            "agent.py",
+            "agent = Agent(\n"
+            '    model="gpt-4o-mini",\n'
+            "    llm=LLM(\n"
+            '        model=os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            4,
+            id="the-models-own-key-in-a-call-inside-a-call-with-a-model",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const session = new AgentSession({\n"
+            '  model: "gpt-4o-mini",\n'
+            "  llm: new LLM({\n"
+            '    model: process.env.LLM_MODEL ?? "gpt-4o",\n'
+            "  }),\n"
+            "});\n",
+            4,
+            id="the-models-own-key-in-a-literal-inside-a-literal-with-a-model",
+        ),
+        pytest.param(
             "Agent.java",
             "public class Agent {\n"
             '    private final Stt stt = new Stt(model = "nova-3");\n'
@@ -6454,6 +6476,57 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             "  timeout: process.env.LLM_TIMEOUT,\n"
             "}} />\n",
             id="literal-straight-inside-a-brace",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    model_kwargs={\n"
+            '        "timeout": float(os.getenv("LLM_TIMEOUT", "0")),\n'
+            "    },\n"
+            ")\n",
+            id="read-in-a-literal-inside-the-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    http_client=Client(\n"
+            '        timeout=os.getenv("LLM_TIMEOUT"),\n'
+            "    ),\n"
+            ")\n",
+            id="read-in-a-call-inside-the-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    http_client=Client(\n"
+            '        timeout=os.getenv("LLM_TIMEOUT"),\n'
+            "    ),\n"
+            + "".join(f"    arg{i}={i},\n" for i in range(25))
+            + ")\n",
+            id="read-in-a-call-inside-a-call-still-open-long-after",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const llm = new ChatOpenAI({\n"
+            '  model: "gpt-4o",\n'
+            "  configuration: {\n"
+            "    timeout: process.env.LLM_TIMEOUT,\n"
+            "  },\n"
+            "});\n",
+            id="read-in-a-literal-inside-the-literal",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    timeouts=[\n"
+            '        os.getenv("LLM_TIMEOUT"),\n'
+            "    ],\n"
+            ")\n",
+            id="read-in-a-list-inside-the-call",
         ),
     ],
 )
