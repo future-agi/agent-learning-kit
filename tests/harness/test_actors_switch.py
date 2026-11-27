@@ -173,7 +173,9 @@ def test_with_actors_off_no_actor_tool_is_offered_and_no_actors_file_is_written(
     assert not (tmp_path / ACTORS_FILE).exists()
 
 
-def test_with_actors_on_the_platform_s_range_is_the_default_share(tmp_path, monkeypatch, share_refused):
+def test_with_actors_on_the_platform_s_range_is_the_default_share(
+    tmp_path, monkeypatch, share_refused
+):
     monkeypatch.delenv("ALK_HARNESS_JOB_ID", raising=False)
     tools = _tools(tmp_path, {"actors": ON}, kept=_written(9))
     assert {"actors", "faults", "pre_run", "starts_with"} <= set(tools["submit_scenario"].input_schema["properties"])
@@ -181,7 +183,9 @@ def test_with_actors_on_the_platform_s_range_is_the_default_share(tmp_path, monk
     assert not share_refused(lambda: _submit(tools))
 
 
-def test_a_local_job_with_no_switch_behaves_as_before(tmp_path, monkeypatch, share_refused):
+def test_a_local_job_with_no_switch_behaves_as_before(
+    tmp_path, monkeypatch, share_refused
+):
     monkeypatch.delenv("ALK_HARNESS_JOB_ID", raising=False)
     tools = _tools(tmp_path, {}, hosted=False, kept=_written(9))
     share = default_share(str(tmp_path))
