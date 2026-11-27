@@ -154,7 +154,24 @@ def test_a_browser_that_cannot_be_made_fails_the_spawn_as_the_platform_s(tmp_pat
 def test_a_contract_that_cannot_be_read_is_logged_not_taken_silently_for_no_browser(tmp_path, caplog) -> None:
     (tmp_path / "contract.json").write_text("{not json")
     assert br.contract_needs_browser(tmp_path) is False
-    assert "contract" in caplog.text and caplog.records[-1].exc_info is not None
+    assert "contract" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"agent": "MARKER-AGENT", "one_liner": "MARKER-LINE", "modality": "chat", "environment_needs": "MARKER-NEED"}',
+        '{"agent": "MARKER-AGENT", "prompt_excerpt": "MARKER-PROMPT',
+    ],
+    ids=["wrong-type", "broken-json"],
+)
+def test_a_contract_that_cannot_be_read_never_puts_its_content_in_the_log(tmp_path, caplog, text) -> None:
+    # The contract is the customer's text: the log says where it is and which fields failed, never what they hold.
+    (tmp_path / "contract.json").write_text(text)
+    assert br.contract_needs_browser(tmp_path) is False
+    assert "contract" in caplog.text
+    assert "MARKER" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 def test_sites_for_an_agent_that_needs_no_browser_start_none(tmp_path) -> None:
@@ -301,6 +318,29 @@ def test_a_hosted_world_with_no_agent_user_starts_no_browser(tmp_path, monkeypat
     assert launched == []
 
 
+def test_a_world_process_named_browser_keeps_its_folder_when_the_kit_s_browser_starts(
+    tmp_path, monkeypatch
+) -> None:
+    import re
+
+    monkeypatch.setattr(kit_browser, "chromium_binary", lambda: "/opt/alk-chromium")
+    context, _, _ = _factory_context(tmp_path, resolver=_fake_user_resolver({"svc-agent": (1234, 5678)}))
+    # A bundle may name a world process `browser`; its folder holds its own files and must outlive the kit's browser.
+    theirs = pr.world_scratch_dir(context.work_directory, 0, "browser")
+    theirs.mkdir(parents=True)
+    (theirs / "uploads.db").write_text("the process's own data")
+    browser = br.kit_browser_factory(context)(0, None)
+    try:
+        browser.start()
+        browser.stop()
+        browser.start()
+    finally:
+        browser.close()
+    assert (theirs / "uploads.db").read_text() == "the process's own data"
+    # The kit's folder has a name no world process can have.
+    assert not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", Path(browser.directory).name)
+
+
 def test_an_image_with_no_browser_fails_the_spawn(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(kit_browser, "chromium_binary", lambda: None)
     context, _, _ = _factory_context(tmp_path, resolver=lambda name: None)
@@ -354,6 +394,18 @@ def test_a_provisioned_browser_world_gives_its_agent_the_browser_and_says_so(
     assert environments["python3"][BROWSER_CDP_URL_ENV] == "http://127.0.0.1:9022"
     provider._teardown_world(0)
     assert browser.closed
+
+
+def test_a_job_with_no_browser_sites_never_reads_the_contract(tmp_path, monkeypatch) -> None:
+    read: list[object] = []
+    monkeypatch.setattr(pr, "contract_needs_browser", lambda bundle_dir: read.append(bundle_dir) or True)
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (tmp_path / "job.json").write_text(json.dumps({"metadata": {}}))
+    provider = _sql_spy_provider(runner=lambda argv, **_: FakeHandle())
+    [runtime] = _provision_one(provider, manifest, source, bundle_dir, tmp_path)
+    assert read == []
+    assert "browser" not in runtime.metadata
 
 
 def test_closing_the_provider_closes_every_world_s_browser(tmp_path, monkeypatch) -> None:
