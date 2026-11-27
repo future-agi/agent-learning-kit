@@ -95,8 +95,27 @@ LISTENER = r"""
       return shown !== 'none';
     } catch (e) { return false; }
   };
-  // One box of a code split over one-character fields: a one-character field near a field named as a code's.
+  // One box of a code split over boxes. A run of 4 to 8 text boxes under one element (up to 5 levels up) is a code
+  // when each box takes one character, or when one box is named as a code's and each takes one character or digits.
+  const textBox = (one) => /^input$/i.test(one.tagName)
+    && ['', 'text', 'tel', 'number', 'password'].includes(String(one.getAttribute('type') || '').toLowerCase());
+  const oneCharacter = (one) => one.maxLength === 1;
+  const codeRun = (el) => {
+    if (!textBox(el)) return false;
+    let scope = el.parentElement;
+    for (let up = 0; scope && up < 5; up += 1, scope = scope.parentElement) {
+      const boxes = Array.from(scope.querySelectorAll ? scope.querySelectorAll('input') : []).filter(textBox);
+      if (boxes.length > 8) return false;
+      if (boxes.length < 4) continue;
+      if (boxes.every(oneCharacter)) return true;
+      const named = boxes.some((one) => secretAuto(one.getAttribute('autocomplete')));
+      return named && boxes.every((one) => oneCharacter(one) || one.inputMode === 'numeric');
+    }
+    return false;
+  };
+  // Or a one-character field near a field named as a code's.
   const codeBox = (el) => {
+    if (codeRun(el)) return true;
     if (!/^input$/i.test(el.tagName) || el.maxLength !== 1) return false;
     let scope = el.form || el.parentElement;
     for (let up = 0; scope && up < 3; up += 1, scope = scope.parentElement) {

@@ -176,10 +176,14 @@ command (`execCommand('insertText')`), whose `input` event is trusted too, write
 into a secret field is never kept as text, only that typing happened: a password field, or a field
 whose autofill names a password, a card's number, security code or expiry, or a one-time code
 (`current-password`, `new-password`, `cc-number`, `cc-csc`, `cc-exp*`, `one-time-code`), a field
-the page shows as dots by its own style, and each one-character box of a code split over boxes when
-a field near it (in its form, else up to three levels up) has one of those autofill names, including
-a field whose kind or autofill is changed after the page loads. A card field with no autofill name,
-or a split code none of whose boxes is named, is not known to be one. The job's declared secrets are masked wherever the record holds them, as
+the page shows as dots by its own style, and each box of a code split over boxes: a run of 4 to 8
+text boxes under one element (up to five levels up) that each take one character, or of which one is
+named as a code's and each takes one character or digits, or a one-character box near a field (in
+its form, else up to three levels up) with one of those autofill names. That includes a field whose
+kind or autofill is changed after the page loads. A card field with no autofill name, a split code
+whose unnamed boxes are not one character each, and a field shown as dots by a font rather than by
+its style are not known to be secret; a grid of 4 to 8 one-character boxes that is no code is taken
+for one. The job's declared secrets are masked wherever the record holds them, as
 it is made. A value is masked whole, and only one of 8 characters or more: a shorter one, a secret left
 half-typed, or one cut by the 200-character limit on typed text, is not matched. Text the page shows
 back (a click's element text, up to 80 characters) is kept as the page shows it, at any level, and
