@@ -254,12 +254,26 @@ def compile_postgres(
     )
 
 
+class PostgresApplyError(Exception):
+    """A compiled statement PostgreSQL refused, with the table it was writing and the driver's own error."""
+
+    def __init__(self, table: str | None, error: BaseException) -> None:
+        super().__init__(str(error))
+        self.table = table
+        self.error = error
+
+
 def apply_postgres(connection: Any, compiled: PostgresCompileResult) -> None:
     """Apply a compiled program atomically using driver-bound parameters."""
 
     with connection.transaction():
         for operation in compiled.operations:
-            connection.execute(operation.statement, operation.params or None)
+            try:
+                connection.execute(operation.statement, operation.params or None)
+            except Exception as error:
+                # PostgreSQL names no table for a value it cannot parse (22P02): carry the
+                # table being written so the diagnosis can point the repair at it.
+                raise PostgresApplyError(operation.table, error) from error
         for reset in compiled.sequence_resets:
             qualified = f"{_identifier(reset.schema_name)}.{_identifier(reset.table)}"
             column = _identifier(reset.column)
@@ -274,6 +288,7 @@ __all__ = [
     "POSTGRES_COMPILER_VERSION",
     "CompileDecision",
     "PostgresCompileError",
+    "PostgresApplyError",
     "PostgresCompileResult",
     "PostgresInsert",
     "PostgresSequenceReset",

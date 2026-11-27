@@ -24,15 +24,20 @@ from typing import Any
 
 from ..backends import tool, tool_server
 
-from ..catalogue import CHECK_RULES, CONTRACT_FIELDS, CONTRACT_SCHEMA, CRITERIA_RULES, settled_by
+from ..catalogue import (
+    CHECK_RULES,
+    CONTRACT_SCHEMA,
+    CRITERIA_RULES,
+    authored_sub_goal,
+    worker_subjects_note,
+)
+from ..actors import load_actors
 from ..contract import AgentContract
 from ..environment import (
-    SubGoal,
     load_catalogue,
     save_catalogue,
     save_simulator_prompt,
     validate_simulator_prompt,
-    validate_sub_goal,
 )
 from ..tools import schema
 from .stores import Store, StoreError, resolve, supported
@@ -321,24 +326,43 @@ def provision_tools(
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
         "overlay is refused until it names a sub-goal that fails when that overlay is "
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
-        "task sub-goal.",
+        "task sub-goal."
+        + (
+            " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
+            "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
+            "came into. Leave it empty for a sub-goal about the person's task."
+        )
+        + worker_subjects_note(contract),
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            {
+                "name": str,
+                "what": str,
+                "check": str,
+                "judged": str,
+                "output": str,
+                "overlay": str,
+                "subject": str,
+                "actor": str,
+                **CONTRACT_SCHEMA,
+            },
             ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
-        one = SubGoal(
-            name=str(args["name"]),
-            what=str(args.get("what") or ""),
-            check=str(args.get("check") or ""),
-            judged=str(args.get("judged") or ""),
-            output=str(args.get("output") or "pass_fail"),
-            overlay=str(args.get("overlay") or ""),
-            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
+        # As at the world stage: a repair keeps whose result the sub-goal checks and its actor unless it says otherwise.
+        previous = next(
+            (g for g in catalogue.sub_goals if g.name == str(args.get("name") or "")),
+            None,
         )
-        one.verifier = settled_by(one)
-        problems = validate_sub_goal(one)
+        try:
+            one, problems = authored_sub_goal(
+                args,
+                previous=previous,
+                worker_ids={worker.id for worker in contract.workers},
+                actor_ids=set(load_actors(destination).by_id()),
+            )
+        except ValueError as invalid:
+            return _err(f"Not added: {invalid}")
         if problems:
             return _err(f"{one.name} not added:\n  - " + "\n  - ".join(problems))
         catalogue.sub_goals = [

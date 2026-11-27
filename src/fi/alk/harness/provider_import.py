@@ -206,45 +206,70 @@ def _rewritten_as_url(value: str) -> bool:
 _LARGEST_WHOLE_PROMPT = 1024 * 1024
 
 
-def whole_prompt(profile: Mapping[str, Any]) -> str | None:
-    """The agent's whole instructions from a provider profile, or None where code can't take
-    every text of them, or where taking them would cut them.
+# What a fetch found when it compared the prompt's texts before and after the profile's
+# sanitizer: "unchanged", or "changed", where what is left may be cut. A fetched profile with
+# no such record, such as one cached before fetches made it, is not taken as whole.
+PROMPT_CHECK = "prompt_check"
+_FETCHED = frozenset({"retell", "vapi"})
 
-    Phone and LiveKit carry the prompt the user gave. Retell's one general prompt is whole when
-    there are no states; with states or a conversation flow it is only a part. Vapi's are the
-    system messages of the assistant's model, in order.
+
+def without_prompt_check(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """The profile as the assistant is, without this kit's record of its prompt check: what a
+    reading is shown, and what a binding's digest is taken over."""
+    return {key: value for key, value in profile.items() if key != PROMPT_CHECK}
+
+
+def _prompt_texts(profile: Mapping[str, Any]) -> list[Any] | None:
+    """The texts that together are the agent's prompt in a provider profile, or None where they
+    are not one prompt.
+
+    Phone and LiveKit carry the prompt the user gave. Retell's one general prompt is the whole
+    when there are no states; with states or a conversation flow it is only a part. Vapi's are
+    the system messages of the assistant's model, in order.
     """
     provider = str(profile.get("provider") or "")
-    texts: list[Any]
     if provider in {"phone", "livekit"}:
-        texts = [profile.get("system_prompt")]
-    elif provider == "retell":
+        return [profile.get("system_prompt")]
+    if provider == "retell":
         if profile.get("response_engine_type") != "retell-llm" or profile.get("states"):
             return None
-        texts = [profile.get("general_prompt")]
-    elif provider == "vapi":
+        return [profile.get("general_prompt")]
+    if provider == "vapi":
         model = profile.get("model")
         messages = model.get("messages") if isinstance(model, Mapping) else None
         if not isinstance(messages, list):
             return None
-        texts = [
+        return [
             message.get("content")
             for message in messages
             if isinstance(message, Mapping) and message.get("role") == "system"
         ]
-    else:
+    return None
+
+
+def whole_prompt(profile: Mapping[str, Any]) -> str | None:
+    """The agent's whole instructions from a provider profile, or None where code can't take
+    every text of them, or where taking them would cut them."""
+    texts = _prompt_texts(profile)
+    if not texts or not all(isinstance(text, str) for text in texts):
         return None
-    if not texts or not all(isinstance(text, str) and text.strip() for text in texts):
+    if profile.get("provider") in _FETCHED and profile.get(PROMPT_CHECK) != "unchanged":
         return None
-    if provider in {"retell", "vapi"} and any(
-        _rewritten_as_url(text) for text in texts
-    ):
-        # Fetched profiles were sanitized, and one rewritten as an address may have been cut.
+    # Measured before anything is built from the texts: a character is at least one byte, so
+    # texts with more characters than the limit are over it in bytes too.
+    joins = len("\n\n") * (len(texts) - 1)
+    if sum(len(text) for text in texts) + joins > _LARGEST_WHOLE_PROMPT:
         return None
-    whole = "\n\n".join(texts)
-    if len(whole.encode("utf-8")) > _LARGEST_WHOLE_PROMPT:
+    if not all(text.strip() for text in texts):
         return None
-    return whole
+    try:
+        encoded = sum(len(text.encode("utf-8")) for text in texts)
+    except UnicodeEncodeError:
+        # A lone surrogate, which JSON can carry and UTF-8 can't: no whole text to send.
+        return None
+    if encoded + joins > _LARGEST_WHOLE_PROMPT:
+        return None
+    return "\n\n".join(texts)
 
 
 def inspect_provider_target(
@@ -344,7 +369,11 @@ def inspect_provider_target(
                 "retell_response_engine_unsupported: provider_import supports "
                 "retell-llm and conversation-flow"
             )
-    return _safe_profile_value(profile)
+    safe = _safe_profile_value(profile)
+    safe[PROMPT_CHECK] = (
+        "unchanged" if _prompt_texts(safe) == _prompt_texts(profile) else "changed"
+    )
+    return safe
 
 
 def _request_json(
@@ -1231,9 +1260,15 @@ def _clone_retell(
 
 
 def provider_profile_digest(profile: Mapping[str, Any]) -> str:
-    """The identity of an inspected (redacted) provider profile: prompt, model, voice and tools."""
+    """The identity of an inspected (redacted) provider profile: prompt, model, voice and tools.
+
+    The fetch's record of its prompt check is left out: it says what this kit did with the
+    prompt, not what the assistant is, and a binding sealed by a kit that kept no such record
+    must still match the same assistant.
+    """
+    identity = without_prompt_check(profile)
     encoded = json.dumps(
-        profile, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
