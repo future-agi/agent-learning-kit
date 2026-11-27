@@ -187,6 +187,14 @@ jobs:
           set -o pipefail
           python -m pytest -q -rs tests/harness/test_kit_browser_chromium.py | tee chromium.out
           ! grep -q "skipped" chromium.out
+      - name: Show how each browser that failed to start began its output
+        if: failure()
+        shell: bash
+        # The error quotes the end of the browser's output; the reason is at its start.
+        run: |
+          find /tmp/pytest-of-"$(id -un)" -name browser.log -size +0 2>/dev/null | head -n 5 | while read -r log; do
+            echo "== $log"; head -n 60 "$log"
+          done
 
   kit-browser-clients:
     # The kit's browser driven by the clients agents use, each in a row of its own so one client's
@@ -251,6 +259,14 @@ jobs:
           if [ "$ROW" = playwright ]; then selected="playwright or plain_devtools"; fi
           python -m pytest -q -rs tests/harness/test_kit_browser_clients.py -k "$selected" | tee clients.out
           ! grep -q "skipped" clients.out
+      - name: Show how each browser that failed to start began its output
+        if: failure()
+        shell: bash
+        # The error quotes the end of the browser's output; the reason is at its start.
+        run: |
+          find /tmp/pytest-of-"$(id -un)" -name browser.log -size +0 2>/dev/null | head -n 5 | while read -r log; do
+            echo "== $log"; head -n 60 "$log"
+          done
 
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
