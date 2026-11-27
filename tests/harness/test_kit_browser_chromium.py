@@ -172,6 +172,7 @@ class _Tab:
         self.session = None
         # What the browser sent this client besides answers: its events.
         self.events: list[dict] = []
+        self.last: list[str] = []
 
     async def call(
         self, method: str, params: dict | None = None, *, session: bool = True
@@ -198,11 +199,14 @@ class _Tab:
             found = await self.call(
                 "Runtime.evaluate",
                 {
-                    "expression": "[document.readyState, document.body ? document.body.innerText : '']",
+                    "expression": "[document.readyState, document.body ? document.body.innerText : '',"
+                    " location.href, document.documentElement ? document.documentElement.outerHTML.slice(0, 600) : '']",
                     "returnByValue": True,
                 },
             )
-            state, text = found["result"]["result"].get("value") or ["", ""]
+            state, text, *where = found["result"]["result"].get("value") or ["", "", "", ""]
+            # Where the tab ended, for a failure's message: its address, its state and the start of its page.
+            self.last = [*where[:1], state, *where[1:]]
             if (state == "complete" and text) or time.monotonic() >= deadline:
                 return str(text)
             await asyncio.sleep(0.25)
@@ -259,11 +263,13 @@ def test_the_browser_opens_its_site_and_refuses_another_which_is_logged_as_the_a
     async def steps(page):
         return await page.open("http://shop.test/cart"), await page.open(
             "http://www.example.com/"
-        )
+        ), page.last
 
-    shop, other = _run(kit, steps)
+    shop, other, where = _run(kit, steps)
     assert "page /cart" in shop
-    assert "outside the test world" in other
+    # The proxy refuses with its own 403 page; Chromium as the hosted image pins it shows its own error page for it
+    # instead (an older build shows the proxy's text). Either way the agent's page is not the site's.
+    assert "outside the test world" in other or where[:1] == ["chrome-error://chromewebdata/"], where
     hosts = [row["arguments"]["host"] for row in log.rows()[before:]]
     assert hosts.count("www.example.com") >= 1
     assert {row["arguments"]["via"] for row in log.rows()[before:]} == {"browser"}
