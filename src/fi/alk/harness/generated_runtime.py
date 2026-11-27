@@ -104,6 +104,59 @@ def can_generate_runtime(source: str | Path, runtime: Any | None = None) -> bool
     return True
 
 
+# The languages the plan builds with Node.
+NODE_LANGUAGES = frozenset({"node", "nodejs", "javascript", "typescript", "js", "ts"})
+
+
+def planned_component(source: str | Path, runtime: Any | None = None) -> tuple[str, Path]:
+    """The language (``python`` or ``node``) and the component folder the plan builds, or one
+    admission error. With no language it is inferred from the component's manifests, and a
+    repository root that holds none takes the one component nested in it."""
+    root = Path(source).expanduser().resolve()
+    component = _component_root(root, str(getattr(runtime, "workdir", "") or ""))
+    language = str(getattr(runtime, "language", "") or "").strip().lower()
+    python_markers = _python_markers(component)
+    node_marker = component / "package.json"
+
+    if language in {"python", "py"}:
+        if not python_markers:
+            raise GeneratedRuntimeError(
+                "generated_runtime_dependency_manifest_missing: expected pyproject.toml, "
+                "requirements.txt, or a Python lock file"
+            )
+        return "python", component
+    if language in NODE_LANGUAGES:
+        if not node_marker.is_file():
+            raise GeneratedRuntimeError(
+                "generated_runtime_dependency_manifest_missing: expected package.json"
+            )
+        return "node", component
+    if python_markers and not node_marker.is_file():
+        return "python", component
+    if node_marker.is_file() and not python_markers:
+        return "node", component
+    if python_markers and node_marker.is_file():
+        raise GeneratedRuntimeError(
+            "generated_runtime_language_ambiguous: both Python and Node manifests exist; "
+            "set runtime.language and runtime.workdir to the intended component"
+        )
+    nested = _nested_components(component)
+    if len(nested) == 1 and component == root:
+        return planned_component(
+            root, _runtime_override(runtime, workdir=nested[0].relative_to(root).as_posix())
+        )
+    if len(nested) > 1:
+        choices = ", ".join(path.relative_to(root).as_posix() for path in nested[:12])
+        raise GeneratedRuntimeError(
+            "generated_runtime_component_ambiguous: multiple runnable components found: "
+            f"{choices}; set runtime.workdir"
+        )
+    raise GeneratedRuntimeError(
+        "generated_runtime_dependency_manifest_missing: no supported Python or Node "
+        "dependency manifest was found"
+    )
+
+
 def detect_generated_runtime(
     source: str | Path, runtime: Any | None = None
 ) -> GeneratedRuntimePlan:
@@ -118,54 +171,13 @@ def detect_generated_runtime(
             "runtime_selection_unsupported: generated runtime cannot enforce selected Compose services or process obligations"
         )
     root = Path(source).expanduser().resolve()
-    component = _component_root(root, str(getattr(runtime, "workdir", "") or ""))
-    language = str(getattr(runtime, "language", "") or "").strip().lower()
-    python_markers = _python_markers(component)
-    node_marker = component / "package.json"
-
-    if language in {"python", "py"}:
-        if not python_markers:
-            raise GeneratedRuntimeError(
-                "generated_runtime_dependency_manifest_missing: expected pyproject.toml, "
-                "requirements.txt, or a Python lock file"
-            )
-        language = "python"
-    elif language in {"node", "nodejs", "javascript", "typescript", "js", "ts"}:
-        if not node_marker.is_file():
-            raise GeneratedRuntimeError(
-                "generated_runtime_dependency_manifest_missing: expected package.json"
-            )
-        language = "node"
-    elif python_markers and not node_marker.is_file():
-        language = "python"
-    elif node_marker.is_file() and not python_markers:
-        language = "node"
-    elif python_markers and node_marker.is_file():
-        raise GeneratedRuntimeError(
-            "generated_runtime_language_ambiguous: both Python and Node manifests exist; "
-            "set runtime.language and runtime.workdir to the intended component"
-        )
-    else:
-        nested = _nested_components(component)
-        if len(nested) == 1 and component == root:
-            component = nested[0]
-            return detect_generated_runtime(
-                root,
-                _runtime_override(
-                    runtime, workdir=component.relative_to(root).as_posix()
-                ),
-            )
-        if len(nested) > 1:
-            choices = ", ".join(
-                path.relative_to(root).as_posix() for path in nested[:12]
-            )
-            raise GeneratedRuntimeError(
-                "generated_runtime_component_ambiguous: multiple runnable components found: "
-                f"{choices}; set runtime.workdir"
-            )
-        raise GeneratedRuntimeError(
-            "generated_runtime_dependency_manifest_missing: no supported Python or Node "
-            "dependency manifest was found"
+    configured = _component_root(root, str(getattr(runtime, "workdir", "") or ""))
+    language, component = planned_component(root, runtime)
+    if component != configured:
+        # The one component nested in the repository: planned with it as the workdir.
+        return detect_generated_runtime(
+            root,
+            _runtime_override(runtime, workdir=component.relative_to(root).as_posix()),
         )
 
     explicit_command = _explicit_command(runtime)
