@@ -75,6 +75,11 @@ setTimeout(() => { location.href = 'http://pagemade.example/landing'; }, 100);
     # A single-page app's button: its own handler moves the page when the agent clicks it.
     "/button-off": """<html><body><button id=go onclick="location.href='http://clickscript.example/x'">Go</button>
 </body></html>""",
+    # The page types into its own field through the editing command, which fires a trusted input event.
+    "/forge-typing": """<html><body><input id=s aria-label="Search"><script>
+setTimeout(() => { const s = document.getElementById('s'); s.focus();
+  document.execCommand('insertText', false, 'page-forged-words'); }, 100);
+</script></body></html>""",
     "/meta-off": """<html><head><meta http-equiv=refresh content="0;url=http://metamade.example/landing"></head>
 <body>moving</body></html>""",
     "/card-switched": """<html><body><script>
@@ -801,6 +806,23 @@ def test_typing_sent_as_input_is_kept_and_an_action_made_by_script_is_not(browse
     assert [row["text"] for row in rows if row["kind"] == "typing"][-1] == "blue hats"
     assert not [row for row in rows if "scripted words" in json.dumps(row)]
     assert any(row["kind"] == "navigation" for row in rows)
+
+
+def test_a_page_that_types_into_its_own_field_writes_no_typing_row(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/forge-typing")
+        await asyncio.sleep(1)
+        await page.open("http://shop.test/form")
+        await page.click("#q")
+        await page.type("ok")
+
+    _run(kit, steps)
+    rows = _settled(kit)["rows"]
+    assert not [row for row in rows if "page-forged-words" in json.dumps(row)]
+    # The agent's own keys are still kept.
+    assert [row["text"] for row in rows if row["kind"] == "typing" and row["url"] == "http://shop.test/form"][-1] == "ok"
 
 
 def test_an_agent_that_looks_through_every_world_of_its_page_cannot_write_the_record(browser) -> None:
