@@ -5779,6 +5779,69 @@ def test_a_setting_beside_the_model_in_a_wrapped_call_is_dropped_with_it(
 
 
 @pytest.mark.parametrize(
+    ("written", "cited", "where"),
+    [
+        pytest.param(
+            "agent = Agent(\n"
+            '    model="gpt-4o-mini",\n'
+            "    llm=LLM(\n"
+            '        os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            4,
+            2,
+            id="wrapped",
+        ),
+        pytest.param(
+            'model = os.getenv("LLM_MODEL", "gpt-4o"); llm = LLM("gpt-4o-mini", model=model)\n'
+            'agent = Agent(model="gpt-4o-mini", llm=LLM(os.getenv("LLM_MODEL", "gpt-4o")))\n',
+            2,
+            2,
+            id="one-line",
+        ),
+    ],
+)
+def test_a_refusal_beside_the_model_names_the_line_it_is_written_on(
+    root, written, cited, where
+):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"setting": "LLM_MODEL", "path": "agent.py", "line": cited})
+
+    assert problems and "writes the model as a value beside LLM_MODEL" in problems[0]
+    if where == cited:
+        assert "give the name written there" in problems[0]
+        assert "citing line" not in problems[0]
+    else:
+        assert f"the model is written on line {where} of agent.py" in problems[0]
+        assert f"citing line {where}" in problems[0]
+
+
+def test_a_name_refused_twice_from_another_statement_on_the_line_keeps_the_setting(
+    tmp_path, root
+):
+    # nova-3 is written after the ;, in another statement: it is not beside the setting, so the
+    # setting is kept without the name, as it is when the statements are on two lines.
+    (root / "agent.py").write_text(
+        'model = os.getenv("LLM_MODEL", "gpt-4o"); stt = STT(model="nova-3")\n',
+        encoding="utf-8",
+    )
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "LLM_MODEL", "name": "nova-3", "path": "agent.py", "line": 1},
+    )
+
+    assert submit(wrong).get("is_error")
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    model = saved(destination).get("model")
+    assert (model["name"], model["setting"]) == ("", "LLM_MODEL")
+
+
+@pytest.mark.parametrize(
     "written",
     [
         pytest.param(

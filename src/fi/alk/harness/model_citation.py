@@ -968,15 +968,16 @@ def _enclosing_statement(
 
 def _written_in_the_call_read_in(
     text: str, spans, setting: str, reads: list[tuple[int, int, bool]], shift: int
-) -> bool:
-    """Whether the statement (``text`` and its lines' ``spans``) writes a model as a quoted value
-    straight into the call or literal that holds a read of ``setting`` and was opened before the
-    cited line (which starts at ``shift``): a ChatOpenAI( call wrapped over lines, given
+) -> int | None:
+    """Where the statement (``text`` and its lines' ``spans``) writes a model as a quoted value
+    into a call or literal that holds a read of ``setting`` and was opened before the cited line
+    (which starts at ``shift``), or None: a ChatOpenAI( call wrapped over lines, given
     model="gpt-4o" on one and timeout=os.getenv("LLM_TIMEOUT") on the next, does. A model inside
     another call beside the read (an Agent( given stt=STT(model="nova-3") on one line and
     llm=LLM(os.getenv("LLM_MODEL")) on the next) is another component's and doesn't count. Any
     call or literal around the read that opened before the cited line counts, not only the
-    nearest: ChatOpenAI( given model="gpt-4o", then http_client=Client( holding the read. One
+    nearest: ChatOpenAI( given model="gpt-4o", then http_client=Client( holding the read, but
+    none outside a body around the read (a method, lambda or closure given in the literal). One
     pass over the statement. In a { only a key of that literal counts (after the { or a comma,
     as model: or "model":, or model= on the same line), not a statement in a body that opens
     after = or : (Scala's def run(): Unit = {, a case "voice": {, an assigned lambda) holding
@@ -1014,7 +1015,7 @@ def _written_in_the_call_read_in(
                 if colon or "\n" not in text[before:at]:
                     keyed.add(at)
     if not values:
-        return False
+        return None
     skipped, _ = _skipped(text, spans)
     points = sorted([(at, 0) for at in values] + [(read, 1) for read, _, _ in reads])
     marks = heapq.merge(
@@ -1034,7 +1035,7 @@ def _written_in_the_call_read_in(
     earlier = 0
     around = 0
     floor = len(text)
-    value_in: list[int] = []
+    value_in: list[tuple[int, int]] = []
     calls: set[int] = set()
     for at, kind, char, holds in marks:
         if kind == 2:
@@ -1061,7 +1062,7 @@ def _written_in_the_call_read_in(
                 around = min(around, len(stack))
         elif kind == 0:
             if stack and (not braces[-1] or at in keyed):
-                value_in.append(stack[-1])
+                value_in.append((stack[-1], at))
         else:
             around = max(around, earlier)
             inner = next(
@@ -1074,7 +1075,7 @@ def _written_in_the_call_read_in(
             )
             floor = min(floor, inner)
     calls.update(stack[index] for index in range(floor, around) if holding[index])
-    return any(bracket in calls for bracket in value_in)
+    return next((at for bracket, at in value_in if bracket in calls), None)
 
 
 def _reads_on_line(
@@ -1383,10 +1384,10 @@ def _part_holding(text: str, spans, at: int) -> tuple[int, int]:
 
 def _writes_a_model(
     text: str, spans, setting: str, part: tuple[int, int] | None = None
-) -> bool:
-    """Whether the statement (``text`` and its lines' ``spans``, as _statement gives them) writes
+) -> int | None:
+    """Where the statement (``text`` and its lines' ``spans``, as _statement gives them) writes
     a model as a quoted value after model= or model: outside its comments, one that doesn't read
-    ``setting`` (model: "${OPENAI_MODEL:-gpt-4o}" does): ChatOpenAI(model="gpt-4o",
+    ``setting`` (model: "${OPENAI_MODEL:-gpt-4o}" does), or None: ChatOpenAI(model="gpt-4o",
     timeout=os.getenv("LLM_TIMEOUT")) reads LLM_TIMEOUT beside the model. Only in ``part`` (where
     it starts and ends) when given: a model after a ; is another statement's."""
     start, end = part if part is not None else (0, len(text))
@@ -1394,8 +1395,8 @@ def _writes_a_model(
         line = _span_line(text, offset)[:comment]
         for found in _MODEL_VALUE.finditer(line):
             if setting not in found.group(3) and start <= offset + found.start() < end:
-                return True
-    return False
+                return offset + found.start()
+    return None
 
 
 def _read_off_something(line: str, start: int) -> bool:
@@ -1404,6 +1405,55 @@ def _read_off_something(line: str, start: int) -> bool:
     while before >= 0 and line[before] in " \t":
         before -= 1
     return before >= 0 and line[before] == "."
+
+
+def _blanked_outside(line: str, offset: int, part: tuple[int, int]) -> str:
+    """``line`` (starting at ``offset`` in its statement) with what lies outside ``part`` of the
+    statement turned to spaces, so the line keeps its length and its scanned offsets."""
+    start, end = part[0] - offset, part[1] - offset
+    if start <= 0 and end >= len(line):
+        return line
+    start, end = max(0, start), min(len(line), max(0, end))
+    return " " * start + line[start:end] + " " * (len(line) - end)
+
+
+def _written_beside(
+    text: str,
+    spans,
+    outer: str,
+    outer_spans,
+    outer_reads,
+    shift: int,
+    reads,
+    setting: str,
+    beside: str,
+    named,
+) -> int | None:
+    """How many lines after the cited one (before it, when negative) a model is written beside
+    the setting's read, or None. ``outer`` is ``text`` (the cited statement) itself unless the
+    cited statement sits inside a wrapped call, which then starts ``shift`` before it. Written:
+    as a value in the cited statement's part that holds the read, in a call or literal around the
+    read, or, given ``beside`` (a name refused with the setting), named on one of its lines, the
+    cited statement cut at its ; as for a value. ``named`` says whether a line names ``beside``."""
+    if _is_the_models_value(outer, outer_spans, outer_reads):
+        return None
+    part = _part_holding(text, spans, reads[0][0]) if reads else None
+    at = _writes_a_model(text, spans, setting, part)
+    if at is not None:
+        return text.count("\n", 0, at)
+    cited = outer.count("\n", 0, shift)
+    if outer is not text:
+        at = _written_in_the_call_read_in(outer, outer_spans, setting, outer_reads, shift)
+        if at is not None:
+            return outer.count("\n", 0, at) - cited
+    if beside:
+        for offset, comment, inside, _ in outer_spans:
+            line = _span_line(outer, offset)
+            if outer is text and part is not None:
+                line = _blanked_outside(line, offset, part)
+            if named(line, offset, (comment, inside)):
+                return outer.count("\n", 0, offset) - cited
+    return None
 
 
 def model_problems(
@@ -1638,39 +1688,39 @@ def model_problems(
                 for start, end, shell in reads
                 if start + shift < len(outer)
             ]
-        if not _is_the_models_value(outer, outer_spans, outer_reads) and (
-            _writes_a_model(
-                text,
-                spans,
-                setting,
-                _part_holding(text, spans, reads[0][0]) if reads else None,
+        # Where the model is written beside the setting: the line it is on is the one to cite.
+        written = _written_beside(
+            text,
+            spans,
+            outer,
+            outer_spans,
+            outer_reads,
+            shift,
+            reads,
+            setting,
+            beside,
+            named=lambda line, at, scanned: named_on(
+                line,
+                beside,
+                config=config,
+                yaml=suffix in _YAML_SUFFIXES,
+                block=block if outer is text and at == 0 else None,
+                scanned=scanned,
+                **scan,
+            ),
+        )
+        if written is not None:
+            on = model.line + written
+            where = (
+                "give the name written there"
+                if on == model.line
+                else f"the model is written on line {on} of {shown_path}: give the name written "
+                f"there, citing line {on}"
             )
-            or (
-                outer is not text
-                and _written_in_the_call_read_in(
-                    outer, outer_spans, setting, outer_reads, shift
-                )
-            )
-            or (
-                bool(beside)
-                and any(
-                    named_on(
-                        _span_line(outer, offset),
-                        beside,
-                        config=config,
-                        yaml=suffix in _YAML_SUFFIXES,
-                        block=block if outer is text and offset == 0 else None,
-                        scanned=(span_comment, span_inside),
-                        **scan,
-                    )
-                    for offset, span_comment, span_inside, _ in outer_spans
-                )
-            )
-        ):
             return [
                 f"model: the statement on line {model.line} of {shown_path} writes the model as a "
                 f"value beside {shown_setting}, so {shown_setting} is not where the model comes "
-                "from; give the name written there, with no setting, or leave model out"
+                f"from; {where}, with no setting, or leave model out"
             ]
     elif name and not named_on(
         cited_line,
