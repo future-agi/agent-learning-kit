@@ -500,6 +500,9 @@ class KitBrowser:
                 logger.warning("browser: the last profile under %s could not be removed", self.directory)
         profile = self.directory / f"p{uuid.uuid4().hex[:8]}"
         profile.mkdir(parents=True)
+        # Under per-user isolation the harness's umask keeps this folder to itself, yet the browser runs as the
+        # agent's user and opens its profile by a path through it: it lets others pass through, not list it.
+        self.directory.chmod(0o711)
         self._temporary = _browser_temporary_folder()
         self._prepare(profile)
         self._prepare(self._temporary)
