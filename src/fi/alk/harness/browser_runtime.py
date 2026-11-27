@@ -12,6 +12,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from .bundle_v2 import ProcessUser
 from .job import FailureDomain
 from .world_door import PostgresLog
@@ -46,6 +48,11 @@ def _browser_unknown(reason: str) -> ProcessRuntimeError:
     return ProcessRuntimeError("browser", "spawn_failed", reason, domain=FailureDomain.INFRASTRUCTURE)
 
 
+# The world's folder for the kit's browser. A leading dot is outside the process-name pattern, so no world process
+# shares it: each start of the browser empties this folder.
+KIT_BROWSER_FOLDER = ".kit-browser"
+
+
 def contract_needs_browser(bundle_dir: Path | None) -> bool:
     """Whether the bundle's contract says its agent needs a browser from the environment; False for none, or one
     that can't be read (the build's own steps report that)."""
@@ -58,9 +65,16 @@ def contract_needs_browser(bundle_dir: Path | None) -> bool:
         contract = AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return False
-    except (OSError, ValueError):
-        # Taken for no browser, so the trial will say none was started; the cause is here.
-        logger.warning("browser: the agent's contract at %s could not be read", path, exc_info=True)
+    except ValidationError as problem:
+        # Taken for no browser, so the trial will say none was started; the cause is here. The contract is the
+        # customer's text, so the log names the fields that failed, never what they hold.
+        fields = [".".join(str(part) for part in one["loc"]) for one in problem.errors(include_input=False)]
+        logger.warning(
+            "browser: the agent's contract at %s could not be read (%s at %s)", path, type(problem).__name__, fields
+        )
+        return False
+    except (OSError, ValueError) as problem:
+        logger.warning("browser: the agent's contract at %s could not be read (%s)", path, type(problem).__name__)
         return False
     return "browser" in how_it_runs(contract).needs
 
@@ -150,7 +164,7 @@ def kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
             binary=binary,
             sites=context.browser_allowed_sites or (),
             log=log,
-            directory=world_scratch_dir(context.work_directory, world_index, "browser"),
+            directory=world_scratch_dir(context.work_directory, world_index, KIT_BROWSER_FOLDER),
             state_path=state,
             launch=launch,
             stop=lambda handle: _terminate_and_wait(handle),

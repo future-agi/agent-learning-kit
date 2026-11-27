@@ -1,0 +1,93 @@
+{
+  "name": "duplicate_request_key_retried_noah_bergeron",
+  "scenario_key": "duplicate-request-key-retried-noah-bergeron",
+  "scenario_id": "",
+  "use_case": "Recognise known contacts and accounts",
+  "branch": "Duplicate request with a request key retried: Noah Bergeron's chat request is recorded and his connection drops; upsert_lead twice with the same request key and his email (fix email on the first only).",
+  "tests": "Noah Bergeron's request is recorded on his open lead L16 and a retry with the same request_key REQ-NOAH-001 returns it without a duplicate",
+  "instruction": "You are Noah Bergeron from Prairie Grain Co-op (noah.bergeron@prairiegrain.example). Submit your request for 60 support seats in Canada (timeline 0-3 months), the corrected count from your last email. Your chat drops after you send it, so send exactly the same request again.\n\nYour details:\n- Name: Noah Bergeron\n- Company: Prairie Grain Co-op\n- Email: noah.bergeron@prairiegrain.example\n- Seats: 60\n- Use Case: support\n- Country: Canada\n- Timeline: 0-3 months",
+  "keywords": [
+    "duplicate"
+  ],
+  "persona": {
+    "name": "Noah Bergeron",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "Canada",
+    "personality": "Impatient and direct",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, Noah Bergeron at Prairie Grain Co-op (noah.bergeron@prairiegrain.example). Submitting our request for 60 support seats in Canada, live in 0-3 months.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "contact_id": "C16",
+    "lead_id": "L16",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "upsert_lead",
+      "arguments": {
+        "country": "Canada",
+        "source": "chat",
+        "request_key": "REQ-NOAH-001",
+        "timeline": "0-3 months",
+        "name": "Noah Bergeron",
+        "company": "Prairie Grain Co-op",
+        "email": "noah.bergeron@prairiegrain.example",
+        "use_case": "support",
+        "seats": 60
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "email": "caller: noah.bergeron@prairiegrain.example",
+        "seats": "caller: 60 seats",
+        "timeline": "caller: 0-3 months"
+      }
+    },
+    {
+      "tool": "upsert_lead",
+      "arguments": {
+        "country": "Canada",
+        "timeline": "0-3 months",
+        "seats": 60,
+        "use_case": "support",
+        "name": "Noah Bergeron",
+        "email": "noah.bergeron@prairiegrain.example",
+        "source": "chat",
+        "request_key": "REQ-NOAH-001",
+        "company": "Prairie Grain Co-op"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "duplicate",
+    "counterparty": "prospect",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "task": "deduplicate",
+    "interaction": "resumed",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "lead_updated_not_duplicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

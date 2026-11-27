@@ -1,0 +1,70 @@
+{
+  "name": "a_deleted_policy_quoted_as_current",
+  "scenario_key": "a-deleted-policy-quoted-as-current",
+  "scenario_id": "",
+  "use_case": "Answer return and exchange policy questions with citations",
+  "branch": "Customer quotes a deleted 2023 returns policy claiming a 90-day window; agent cites the current approved version 3.0",
+  "tests": "the agent consults the approved Returns Policy version 3.0 (ret_pol_v3) after searching Drive, refutes the deleted 2023 policy's 90-day window, and cites version 3.0",
+  "instruction": "You have a saved copy of 'Returns Policy 2023' which states a 90-day return window. Ask customer support whether you can return items within 90 days according to this policy.\n\nYour details:\n- Name: Gareth Hughes\n- Email: gareth.hughes@example.co.uk\n- Location: Cardiff, UK",
+  "keywords": [
+    "policy_citation",
+    "return_window",
+    "library_lookup"
+  ],
+  "persona": {
+    "name": "Gareth Hughes",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, my saved copy of the Northgate Returns Policy 2023 states a 90-day return window. Can you confirm if I still have 90 days to return items?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "file_id": "ret_pol_v3"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "title contains 'Returns Policy'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "includeComments": false,
+        "revisionId": null,
+        "fileId": "ret_pol_v3"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: drive_files.file_id for approved returns policy (ret_pol_v3)"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {},
+  "sub_goals": [
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

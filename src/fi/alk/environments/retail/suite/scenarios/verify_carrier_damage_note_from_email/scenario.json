@@ -1,0 +1,88 @@
+{
+  "name": "verify_carrier_damage_note_from_email",
+  "scenario_key": "verify-carrier-damage-note-from-email",
+  "scenario_id": "",
+  "use_case": "Track an order, report a damaged delivery",
+  "branch": "Customer inquires whether the carrier shipment event recorded transit damage before initiating return action",
+  "tests": "the agent retrieves shipment tracking for order O35 and reports the carrier's damage event note",
+  "instruction": "Following your email (thread th_r02_damaged_sweatshirt) about order O35, you want to know if the shipping carrier's tracking records specifically confirm that the package was noted as damaged in transit before you decide what action to take.\n\nYour details:\nName: Quinn Fabray\nEmail: quinn.fabray@example.com\nPostal code: 43215\nThread ID: th_r02_damaged_sweatshirt\nOrder ID: O35",
+  "keywords": [
+    "carrier_damage"
+  ],
+  "persona": {
+    "name": "Quinn Fabray",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, following up on email thread th_r02_damaged_sweatshirt about order O35, did the carrier report specific transit damage on the tracking record?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O35",
+    "origin": "seed",
+    "thread_id": "th_r02_damaged_sweatshirt",
+    "customer_id": "C17"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_r02_damaged_sweatshirt"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the email the request came in"
+      }
+    },
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "order_id": "O35",
+        "postal_code": "43215"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_shipment_tracking",
+      "arguments": {
+        "customer_id": "C17",
+        "order_id": "O35"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "order_id": "record: order O35 from thread"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "counterparty": "verified_owner",
+    "task": "track_order_report_damage",
+    "disposition": "damaged_delivery",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "tracking_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

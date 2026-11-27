@@ -1,0 +1,3 @@
+def setup(world):
+    world.change("session_caller", "default", {"employee_id": "E08"}, by="id")
+    world.put("slack_approvals", {"approval_id": "APP-KN-404", "actor_id": "U_KDESK", "channel_id": "CH_HELPPOL", "content_hash": "sha256:1974eea2eab477227d3429c012c9a53495a86953ca2dfd4bacca37b23e2c67c5", "approved_text": "Under Relocation Policy 1.0, allowances are set for the US (up to $10,000, section 1) and the UK (up to 8,000 GBP, section 2). Under section 3, relocations to other countries such as Japan are reviewed case by case by the People team, with no preset allowance. We can open a knowledge request with the People team if you wish.", "status": "approved", "expires_at": "2026-11-30T00:00:00Z"})

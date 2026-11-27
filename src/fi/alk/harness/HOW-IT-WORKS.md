@@ -129,7 +129,7 @@ wider than the firewall (the agent's proxy still reads a name as covering the ho
 loopback, and never a
 site any of whose addresses is loopback or unspecified (an IPv4 one written as IPv6 included);
 each address of a site is tried in turn within 30 seconds. Chromium sends loopback through it too,
-and QUIC and WebRTC are off. A refusal is logged as the agent's `egress_blocked` attempt marked
+QUIC is off, and WebRTC is kept to the proxy (no UDP outside it). A refusal is logged as the agent's `egress_blocked` attempt marked
 `via: browser` while a browser runs, whoever in it asked and however that client reached it: at the
 world's door where its database keeps the log, else in a kit-owned file cut at each trial, capped,
 cleaned, with the query part of an address removed. With no client the browser asks only for its own

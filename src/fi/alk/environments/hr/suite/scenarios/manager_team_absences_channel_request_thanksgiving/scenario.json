@@ -1,0 +1,85 @@
+{
+  "name": "manager_team_absences_channel_request_thanksgiving",
+  "scenario_key": "manager-team-absences-channel-request-thanksgiving",
+  "scenario_id": "",
+  "use_case": "Show a manager their team's absences",
+  "branch": "A manager asks in the private engineering managers Slack channel to review team absences for Thanksgiving week.",
+  "tests": "Reads manager's Slack inquiry in eng-managers and reports team absences for Thanksgiving week.",
+  "instruction": "You are David Miller (manager ID M03), senior engineering director. You posted a reminder in #eng-managers (CH_ENGMGR, message ts 1792504800.000014) about Thanksgiving week approvals. Contact the HR leave desk to read your message thread in #eng-managers and retrieve the team absences for your direct team during Thanksgiving week (2026-11-23 to 2026-11-27).\n\nYour details:\n- Manager ID: M03\n- Name: David Miller\n- Channel: #eng-managers (CH_ENGMGR)\n- Thread timestamp: 1792504800.000014\n- Start Date: 2026-11-23\n- End Date: 2026-11-27",
+  "keywords": [
+    "team_absences",
+    "manager_view",
+    "slack_thread"
+  ],
+  "persona": {
+    "name": "David Miller",
+    "gender": "male",
+    "age_group": "",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi, could you check my message in #eng-managers at 1792504800.000014 and pull up team absences for M03 during Thanksgiving week (Nov 23 to 27)?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "message_ts": "1792504800.000014",
+    "start_date": "2026-11-23",
+    "channel_id": "CH_ENGMGR",
+    "manager_id": "M03",
+    "end_date": "2026-11-27",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "slack_read_thread",
+      "arguments": {
+        "message_ts": "1792504800.000014",
+        "channel_id": "CH_ENGMGR"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_team_absences",
+      "arguments": {
+        "end_date": "2026-11-27",
+        "start_date": "2026-11-23",
+        "manager_id": "M03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "manager_id": "caller: M03",
+        "start_date": "caller: 2026-11-23",
+        "end_date": "caller: 2026-11-27"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "split_message",
+    "disposition": "standard",
+    "overlay": "none",
+    "counterparty": "manager_us",
+    "interaction": "multi_turn",
+    "task": "show_team_absences",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "team_absences_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -56,6 +56,10 @@ _WRITE_VERBS = frozenset({"put", "change", "drop", "call"})
 MCP_ROUTE = "mcp:"
 
 
+def _catalogue_text(value: Any) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
 class HostedWorld(HttpObservationHandle):
     """The `World` surface, backed by this scenario's own logical postgres database.
 
@@ -77,8 +81,12 @@ class HostedWorld(HttpObservationHandle):
         workspace_channel: WorkspaceClient | None = None,
         endpoints: Mapping[str, str] | None = None,
         observations=None,
+        isolated: bool = False,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
+
+        `isolated` is set for a world of a sealed environment release: its setup, ready and checks
+        are authored with that environment, so they run in the isolated child its handlers do.
 
         In a phase worker, `workspace_channel` stands in for `workspace_roots`: the harness
         process serves the workspace files (`workspace_channel.py`).
@@ -99,6 +107,7 @@ class HostedWorld(HttpObservationHandle):
         self._workspace_channel = workspace_channel
         self.world_index = world_index
         self.rng = rng
+        self.isolated = isolated
         # Row counts as they stood when the baseline was frozen, keyed by table. Never
         # re-measured: a live count would make the cap depend on what a scenario already wrote,
         # and the whole point is that it is decided before any scenario runs.
@@ -546,9 +555,8 @@ class HostedWorld(HttpObservationHandle):
         rows = self._store.query(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
         )
-        return [
-            row["tablename"] for row in rows if row["tablename"] != CONFORMANCE_TABLE
-        ]
+        names = [_catalogue_text(row["tablename"]) for row in rows]
+        return [name for name in names if name != CONFORMANCE_TABLE]
 
     def _table_columns(self, table: str) -> set[str]:
         rows = self._store.query(
@@ -556,7 +564,7 @@ class HostedWorld(HttpObservationHandle):
             "WHERE table_schema = 'public' AND table_name = %s",
             (table,),
         )
-        return {row["column_name"] for row in rows}
+        return {_catalogue_text(row["column_name"]) for row in rows}
 
     def _primary_key_order(self, table: str) -> list[str]:
         """This table's primary key columns, in index order.
@@ -578,7 +586,7 @@ class HostedWorld(HttpObservationHandle):
             """,
             (table,),
         )
-        return [row["attname"] for row in rows]
+        return [_catalogue_text(row["attname"]) for row in rows]
 
     def _resolve_by(self, table: str) -> str:
         """The column to key `change`/`drop` on when scenario code did not name one.

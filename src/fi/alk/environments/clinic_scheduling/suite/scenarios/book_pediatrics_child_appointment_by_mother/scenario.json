@@ -1,0 +1,98 @@
+{
+  "name": "book_pediatrics_child_appointment_by_mother",
+  "scenario_key": "book-pediatrics-child-appointment-by-mother",
+  "scenario_id": "",
+  "use_case": "Book a new appointment",
+  "branch": "Claire Davies books Leo (P406) with Dr. Hannah Lee on Monday 2 November morning at North as his mother and guardian",
+  "tests": "passes when the agent verifies child patient Leo Davies with guardian Claire Davies and books Dr. Hannah Lee at North on Monday morning",
+  "instruction": "You want to book a paediatric checkup for your son Leo Davies with Dr. Hannah Lee on Monday 2 November in the morning at Riverbank North. Provide his full name and date of birth when asked for verification, and confirm the appointment.\n\nYour details:\n- Patient full name: Leo Davies\n- Patient date of birth: 2019-06-12\n- Guardian name: Claire Davies (mother)\n- Insurance: Vitality, Member ID: VT-300406\n- Preferred provider: Dr. Hannah Lee (pediatrics)\n- Preferred location: Riverbank North\n- Preferred date: Monday 2 November 2026, 09:00",
+  "keywords": [
+    "pediatrics",
+    "booking",
+    "guardian"
+  ],
+  "persona": {
+    "name": "Claire Davies",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Homemaker",
+    "location": "United Kingdom",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hello, I'd like to book an appointment for my son Leo Davies with Dr. Hannah Lee on Monday 2 November morning at Riverbank North.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "generated",
+    "created_records": [
+      "patients.P406",
+      "insurance.P406"
+    ]
+  },
+  "solution": [
+    {
+      "tool": "verify_patient",
+      "arguments": {
+        "full_name": "Leo Davies",
+        "dob": "2019-06-12"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "find_available_slots",
+      "arguments": {
+        "location_id": "LOC-NOR",
+        "date_to": "2026-11-02",
+        "date_from": "2026-11-02",
+        "provider_id": "D06",
+        "patient_id": "P406"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "reason": "Paediatric checkup",
+        "patient_id": "P406",
+        "self_pay": false,
+        "confirmed": true,
+        "request_key": "req-p406-d06-1102",
+        "slot_id": "SL-D06-20261102-0900"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "patient_id": "record: patients.patient_id P406",
+        "slot_id": "the slot the patient confirmed"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interface": "clean",
+    "task": "book_appointment",
+    "counterparty": "guardian",
+    "overlay": "none",
+    "disposition": "none"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

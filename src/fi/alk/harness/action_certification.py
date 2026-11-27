@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from .json_schemas import validator
 from .source_model import SourceAction
 
 ACTION_CERTIFICATION_SCHEMA_VERSION = "futureagi.action-certification.v1"
@@ -146,7 +146,7 @@ def schema_valid_arguments(schema: dict[str, object]) -> dict[str, object]:
     value = _schema_value(schema)
     if not isinstance(value, dict):
         raise ValueError("action_input_schema_root_not_object")
-    Draft202012Validator(schema).validate(value)
+    validator(schema).validate(value)
     return value
 
 
@@ -231,7 +231,7 @@ def certify_actions(
             continue
         try:
             arguments = policy.arguments or schema_valid_arguments(action.input_schema)
-            Draft202012Validator(action.input_schema).validate(arguments)
+            validator(action.input_schema).validate(arguments)
         except Exception as exc:
             results.append(
                 ActionProbeResult(
@@ -271,7 +271,7 @@ def certify_actions(
             and action.output_schema is not None
         ):
             try:
-                Draft202012Validator(action.output_schema).validate(invocation.result)
+                validator(action.output_schema).validate(invocation.result)
                 output_valid = True
             except Exception:
                 output_valid = False

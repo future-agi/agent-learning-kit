@@ -44,7 +44,7 @@ from . import outbound as ob
 from . import user_files
 from .actors import ACTOR_RULES_FILE, ACTORS_FILE
 from .backends import GOOGLE_ADK_APPROVAL_ENV
-from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
+from .bundle_v2 import BUNDLE_V2_MANIFEST, BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
 from .framework_detection import FrameworkFolders, framework_folders_for
 from .hosted_compose_bootstrap import initialize_hosted_compose
@@ -734,6 +734,15 @@ def row_counts_for_capability(
     )
 
 
+def _composed_from_release(bundle_dir: Path) -> bool:
+    """Whether this sealed bundle was composed from environment and suite releases (`releases.compose_bundle`)."""
+    try:
+        body = json.loads((bundle_dir / BUNDLE_V2_MANIFEST).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    return (body.get("provenance") or {}).get("source_kind") == "release"
+
+
 class ProcessWorldFactory:
     """Builds a real `HostedWorld` over the runtime's postgres endpoint. `AttachedPostgresStore`
     (not the bare `PostgresStore`) is the correct base here — it takes a raw DSN and never manages
@@ -745,6 +754,9 @@ class ProcessWorldFactory:
 
         self._work_directory = work_directory
         self._observations = load_observations(bundle_dir)
+        # A release's scenario code is authored with its environment, so it runs isolated; a
+        # submitted agent's runs as it always did.
+        self._from_release = bundle_dir is not None and _composed_from_release(bundle_dir)
 
     async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> World:
         from .world.observation import http_endpoints
@@ -763,6 +775,7 @@ class ProcessWorldFactory:
             workspace_roots=runtime.metadata.get("workspace_roots", {}),
             endpoints=http_endpoints(runtime),
             observations=self._observations,
+            isolated=self._from_release,
         )
 
 

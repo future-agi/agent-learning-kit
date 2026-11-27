@@ -1,0 +1,118 @@
+{
+  "name": "search_thread_by_sender_haircut",
+  "scenario_key": "search-thread-by-sender-haircut",
+  "scenario_id": "",
+  "use_case": "Pick up a booking request from the bookings mailbox",
+  "branch": "The customer emailed about a haircut next week but forgot the subject; searching from:chloe.park@example.com finds three of her threads (the haircut thread, her sister's haircut, a colour question); the agent reads the haircut thread, sees the correction to Wednesday 4 Nov at 10 am with Lucia at Midtown, and books it",
+  "tests": "the agent finds the customer's email thread by sender search, honors her correction to Wednesday 4 November, and books the confirmed haircut",
+  "instruction": "You emailed Northlight Studios asking to book a haircut with Lucia at Midtown and then corrected the day in a later email in the same thread; you have other threads with them too. You don't recall the subject line. Ask the desk to find your email and book the haircut as your emails settled it, without saying the day or time yourself. When the desk reads back Wednesday 4 November at 10 am New York time, confirm; if it reads back Tuesday, say you corrected that.\n\nYour details:\n- Name: Chloe Park\n- Email: chloe.park@example.com\n- Phone: +1 212 555 0103",
+  "keywords": [
+    "booking",
+    "haircut"
+  ],
+  "persona": {
+    "name": "Chloe Park",
+    "gender": "",
+    "age_group": "",
+    "occupation": "",
+    "location": "Canada",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I sent an email about booking a haircut next week, but I don't remember what subject line I put. Can you check my email chloe.park@example.com and book it for me?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "email": "chloe.park@example.com",
+    "customer_id": "CU03",
+    "thread_id": "th_s03_day_correction",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_customer",
+      "arguments": {
+        "phone": "+1 212 555 0103",
+        "email": "chloe.park@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_threads",
+      "arguments": {
+        "query": "from:chloe.park@example.com"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_s03_day_correction"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "the haircut thread, not her sister's or the colour question"
+      }
+    },
+    {
+      "tool": "list_slots",
+      "arguments": {
+        "location_id": "L1",
+        "date": "2026-11-04",
+        "staff_id": "ST02",
+        "service_id": "SV3"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "book_appointment",
+      "arguments": {
+        "location_id": "L1",
+        "staff_id": "ST02",
+        "confirmed": true,
+        "request_key": "REQ-CU03-SV3-1104",
+        "service_id": "SV3",
+        "customer_id": "CU03",
+        "start_time": "2026-11-04T10:00"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "staff_id": "record: staff staff_id for Lucia Fernandez",
+        "service_id": "record: services service_id for Haircut",
+        "confirmed": "caller: confirms when read back",
+        "customer_id": "record: customers customer_id for CU03",
+        "start_time": "caller: 2026-11-04T10:00",
+        "location_id": "record: locations location_id for Midtown Studio"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "task": "pickup_email_case",
+    "interface": "clean_prose",
+    "counterparty": "individual_customer",
+    "overlay_vector": "none",
+    "disposition": "search_by_sender",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "appointment_booked_as_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}
