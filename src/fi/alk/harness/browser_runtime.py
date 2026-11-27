@@ -92,13 +92,17 @@ def world_browser_environment(
         return {}
     browser = context.browsers.get(world_index)
     if browser is None:
+        from .browser_blocked_log import BlockedFileLog
+
         database = next((one for one in endpoints.values() if one.protocol == "postgres"), None)
-        log = PostgresLog(database.address) if database is not None else None
-        if log is None:
-            logger.warning(
-                "browser: the world has no postgres endpoint to hold its action log; the browser's refused sites are "
-                "refused but not recorded"
-            )
+        door = any(name in endpoints for name in ("world_door", "tool_proxy"))
+        # With a door and a database the door's log is the one source of refusals, read by the trial as the agent's
+        # other calls are; with no door a trial never reads that log, so the refusals go to a kit-owned file.
+        log: Any = (
+            PostgresLog(database.address)
+            if door and database is not None
+            else BlockedFileLog(context.work_directory / "browser-state" / f"w{world_index}-blocked.jsonl")
+        )
         make = context.browser_factory or kit_browser_factory(context)
         try:
             browser = make(world_index, log)
@@ -125,6 +129,7 @@ def world_browser_environment(
 def kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
     """Makes a world's `KitBrowser`: Chromium from the image, run as the agent's user through the context's runner,
     with its profile in the world's scratch and its state where only the kit writes."""
+    from .browser_record import BrowserRecorder
     from .kit_browser import KitBrowser, chromium_binary
     from .process_runtime import _resolve_process_user, _terminate_and_wait, world_scratch_dir
 
@@ -165,6 +170,12 @@ def kit_browser_factory(context: SpawnContext) -> Callable[[int, Any], Any]:
             stop=lambda handle: _terminate_and_wait(handle),
             prepare=prepare,
             retain_log=context.retain_process_log,
+            recorder=BrowserRecorder(
+                context.browser_allowed_sites or (),
+                state.with_name(f"w{world_index}-record.json"),
+                # A secret of the job's the agent types into a page is masked before the record is written.
+                secret_values=tuple(context.secret_values.values()),
+            ),
         )
 
     return make

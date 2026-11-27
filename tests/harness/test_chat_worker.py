@@ -945,3 +945,152 @@ def test_the_transcript_names_the_end_state_by_the_id_it_was_stored_under():
     assert "end_state_artifact" not in _json.loads(_with_stored_end_state(transcript, {}))["world_actors"]
     plain = _json.dumps({"messages": []}).encode()
     assert _with_stored_end_state(plain, {}) == plain
+
+
+def test_the_transcript_names_the_browser_s_file_by_the_id_it_was_stored_under():
+    import json as _json
+
+    from fi.alk.harness.chat_worker import _with_stored_end_state
+
+    transcript = _json.dumps({"messages": [], "world_actors": {"browser_state_artifact": "0"}}).encode()
+    stored = _json.loads(_with_stored_end_state(transcript, {"0": "sha256:" + "b" * 64}))
+    assert stored["world_actors"]["browser_state_artifact"] == "sha256:" + "b" * 64
+    assert "browser_state_artifact" not in _json.loads(_with_stored_end_state(transcript, {}))["world_actors"]
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_a_screenshot_the_platform_did_not_keep_is_said_and_never_named(tmp_path, monkeypatch, raises):
+    context = _context(tmp_path)
+
+    class Refuses:
+        def __init__(self) -> None:
+            self.kinds: list[str] = []
+
+        async def upload_artifact(self, data, *, kind, **_kwargs):
+            self.kinds.append(kind.value)
+            if kind.value == "screenshot":
+                if raises:
+                    raise RuntimeError("upload failed")
+                return None
+            return f"stored-{len(self.kinds)}"
+
+    async def worker(module, payload, **_kwargs):
+        return {
+            "outcome": {
+                "calls": [], "turns": 1, "started_at": None, "ended_at": None, "duration_ms": 1,
+                "transcript_artifact": "0", "recording_artifacts": [],
+            },
+            "artifacts": [
+                {"id": "0", "kind": "transcript", "data": base64.b64encode(b"t").decode()},
+                {"id": "1", "kind": "screenshot", "data": base64.b64encode(b"jpeg").decode()},
+            ],
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    adapter = Refuses()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-0", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY
+    )
+    outcome = asyncio.run(
+        chat_worker.IsolatedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", source_scenario_key="one", scenario_id="id"), runtime
+        )
+    )
+    assert adapter.kinds == ["transcript", "screenshot"]
+    assert outcome.recording_artifacts == ()
+    assert [one["code"] for one in outcome.notices] == ["screenshots_not_kept"]
+
+
+def test_a_screenshot_the_run_s_level_keeps_none_of_is_not_sent_and_says_the_level(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+
+    class NoShots:
+        def __init__(self) -> None:
+            self.kinds: list[str] = []
+
+        def keeps_artifact(self, kind) -> bool:
+            return kind.value != "screenshot"
+
+        async def upload_artifact(self, data, *, kind, **_kwargs):
+            self.kinds.append(kind.value)
+            return f"stored-{len(self.kinds)}"
+
+    sent: list[dict] = []
+
+    async def worker(module, payload, **_kwargs):
+        sent.append(payload)
+        return {
+            "outcome": {
+                "calls": [], "turns": 1, "started_at": None, "ended_at": None, "duration_ms": 1,
+                "transcript_artifact": "0", "recording_artifacts": [],
+            },
+            "artifacts": [
+                {"id": "0", "kind": "transcript", "data": base64.b64encode(b"t").decode()},
+                {"id": "1", "kind": "screenshot", "data": base64.b64encode(b"jpeg").decode()},
+            ],
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    adapter = NoShots()
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-0", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY
+    )
+    outcome = asyncio.run(
+        chat_worker.IsolatedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", source_scenario_key="one", scenario_id="id"), runtime
+        )
+    )
+    assert adapter.kinds == ["transcript"]
+    assert [one["code"] for one in outcome.notices] == ["screenshots_not_sent_at_level"]
+    # The worker is told, so it takes none and says the level itself, never that the platform lost them.
+    assert [one["screenshots_kept"] for one in sent] == [False]
+
+
+def test_the_worker_keeps_no_screenshot_where_the_run_s_level_keeps_none():
+    from fi.alk.harness.outbound import ArtifactKind
+
+    assert chat_worker._ArtifactCollector(screenshots_kept=False).keeps_artifact(ArtifactKind.SCREENSHOT) is False
+    assert chat_worker._ArtifactCollector(screenshots_kept=False).keeps_artifact(ArtifactKind.TRANSCRIPT) is True
+    assert chat_worker._ArtifactCollector().keeps_artifact(ArtifactKind.SCREENSHOT) is True
+    # The worker builds its collector from what the parent sent: no word keeps them, only False keeps none.
+    assert chat_worker._collector_for({"screenshots_kept": False}).keeps_artifact(ArtifactKind.SCREENSHOT) is False
+    assert chat_worker._collector_for({}).keeps_artifact(ArtifactKind.SCREENSHOT) is True
+
+
+def test_the_worker_keeps_screenshots_within_what_its_result_can_carry(monkeypatch):
+    # The worker's result is one file with a size limit: a screenshot that would push it over is not kept, and the
+    # trial goes on.
+    monkeypatch.setattr(chat_worker, "MAX_RESULT_BYTES", 400)
+    collector = chat_worker._ArtifactCollector()
+    kinds = chat_worker.ArtifactKind
+
+    async def run():
+        assert await collector.upload_artifact(b"t" * 100, kind=kinds.TRANSCRIPT) == "0"
+        assert await collector.upload_artifact(b"j" * 100, kind=kinds.SCREENSHOT) == "1"
+        assert await collector.upload_artifact(b"j" * 100, kind=kinds.SCREENSHOT) is None
+
+    asyncio.run(run())
+    assert [one["kind"] for one in collector.artifacts] == ["transcript", "screenshot"]
+
+
+def test_ci_s_kit_tests_installs_the_stores_driver_the_chat_worker_imports() -> None:
+    """The chat worker reaches the world's tools, which import psycopg (the `harness-stores` extra): each row of the
+    job that runs this file installs it, or every isolated chat call there fails at import."""
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8"))["jobs"]
+    running = [one for one in jobs.values() if "tests/harness/test_chat_worker.py" in json.dumps(one)]
+    assert running
+    for job in running:
+        rows = job["strategy"]["matrix"]["dependencies"]
+        installs = [step for step in job["steps"] if "pip install" in str(step.get("run", ""))]
+        for row in rows:
+            mine = [
+                str(step["run"]) for step in installs
+                if step.get("if") in (None, f"matrix.dependencies == '{row}'")
+            ]
+            assert any(re.search(r"'\.\[[^\]]*harness-stores[^\]]*\]'", run) for run in mine), (row, mine)

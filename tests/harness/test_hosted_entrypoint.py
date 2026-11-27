@@ -3087,6 +3087,58 @@ def test_traces_artifact_level_refuses_recording_upload_end_to_end() -> None:
     asyncio.run(scenario())
 
 
+def test_a_hosted_run_at_traces_sends_no_screenshot_and_says_its_level_is_why(tmp_path) -> None:
+    from fi.alk.harness import browser_record
+
+    shots = tmp_path / "w0-shots"
+    shots.mkdir()
+    (shots / "shot-001-end.jpg").write_bytes(b"\xff\xd8end")
+    evidence = {"state": "used", "screenshots": [{"file": "shot-001-end.jpg"}]}
+    said: list = []
+
+    async def scenario() -> None:
+        class ShootingCallRunner:
+            def __init__(self, adapter: he.OutboundAdapter) -> None:
+                self._adapter = adapter
+
+            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> CallOutcome:
+                del runtime
+                transcript_id = await self._adapter.upload_artifact(
+                    b"transcript-bytes", kind=ob.ArtifactKind.TRANSCRIPT, scenario_key=scenario.scenario_key
+                )
+                _, notices = await browser_record.upload_screenshots(
+                    self._adapter, scenario.scenario_key, evidence, shots
+                )
+                said.extend(notices)
+                now = _rfc3339(datetime.now(timezone.utc))
+                return CallOutcome(
+                    calls=(Call(name="tool", arguments={}, result="ok", ok=True, error="", refused=False, at=0.0),),
+                    turns=1,
+                    started_at=now,
+                    ended_at=now,
+                    duration_ms=10,
+                    transcript_artifact=transcript_id,
+                    recording_artifacts=(),
+                )
+
+        harness = _build_harness(
+            scenarios=[FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])],
+            instances=1,
+            artifacts=HarnessArtifactPolicy(level=ArtifactLevel.TRACES),
+        )
+        harness.deps.build_call_runner = lambda adapter, context: ShootingCallRunner(adapter)
+        assert await he.run_job(harness.job_path, harness.source, harness.output, deps=harness.deps) == he.EXIT_OK
+        # Nothing was offered to the platform: no refusal was logged for a screenshot.
+        assert not any(
+            "kind=screenshot" in r["payload"]["message"]
+            for r in harness.transport.event_records
+            if r.get("type") == "log"
+        )
+
+    asyncio.run(scenario())
+    assert said == [browser_record.level_keeps_no_screenshots_notice(1)]
+
+
 def test_secrets_unlink_failure_after_the_terminal_does_not_lose_the_terminal_event() -> (
     None
 ):
@@ -5971,6 +6023,40 @@ def test_the_job_masks_every_value_in_spans_but_the_platform_settings(
     assert copy.attributes["llm.model_name"] == "gemini-2.5-flash-lite"
     assert copy.resource.attributes["project_name"] == "hosted-harness-prod"
     assert copy.attributes["input.value"] == "a *** b *** c *** d *** e *** f ***"
+
+
+@pytest.mark.parametrize(
+    ("level", "kept"),
+    [
+        (ArtifactLevel.METADATA_ONLY, False),
+        (ArtifactLevel.TRACES, False),
+        (ArtifactLevel.TRACES_AND_RECORDINGS, True),
+        (ArtifactLevel.FULL, True),
+    ],
+)
+def test_a_browser_screenshot_is_kept_where_a_recording_is(level, kept) -> None:
+    # A screenshot is a recording of the screen: it sits on the line audio sits on, and never takes a reserved place.
+    forbidden = he._ARTIFACT_LEVEL_FORBIDDEN_KINDS[level]
+    assert (ob.ArtifactKind.SCREENSHOT not in forbidden) is kept
+    assert (ob.ArtifactKind.RECORDING_COMBINED not in forbidden) is kept
+    assert not ob.is_reserved_artifact_kind(ob.ArtifactKind.SCREENSHOT)
+    # Admitted after recordings, with the optional kinds, so it never crowds a recording out of the budget.
+    assert ob.priority_class(ob.ArtifactKind.SCREENSHOT) == 2
+
+
+@pytest.mark.parametrize(
+    ("level", "kept"),
+    [
+        (ArtifactLevel.METADATA_ONLY, False),
+        (ArtifactLevel.TRACES, False),
+        (ArtifactLevel.TRACES_AND_RECORDINGS, True),
+        (ArtifactLevel.FULL, True),
+    ],
+)
+def test_the_adapter_says_whether_its_level_keeps_a_screenshot(level, kept) -> None:
+    adapter = _build_adapter(FakeTransport())
+    adapter.configure_artifacts(HarnessArtifactPolicy(level=level))
+    assert adapter.keeps_artifact(ob.ArtifactKind.SCREENSHOT) is kept
 
 
 def test_a_transcript_upload_the_platform_did_not_take_is_tried_again_before_the_receipt_drops_it() -> None:

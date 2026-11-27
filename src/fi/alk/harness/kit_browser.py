@@ -465,8 +465,12 @@ class KitBrowser:
         prepare: Callable[[Path], None] = lambda path: None,
         connect: Callable[[str, int], socket.socket] | None = None,
         retain_log: Callable[[Path], None] | None = None,
+        recorder: Any = None,
     ) -> None:
         self.binary = binary
+        self.log = log
+        # The kit's own client to the browser: what the agent did there, kept as the world's record.
+        self.recorder = recorder
         self.directory = directory
         self.relay = DevToolsRelay(state_path)
         try:
@@ -487,12 +491,22 @@ class KitBrowser:
         return {BROWSER_CDP_URL_ENV: self.relay.url}
 
     def metadata(self) -> dict[str, str]:
-        return {"state": "started", "state_path": str(self.relay.state_path)}
+        found = {"state": "started", "state_path": str(self.relay.state_path)}
+        if self.recorder is not None:
+            found["record_path"] = str(self.recorder.record_path)
+        if isinstance(getattr(self.log, "path", None), Path):
+            # A world with no door keeps the browser's refusals in a kit-owned file.
+            found["blocked_log_path"] = str(self.log.path)
+        return found
 
     def start(self) -> None:
         """Stop any browser running now and start a new one that remembers nothing: a new, empty profile folder,
         whether or not the last one could be removed."""
         self.stop()
+        reset = getattr(self.log, "reset", None)
+        if callable(reset):
+            # A new trial: the last one's refusals are not this one's.
+            reset()
         if self.directory.exists():
             try:
                 shutil.rmtree(self.directory)
@@ -515,11 +529,17 @@ class KitBrowser:
             browser_environment(home=profile, temporary=self._temporary),
             self.directory / "browser.log",
         )
-        self.relay.target(self._devtools_port(profile))
+        port = self._devtools_port(profile)
+        if self.recorder is not None:
+            # Before the relay lets the agent in, so every tab it opens is watched from its first page.
+            self.recorder.attach(port)
+        self.relay.target(port)
 
     def stop(self) -> None:
         """Stop the browser. From here no refusal is the agent's until the next browser has started."""
         self.relay.release()
+        if self.recorder is not None:
+            self.recorder.detach()
         handle, self._handle = self._handle, None
         try:
             if handle is not None:
@@ -539,9 +559,13 @@ class KitBrowser:
             self.stop()
         finally:
             try:
-                self.relay.close()
+                if self.recorder is not None:
+                    self.recorder.close()
             finally:
-                self.proxy.close()
+                try:
+                    self.relay.close()
+                finally:
+                    self.proxy.close()
 
     def _devtools_port(self, profile: Path) -> int:
         """The port Chromium chose, from the file it writes in its profile once its DevTools port is open. A browser
@@ -626,6 +650,25 @@ def _log_tail(path: Path) -> str:
     return "".join(one for one in redact_outbound_text(text) if one.isprintable())
 
 
+def browser_used(state_path: Any) -> bool:
+    """Whether the world's browser was used since it last started: a client attached through the relay, or its proxy
+    was asked for anything. A state that can't be read is never taken for a used browser."""
+    path = Path(str(state_path or ""))
+    try:
+        if not path.is_file():
+            return False
+        with open(path, "rb") as handle:
+            state = json.loads(handle.read(4096))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    attached = state.get("attached", 0)
+    return (isinstance(attached, int) and not isinstance(attached, bool) and attached > 0) or state.get(
+        "requested"
+    ) is True
+
+
 def browser_notices(runtime: Any) -> list[dict[str, Any]]:
     """What a trial says of its world's browser: not started for sites the agent was not read to need, and not
     used when no client attached to it and its proxy was asked for nothing. A state that can't be read is never
@@ -643,17 +686,7 @@ def browser_notices(runtime: Any) -> list[dict[str, Any]]:
         ]
     if browser.get("state") != "started":
         return []
-    state: Any = None
-    path = Path(str(browser.get("state_path") or ""))
-    try:
-        if path.is_file():
-            with open(path, "rb") as handle:
-                state = json.loads(handle.read(4096))
-    except (OSError, ValueError):
-        state = None
-    state = state if isinstance(state, dict) else {}
-    attached = state.get("attached", 0)
-    if (isinstance(attached, int) and attached > 0) or state.get("requested") is True:
+    if browser_used(browser.get("state_path")):
         return []
     return [
         {

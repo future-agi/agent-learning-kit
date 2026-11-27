@@ -4291,7 +4291,12 @@ END_STATE_SCHEMA = "futureagi.world-state.v1"
 
 
 async def upload_end_state(
-    adapter: Any, scenario_key: str, sealed: dict[str, Any], log: Sequence[Mapping[str, Any]] | None
+    adapter: Any,
+    scenario_key: str,
+    sealed: dict[str, Any],
+    log: Sequence[Mapping[str, Any]] | None,
+    *,
+    browser: Mapping[str, Any] | None = None,
 ) -> str | None:
     """Store the world's records at the trial's end and its action log as the trial's `world_state` artifact, so a
     fixed check can grade the trial again without calling the agent; pops the snapshot out of `sealed`. Nothing is
@@ -4305,6 +4310,10 @@ async def upload_end_state(
         "skipped": list(end.skipped),
         "action_log": [dict(row) for row in log or []],
     }
+    if browser is not None:
+        # The world's record of its browser and its refusals: kept apart from the action log, so no check counts
+        # them as calls.
+        body.update(browser)
     try:
         return await adapter.upload_artifact(
             json.dumps(body, sort_keys=True, default=str).encode("utf-8"),

@@ -35,6 +35,19 @@ from .call_runner import (
 from .contract import AgentContract
 from .privilege import IsolationMode, isolation_mode
 from .hosted_scheduler import WORKER_LIMITS_NOT_ENFORCED, CallAborted, CallCancelled, CallOutcome, Scenario, World
+from .browser_record import (
+    BROWSER_STATE_KEY,
+    WORLD_END_UNREADABLE,
+    browser_blocked,
+    browser_blocked_from_runtime,
+    browser_counts,
+    browser_evidence,
+    browser_file_body,
+    browser_shots_dir,
+    sealed_browser_blocked,
+    upload_browser_state,
+    upload_screenshots,
+)
 from .kit_browser import browser_notices
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
@@ -1361,6 +1374,8 @@ class HostedChatCallRunner:
         # Calls returned over HTTP are recorded here as they run, so they are a full capture.
         capture_failed = capture_failed and not graded_calls(transcript.calls)
 
+        # The world's record of its browser, sealed now the agent is done: off the loop, it waits on the kit's client.
+        browser = await asyncio.to_thread(browser_evidence, runtime)
         world_record = _world_actors_record(
             door,
             listing,
@@ -1388,10 +1403,34 @@ class HostedChatCallRunner:
         )
 
         if door_sees_tools:
-            from .call_runner import upload_end_state, worker_channels_held
+            from .call_runner import END_STATE_KEY, upload_end_state, worker_channels_held
 
             sealed = await asyncio.to_thread(self._records.end, id(runtime), records_dsn)
-            kept = await upload_end_state(self._adapter, scenario.scenario_key, sealed, _trial_log(door, trial_started))
+            door_log = _trial_log(door, trial_started)
+            # The browser's refusals come from one place only: the door's log where its database keeps them, else the
+            # kit-owned file the browser was given. Only the world's table holds the browser proxy's rows, so a table
+            # that cannot be read leaves the list unreadable, never empty.
+            refused = (
+                await asyncio.to_thread(
+                    browser_blocked, runtime, _readable_trial_log(door, trial_started, proxied=True)
+                )
+                if browser is not None
+                else None
+            )
+            # Decided before the upload: an upload the platform refused is not a world whose end could not be read.
+            end_readable = sealed.get(END_STATE_KEY) is not None
+            kept = await upload_end_state(
+                self._adapter, scenario.scenario_key, sealed, door_log,
+                browser=browser_file_body(browser, refused, adapter=self._adapter) if browser is not None else None,
+            )
+            browser_kept = None
+            if browser is not None and not end_readable:
+                # The world's end could not be read: the browser's record is still kept, in a file saying so, under a
+                # name of its own, so no reader of the world's end state takes a file without tables for it.
+                browser_kept = await upload_browser_state(
+                    self._adapter, scenario.scenario_key, browser, refused, why=WORLD_END_UNREADABLE,
+                    action_log=door_log,
+                )
             # `door` says a door stood for these counts, so a reader never takes a record from before it for one.
             world_record = {
                 **(world_record or {}),
@@ -1400,10 +1439,27 @@ class HostedChatCallRunner:
                 # The positive evidence a platform needs before it says a worker was held on its channel.
                 **({"worker_channels": True} if worker_channels_held(self._context.bundle_dir) else {}),
                 **({"end_state_artifact": kept} if kept else {}),
+                **({BROWSER_STATE_KEY: browser_kept} if browser_kept else {}),
+                # Counts only: the browser's rows are in the world_state file.
+                **({"browser": browser_counts(browser)} if browser is not None else {}),
             }
+            if browser is not None and isinstance(world_record.get("state_changes"), list):
+                # The browser's refusals in the agent's blocked list, which the door's log gives, split into its
+                # navigations and its pages' requests and counted; the addresses are in the world_state file.
+                world_record["state_changes"] = sealed_browser_blocked(
+                    world_record["state_changes"], browser, refused
+                )
         else:
             # The agent runs its own tools where no door stands: World changes says so, never "no change".
             world_record = dict(NOT_RECORDED)
+            if browser is not None:
+                # A world with the kit's browser still keeps a world_state file: the browser's record and refusals,
+                # saying the world itself was not recorded. The sealed record names it and keeps its counts only.
+                blocked = await asyncio.to_thread(browser_blocked_from_runtime, runtime)
+                kept = await upload_browser_state(self._adapter, scenario.scenario_key, browser, blocked)
+                world_record.update(
+                    {**({BROWSER_STATE_KEY: kept} if kept else {}), "browser": browser_counts(browser)}
+                )
         unenforced: list[dict[str, str]] = []
         stopped_notices: list[dict[str, Any]] = []
         if proxied:
@@ -1518,11 +1574,16 @@ class HostedChatCallRunner:
                 kind=ArtifactKind.TOOL_TRACE,
                 scenario_key=scenario.scenario_key,
             )
+        # Last, so they never crowd out the transcript and the end state. Never named as the call's recordings: the
+        # platform reads those as a voice call's.
+        _, shot_notices = await upload_screenshots(
+            self._adapter, scenario.scenario_key, browser, browser_shots_dir(runtime)
+        )
         outcome = CallOutcome(
             calls=calls,
             tool_capture_failed=capture_failed,
             turns=len(transcript.exchanges),
-            notices=tuple(said),
+            notices=tuple(said) + tuple(shot_notices),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

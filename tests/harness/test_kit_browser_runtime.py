@@ -309,6 +309,22 @@ def test_the_kit_runs_the_browser_as_the_agent_s_user_with_nothing_of_its_own(
     assert sorted(chowned) == sorted([(profile, 1234, 5678), (launch["env"]["TMPDIR"], 1234, 5678)])
     # Its state is where the kit writes and the agent's user does not.
     assert browser.metadata()["state_path"] == str(tmp_path / "browser-state" / "w0.json")
+    # The world's record of the browser is kept beside it, by the kit's own client to the browser.
+    assert browser.metadata()["record_path"] == str(tmp_path / "browser-state" / "w0-record.json")
+
+
+def test_the_world_s_browser_record_masks_the_job_s_declared_secrets(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(kit_browser, "chromium_binary", lambda: "/opt/alk-chromium")
+    context, _, _ = _factory_context(tmp_path, resolver=_fake_user_resolver({"svc-agent": (1234, 5678)}))
+    context = dataclasses.replace(context, secret_values={"SHOP_PASSWORD": "tok-4f9a1c7e2b"})
+    browser = br.kit_browser_factory(context)(0, None)
+    try:
+        browser.recorder.record.acted(
+            "tab-1", json.dumps({"kind": "typing", "url": "http://shop.test/", "target": {}, "text": "tok-4f9a1c7e2b"})
+        )
+        assert "tok-4f9a1c7e2b" not in json.dumps(browser.recorder.record.body())
+    finally:
+        browser.close()
 
 
 def test_a_world_under_a_long_work_folder_starts_its_browser_on_linux(tmp_path, monkeypatch) -> None:

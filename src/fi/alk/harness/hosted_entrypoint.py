@@ -1172,6 +1172,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.RECORDING_STEREO,
             ob.ArtifactKind.RECORDING_CUSTOMER,
             ob.ArtifactKind.RECORDING_ASSISTANT,
+            ob.ArtifactKind.SCREENSHOT,
             ob.ArtifactKind.TRACE,
             ob.ArtifactKind.TOOL_TRACE,
             ob.ArtifactKind.TRANSCRIPT,
@@ -1185,6 +1186,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.RECORDING_STEREO,
             ob.ArtifactKind.RECORDING_CUSTOMER,
             ob.ArtifactKind.RECORDING_ASSISTANT,
+            ob.ArtifactKind.SCREENSHOT,
             ob.ArtifactKind.OTHER,
         }
     ),
@@ -1755,6 +1757,10 @@ class OutboundAdapter:
 
     # -- artifacts (uploaded+acked BEFORE the referencing receipt) --------------------------
 
+    def keeps_artifact(self, kind: ob.ArtifactKind) -> bool:
+        """Whether the run's artifact level keeps this kind at all; an upload of one it does not is refused."""
+        return kind not in _ARTIFACT_LEVEL_FORBIDDEN_KINDS.get(self._artifacts_policy.level, frozenset())
+
     async def upload_artifact(
         self,
         data: bytes,
@@ -1774,10 +1780,7 @@ class OutboundAdapter:
             return None
         # guest-side level admission + budget, both BEFORE the transport is ever touched
         # ("the guest enforces it first").
-        forbidden = _ARTIFACT_LEVEL_FORBIDDEN_KINDS.get(
-            self._artifacts_policy.level, frozenset()
-        )
-        if kind in forbidden:
+        if not self.keeps_artifact(kind):
             await self.log(
                 level="error",
                 message=(

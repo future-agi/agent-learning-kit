@@ -55,6 +55,7 @@ from fi.alk.harness.outbound import (
     CAPABILITIES_SCHEMA_VERSION,
     EVENT_PAYLOAD_MAX_BYTES,
     ArtifactBudgetTracker,
+    SCREENSHOT_SHARE,
     ArtifactKind,
     ArtifactManifestDraft,
     ArtifactsClient,
@@ -1974,6 +1975,21 @@ def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_and_othe
     assert tracker.would_admit(ArtifactKind.RECORDING_COMBINED, 100, digest="d3")
 
 
+def test_screenshots_take_no_more_than_their_share_and_a_later_trace_still_fits() -> None:
+    # Many browser trials photograph their pages until nothing is left: their screenshots stop at their share of the
+    # job's budget, so a trace of half the budget uploaded after all of them is still taken.
+    tracker = ArtifactBudgetTracker(max_artifact_bytes=100)
+    taken = 0
+    for index in range(100):
+        if tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}"):
+            tracker.record(ArtifactKind.SCREENSHOT, 1, digest=f"shot-{index}")
+            taken += 1
+    assert taken == int(100 * SCREENSHOT_SHARE) <= 50
+    assert tracker.would_admit(ArtifactKind.TRACE, 50, digest="trace")
+    # A screenshot already taken is no new spend.
+    assert tracker.would_admit(ArtifactKind.SCREENSHOT, 1, digest="shot-0")
+
+
 # --- ResultReceiptDraft / build_result_receipt / build_skipped_receipt -----------------------------
 
 
@@ -3742,6 +3758,16 @@ def test_artifacts_client_content_type_defaults_by_kind() -> None:
     digest3 = hashlib.sha256(data3).hexdigest()
     client.upload(digest3, data3, kind=ArtifactKind.TRACE)
     assert platform.received_headers[-1]["Content-Type"] == "application/octet-stream"
+
+
+def test_a_browser_screenshot_is_sent_as_a_jpeg() -> None:
+    # The browser's screenshots are JPEG: the platform serves them back with the type they were sent with.
+    platform = _platform()
+    client = ArtifactsClient(_capabilities(), platform, sleep=lambda s: None)
+    data = b"\xff\xd8\xff\xe0 screenshot bytes"
+    client.upload(hashlib.sha256(data).hexdigest(), data, kind=ArtifactKind.SCREENSHOT, scenario_key="k1")
+    assert platform.received_headers[-1]["Content-Type"] == "image/jpeg"
+    assert platform.received_headers[-1]["X-Artifact-Kind"] == "screenshot"
 
 
 def test_artifacts_client_detects_wave_recording_bytes() -> None:

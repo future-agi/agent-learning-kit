@@ -21,7 +21,7 @@ from .call_runner import ArtifactUploader, CallRunnerContext
 from .chat_call_runner import _check_text_usage, handler_child_for
 from .handler_child import HandlerChannel
 from .hosted_scheduler import USER_CANCELED, CallAborted, CallCancelled, CallOutcome, Scenario, World, call_sealed
-from .isolated_process import IsolatedWorkerError, run_json_worker, run_worker, stop_requested
+from .isolated_process import MAX_RESULT_BYTES, IsolatedWorkerError, run_json_worker, run_worker, stop_requested
 from .outbound import ArtifactKind
 from .privilege import IsolationMode, isolation_mode
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
@@ -88,6 +88,8 @@ class IsolatedChatCallRunner:
         *,
         world: World | None = None,
     ) -> CallOutcome:
+        from .browser_record import level_keeps_no_screenshots_notice, not_kept_notice, screenshots_kept
+
         context = self._context
         environ = _allowlisted_ambient_env(dict(os.environ))
         environ.update(
@@ -147,6 +149,8 @@ class IsolatedChatCallRunner:
                     ),
                     "scenario_id": scenario.scenario_id,
                     "start": self._records.start_of(id(runtime)),
+                    # So the worker sends no screenshot the run's level keeps none of, and says the level is why.
+                    "screenshots_kept": screenshots_kept(self._adapter),
                 },
                 environ=environ,
                 work_directory=context.work_directory / "chat-workers",
@@ -167,12 +171,27 @@ class IsolatedChatCallRunner:
         await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
         artifacts = list(result.get("artifacts", []))
+        # A run whose level keeps no screenshots sends none: they are said as the level's, never as lost.
+        shots_kept = screenshots_kept(self._adapter)
         # A transcript names the trial's end state by the worker's own id, so the end state is stored before it.
         ends = [one for one in artifacts if one["kind"] == ArtifactKind.WORLD_STATE.value]
         for artifact in ends + [one for one in artifacts if one not in ends]:
             data = base64.b64decode(artifact["data"], validate=True)
             if artifact["kind"] == "transcript":
                 data = _with_stored_end_state(data, artifact_ids)
+            if artifact["kind"] == ArtifactKind.SCREENSHOT.value:
+                if not shots_kept:
+                    artifact_ids[artifact["id"]] = None
+                    continue
+                # A screenshot that could not be stored never fails the trial: it is said below.
+                try:
+                    artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
+                        data, kind=ArtifactKind.SCREENSHOT, scenario_key=scenario.scenario_key
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("a browser screenshot was not stored: %s", type(exc).__name__)
+                    artifact_ids[artifact["id"]] = None
+                continue
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
                 data,
                 kind=ArtifactKind(artifact["kind"]),
@@ -182,9 +201,17 @@ class IsolatedChatCallRunner:
         outcome = None
         if raw_outcome is not None:
             raw_outcome["calls"] = tuple(Call(**call) for call in raw_outcome["calls"])
+            # A recording not kept has no id: never named in the outcome, and a lost screenshot is said.
+            lost = sum(
+                1 for one in artifacts if one["kind"] == ArtifactKind.SCREENSHOT.value and not artifact_ids.get(one["id"])
+            )
+            if lost:
+                said = not_kept_notice(lost) if shots_kept else level_keeps_no_screenshots_notice(lost)
+                raw_outcome["notices"] = (*(raw_outcome.get("notices") or ()), said)
             raw_outcome["recording_artifacts"] = tuple(
                 artifact_ids[item]
                 for item in raw_outcome.get("recording_artifacts", [])
+                if artifact_ids.get(item)
             )
             raw_outcome["transcript_artifact"] = artifact_ids.get(
                 raw_outcome["transcript_artifact"]
@@ -204,21 +231,24 @@ class IsolatedChatCallRunner:
 
 
 def _with_stored_end_state(data: bytes, artifact_ids: dict[str, Any]) -> bytes:
-    """A transcript whose World changes name the end state by the worker's id, naming it by the id it was stored
-    under instead; any other transcript is returned as it was."""
+    """A transcript whose World changes name the end state, or the browser's own file, by the worker's id, naming each
+    by the id it was stored under instead; any other transcript is returned as it was."""
+    from .browser_record import BROWSER_STATE_KEY
+
     try:
         document = json.loads(data)
     except ValueError:
         return data
     world = document.get("world_actors") if isinstance(document, dict) else None
-    local = world.get("end_state_artifact") if isinstance(world, dict) else None
-    if local is None:
+    keys = [key for key in ("end_state_artifact", BROWSER_STATE_KEY) if isinstance(world, dict) and key in world]
+    if not keys:
         return data
-    stored = artifact_ids.get(str(local))
-    if stored:
-        world["end_state_artifact"] = stored
-    else:
-        world.pop("end_state_artifact", None)
+    for key in keys:
+        stored = artifact_ids.get(str(world[key]))
+        if stored:
+            world[key] = stored
+        else:
+            world.pop(key, None)
     return json.dumps(document, sort_keys=True, default=str).encode("utf-8")
 
 
@@ -263,21 +293,32 @@ class _UsageCollector:
 
 
 class _ArtifactCollector:
-    def __init__(self) -> None:
+    def __init__(self, *, screenshots_kept: bool = True) -> None:
         self.artifacts: list[dict[str, Any]] = []
+        self._carried = 0
+        self._screenshots_kept = screenshots_kept
+
+    def keeps_artifact(self, kind: ArtifactKind) -> bool:
+        """What the parent's run keeps, as it told the worker: a screenshot only where its level keeps one."""
+        return self._screenshots_kept or kind is not ArtifactKind.SCREENSHOT
 
     async def upload_artifact(
         self, data: bytes, *, kind: ArtifactKind, **_kwargs: Any
-    ) -> str:
+    ) -> str | None:
+        encoded = base64.b64encode(data).decode("ascii")
+        # The worker's result is one file with a size limit. A screenshot that would take it past three quarters of
+        # that, leaving room for the outcome, is not kept rather than failing the trial; its runner says so.
+        if kind is ArtifactKind.SCREENSHOT and self._carried + len(encoded) > MAX_RESULT_BYTES * 3 // 4:
+            return None
+        self._carried += len(encoded)
         identifier = str(len(self.artifacts))
-        self.artifacts.append(
-            {
-                "id": identifier,
-                "kind": kind.value,
-                "data": base64.b64encode(data).decode("ascii"),
-            }
-        )
+        self.artifacts.append({"id": identifier, "kind": kind.value, "data": encoded})
         return identifier
+
+
+def _collector_for(payload: dict[str, Any]) -> _ArtifactCollector:
+    """The worker's collector, keeping screenshots unless the parent said the run's level keeps none."""
+    return _ArtifactCollector(screenshots_kept=payload.get("screenshots_kept") is not False)
 
 
 async def main() -> None:
@@ -288,7 +329,7 @@ async def main() -> None:
     from .retell_chat_call_runner import RetellChatCallRunner
 
     payload = json.load(sys.stdin)
-    collector = _ArtifactCollector()
+    collector = _collector_for(payload)
     usage = _UsageCollector()
     try:
         isolated = payload.get("process_isolation") == IsolationMode.PER_USER.value

@@ -2874,6 +2874,8 @@ class ArtifactKind(str, Enum):
     RECORDING_STEREO = "recording_stereo"
     RECORDING_CUSTOMER = "recording_customer"
     RECORDING_ASSISTANT = "recording_assistant"
+    # A picture of the environment's browser: a recording of the screen, kept where audio is.
+    SCREENSHOT = "screenshot"
     TRANSCRIPT = "transcript"
     TOOL_TRACE = "tool_trace"
     # The world's records at a trial's end, with its action log: kept so a fixed check can grade the trial again.
@@ -2918,6 +2920,11 @@ _RECORDING_ARTIFACT_KINDS = frozenset(
 )
 
 
+# The most of a job's upload budget the browser's screenshots may take together: they share the last tier with
+# traces, and many browser trials would otherwise leave no room for a trace uploaded after them.
+SCREENSHOT_SHARE = 0.5
+
+
 def priority_class(kind: ArtifactKind) -> int:
     """N16: the contract's three-tier budget partition as a total order, lower = admitted first --
     `0` reserved (`is_reserved_artifact_kind`, always admitted), `1` recordings, `2` optional
@@ -2951,6 +2958,7 @@ class ArtifactBudgetTracker:
     ) -> None:
         self._max_bytes = max_artifact_bytes
         self._admitted_bytes = 0
+        self._screenshot_bytes = 0
         self._seen_digests: set[str] = set()
         self._recording_headroom_bytes = recording_headroom_bytes
 
@@ -2963,14 +2971,17 @@ class ArtifactBudgetTracker:
         remaining = self._max_bytes - self._admitted_bytes
         if tier == 2:
             remaining -= self._recording_headroom_bytes
+        if kind is ArtifactKind.SCREENSHOT:
+            remaining = min(remaining, int(self._max_bytes * SCREENSHOT_SHARE) - self._screenshot_bytes)
         return size <= remaining
 
     def record(self, kind: ArtifactKind, size: int, *, digest: str) -> None:
-        del kind  # reservation already resolved by would_admit; recorded uniformly here
         if digest in self._seen_digests:
             return
         self._seen_digests.add(digest)
         self._admitted_bytes += size
+        if kind is ArtifactKind.SCREENSHOT:
+            self._screenshot_bytes += size
 
     @property
     def admitted_bytes(self) -> int:
@@ -3065,6 +3076,8 @@ _DEFAULT_ARTIFACT_CONTENT_TYPES: dict[ArtifactKind, str] = {
     ArtifactKind.RECORDING_ASSISTANT: "video/mp4",
     ArtifactKind.TRANSCRIPT: "application/json",
     ArtifactKind.RESULT: "application/json",
+    # The browser's screenshots are taken as JPEG.
+    ArtifactKind.SCREENSHOT: "image/jpeg",
 }
 
 

@@ -132,15 +132,14 @@ wider than the firewall (the agent's proxy still reads a name as covering the ho
 loopback, and never a
 site any of whose addresses is loopback or unspecified (an IPv4 one written as IPv6 included);
 each address of a site is tried in turn within 30 seconds. Chromium sends loopback through it too,
-QUIC is off, and WebRTC is kept to the proxy (no UDP outside it). A refusal is logged in the world's action log as the agent's
-`egress_blocked` attempt marked `via: browser` while a browser runs, whoever in it asked and however
-that client reached it; with no client the browser asks only for its own service name
-(`kit-browser.invalid`, never logged), so a refusal while it runs is a client's. Nothing is logged
-between a browser's stop and the next one's start. The log reaches the trial's `blocked` list only
-where the chat trial reads the world's log (a world with a door or a tool proxy); a world with no
-postgres endpoint refuses and does not record. The proxy sees a host, not who in the browser
+QUIC is off, and WebRTC is kept to the proxy (no UDP outside it). A refusal is logged as the agent's `egress_blocked` attempt marked
+`via: browser` while a browser runs, whoever in it asked and however that client reached it: at the
+world's door where its database keeps the log, else in a kit-owned file cut at each trial, capped,
+cleaned, with the query part of an address removed. With no client the browser asks only for its own
+service name (`kit-browser.invalid`, never logged), so a refusal while it runs is a client's. Nothing
+is logged between a browser's stop and the next one's start. The proxy sees a host, not who in the browser
 asked, so its count holds a page's own requests (scripts, fonts, a favicon) as well as the agent's
-navigations. A trial says `browser_not_used` when no client
+navigations; the browser record tells them apart. A trial says `browser_not_used` when no client
 attached through the relay and the browser's proxy was asked for nothing, and `browser_not_started` when the job has sites for an agent not read as needing a
 browser; both are reported, not graded. The relay serves as many clients as the egress proxy does
 and lets a connection idle both ways go after as long as the longest call allowed. That bound holds
@@ -148,6 +147,97 @@ for the environment's browser only: the agent's own code, or a browser it starts
 the sandbox's firewall. It covers what the browser is asked to load over the network, not local
 files the agent's user can read, nor a client that changes the browser's own settings through its
 DevTools address.
+
+**The browser record** (`browser_record.py`; its WebSocket client is `devtools_socket.py`, and the
+refusals file of a world with no door is `browser_blocked_log.py`). Beside each world's browser the kit runs a recorder
+on the browser's own port, which never counts as the agent's attach. It keeps, in order and with
+times, the pages the agent's tabs opened, what it clicked and typed (the element in words), and
+the sites it was refused, in two lists: a page the agent tried to open off the list, kept whole
+each time (the browser's own retries within 2 s, in one tab, are one attempt), and a request a
+page made off the list, counted for each host. A page that sends its tab off the list itself, by a
+redirect, a refresh (a meta tag or a `Refresh` header) or its own script with no input behind it, is
+counted as the page's request; so is a move the agent makes by running script in the page
+(`location.href` set) rather than by navigating, which is not counted as its attempt. A click of the
+agent's that the page's own handler turns into a move (a button whose script navigates) is the
+agent's attempt: the browser marks the move as set off by input. That mark lapses after about 5 s and a
+window the handler opens uses it up, so once the agent has clicked or typed on a page, a move that page's script
+makes is the agent's until the tab opens another page: a handler that moves the page after a slow step, or after
+opening a window, stays the agent's. The cost: a page's own timer that fires after any click or typing of the
+agent's on that page reads as the agent's too. The icon the browser asks of a site it was just refused is no request at all. Both lists are capped with the rows. A DevTools client is
+not told of the clicks and keys another client sends, so a small listener runs in each page, in a
+script world of its own, and reports only trusted events through a binding; the page's own
+scripts can neither write to the record nor read it. The world's and the binding's names are
+random, say nothing of what they are, and are new at each attach; the listener takes the binding into
+its own closure and off the world's globals before the page loads. A client holding the browser's
+DevTools address is the limit below. Only trusted events are rows:
+an agent that acts by script (an element's `click()` run in the page, or a value set and an `input`
+event made up) leaves no click or typing row, though its pages, screenshots and refusals are still
+kept; typing sent as input (`Input.insertText`, as a Playwright-style fill does) is kept. Typing is
+a row only where the browser was given it (keys, a paste, a drop or inserted text, each announced by
+a trusted `beforeinput` on that field): a page that types into its own field through the editing
+command (`execCommand('insertText')`), whose `input` event is trusted too, writes no typing row. Text typed
+into a secret field is never kept as text, only that typing happened: a password field, or a field
+whose autofill names a password, a card's number, security code or expiry, or a one-time code
+(`current-password`, `new-password`, `cc-number`, `cc-csc`, `cc-exp*`, `one-time-code`), a field
+the page shows as dots by its own style, and each box of a code split over boxes: a run of 4 to 8
+text boxes under one element (up to five levels up) that each take one character, or of which one is
+named as a code's and each takes one character or digits, or a one-character box near a field (in
+its form, else up to three levels up) with one of those autofill names. That includes a field whose
+kind or autofill is changed after the page loads. A card field with no autofill name, a split code
+whose unnamed boxes are not one character each, and a field shown as dots by a font rather than by
+its style are not known to be secret; a grid of 4 to 8 one-character boxes that is no code is taken
+for one. The job's declared secrets are masked wherever the record holds them, as
+it is made. A value is masked whole, and only one of 8 characters or more: a shorter one, a secret left
+half-typed, or one cut by the 200-character limit on typed text, is not matched. Text the page shows
+back (a click's element text, up to 80 characters) is kept as the page shows it, at any level, and
+a secret field inside a custom element's shadow tree is judged by the custom element, which may not
+say it is one. Screenshots show whatever the page shows. Every text passes the kit's
+cleaner, which drops an address's query and fragment; a token in its path (a reset link's, say) is
+kept. Rows are capped (the record then says `truncated`), and a
+screenshot is taken at each page load and at the trial's end, capped in count and bytes with one
+place kept free for the end's, each named by the id it is stored under. The end's is not kept when it
+is larger than all of them together may be, or is answered after the record is sealed. A page is
+judged by its address: a blank page, the browser's own error page and an address off the sites are
+neither rows nor screenshots, and never the end's. The Chromium the image pins shows its own error
+page for any page it could not load and any page the proxy refused (an older build shows the
+proxy's refusal over http, at the refused address). So an allowed page that fails to load leaves
+no row, and so does an allowed name the proxy refuses by its address (one that resolves to
+loopback); a build that shows the proxy's refusal would keep that one as a page at the allowed
+address. The refusal itself is in the blocked list. The record holds against the page,
+not against a client holding the DevTools address: such a client can do whatever DevTools can,
+so the record says what the browser did, never that nothing else touched it.
+
+The record is the world's, never the agent's tool calls: it lives in the trial's `world_state`
+file, apart from the action log, and the sealed world record carries its counts only. There the
+agent's `blocked` list has the browser's refusals split by the record into navigations and page
+requests, counted for each host (`what: navigation` or `page_request`); their addresses are in the
+file. Where the browser's refusals could not be read, the agent's entry holds none of them and says
+`browser_blocked_unreadable`; where their file reached its cap, it says `browser_blocked_truncated`. For a host the record saw, its count stands in for the proxy's, which counts each of the
+browser's retries; a host only the proxy refused (a worker's request, a tab watched late) stays as
+the proxy counted it. A world
+with a door adds it to the end state it stores; a world with no door still stores the file, under
+`futureagi.browser-world-state.v1`, saying the world's records were not recorded (`not_held`)
+rather than carrying empty tables. Where a door stood but the world's end could not be read, the
+same file holds the door's action log and says only the tables are missing. The sealed record names the
+world's end state under `end_state_artifact` only when the file holds the world's tables; a file
+holding the browser's record without them is named under `browser_state_artifact`. With no client
+attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. The
+record reaches disk when a client attaches or leaves, at the seal and when the recorder stops
+reading, not row by row: a seal not answered within 5 seconds is read as last written, says
+`complete: false`, and may hold none of the rows since the last attach. Typed text
+leaves with the trace, wherever the `world_state` file goes; secret fields never hold it. One
+setting, `TYPED_TEXT_NEEDS_RECORDINGS`, holds it to `traces-and-recordings` instead: below that each
+typing row then keeps where and that it happened, its text is left out, and the file says
+`typed_text: not_kept_at_level`. Screenshots are uploaded last, as
+the `screenshot` kind, kept from `traces-and-recordings` up; at a lower level the browser still
+takes them in the world, none is sent, and the trial says the level is why. Together they take at
+most half of the job's upload budget, so traces uploaded after them keep room. One the kit cannot send
+whole, one the platform does not keep, or one past what an isolated worker's result can carry never
+fails the trial: the trial says so. Once the pages' screenshots are full (one place stays for the
+end's), no page is photographed; a page screenshot not kept, or one whose tab closed before it was
+taken, leaves its place free. The end's tab is chosen once every event the browser sent before the
+seal is handled: of the tabs still open showing a page the agent opened, the one that opened its
+page last. A tab that moves on while it is photographed gives no end screenshot.
 
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the
