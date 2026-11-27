@@ -129,7 +129,7 @@ wider than the firewall (the agent's proxy still reads a name as covering the ho
 loopback, and never a
 site any of whose addresses is loopback or unspecified (an IPv4 one written as IPv6 included);
 each address of a site is tried in turn within 30 seconds. Chromium sends loopback through it too,
-and QUIC and WebRTC are off. A refusal is logged in the world's action log as the agent's
+QUIC is off, and WebRTC is kept to the proxy (no UDP outside it). A refusal is logged in the world's action log as the agent's
 `egress_blocked` attempt marked `via: browser` while a browser runs, whoever in it asked and however
 that client reached it; with no client the browser asks only for its own service name
 (`kit-browser.invalid`, never logged), so a refusal while it runs is a client's. Nothing is logged
@@ -137,7 +137,7 @@ between a browser's stop and the next one's start. The log reaches the trial's `
 where the chat trial reads the world's log (a world with a door or a tool proxy); a world with no
 postgres endpoint refuses and does not record. The proxy sees a host, not who in the browser
 asked, so its count holds a page's own requests (scripts, fonts, a favicon) as well as the agent's
-navigations; the browser record tells them apart. A trial says `browser_not_used` when no client
+navigations. A trial says `browser_not_used` when no client
 attached through the relay and the browser's proxy was asked for nothing, and `browser_not_started` when the job has sites for an agent not read as needing a
 browser; both are reported, not graded. The relay serves as many clients as the egress proxy does
 and lets a connection idle both ways go after as long as the longest call allowed. That bound holds

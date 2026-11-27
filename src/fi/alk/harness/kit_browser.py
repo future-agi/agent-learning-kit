@@ -7,8 +7,8 @@ Two bounds hold, and they are not the same:
 
 - The browser reaches only the environment's sites, through a refusing proxy of its own
   (``BrowserProxy``). Unlike the agent's proxy it never admits loopback, where the world's database
-  and the kit's own services listen, and Chromium is told to send loopback through it too. QUIC and
-  WebRTC, which would go around a proxy, are off.
+  and the kit's own services listen, and Chromium is told to send loopback through it too. QUIC, which
+  would go around a proxy, is off, and WebRTC is kept to the proxy: it sends no UDP the proxy does not carry.
 - The sandbox as a whole reaches the firewall's wider list. The agent's own code, or a browser it
   starts itself, is bound only by that.
 
@@ -18,8 +18,9 @@ allows; a filter between the agent and the browser would be needed for that. Nor
 local files: the browser can open what the agent's user can read, as the agent itself can.
 
 The browser runs as the agent's user with a bare environment, starts on an empty profile at each
-reset, and its own background traffic is switched off as far as Chromium's switches allow. What it
-asks for before a client attaches is never logged as the agent's attempt.
+reset, and its own background traffic is switched off as far as Chromium's switches allow. With no
+client attached it asks only for its own service name, so a refusal while it runs comes from whoever
+is attached.
 
 What the proxy logs is per host: it sees a host name, not who asked. Once a client has attached, a
 refused request is logged whether the agent's navigation asked for it or a page it opened did (a
