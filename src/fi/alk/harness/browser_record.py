@@ -159,8 +159,17 @@ LISTENER = r"""
       ? event.target.closest('a,button,input,select,textarea,label,[role]') || event.target : event.target;
     say({kind: 'click', url: location.href, target: describe(hit)});
   }, true);
-  addEventListener('input', (event) => {
+  // Typing the browser was given (keys, a paste, a drop, inserted text) comes with a trusted beforeinput first, in
+  // the same task; a page's own editing command fires input alone.
+  let given = null;
+  addEventListener('beforeinput', (event) => {
     if (!event.isTrusted) return;
+    given = event.target;
+    setTimeout(() => { given = null; }, 0);
+  }, true);
+  addEventListener('input', (event) => {
+    if (!event.isTrusted || event.target !== given) return;
+    given = null;
     const el = event.target;
     const hidden = isSecret(el);
     const typed = hidden || !el || el.isContentEditable ? null : String(el.value || '').slice(0, %(text)d);

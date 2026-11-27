@@ -169,7 +169,10 @@ its own closure and off the world's globals before the page loads. A client hold
 DevTools address is the limit below. Only trusted events are rows:
 an agent that acts by script (an element's `click()` run in the page, or a value set and an `input`
 event made up) leaves no click or typing row, though its pages, screenshots and refusals are still
-kept; typing sent as input (`Input.insertText`, as a Playwright-style fill does) is kept. Text typed
+kept; typing sent as input (`Input.insertText`, as a Playwright-style fill does) is kept. Typing is
+a row only where the browser was given it (keys, a paste, a drop or inserted text, each announced by
+a trusted `beforeinput` on that field): a page that types into its own field through the editing
+command (`execCommand('insertText')`), whose `input` event is trusted too, writes no typing row. Text typed
 into a secret field is never kept as text, only that typing happened: a password field, or a field
 whose autofill names a password, a card's number, security code or expiry, or a one-time code
 (`current-password`, `new-password`, `cc-number`, `cc-csc`, `cc-exp*`, `one-time-code`), a field
