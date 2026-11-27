@@ -6557,6 +6557,23 @@ def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
             'llm = ChatOpenAI(model="gpt-4o", stop=";", timeout=os.getenv("LLM_TIMEOUT")); x = 1\n',
             id="semicolons-in-a-string-and-after-the-call",
         ),
+        pytest.param(
+            "agent.py",
+            'llm = ChatOpenAI(model="gpt-4o", stop=");", timeout=os.getenv("LLM_TIMEOUT"))\n',
+            id="a-closing-bracket-and-semicolon-in-a-string",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const llm = new ChatOpenAI({ model: "gpt-4o", /* }); */ '
+            "timeout: process.env.LLM_TIMEOUT });\n",
+            id="closing-brackets-and-a-semicolon-in-a-comment",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const llm = new ChatOpenAI({ model: "gpt-4o", callbacks: [() => { log(); }], '
+            "timeout: process.env.LLM_TIMEOUT });\n",
+            id="a-semicolon-inside-a-function-given-to-the-call",
+        ),
     ],
 )
 def test_a_setting_beside_the_model_its_own_call_is_given_is_still_refused(
