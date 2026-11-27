@@ -405,13 +405,14 @@ jobs:
       - name: Install test dependencies on the newest versions
         if: matrix.dependencies == 'newest'
         run: |
-          python -m pip install . pytest pytest-asyncio 'hypothesis>=6.140'
+          # harness-stores: the chat worker reaches the world's tools, which import psycopg.
+          python -m pip install '.[harness-stores]' pytest pytest-asyncio 'hypothesis>=6.140'
           python -c "import importlib.metadata as m; print({p: m.version(p) for p in ('openai', 'litellm', 'httpx2')})"
       - name: Install test dependencies
         if: matrix.dependencies == 'minimum-livekit'
         # Exercise the minimum LiveKit version supported by pyproject.toml. It needs openai 2.
         run: >-
-          python -m pip install '.[livekit]' pytest pytest-asyncio 'hypothesis>=6.140'
+          python -m pip install '.[livekit,harness-stores]' pytest pytest-asyncio 'hypothesis>=6.140'
           'livekit-agents==1.8.3'
           'livekit-plugins-cartesia==1.8.3'
           'livekit-plugins-deepgram==1.8.3'
