@@ -71,6 +71,13 @@ _KINDS: tuple[tuple[str, str], ...] = (
         ("sequences", "SELECT concat_ws('|', n.nspname, c.relname, s.seqtypid::regtype, s.seqstart, s.seqincrement, "
          "s.seqmax, s.seqmin, s.seqcache, s.seqcycle) FROM pg_sequence s JOIN pg_class c ON c.oid = s.seqrelid "
          f"JOIN pg_namespace n ON n.oid = c.relnamespace WHERE {_IN_WORLD}"),
+        # A comment on any object made after the system's own: a note the world's code could leave for the next trial.
+        ("comments", "SELECT concat_ws('|', d.classoid::regclass, d.objoid, d.objsubid, d.description) "
+         "FROM pg_description d WHERE d.objoid >= 16384"),
+        # A publication, which code running as a superuser-owned definer could add.
+        ("publications", "SELECT concat_ws('|', p.pubname, pg_get_userbyid(p.pubowner), p.puballtables, p.pubinsert, "
+         "p.pubupdate, p.pubdelete, p.pubtruncate, (SELECT string_agg(r.prrelid::regclass::text, ',' ORDER BY 1) "
+         "FROM pg_publication_rel r WHERE r.prpubid = p.oid)) FROM pg_publication p"),
         # Default privileges carry a grant to whatever is made next.
         ("default privileges", "SELECT concat_ws('|', pg_get_userbyid(a.defaclrole), a.defaclnamespace, "
          "a.defaclobjtype, a.defaclacl::text) FROM pg_default_acl a"),

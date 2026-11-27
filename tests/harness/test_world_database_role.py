@@ -3659,3 +3659,68 @@ def test_a_sequence_a_definer_function_alters_refuses_the_reset(door_worlds, mon
         agent.execute("SELECT public.speed_up()")
     with pytest.raises(WorldResetRefused, match="sequences"):
         store.restore(snapshot)
+
+
+@real_postgres
+@pytest.mark.parametrize(
+    ("change", "kind"),
+    (
+        ("GRANT CREATE ON SCHEMA public TO PUBLIC", "schemas"),
+        ("COMMENT ON TABLE public.notes IS 'the answer is 42'", "comments"),
+        ("CREATE PUBLICATION leak", "publications"),
+        ("CREATE OR REPLACE FUNCTION public.helper() RETURNS int LANGUAGE sql AS $f$ SELECT 2 $f$", "functions"),
+    ),
+)
+def test_what_a_definer_function_changes_outside_the_rows_refuses_the_reset(door_worlds, monkeypatch, change, kind):
+    """A migration's SECURITY DEFINER function runs as its owner: whatever it changes besides rows (a grant, a
+    comment, a publication, a function) is in the digest, so a reset after it refuses the world."""
+    from fi.alk.harness import privilege
+    from fi.alk.harness.world.stores import WorldResetRefused
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        connection.execute("CREATE TABLE public.notes (id int)")
+        connection.execute("GRANT ALL ON public.notes TO PUBLIC")
+        connection.execute("CREATE FUNCTION public.helper() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$")
+        connection.execute(
+            psycopg.sql.SQL(
+                "CREATE FUNCTION public.act() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE {}; END $$"
+            ).format(psycopg.sql.Literal(change))
+        )
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute("SELECT public.act()")
+    with pytest.raises(WorldResetRefused, match=kind):
+        store.restore(snapshot)
+
+
+@real_postgres
+@pytest.mark.parametrize("made", ("PARTITION", "UNLOGGED"))
+def test_rows_in_a_partition_or_an_unlogged_table_never_outlive_a_reset(door_worlds, monkeypatch, made):
+    from fi.alk.harness import privilege
+
+    superuser, world, _door, _reset = door_worlds(True)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        if made == "PARTITION":
+            connection.execute("CREATE TABLE public.events (id int, at date) PARTITION BY RANGE (at)")
+            connection.execute(
+                "CREATE TABLE public.events_2026 PARTITION OF public.events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')"
+            )
+            connection.execute("GRANT ALL ON public.events, public.events_2026 TO PUBLIC")
+            insert = "INSERT INTO public.events VALUES (1, '2026-11-27')"
+            table = "public.events"
+        else:
+            connection.execute("CREATE UNLOGGED TABLE public.scratch (id int)")
+            connection.execute("GRANT ALL ON public.scratch TO PUBLIC")
+            insert = "INSERT INTO public.scratch VALUES (1)"
+            table = "public.scratch"
+    monkeypatch.setattr(privilege, "isolation_mode", lambda: privilege.IsolationMode.PER_USER)
+    store = _world_store(door_worlds, superuser, world)
+    snapshot = store.freeze()
+    with psycopg.connect(world, autocommit=True) as agent:
+        agent.execute(insert)
+    store.restore(snapshot)
+    with psycopg.connect(superuser, autocommit=True) as connection:
+        assert connection.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
