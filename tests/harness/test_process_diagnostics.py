@@ -112,8 +112,9 @@ def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path)
     assert _collapse_repeated_lines("error 402\nb\nerror 402\nc\n") == (
         "error 402\nb\nerror 402\nc\n"
     )
-    assert _collapse_repeated_lines("b\nerror 402\nerror 402\nerror 402\nc\n") == (
-        "b\n[earlier copies of the next line omitted: 2]\nerror 402\nc\n"
+    copy = "error 402 from the speech provider\n"
+    assert _collapse_repeated_lines("b\n" + copy * 10 + "c\n") == (
+        "b\n[earlier copies of the next line omitted: 9]\n" + copy + "c\n"
     )
 
 
@@ -184,17 +185,16 @@ def test_records_that_differ_in_a_status_or_exit_code_are_different_errors():
 
 
 def test_records_that_differ_only_in_times_ids_or_counters_still_collapse():
-    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+    from fi.alk.harness.process_diagnostics import _shape
 
-    log = (
-        '{"msg":"stt failed","status_code":402,"ts":"2026-11-09T12:00:01.123Z","req":"a1b2c3d4e5f6"}\n'
-        '{"msg":"stt failed","status_code":402,"ts":"2026-11-09T12:00:09.456Z","req":"f6e5d4c3b2a1"}\n'
-        "INFO poll 18342 took 0.53s\n"
-        "INFO poll 18343 took 0.61s\n"
-    )
-    collapsed = _collapse_repeated_lines(log)
-    assert collapsed.count("stt failed") == 1
-    assert collapsed.count("INFO poll") == 1
+    for first, second in (
+        (
+            '{"msg":"stt failed","status_code":402,"ts":"2026-11-09T12:00:01.123Z","req":"a1b2c3d4e5f6"}\n',
+            '{"msg":"stt failed","status_code":402,"ts":"2026-11-09T12:00:09.456Z","req":"f6e5d4c3b2a1"}\n',
+        ),
+        ("INFO poll 18342 took 0.53s\n", "INFO poll 18343 took 0.61s\n"),
+    ):
+        assert _shape([first]) == _shape([second]), (first, second)
 
 
 def test_poll_lines_with_iso_offset_timestamps_collapse_so_the_root_error_survives(
@@ -286,10 +286,11 @@ def test_an_underscore_prefixed_hex_id_collapses_like_any_other_id():
     from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
 
     lines = "".join(
-        f"INFO poll req_{n:010x} state=pending\n" for n in (0x3941907E58, 0x1A2B3C4D5E)
+        f"INFO poll req_{n:010x} state=pending\n"
+        for n in range(0x3941907E58, 0x3941907E58 + 10)
     )
     collapsed = _collapse_repeated_lines(lines + "ERROR root cause\n")
-    assert "[earlier copies of the next line omitted: 1]" in collapsed
+    assert "[earlier copies of the next line omitted: 9]" in collapsed
 
 
 def test_a_nul_byte_in_the_log_does_not_break_collapsing(tmp_path):
@@ -299,13 +300,13 @@ def test_a_nul_byte_in_the_log_does_not_break_collapsing(tmp_path):
     work.mkdir()
     log = work / "process.log"
     log.write_bytes(
-        b"binary \x00a\x00 junk\n" * 3
+        b"binary \x00a\x00 junk\n" * 10
         + b"ERROR worker: root cause is a missing api key\n"
     )
     retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
     body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
     assert body.endswith("ERROR worker: root cause is a missing api key\n")
-    assert "[earlier copies of the next line omitted: 2]" in body
+    assert "[earlier copies of the next line omitted: 9]" in body
 
 
 def test_retention_write_failure_does_not_prevent_cleanup(tmp_path, monkeypatch):
@@ -481,9 +482,12 @@ _PEM_LINES = [
 def _evidence(tmp_path, source, log_text):
     logs = tmp_path / "process-logs"
     logs.mkdir(exist_ok=True)
-    (logs / "worlds-w0-agent-" f"{'a' * 32}.log").write_text(log_text)
+    (logs / f"worlds-w0-agent-{'a' * 32}.log").write_text(log_text)
     return retained_process_evidence(
-        logs, set(), {"job_key": "unrelated-job-value"}, masks=source_secret_masks(source)
+        logs,
+        set(),
+        {"job_key": "unrelated-job-value"},
+        masks=source_secret_masks(source),
     )
 
 
@@ -505,14 +509,19 @@ def _source(tmp_path, files):
         ("export API_TOKEN=canary-token-export-0003", "canary-token-export-0003"),
         ("export API_TOKEN='canary-token-both-0004'", "canary-token-both-0004"),
         ("API_TOKEN=canary-token-comment-0005 # prod key", "canary-token-comment-0005"),
-        ('API_TOKEN="canary-token-qcomment-0006"  # prod', "canary-token-qcomment-0006"),
+        (
+            'API_TOKEN="canary-token-qcomment-0006"  # prod',
+            "canary-token-qcomment-0006",
+        ),
         ("API_TOKEN=canary-token-spaces-0007   ", "canary-token-spaces-0007"),
         ("api_token: canary-token-colon-0008", "canary-token-colon-0008"),
     ],
 )
 def test_env_style_values_are_masked_from_process_logs(tmp_path, line, leaked):
     source = _source(tmp_path, {".env": f"PORT=8080\n{line}\n"})
-    text = _evidence(tmp_path, source, f"starting with key {leaked} ok\nlistening on 8080\n")
+    text = _evidence(
+        tmp_path, source, f"starting with key {leaked} ok\nlistening on 8080\n"
+    )
     assert leaked not in text
     assert "<redacted>" in text
     assert "listening on 8080" in text
@@ -543,7 +552,9 @@ def test_a_json_key_file_is_masked_whole_and_by_line(tmp_path):
     body = '{\n  "private_key": "canary-json-private-key-0010",\n  "client": "canary-json-client-0011"\n}\n'
     source = _source(tmp_path, {"svc-key.json": body})
     text = _evidence(
-        tmp_path, source, 'x "private_key": "canary-json-private-key-0010", y canary-json-client-0011'
+        tmp_path,
+        source,
+        'x "private_key": "canary-json-private-key-0010", y canary-json-client-0011',
     )
     assert "canary-json-private-key-0010" not in text
     assert "canary-json-client-0011" not in text
@@ -553,13 +564,17 @@ def test_a_value_under_the_minimum_is_left_alone(tmp_path):
     assert MIN_MASKED_LENGTH == 10
     source = _source(
         tmp_path,
-        {".env": "ENABLED=1\nDEBUG=true\nPORT=8080\nHOST=localhost\nDB=127.0.0.1\nSECRET=canary-long-value-0012\n"},
+        {
+            ".env": "ENABLED=1\nDEBUG=true\nPORT=8080\nHOST=localhost\nDB=127.0.0.1\nSECRET=canary-long-value-0012\n"
+        },
     )
     log = "enabled 1 debug true port 8080 host localhost db 127.0.0.1 canary-long-value-0012\n"
     text = _evidence(tmp_path, source, log)
     assert "enabled 1 debug true port 8080 host localhost db 127.0.0.1" in text
     assert "canary-long-value-0012" not in text
-    assert "1" not in source_secret_masks(source) and "localhost" not in source_secret_masks(source)
+    assert "1" not in source_secret_masks(
+        source
+    ) and "localhost" not in source_secret_masks(source)
 
 
 def test_a_listed_file_reached_through_a_link_is_judged_where_it_resolves(tmp_path):
@@ -591,12 +606,16 @@ def test_a_file_not_on_the_list_is_left_alone(tmp_path):
             "config.yaml": "token: canary-yaml-value-0016\n",
         },
     )
-    text = _evidence(tmp_path, source, "canary-source-code-value-0015 canary-yaml-value-0016\n")
+    text = _evidence(
+        tmp_path, source, "canary-source-code-value-0015 canary-yaml-value-0016\n"
+    )
     assert "canary-source-code-value-0015" in text and "canary-yaml-value-0016" in text
 
 
 def test_an_ordinary_log_reads_normally(tmp_path):
-    source = _source(tmp_path, {".env": "PORT=8080\nAPI_TOKEN=canary-ordinary-token-0017\n"})
+    source = _source(
+        tmp_path, {".env": "PORT=8080\nAPI_TOKEN=canary-ordinary-token-0017\n"}
+    )
     log = "INFO server booting\nWARNING db slow\nTraceback: ImportError: no module named foo\n"
     text = _evidence(tmp_path, source, log)
     assert log.strip() in text
@@ -604,13 +623,26 @@ def test_an_ordinary_log_reads_normally(tmp_path):
 
 
 def test_a_listed_file_over_the_size_bound_raises(tmp_path):
-    source = _source(tmp_path, {"big/.env": "KEY=" + "canary-big-" * 10000 + "\n", ".env": "K=canary-small-value-0018\n"})
+    source = _source(
+        tmp_path,
+        {
+            "big/.env": "KEY=" + "canary-big-" * 10000 + "\n",
+            ".env": "K=canary-small-value-0018\n",
+        },
+    )
     with pytest.raises(OSError):
         source_secret_masks(source)
 
 
 def test_a_state_file_over_the_size_bound_is_not_skipped(tmp_path):
-    source = _source(tmp_path, {"infra/terraform.tfstate": '{"v": "canary-tfstate-value-0201", "pad": "' + "x" * 70000 + '"}'})
+    source = _source(
+        tmp_path,
+        {
+            "infra/terraform.tfstate": '{"v": "canary-tfstate-value-0201", "pad": "'
+            + "x" * 70000
+            + '"}'
+        },
+    )
     with pytest.raises(OSError):
         source_secret_masks(source)
 
@@ -619,7 +651,13 @@ def test_listed_files_past_the_total_bound_raise(tmp_path, monkeypatch):
     from fi.alk.harness import process_diagnostics
 
     monkeypatch.setattr(process_diagnostics, "_MAX_MASKED_TOTAL_BYTES", 100)
-    source = _source(tmp_path, {"a/.env": "K=canary-total-value-0202\n" * 3, "b/.env": "K=canary-total-value-0203\n" * 3})
+    source = _source(
+        tmp_path,
+        {
+            "a/.env": "K=canary-total-value-0202\n" * 3,
+            "b/.env": "K=canary-total-value-0203\n" * 3,
+        },
+    )
     with pytest.raises(OSError):
         source_secret_masks(source)
 
@@ -628,7 +666,11 @@ def test_a_walk_past_the_entry_bound_raises(tmp_path, monkeypatch):
     from fi.alk.harness import process_diagnostics
 
     monkeypatch.setattr(process_diagnostics, "_MAX_WALKED_ENTRIES", 5)
-    source = _source(tmp_path, {f"data/{n}.txt": "x" for n in range(8)} | {"backend/.env": "K=canary-walk-value-0204\n"})
+    source = _source(
+        tmp_path,
+        {f"data/{n}.txt": "x" for n in range(8)}
+        | {"backend/.env": "K=canary-walk-value-0204\n"},
+    )
     with pytest.raises(OSError):
         source_secret_masks(source)
 
@@ -656,7 +698,9 @@ def test_a_listed_file_that_cannot_be_read_raises(tmp_path):
 
 
 def test_a_listed_name_that_links_to_an_unlisted_file_is_masked(tmp_path):
-    source = _source(tmp_path, {"conf/app.txt": "API_TOKEN=canary-linked-name-0207\nPORT=8080\n"})
+    source = _source(
+        tmp_path, {"conf/app.txt": "API_TOKEN=canary-linked-name-0207\nPORT=8080\n"}
+    )
     os.symlink(source / "conf" / "app.txt", source / ".env")
     text = _evidence(tmp_path, source, "token canary-linked-name-0207 on 8080\n")
     assert "canary-linked-name-0207" not in text and "on 8080" in text
@@ -669,22 +713,45 @@ def test_an_unlisted_name_that_links_to_a_listed_file_is_still_masked(tmp_path):
 
 
 def test_an_escaped_pem_in_an_env_value_is_masked_once_expanded(tmp_path):
-    body = "\\n".join(["-----BEGIN PRIVATE KEY-----", "CANARYESCAPEDLINEONEabcdefghijkl", "CANARYESCAPEDLINETWOmnopqrstuvwx", "-----END PRIVATE KEY-----"])
+    body = "\\n".join(
+        [
+            "-----BEGIN PRIVATE KEY-----",
+            "CANARYESCAPEDLINEONEabcdefghijkl",
+            "CANARYESCAPEDLINETWOmnopqrstuvwx",
+            "-----END PRIVATE KEY-----",
+        ]
+    )
     source = _source(tmp_path, {".env": f'FIREBASE_PRIVATE_KEY="{body}"\n'})
     expanded = body.replace("\\n", "\n")
-    log = "key:\n" + expanded + "\nline " + "CANARYESCAPEDLINETWOmnopqrstuvwx" + "\ndone\n"
+    log = (
+        "key:\n"
+        + expanded
+        + "\nline "
+        + "CANARYESCAPEDLINETWOmnopqrstuvwx"
+        + "\ndone\n"
+    )
     text = _evidence(tmp_path, source, log)
     assert "CANARYESCAPED" not in text and "done" in text
     (tmp_path / "crlf").mkdir()
     (tmp_path / "tab").mkdir()
-    crlf = _source(tmp_path / "crlf", {".env": 'SERVICE_KEY="CANARYCRLFLINEONE0123456789\\r\\nCANARYCRLFLINETWO0123456789"\n'})
+    crlf = _source(
+        tmp_path / "crlf",
+        {
+            ".env": 'SERVICE_KEY="CANARYCRLFLINEONE0123456789\\r\\nCANARYCRLFLINETWO0123456789"\n'
+        },
+    )
     assert "CANARYCRLFLINETWO0123456789" in source_secret_masks(crlf)
-    tabbed = _source(tmp_path / "tab", {".env": 'SERVICE_KEY="CANARYTABPARTONE01234\\tCANARYTABPARTTWO01234"\n'})
+    tabbed = _source(
+        tmp_path / "tab",
+        {".env": 'SERVICE_KEY="CANARYTABPARTONE01234\\tCANARYTABPARTTWO01234"\n'},
+    )
     assert "CANARYTABPARTONE01234\tCANARYTABPARTTWO01234" in source_secret_masks(tabbed)
 
 
 def test_an_escaped_quote_in_a_quoted_value_is_handled(tmp_path):
-    source = _source(tmp_path, {".env": 'K="ab\\"canary-escaped-quote-0209"\nPORT=8080\n'})
+    source = _source(
+        tmp_path, {".env": 'K="ab\\"canary-escaped-quote-0209"\nPORT=8080\n'}
+    )
     log = 'got ab"canary-escaped-quote-0209 and canary-escaped-quote-0209 on 8080\n'
     text = _evidence(tmp_path, source, log)
     assert "canary-escaped-quote-0209" not in text and "on 8080" in text
@@ -692,7 +759,9 @@ def test_an_escaped_quote_in_a_quoted_value_is_handled(tmp_path):
 
 def test_a_json_string_that_is_a_multi_line_pem_is_masked_whole_and_by_line(tmp_path):
     pem = "\n".join(_PEM_LINES)
-    source = _source(tmp_path, {"svc-key.json": json.dumps({"private_key": pem, "name": "svc"})})
+    source = _source(
+        tmp_path, {"svc-key.json": json.dumps({"private_key": pem, "name": "svc"})}
+    )
     masks = source_secret_masks(source)
     assert pem in masks
     assert _PEM_LINES[1] in masks and _PEM_LINES[2] in masks
@@ -703,9 +772,21 @@ def test_a_json_string_that_is_a_multi_line_pem_is_masked_whole_and_by_line(tmp_
 @pytest.mark.parametrize(
     "name, content, printed",
     [
-        (".pgpass", "db.internal:5432:app:appuser:canary-pgpass-field-0210\n", "canary-pgpass-field-0210"),
-        (".netrc", "machine host.internal login appuser password canary-netrc-field-0211\n", "canary-netrc-field-0211"),
-        (".git-credentials", "https://appuser:canary-gitcred-field-0212@git.internal\n", "canary-gitcred-field-0212"),
+        (
+            ".pgpass",
+            "db.internal:5432:app:appuser:canary-pgpass-field-0210\n",
+            "canary-pgpass-field-0210",
+        ),
+        (
+            ".netrc",
+            "machine host.internal login appuser password canary-netrc-field-0211\n",
+            "canary-netrc-field-0211",
+        ),
+        (
+            ".git-credentials",
+            "https://appuser:canary-gitcred-field-0212@git.internal\n",
+            "canary-gitcred-field-0212",
+        ),
     ],
 )
 def test_a_credential_field_printed_alone_is_masked(tmp_path, name, content, printed):
@@ -738,27 +819,67 @@ _TYPICAL_LOG = (
 
 def test_a_typical_env_masks_the_key_and_leaves_the_diagnostics_readable(tmp_path):
     source = _source(
-        tmp_path, {".env": _TYPICAL_ENV, ".env.example": _TYPICAL_ENV.replace("canary-sk-proj-Ab12Cd34Ef56", "your-key-here-1234")}
+        tmp_path,
+        {
+            ".env": _TYPICAL_ENV,
+            ".env.example": _TYPICAL_ENV.replace(
+                "canary-sk-proj-Ab12Cd34Ef56", "your-key-here-1234"
+            ),
+        },
     )
     text = _evidence(tmp_path, source, _TYPICAL_LOG)
-    for readable in ("gpt-4o-mini", "https://api.openai.com/v1", "http://localhost:8000", "production"):
+    for readable in (
+        "gpt-4o-mini",
+        "https://api.openai.com/v1",
+        "http://localhost:8000",
+        "production",
+    ):
         assert readable in text
-    assert "The model gpt-4o-mini does not exist (base_url=https://api.openai.com/v1)" in text
+    assert (
+        "The model gpt-4o-mini does not exist (base_url=https://api.openai.com/v1)"
+        in text
+    )
     assert "canary-sk-proj-Ab12Cd34Ef56" not in text
     assert "key <redacted> leaked" in text
 
 
-@pytest.mark.parametrize("name", [".env.example", ".env.sample", ".env.template", ".env.dist", "prod.env.example", "creds.json.example"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".env.example",
+        ".env.sample",
+        ".env.template",
+        ".env.dist",
+        "prod.env.example",
+        "creds.json.example",
+    ],
+)
 def test_a_template_file_builds_no_masks(tmp_path, name):
-    source = _source(tmp_path, {name: "API_TOKEN=canary-template-token-0101\nDB_PASSWORD=canary-template-pass-0102\n"})
-    text = _evidence(tmp_path, source, "canary-template-token-0101 canary-template-pass-0102\n")
+    source = _source(
+        tmp_path,
+        {
+            name: "API_TOKEN=canary-template-token-0101\nDB_PASSWORD=canary-template-pass-0102\n"
+        },
+    )
+    text = _evidence(
+        tmp_path, source, "canary-template-token-0101 canary-template-pass-0102\n"
+    )
     assert source_secret_masks(source) == frozenset()
     assert "canary-template-token-0101" in text and "canary-template-pass-0102" in text
 
 
 def test_a_secret_named_setting_with_a_plain_word_is_masked(tmp_path):
-    source = _source(tmp_path, {".env": "DB_PASSWORD=correcthorsebattery\nAPIKEY=plainwordsecret\nMODEL=plainwordmodel\n"})
-    text = _evidence(tmp_path, source, "pw correcthorsebattery key plainwordsecret model plainwordmodel\n")
+    source = _source(
+        tmp_path,
+        {
+            ".env": "DB_PASSWORD=correcthorsebattery\nAPIKEY=plainwordsecret\nMODEL=plainwordmodel\n"
+        },
+    )
+    text = _evidence(
+        tmp_path,
+        source,
+        "pw correcthorsebattery key plainwordsecret model plainwordmodel\n",
+    )
     assert "correcthorsebattery" not in text and "plainwordsecret" not in text
     assert "model plainwordmodel" in text
 
@@ -766,16 +887,33 @@ def test_a_secret_named_setting_with_a_plain_word_is_masked(tmp_path):
 def test_a_token_like_value_under_a_plain_name_is_masked(tmp_path):
     source = _source(
         tmp_path,
-        {".env": "SESSION_ID=a1b2c3d4e5f6a7b8c9d0\nBLOB=" + "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh" + "\nHEX=" + "0" * 32 + "\n"},
+        {
+            ".env": "SESSION_ID=a1b2c3d4e5f6a7b8c9d0\nBLOB="
+            + "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh"
+            + "\nHEX="
+            + "0" * 32
+            + "\n"
+        },
     )
-    log = "id a1b2c3d4e5f6a7b8c9d0 blob AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh hex " + "0" * 32 + "\n"
+    log = (
+        "id a1b2c3d4e5f6a7b8c9d0 blob AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh hex "
+        + "0" * 32
+        + "\n"
+    )
     text = _evidence(tmp_path, source, log)
-    assert "a1b2c3d4e5f6a7b8c9d0" not in text and "AbCdEfGhIjKl" not in text and "0" * 32 not in text
+    assert (
+        "a1b2c3d4e5f6a7b8c9d0" not in text
+        and "AbCdEfGhIjKl" not in text
+        and "0" * 32 not in text
+    )
 
 
 @pytest.mark.parametrize(
     "value",
-    ["postgres://app:canary-pw-0103@db.internal:5432/app", "https://api.example.com/v1?sig=canary0104"],
+    [
+        "postgres://app:canary-pw-0103@db.internal:5432/app",
+        "https://api.example.com/v1?sig=canary0104",
+    ],
 )
 def test_a_url_with_userinfo_or_a_query_is_masked(tmp_path, value):
     source = _source(tmp_path, {".env": f"BACKEND_URL={value}\n"})
@@ -783,10 +921,10 @@ def test_a_url_with_userinfo_or_a_query_is_masked(tmp_path, value):
     assert value not in text and "canary" not in text
 
 
-_SLACK = "https://hooks.slack.com/services/T0FAKE1234/B0FAKE5678/fakeWebhookSecretValue24"
-_TELEGRAM = (
-    "https://api.telegram.org/bot1234567890:AAHfakeTelegramToken0123456789abcde/sendMessage"
+_SLACK = (
+    "https://hooks.slack.com/services/T0FAKE1234/B0FAKE5678/fakeWebhookSecretValue24"
 )
+_TELEGRAM = "https://api.telegram.org/bot1234567890:AAHfakeTelegramToken0123456789abcde/sendMessage"
 _DISCORD = (
     "https://discord.com/api/webhooks/1234567890123/"
     "fake-Discord_Webhook_Token_Value_abcdefghijkl"
@@ -806,7 +944,9 @@ _DISCORD = (
     ids=["slack", "discord", "plain-name", "telegram-path-token"],
 )
 def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url):
-    source = _source(tmp_path, {".env": line + "\nOPENAI_API_KEY=sk-live-fakefakefake123\n"})
+    source = _source(
+        tmp_path, {".env": line + "\nOPENAI_API_KEY=sk-live-fakefakefake123\n"}
+    )
     log = f'HTTP Request: POST {url} "HTTP/1.1 404 Not Found"\n'
     text = _evidence(tmp_path, source, log)
     assert url not in text
@@ -865,11 +1005,19 @@ def test_a_webhook_url_with_its_token_in_the_path_is_masked(tmp_path, line, url)
         ),
     ],
     ids=[
-        "urllib3-path", "path-only", "host-case", "default-port", "letters-under-name",
-        "sas-encoded", "username-token", "fragment",
+        "urllib3-path",
+        "path-only",
+        "host-case",
+        "default-port",
+        "letters-under-name",
+        "sas-encoded",
+        "username-token",
+        "fragment",
     ],
 )
-def test_a_secret_urls_token_is_masked_however_the_log_prints_it(tmp_path, line, logged, token):
+def test_a_secret_urls_token_is_masked_however_the_log_prints_it(
+    tmp_path, line, logged, token
+):
     source = _source(tmp_path, {".env": line + "\n"})
     text = _evidence(tmp_path, source, logged + "\n")
     assert token not in text
@@ -890,8 +1038,16 @@ def test_a_secret_urls_token_is_masked_however_the_log_prints_it(tmp_path, line,
         "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     ],
     ids=[
-        "plain", "hf-model", "openai-model", "gemini-model", "vertex-project",
-        "meta-llama-3", "claude-3-5", "claude-sonnet-4", "deepseek", "llama-4-maverick",
+        "plain",
+        "hf-model",
+        "openai-model",
+        "gemini-model",
+        "vertex-project",
+        "meta-llama-3",
+        "claude-3-5",
+        "claude-sonnet-4",
+        "deepseek",
+        "llama-4-maverick",
     ],
 )
 def test_a_url_with_a_model_or_plain_path_is_left_alone(tmp_path, url):
@@ -913,7 +1069,9 @@ def test_ordinary_query_values_and_usernames_stay_readable(tmp_path):
     line = "starting in production mode; connecting as application with sslmode verify-full\n"
     text = _evidence(tmp_path, source, line)
     assert "production" in text and "application" in text and "verify-full" in text
-    assert "hunter2pw-longer" not in _evidence(tmp_path, source, "password hunter2pw-longer\n")
+    assert "hunter2pw-longer" not in _evidence(
+        tmp_path, source, "password hunter2pw-longer\n"
+    )
 
 
 def test_a_letters_only_webhook_token_under_a_plain_name_is_masked(tmp_path):
@@ -937,7 +1095,8 @@ def test_a_webhook_split_over_short_segments_is_masked(tmp_path):
 
 
 _CERT = (
-    "-----BEGIN CERTIFICATE-----\n" + ("MIIBszCCAVmgAwIBAgIUQ0FOQVJZ" * 2 + "\n") * 20
+    "-----BEGIN CERTIFICATE-----\n"
+    + ("MIIBszCCAVmgAwIBAgIUQ0FOQVJZ" * 2 + "\n") * 20
     + "-----END CERTIFICATE-----\n"
 )
 
@@ -946,11 +1105,18 @@ _CERT = (
     "path,body",
     [
         ("certs/cacert.pem", _CERT * 60),
-        ("models/tokenizer.json", '{"model": {"vocab": {' + ", ".join(f'"w{i}": {i}' for i in range(9000)) + "}}}"),
+        (
+            "models/tokenizer.json",
+            '{"model": {"vocab": {'
+            + ", ".join(f'"w{i}": {i}' for i in range(9000))
+            + "}}}",
+        ),
     ],
     ids=["ca-bundle", "tokenizer"],
 )
-def test_a_large_public_listed_file_does_not_withhold_the_evidence(tmp_path, path, body):
+def test_a_large_public_listed_file_does_not_withhold_the_evidence(
+    tmp_path, path, body
+):
     # A CA bundle and a tokenizer hold nothing secret, so their size doesn't stop the masks.
     (tmp_path / path).parent.mkdir(parents=True)
     (tmp_path / path).write_text(body)
@@ -961,7 +1127,10 @@ def test_a_large_public_listed_file_does_not_withhold_the_evidence(tmp_path, pat
 
 def test_a_commented_ca_bundle_does_not_withhold_the_evidence(tmp_path):
     # certifi's and curl's bundles carry # comments between the certificates.
-    bundle = "".join(f"# Issuer: CN=Example Root {i}\n# Label: \"Example {i}\"\n" + _CERT for i in range(60))
+    bundle = "".join(
+        f'# Issuer: CN=Example Root {i}\n# Label: "Example {i}"\n' + _CERT
+        for i in range(60)
+    )
     (tmp_path / "package" / "certifi").mkdir(parents=True)
     (tmp_path / "package" / "certifi" / "cacert.pem").write_text(bundle)
     (tmp_path / ".env").write_text("API_KEY=canary-public-files-0072\n")
@@ -972,7 +1141,8 @@ def test_a_commented_ca_bundle_does_not_withhold_the_evidence(tmp_path):
 def test_a_large_pem_holding_a_private_key_still_fails_closed(tmp_path):
     (tmp_path / "certs").mkdir()
     (tmp_path / "certs" / "bundle.pem").write_text(
-        _CERT * 60 + "-----BEGIN PRIVATE KEY-----\nCANARYKEY\n-----END PRIVATE KEY-----\n"
+        _CERT * 60
+        + "-----BEGIN PRIVATE KEY-----\nCANARYKEY\n-----END PRIVATE KEY-----\n"
     )
     with pytest.raises(OSError):
         source_secret_masks(tmp_path)
@@ -981,9 +1151,15 @@ def test_a_large_pem_holding_a_private_key_still_fails_closed(tmp_path):
 def test_a_line_of_an_env_file_that_is_not_a_setting_is_masked_like_a_line(tmp_path):
     source = _source(
         tmp_path,
-        {".env": 'PRIVATE_BLOB="-----BEGIN KEY-----\nCANARYPEMLINE0105abcdefghijklmnop\nAAAAB3NzaC1yc2EAAAADAQABAA==\n-----END KEY-----"\n'},
+        {
+            ".env": 'PRIVATE_BLOB="-----BEGIN KEY-----\nCANARYPEMLINE0105abcdefghijklmnop\nAAAAB3NzaC1yc2EAAAADAQABAA==\n-----END KEY-----"\n'
+        },
     )
-    text = _evidence(tmp_path, source, "line CANARYPEMLINE0105abcdefghijklmnop and AAAAB3NzaC1yc2EAAAADAQABAA==\n")
+    text = _evidence(
+        tmp_path,
+        source,
+        "line CANARYPEMLINE0105abcdefghijklmnop and AAAAB3NzaC1yc2EAAAADAQABAA==\n",
+    )
     assert "CANARYPEMLINE" not in text and "AAAAB3NzaC1yc2E" not in text
 
 
@@ -992,7 +1168,9 @@ def test_a_long_line_of_spaces_builds_the_masks_quickly(tmp_path):
     # failed repair attempt, so building them must stay linear in the line's length.
     import time
 
-    (tmp_path / ".env").write_text("A=x" + " " * 65000 + "y\nAPI_KEY=canary-key-QWERTY-12345\n")
+    (tmp_path / ".env").write_text(
+        "A=x" + " " * 65000 + "y\nAPI_KEY=canary-key-QWERTY-12345\n"
+    )
     started = time.perf_counter()
     masks = source_secret_masks(tmp_path)
     took = time.perf_counter() - started
@@ -1150,11 +1328,54 @@ def test_a_bare_status_code_keeps_two_errors_apart_inside_chatter(tmp_path):
 def test_the_last_line_without_a_newline_is_still_a_copy_of_the_ones_before():
     from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
 
+    line = "INFO poll state=pending"
     assert (
-        _collapse_repeated_lines("a\na\na")
-        == "[earlier copies of the next line omitted: 2]\na"
+        _collapse_repeated_lines(f"{line}\n" * 10 + line)
+        == f"[earlier copies of the next line omitted: 10]\n{line}"
     )
     assert (
-        _collapse_repeated_lines("poll\r\npoll\n")
-        == "[earlier copies of the next line omitted: 1]\npoll\n"
+        _collapse_repeated_lines(f"{line}\r\n" * 10 + f"{line}\n")
+        == f"[earlier copies of the next line omitted: 10]\n{line}\n"
     )
+
+
+def _retained_bytes(tmp_path, content: bytes) -> str:
+    from fi.alk.harness.process_diagnostics import retain_process_log
+
+    work = tmp_path / "work"
+    work.mkdir()
+    log = work / "process.log"
+    log.write_bytes(content)
+    retain_process_log(log, work=work, destination=tmp_path / "artifacts", secrets={})
+    return next((tmp_path / "artifacts").rglob("*.log")).read_text()
+
+
+def test_a_root_error_followed_by_megabytes_of_one_repeated_line_survives(tmp_path):
+    root = b"ERROR stt: provider returned HTTP 402 Payment Required\n"
+    noise = b"INFO stream byte not consumed\n" * 70_000  # about 2 MB, far past 64 KiB
+
+    body = _retained_bytes(tmp_path, b"starting worker\n" + root + noise)
+
+    assert root.decode() in body
+    assert body.endswith(
+        "[earlier copies of the next line omitted: 69999]\n"
+        "INFO stream byte not consumed\n"
+    )
+
+
+def test_many_short_distinct_repeated_pairs_never_push_out_the_root_error(tmp_path):
+    import itertools
+    import string
+
+    root = b"ERROR worker: root cause is a missing api key\n"
+    words = (
+        "".join(one) for one in itertools.product(string.ascii_lowercase, repeat=3)
+    )
+    pairs = b"".join(
+        f"{word}\n{word}\n".encode() for word in itertools.islice(words, 700)
+    )
+
+    body = _retained_bytes(tmp_path, root + pairs)
+
+    # Each pair is shorter than a note would be, so it stays as written, and the whole log fits.
+    assert body == (root + pairs).decode()
