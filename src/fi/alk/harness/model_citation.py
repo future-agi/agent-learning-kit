@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import html
+import heapq
 import logging
 import os
 import re
@@ -829,34 +830,124 @@ def _statement(
     return "\n".join(parts), spans
 
 
+_BRACKET = re.compile(r"[()\[\]{}]")
+
+
+def _brackets(
+    text: str, skipped: list[tuple[int, int]]
+) -> Iterator[tuple[int, str, bool]]:
+    """Each bracket of ``text`` outside ``skipped`` (in order, merged), in order, with whether it
+    holds arguments or a value: ( and [ always, { only after ( [ , = or : (a literal given as an
+    argument or a value), never a { that opens a block (a function, class or method body). The
+    look-back passes over the spaces before a {, each once, so a text costs about its length."""
+    ranges = iter(skipped)
+    current = next(ranges, None)
+    for found in _BRACKET.finditer(text):
+        at = found.start()
+        while current is not None and current[1] <= at:
+            current = next(ranges, None)
+        if current is not None and current[0] <= at:
+            continue
+        char = text[at]
+        holds = True
+        if char == "{":
+            before = at - 1
+            while before >= 0 and text[before] in " \t\r\n":
+                before -= 1
+            holds = before >= 0 and text[before] in "([,=:"
+        yield at, char, holds
+
+
 def _enclosing_statement(
     lines: list[str], index: int, block: str | None, scan
 ) -> tuple[str, list[tuple[int, int, list[tuple[int, int]], list[tuple[int, int]]]], int] | None:
-    """The statement the cited line (``lines[index]``) sits inside, when a bracket opened on one
-    of the _STATEMENT_LINES lines before it is still open there (a call wrapped over lines, cited
-    on one of its arguments): as _statement gives it from the line that bracket opened on, with
-    where the cited line starts in it. None when every bracket opened there is closed again.
-    ``block`` is the block open where the first of those lines starts. Each line is scanned
-    once, so this costs about the length of those lines."""
+    """The statement the cited line (``lines[index]``) sits inside, when a call or a literal
+    opened on one of the _STATEMENT_LINES lines before it is still open there (a call wrapped
+    over lines, cited on one of its arguments): as _statement gives it from the line that bracket
+    opened on, with where the cited line starts in it. A block left open there (a function or
+    class body) is not one. None when no such bracket is open. ``block`` is the block open where
+    the first of those lines starts. Each line is scanned once, so this costs about the length
+    of those lines."""
     first = max(0, index - _STATEMENT_LINES)
-    opened: list[int] = []
+    if first == index:
+        return None
     scans: dict[int, tuple[int, list[tuple[int, int]], str | None]] = {}
+    spans = []
+    offset = 0
     for at in range(first, index):
         line = lines[at]
         scans[at] = comment, inside, block = _line_scan(line, block, **scan)
-        depth = _open_brackets(line, comment, _strings(line, comment, inside), inside)
-        if depth > 0:
-            opened.extend([at] * depth)
-        elif depth < 0:
-            del opened[max(0, len(opened) + depth) :]
-    if not opened:
+        spans.append((offset, comment, inside, _strings(line, comment, inside)))
+        offset += len(line) + 1
+    before = "\n".join(lines[first:index])
+    skipped, _ = _skipped(before, spans)
+    open_at: list[tuple[int, bool]] = []
+    for at, char, holds in _brackets(before, skipped):
+        if char in "([{":
+            open_at.append((at, holds))
+        elif open_at:
+            open_at.pop()
+    opened = next((at for at, holds in open_at if holds), None)
+    if opened is None:
         return None
-    start = opened[0]
-    text, spans = _statement(lines, start, scans[start], scan)
+    start = first + before.count("\n", 0, opened)
+    text, statement_spans = _statement(lines, start, scans[start], scan)
     shift = sum(len(lines[at]) + 1 for at in range(start, index))
-    if len(spans) <= index - start:
+    if len(statement_spans) <= index - start:
         return None
-    return text, spans, shift
+    return text, statement_spans, shift
+
+
+def _written_in_the_call_read_in(
+    text: str, spans, setting: str, reads: list[tuple[int, int, bool]], shift: int
+) -> bool:
+    """Whether the statement (``text`` and its lines' ``spans``) writes a model as a quoted value
+    straight into the call or literal that holds a read of ``setting`` and was opened before the
+    cited line (which starts at ``shift``): a ChatOpenAI( call wrapped over lines, given
+    model="gpt-4o" on one and timeout=os.getenv("LLM_TIMEOUT") on the next, does. A model inside
+    another call beside the read (an Agent( given stt=STT(model="nova-3") on one line and
+    llm=LLM(os.getenv("LLM_MODEL")) on the next) is another component's and doesn't count. One
+    pass over the statement."""
+    values: list[int] = []
+    for offset, comment, _, _ in spans:
+        line = _span_line(text, offset)[:comment]
+        values.extend(
+            offset + found.start()
+            for found in _MODEL_VALUE.finditer(line)
+            if setting not in found.group(3)
+        )
+    if not values:
+        return False
+    skipped, _ = _skipped(text, spans)
+    points = sorted([(at, 0) for at in values] + [(read, 1) for read, _, _ in reads])
+    marks = heapq.merge(
+        ((at, 2, char, holds) for at, char, holds in _brackets(text, skipped)),
+        ((at, kind, "", False) for at, kind in points),
+    )
+    # The open brackets, the nearest of them at or below each that holds arguments, and how many
+    # of them opened before the cited line (always the first ones).
+    stack: list[int] = []
+    holding: list[int | None] = []
+    earlier = 0
+    value_in: list[int] = []
+    calls: set[int] = set()
+    for at, kind, char, holds in marks:
+        if kind == 2:
+            if char in "([{":
+                stack.append(at)
+                holding.append(at if holds else (holding[-1] if holding else None))
+                if at < shift:
+                    earlier = len(stack)
+            elif stack:
+                stack.pop()
+                holding.pop()
+                earlier = min(earlier, len(stack))
+        elif kind == 0:
+            if stack:
+                value_in.append(stack[-1])
+        elif earlier and holding[earlier - 1] is not None:
+            calls.add(holding[earlier - 1])
+    return any(bracket in calls for bracket in value_in)
 
 
 def _reads_on_line(
@@ -1365,7 +1456,7 @@ def model_problems(
             ]
         # Cited inside a call wrapped over lines, what is beside the setting is read in the
         # whole call: the model may be written on a line before the cited one.
-        outer, outer_spans, outer_reads = text, spans, reads
+        outer, outer_spans, outer_reads, shift = text, spans, reads, 0
         first = max(0, model.line - 1 - _STATEMENT_LINES)
         if enclosing := _enclosing_statement(
             lines, model.line - 1, block_open_before(lines, first, **opens), scan
@@ -1377,7 +1468,13 @@ def model_problems(
                 if start + shift < len(outer)
             ]
         if not _is_the_models_value(outer, outer_spans, outer_reads) and (
-            _writes_a_model(outer, outer_spans, setting)
+            _writes_a_model(text, spans, setting)
+            or (
+                outer is not text
+                and _written_in_the_call_read_in(
+                    outer, outer_spans, setting, outer_reads, shift
+                )
+            )
             or (
                 bool(beside)
                 and any(

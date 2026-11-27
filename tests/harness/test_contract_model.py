@@ -5818,6 +5818,140 @@ def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
     assert (contract.model.setting, contract.model.name) == (model["setting"], model["name"])
 
 
+# Another component's model a few lines above the setting: in a function or class body, or in
+# another call beside the one the setting is given to
+
+@pytest.mark.parametrize(
+    "file, written, line",
+    [
+        pytest.param(
+            "agent.ts",
+            "export async function entry(ctx) {\n"
+            '  const stt = new deepgram.STT({ model: "nova-3" });\n'
+            '  const llmModel = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  return llmModel;\n"
+            "}\n",
+            3,
+            id="ts-function-body",
+        ),
+        pytest.param(
+            "agent.ts",
+            "export async function entry(ctx) {\n"
+            '  const model = "nova-3";\n'
+            '  const llmModel = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  return llmModel;\n"
+            "}\n",
+            3,
+            id="ts-function-body-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "class Agent {\n"
+            '    val model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-class-body-with-a-model-field",
+        ),
+        pytest.param(
+            "Agent.java",
+            "public class Agent {\n"
+            '    private final Stt stt = new Stt(model = "nova-3");\n'
+            '    private final String llm = System.getenv().getOrDefault("LLM_MODEL", "gpt-4o");\n'
+            "}\n",
+            3,
+            id="java-class-body",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "class Agent {\n"
+            '    val stt = STT(model = "nova-3")\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-class-body",
+        ),
+        pytest.param(
+            "agent.ts",
+            "export const config = {\n"
+            '  stt: { model: "nova-3" },\n'
+            '  llm: process.env.LLM_MODEL ?? "gpt-4o",\n'
+            "};\n",
+            3,
+            id="ts-object-beside-another",
+        ),
+        pytest.param(
+            "agent.py",
+            "agent = Agent(\n"
+            '    stt=STT(model="nova-3"),\n'
+            '    llm=LLM(os.getenv("LLM_MODEL", "gpt-4o")),\n'
+            ")\n",
+            3,
+            id="read-in-a-call-beside-another",
+        ),
+        pytest.param(
+            "agent.py",
+            "agent = create_agent(\n"
+            '    init_chat_model(os.getenv("LLM_MODEL", "gpt-4o")),\n'
+            '    embeddings=OpenAIEmbeddings(model="text-embedding-3-small"),\n'
+            ")\n",
+            2,
+            id="read-before-a-call-beside-it",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "given", [{}, {"name": "gpt-4o"}], ids=["setting", "name-and-setting"]
+)
+def test_the_models_own_setting_is_kept_beside_another_components_model(
+    root, file, written, line, given
+):
+    (root / file).write_text(written, encoding="utf-8")
+    model = {"setting": "LLM_MODEL", **given}
+
+    problems, contract, _ = checked(root, {**model, "path": file, "line": line})
+
+    assert problems == []
+    assert (contract.model.setting, contract.model.name) == (
+        "LLM_MODEL",
+        given.get("name", ""),
+    )
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param(
+            "llm = ChatOpenAI(\n"
+            '    stt=STT(model="nova-3"),\n'
+            '    model="gpt-4o",\n'
+            '    timeout=os.getenv("LLM_TIMEOUT"),\n'
+            ")\n",
+            id="the-calls-own-model-beside-another",
+        ),
+        pytest.param(
+            "def build():\n"
+            "    return ChatOpenAI(\n"
+            '        model="gpt-4o",\n'
+            '        timeout=os.getenv("LLM_TIMEOUT"),\n'
+            "    )\n",
+            id="wrapped-call-in-a-body",
+        ),
+    ],
+)
+def test_a_setting_beside_the_model_its_own_call_is_given_is_still_refused(
+    root, written
+):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+    line = written.count("\n", 0, written.index("LLM_TIMEOUT")) + 1
+
+    problems, _, _ = checked(
+        root, {"setting": "LLM_TIMEOUT", "path": "agent.py", "line": line}
+    )
+
+    assert problems and "writes the model as a value beside LLM_TIMEOUT" in problems[0]
+
+
 # A long line of model keys is read in one pass
 
 KEYS_LINE = 256 * 1024
