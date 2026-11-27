@@ -189,13 +189,23 @@ class _Tab:
                 self.events.append(answer)
 
     async def open(self, url: str) -> str:
+        """The page's text once it has loaded and shows some, or as it stands after 10 s: a cold browser on a CI
+        runner can take longer than the second a page takes here."""
         await self.call("Page.navigate", {"url": url})
         await asyncio.sleep(1.0)
-        found = await self.call(
-            "Runtime.evaluate",
-            {"expression": "document.body ? document.body.innerText : ''"},
-        )
-        return str(found["result"]["result"].get("value"))
+        deadline = time.monotonic() + 10
+        while True:
+            found = await self.call(
+                "Runtime.evaluate",
+                {
+                    "expression": "[document.readyState, document.body ? document.body.innerText : '']",
+                    "returnByValue": True,
+                },
+            )
+            state, text = found["result"]["result"].get("value") or ["", ""]
+            if (state == "complete" and text) or time.monotonic() >= deadline:
+                return str(text)
+            await asyncio.sleep(0.25)
 
     async def click(self, selector: str) -> None:
         found = await self.call(
