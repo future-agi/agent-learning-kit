@@ -151,7 +151,9 @@ on the browser's own port, which never counts as the agent's attach. It keeps, i
 times, the pages the agent's tabs opened, what it clicked and typed (the element in words), and
 the sites it was refused, in two lists: a page the agent tried to open off the list, kept whole
 each time (the browser's own retries within 2 s, in one tab, are one attempt), and a request a
-page made off the list, counted for each host. Both lists are capped with the rows. A DevTools client is
+page made off the list, counted for each host. A page that sends its tab off the list itself, by a
+redirect or by script, made that request, not the agent; the icon the browser asks of a site it was
+just refused is no request at all. Both lists are capped with the rows. A DevTools client is
 not told of the clicks and keys another client sends, so a small listener runs in each page, in a
 script world of its own, and reports only trusted events through a binding; the page's own
 scripts can neither write to the record nor read it. The world's and the binding's names are
@@ -163,15 +165,18 @@ event made up) leaves no click or typing row, though its pages, screenshots and 
 kept; typing sent as input (`Input.insertText`, as a Playwright-style fill does) is kept. Text typed
 into a secret field is never kept as text, only that typing happened: a password field, or a field
 whose autofill names a password, a card's number, security code or expiry, or a one-time code
-(`current-password`, `new-password`, `cc-number`, `cc-csc`, `cc-exp*`, `one-time-code`), including
-a field whose kind or autofill is changed after the page loads. A card field with no autofill name
-is not known to be one. The job's declared secrets are masked wherever the record holds them, as
+(`current-password`, `new-password`, `cc-number`, `cc-csc`, `cc-exp*`, `one-time-code`), a field
+the page shows as dots by its own style, and each one-character box of a code split over boxes when
+a field near it (in its form, else up to three levels up) has one of those autofill names, including
+a field whose kind or autofill is changed after the page loads. A card field with no autofill name,
+or a split code none of whose boxes is named, is not known to be one. The job's declared secrets are masked wherever the record holds them, as
 it is made. A value is masked whole, and only one of 8 characters or more: a shorter one, a secret left
 half-typed, or one cut by the 200-character limit on typed text, is not matched. Text the page shows
 back (a click's element text, up to 80 characters) is kept as the page shows it, at any level, and
 a secret field inside a custom element's shadow tree is judged by the custom element, which may not
 say it is one. Screenshots show whatever the page shows. Every text passes the kit's
-cleaner. Rows are capped (the record then says `truncated`), and a
+cleaner, which drops an address's query and fragment; a token in its path (a reset link's, say) is
+kept. Rows are capped (the record then says `truncated`), and a
 screenshot is taken at each page load and at the trial's end, capped in count and bytes with one
 place kept free for the end's, each named by the id it is stored under. The end's is not kept when it
 is larger than all of them together may be, or is answered after the record is sealed. A page is
@@ -198,7 +203,10 @@ rather than carrying empty tables. Where a door stood but the world's end could 
 same file holds the door's action log and says only the tables are missing. The sealed record names the
 world's end state under `end_state_artifact` only when the file holds the world's tables; a file
 holding the browser's record without them is named under `browser_state_artifact`. With no client
-attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. Typed text
+attached the record says `not_used`, never an empty list, and a refusal list that could not be read says so. The
+record reaches disk when a client attaches or leaves, at the seal and when the recorder stops
+reading, not row by row: a seal not answered within 5 seconds is read as last written, says
+`complete: false`, and may hold none of the rows since the last attach. Typed text
 leaves with the trace, wherever the `world_state` file goes; secret fields never hold it. One
 setting, `TYPED_TEXT_NEEDS_RECORDINGS`, holds it to `traces-and-recordings` instead: below that each
 typing row then keeps where and that it happened, its text is left out, and the file says
