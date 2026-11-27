@@ -285,7 +285,9 @@ Find, in roughly this order:
 
 12. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
-   When the selected execution runtime supports Dockerfiles, prefer its own Dockerfile to
+   Record a Node.js project as `language: node` with its Node version, the Node command its
+   source starts and, as `workdir`, the folder holding its package.json and package-lock.json;
+   record Bun only when its source pins Bun. When the selected execution runtime supports Dockerfiles, prefer its own Dockerfile to
    generating one. Otherwise use it as evidence for a supported native startup path; do not
    select an unsupported container build. If source deployment instructions offer a published
    image for a Compose service, `runtime.compose_image_services` can select that service's

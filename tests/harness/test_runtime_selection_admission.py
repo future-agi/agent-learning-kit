@@ -101,7 +101,7 @@ def test_selected_image_reports_capability(tmp_path):
         )
 
 
-def test_node_is_explicitly_unsupported_in_process_lane(tmp_path):
+def test_javascript_language_label_is_unsupported_in_process_lane(tmp_path):
     (tmp_path / "package.json").write_text("{}")
     (tmp_path / "server.js").write_text("console.log(1)")
     with pytest.raises(BundleAuthorError, match="runtime_language_unsupported"):
