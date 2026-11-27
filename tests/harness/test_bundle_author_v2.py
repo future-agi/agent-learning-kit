@@ -10003,3 +10003,21 @@ def test_a_node_tools_api_with_a_rewritten_port_still_seals_its_entry_script(tmp
     tools = next(process for process in manifest.processes if process.name == "tools-api")
     assert tools.run_command == ["sh", "-c", "node server.js --port $FI_TOOLS_PORT"]
     assert (tmp_path / "bundle" / tools.working_directory / "server.js").is_file()
+
+
+@pytest.mark.parametrize(
+    "command", [["node", "--env-file=.env", "server.js"], ["node", "--env-file", ".env", "server.js"]]
+)
+def test_a_node_command_that_needs_an_env_file_is_refused_at_admission(tmp_path, command):
+    """Sealing drops `.env`, so Node would exit at start; the harness supplies the environment instead."""
+    with pytest.raises(BundleAuthorError, match="runtime_node_env_file_unsupported") as refused:
+        _seal_node(tmp_path, {".env": "ORDERS_REGION=eu\n"}, command)
+    assert ".env" not in str(refused.value).replace("--env-file", "")
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_a_node_command_with_an_optional_env_file_still_seals(tmp_path):
+    command = ["node", "--env-file-if-exists=.env", "server.js"]
+    sealed = _seal_node(tmp_path, {}, command)
+    control = next(p for p in sealed.processes if p.name == sealed.runtime.control_service)
+    assert control.run_command == command

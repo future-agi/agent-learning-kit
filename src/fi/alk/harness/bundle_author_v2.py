@@ -1579,6 +1579,8 @@ def _node_startup_operands(command: Sequence[str]) -> list[tuple[int, str, str]]
             value in (".", "..") or value.startswith(("./", "../", "/", "file:"))
         ):
             operands.append((index, f"{name} preload", value))
+        elif name == "--env-file":
+            operands.append((index, name, value))
         inline = inline or name in _NODE_INLINE_OPTIONS
         index += 1
     if not inline and index < len(command) and command[index] != "-":
@@ -1621,6 +1623,12 @@ def _node_startup_files(root: Path, command: Sequence[str]) -> list[str]:
     """
     root, files = root.resolve(), []
     for index, role, value in _node_startup_operands(command):
+        if role == "--env-file":
+            # Sealing drops `.env` files, and Node exits when this one is missing. `--env-file-if-exists` is fine.
+            raise BundleAuthorError(
+                f"runtime_node_env_file_unsupported: argv[{index}] (--env-file); the harness supplies the "
+                "environment: declare it in runtime.config_files, whose values reach the process environment"
+            )
         target = Path(os.path.normpath(root / value))
         found = [] if value.startswith("file:") else _node_resolve(target)
         if value.startswith("file:") or not all(
