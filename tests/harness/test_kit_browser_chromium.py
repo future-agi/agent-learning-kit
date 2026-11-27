@@ -61,6 +61,10 @@ setTimeout(() => {
 <input id=b0 maxlength=1 autocomplete="one-time-code"><input id=b1 maxlength=1><input id=b2 maxlength=1>
 <input id=b3 maxlength=1><input id=b4 maxlength=1><input id=b5 maxlength=1>
 </div><input id=q aria-label="Search" maxlength=1></form></body></html>""",
+    "/script-off": """<html><body>moving<script>
+setTimeout(() => { location.href = 'http://pagemade.example/landing'; }, 100);
+</script></body></html>""",
+    "/link-off": """<html><body><a id=go href="http://agentmade.example/clicked">go</a></body></html>""",
     "/card-switched": """<html><body><script>
 const num = document.createElement('input'); num.id = 'num'; num.setAttribute('aria-label', 'Card number');
 num.setAttribute('autocomplete', 'cc-number'); document.body.appendChild(num); num.setAttribute('autocomplete', 'off');
@@ -79,6 +83,12 @@ class _Page(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.path == "/redirect-off":
+            self.send_response(302)
+            self.send_header("location", "http://pagemade.example/after-redirect")
+            self.send_header("content-length", "0")
+            self.end_headers()
+            return
         if self.path.startswith("/fill/"):
             token = self.path.removeprefix("/fill/")
             page = f'<html><body><input id=f aria-label="Field" autocomplete="{token}"></body></html>'
@@ -397,6 +407,38 @@ def test_a_refused_page_is_kept_whole_and_a_page_s_refused_requests_are_counted(
     assert "tracker.example.net" in [one["host"] for one in body["blocked_page_requests"]]
     assert not any(one["url"].startswith("http://tracker.") for one in body["blocked_navigations"])
     _no_page_of(body, "www.example.com")
+
+
+def test_a_page_s_own_redirects_off_the_list_are_its_requests_not_pages_the_agent_tried(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/redirect-off")
+        await page.open("http://shop.test/script-off")
+        await asyncio.sleep(1.5)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    assert not [one for one in body["blocked_navigations"] if "pagemade.example" in one["url"]]
+    assert {"host": "pagemade.example", "count": 2} in body["blocked_page_requests"]
+
+
+def test_what_the_agent_opens_off_the_list_is_its_attempt_and_the_refusal_s_icon_is_no_page_request(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/link-off")
+        await page.click("#go")
+        await asyncio.sleep(1)
+        await page.open("http://agentmade.example/typed")
+        await asyncio.sleep(1)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    tried = [one["url"] for one in body["blocked_navigations"] if "agentmade.example" in one["url"]]
+    assert tried == ["http://agentmade.example/clicked", "http://agentmade.example/typed"]
+    # The browser asks a refused host for its icon to show beside the refusal: neither the agent's nor a page's.
+    assert not [one for one in body["blocked_page_requests"] if one["host"] == "agentmade.example"]
 
 
 @pytest.mark.parametrize("scheme", ["http", "https"])
