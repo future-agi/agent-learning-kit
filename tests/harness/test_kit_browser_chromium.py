@@ -61,6 +61,13 @@ setTimeout(() => {
 <input id=b0 maxlength=1 autocomplete="one-time-code"><input id=b1 maxlength=1><input id=b2 maxlength=1>
 <input id=b3 maxlength=1><input id=b4 maxlength=1><input id=b5 maxlength=1>
 </div><input id=q aria-label="Search" maxlength=1></form></body></html>""",
+    # One shop page for the client runs: a button, a search field, and a button that opens a popup (a new tab the
+    # client is told of and waits on).
+    "/journey": """<html><body><h1>Shop</h1>
+<button id=buy>Buy now</button>
+<input id=q aria-label="Search" type=text>
+<button id=open onclick="window.open('/popped', '_blank')">Open offers</button>
+</body></html>""",
     "/script-off": """<html><body>moving<script>
 setTimeout(() => { location.href = 'http://pagemade.example/landing'; }, 100);
 </script></body></html>""",

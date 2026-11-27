@@ -1428,3 +1428,20 @@ def test_ci_runs_the_real_chromium_tests_with_a_chromium_and_fails_if_they_skip(
     assert "playwright install --with-deps --no-shell chromium" in steps
     assert "ALK_CHROMIUM" in steps and "websockets" in steps
     assert '! grep -q "skipped"' in steps
+
+
+def test_ci_runs_each_client_s_journey_in_a_row_of_its_own_and_fails_if_it_skips() -> None:
+    """Playwright, Puppeteer and browser-use each get a row, so one client's install cannot fail another's; every
+    test of the clients file is chosen by some row, and a skip fails it."""
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github" / "workflows" / "sdk-smoke.yml").read_text(encoding="utf-8"))["jobs"]
+    (job,) = [one for one in jobs.values() if "tests/harness/test_kit_browser_clients.py" in json.dumps(one)]
+    assert job["strategy"]["fail-fast"] is False
+    assert set(job["strategy"]["matrix"]["client"]) == {"playwright", "puppeteer", "browser_use"}
+    steps = "\n".join(str(step.get("run", "")) for step in job["steps"])
+    assert '! grep -q "skipped"' in steps
+    assert "--before=" in steps and "--exclude-newer" in steps
+    tests = (root / "tests" / "harness" / "test_kit_browser_clients.py").read_text(encoding="utf-8")
+    names = [line.split("(")[0].removeprefix("def ") for line in tests.splitlines() if line.startswith("def test_")]
+    chosen = ("playwright", "plain_devtools", "puppeteer", "browser_use")
+    assert names and all(any(word in name for word in chosen) for name in names), names
