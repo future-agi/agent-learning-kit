@@ -188,6 +188,70 @@ jobs:
           python -m pytest -q -rs tests/harness/test_kit_browser_chromium.py | tee chromium.out
           ! grep -q "skipped" chromium.out
 
+  kit-browser-clients:
+    # The kit's browser driven by the clients agents use, each in a row of its own so one client's
+    # install cannot fail another's: Playwright's connect_over_cdp (the Python package that also
+    # brings the hosted image's Chromium), Puppeteer's connect, and browser-use's own browser and
+    # REPL with no model. Pins are releases at least two weeks old, and their dependencies are
+    # resolved as of the same date (npm --before, uv --exclude-newer). For these rows only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [playwright, puppeteer, browser_use]
+    name: kit-browser-clients (${{ matrix.client }})
+    env:
+      CLIENTS_RESOLVED_AS_OF: "2026-11-13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit, and Playwright at the hosted image's pin with its Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          PLAYWRIGHT_VERSION=$(sed -n 's/^ARG PLAYWRIGHT_VERSION=//p' Dockerfile.hosted)
+          test -n "$PLAYWRIGHT_VERSION"
+          websockets=$(python -c "import tomllib; print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package'] if p['name'] == 'websockets'))")
+          python -m pip install . pytest "websockets==$websockets" "playwright==$PLAYWRIGHT_VERSION"
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright" python -m playwright install --with-deps --no-shell chromium
+          chrome=$(find "$RUNNER_TEMP/ms-playwright" -path '*/chrome-linux*/chrome' -type f | head -n 1)
+          test -n "$chrome"
+          echo "ALK_CHROMIUM=$chrome" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        if: matrix.client == 'puppeteer'
+        with:
+          node-version: "22"
+      - name: Install puppeteer-core 25.17.0
+        if: matrix.client == 'puppeteer'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/puppeteer" --no-save --before="$CLIENTS_RESOLVED_AS_OF" puppeteer-core@25.17.0
+          echo "ALK_PUPPETEER_PREFIX=$RUNNER_TEMP/puppeteer" >> "$GITHUB_ENV"
+      - name: Install browser-use 1.0.3 in an environment of its own
+        if: matrix.client == 'browser_use'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install uv
+          python -m venv "$RUNNER_TEMP/browser-use"
+          uv pip install --python "$RUNNER_TEMP/browser-use/bin/python" --exclude-newer "$CLIENTS_RESOLVED_AS_OF" browser-use==1.0.3
+          echo "ALK_BROWSER_USE_PYTHON=$RUNNER_TEMP/browser-use/bin/python" >> "$GITHUB_ENV"
+      - name: Run the ${{ matrix.client }} journey, failing if it skips
+        shell: bash
+        env:
+          ROW: ${{ matrix.client }}
+        run: |
+          set -o pipefail
+          selected="$ROW"
+          if [ "$ROW" = playwright ]; then selected="playwright or plain_devtools"; fi
+          python -m pytest -q -rs tests/harness/test_kit_browser_clients.py -k "$selected" | tee clients.out
+          ! grep -q "skipped" clients.out
+
   clean-install:
     # Install, doctor, the local simulation and the suites that need their own SDK versions. The
     # long test run is kit-tests: this job takes 1 to 4 of its 15 minutes.
