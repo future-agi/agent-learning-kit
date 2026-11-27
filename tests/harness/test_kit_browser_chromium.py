@@ -80,6 +80,20 @@ setTimeout(() => { location.href = 'http://pagemade.example/landing'; }, 100);
 setTimeout(() => { const s = document.getElementById('s'); s.focus();
   document.execCommand('insertText', false, 'page-forged-words'); }, 100);
 </script></body></html>""",
+    # Split codes as hand-built widgets make them: no box named, or the named one's neighbours unbounded, or each
+    # box wrapped deep. And a short form that is no code.
+    "/otp-unnamed": """<html><body><div class=otp>""" + "".join(
+        f"<input id=b{i} inputmode=numeric maxlength=1>" for i in range(6)
+    ) + """</div></body></html>""",
+    "/otp-unbounded": """<html><body><div class=otp>""" + "".join(
+        f"<input id=b{i} inputmode=numeric" + (' autocomplete="one-time-code"' if i == 0 else "") + ">" for i in range(6)
+    ) + """</div></body></html>""",
+    "/otp-deep": """<html><body><div class=otp>""" + "".join(
+        f"<span><span><span><input id=b{i} inputmode=numeric maxlength=1"
+        + (' autocomplete="one-time-code"' if i == 0 else "") + "></span></span></span>" for i in range(6)
+    ) + """</div></body></html>""",
+    "/short-form": """<html><body><form><input id=b0 aria-label="Name"><input id=b1 aria-label="Town">
+<input id=b2 aria-label="Street"><input id=b3 aria-label="Code" autocomplete="one-time-code"></form></body></html>""",
     "/meta-off": """<html><head><meta http-equiv=refresh content="0;url=http://metamade.example/landing"></head>
 <body>moving</body></html>""",
     "/card-switched": """<html><body><script>
@@ -741,6 +755,38 @@ def test_every_box_of_a_split_one_time_code_is_never_kept_as_text(browser) -> No
     held = json.dumps([{key: value for key, value in row.items() if key != "at"} for row in body["rows"]])
     for digit in "731904":
         assert f'"text": "{digit}"' not in held
+
+
+@pytest.mark.parametrize("path", ["/otp-unnamed", "/otp-unbounded", "/otp-deep"])
+def test_a_split_code_built_by_hand_is_never_kept_as_text(browser, path) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open(f"http://shop.test{path}")
+        for index, digit in enumerate("582613"):
+            await page.click(f"#b{index}")
+            await page.type(digit)
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row for row in body["rows"] if row["kind"] == "typing" and row["url"] == f"http://shop.test{path}"]
+    assert len(typed) >= 6 and all(row["secret"] is True and row["text"] is None for row in typed), typed
+
+
+def test_a_short_form_beside_a_code_field_keeps_its_other_fields_text(browser) -> None:
+    kit, _ = browser
+
+    async def steps(page):
+        await page.open("http://shop.test/short-form")
+        await page.click("#b0")
+        await page.type("Ada")
+        await page.click("#b1")
+        await page.type("Leeds")
+
+    _run(kit, steps)
+    body = _settled(kit)
+    typed = [row["text"] for row in body["rows"] if row["kind"] == "typing" and row["url"] == "http://shop.test/short-form"]
+    assert "Ada" in typed and "Leeds" in typed
 
 
 def test_a_card_field_the_page_stops_marking_stays_one(browser) -> None:
