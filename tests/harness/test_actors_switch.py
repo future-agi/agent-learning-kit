@@ -28,7 +28,7 @@ from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
 from fi.alk.harness.world import GeneratedWorld
 from fi.alk.harness.world.snapshot import save
 from fi.alk.harness.world.tools import world_actor_tools
-from fi.simulate.simulation.call_actors import SHARE_RANGE, at_least, default_share
+from fi.simulate.simulation.call_actors import SHARE_RANGE, default_share
 
 ON = {"enabled": True, "share": [0.5, 0.6]}
 OFF = {"enabled": False, "share": [0.0, 0.0]}
@@ -173,24 +173,25 @@ def test_with_actors_off_no_actor_tool_is_offered_and_no_actors_file_is_written(
     assert not (tmp_path / ACTORS_FILE).exists()
 
 
-def test_with_actors_on_the_platform_s_range_is_the_default_share(tmp_path, monkeypatch):
+def test_with_actors_on_the_platform_s_range_is_the_default_share(
+    tmp_path, monkeypatch, share_refused
+):
     monkeypatch.delenv("ALK_HARNESS_JOB_ID", raising=False)
     tools = _tools(tmp_path, {"actors": ON}, kept=_written(9))
-    share = default_share(str(tmp_path), (0.5, 0.6))
     assert {"actors", "faults", "pre_run", "starts_with"} <= set(tools["submit_scenario"].input_schema["properties"])
     assert [one.name for one in world_actor_tools(tmp_path)][:2] == ["add_actor", "drop_actor"]
-    refused = _submit(tools)["content"][0]["text"]
-    assert SHARE_REFUSAL in refused and f"at least {at_least(share, 10)} must" in refused
+    assert not share_refused(lambda: _submit(tools))
 
 
-def test_a_local_job_with_no_switch_behaves_as_before(tmp_path, monkeypatch):
+def test_a_local_job_with_no_switch_behaves_as_before(
+    tmp_path, monkeypatch, share_refused
+):
     monkeypatch.delenv("ALK_HARNESS_JOB_ID", raising=False)
     tools = _tools(tmp_path, {}, hosted=False, kept=_written(9))
     share = default_share(str(tmp_path))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
     assert "actors" in tools["submit_scenario"].input_schema["properties"]
-    refused = _submit(tools)["content"][0]["text"]
-    assert SHARE_REFUSAL in refused and f"at least {at_least(share, 10)} must" in refused
+    assert not share_refused(lambda: _submit(tools))
 
 
 # --- run time -------------------------------------------------------------------------------------------------------

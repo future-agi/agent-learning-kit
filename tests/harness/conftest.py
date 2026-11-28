@@ -133,3 +133,26 @@ def chown_path():
         return Path(os.path.normpath(os.path.join(base, path)))
 
     return resolve
+
+
+@pytest.fixture
+def share_refused(monkeypatch):
+    """Call with a submission; says whether it was refused at the actor-share gate, read from the gate id the
+    refusal is counted under (a gated refusal counts under its gate's own name), never from the reply's words."""
+    from fi.alk.harness import scenario_tools as module
+
+    real = module._count_refusal
+
+    def check(submit) -> bool:
+        counted: list[str] = []
+
+        def spy(refused, name, said):
+            counted.append(name)
+            return real(refused, name, said)
+
+        monkeypatch.setattr(module, "_count_refusal", spy)
+        submit()
+        monkeypatch.setattr(module, "_count_refusal", real)
+        return "actor_share" in counted
+
+    return check

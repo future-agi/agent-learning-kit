@@ -1288,37 +1288,6 @@ def actor_kind_most_share() -> float:
     return value if 0 < value <= 1 else 0.5
 
 
-def _call_actors_short(
-    args: dict[str, Any],
-    kept: list[Scenario],
-    wanted: int,
-    share: float,
-    offered: list[str],
-    actor_ids: set[str],
-) -> str:
-    """Why this scenario without an actor or a fault would leave the suite short of its share of scenarios that
-    include one, or "" when it would not. `offered` says what the environment supports, one line per kind, and
-    `actor_ids` are the actors it offers."""
-    if not offered or wanted < 4 or _parties(args, actor_ids):
-        return ""
-    name = str(args.get("name") or "")
-    others = [one for one in kept if one.name != name]
-    needed = at_least(share, wanted)
-    including = sum(1 for one in others if _parties(one, actor_ids))
-    if including >= needed or len(others) - including < wanted - needed:
-        return ""
-    return (
-        f"{including} of the {wanted} scenarios you are writing include an actor or a fault and at "
-        f"least {needed} must, and the scenarios still to come can no longer make up the difference. Where "
-        f"someone or something else fits this person's situation, write this same task with one of what the "
-        f"environment supports: {'; '.join(offered)}. Where nothing fits, keep this one without and give one to a "
-        "scenario already written whose situation has room for it: resubmit that one with its `scenario_key` and "
-        "it added, then submit this one again. If the person asked for another share, call aim_for with "
-        '`actor_share` set to it: {"min": 1, "max": 1} for every scenario, {"min": 0, "max": 0} for none, or their '
-        "range; no submission is refused for the share after that."
-    )
-
-
 def _one_kind_crowds(
     args: dict[str, Any],
     kept: list[Scenario],
@@ -3797,24 +3766,7 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
-        # The default share is a minimum held for new scenarios; a share the person set is never
-        # refused for. A scenario already in the suite is never refused for it either, so editing one
-        # never changes what it tests.
         offered, kinds_offered, actor_ids = offered_parties() if with_actors else ([], 0, set())
-        short = (
-            ""
-            if target.get("actor_share") or any(one.name == same for one in kept)
-            else _call_actors_short(
-                {**args, "name": same},
-                kept,
-                cap(),
-                call_actor_share(),
-                offered,
-                actor_ids,
-            )
-        )
-        if short:
-            return _refuse(short, gate="actor_share")
         # Editing a scenario already in the suite never changes what it tests, so it is never refused for its kind.
         crowded_kind = (
             ""
@@ -4408,9 +4360,13 @@ def scenario_tools(
         share = call_actor_share()
         if offered:
             said += (
-                f". At least {at_least(share, cap())} of the {cap()} scenarios include an actor or a fault"
-                if share > 0
-                else ". No scenario includes an actor, as the person asked"
+                ". No scenario includes an actor, as the person asked"
+                if share <= 0
+                else f". {at_least(share, cap())} of the {cap()} scenarios include an actor or a fault, as the person asked"
+                if target.get("actor_share")
+                else f". Aim for about {at_least(share, cap())} of the {cap()} scenarios to include an actor or a fault, "
+                "each only where its situation has someone or something else; a scenario where the person is alone "
+                "stays alone, and no scenario is refused for the share"
             )
         if offered and share > 0 and kinds_offered > 1:
             said += (
