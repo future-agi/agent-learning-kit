@@ -238,6 +238,8 @@ _RUN_SECONDS_PAD_SECONDS = 60.0
 # first in the ordinary case; it only ever fires itself for a genuinely hung SDK (a real post-dial
 # machinery failure) -- a runner-owned asyncio.wait_for as the last-resort bound.
 _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
+# How long a placed call waits for the platform to hear its provider id before it goes on anyway.
+_CALL_CONNECTED_SEND_SECONDS = 10.0
 
 # Unpinned by any contract and no producer exists yet. Isolated as one
 # constant + two functions (`_clear_tool_trace_calls`, `collect_tool_trace_calls`) so a real
@@ -444,6 +446,30 @@ async def _default_place_call(
             busy.reset(token)
 
 
+def _call_connected_server(
+    call_connected: Callable[[str, str], Awaitable[None]] | None,
+    scenario_key: str,
+    loop: asyncio.AbstractEventLoop,
+) -> Callable[[dict[str, Any]], dict[str, Any]] | None:
+    """Answers the call worker's word that a call was placed by telling the platform, before the call goes on."""
+    if call_connected is None:
+        return None
+
+    def serve(request: dict[str, Any]) -> dict[str, Any]:
+        provider_call_id = request.get("provider_call_id")
+        if request.get("op") != "call_connected" or not isinstance(provider_call_id, str) or not provider_call_id:
+            return {}
+        sent = asyncio.run_coroutine_threadsafe(call_connected(scenario_key, provider_call_id), loop)
+        try:
+            sent.result(timeout=_CALL_CONNECTED_SEND_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - best-effort telemetry, never fails the call
+            sent.cancel()
+            logger.warning("call_connected_not_sent scenario=%s: %s", scenario_key, type(exc).__name__)
+        return {}
+
+    return serve
+
+
 def _takes_stop_when(place_call: Any) -> bool:
     try:
         parameters = inspect.signature(place_call).parameters.values()
@@ -475,6 +501,9 @@ class CallRunnerContext:
     # Whether the person stopped the run: a cancel of a call's task is a user stop only while this reads true. Read
     # per call, never kept on the runner, which serves every concurrent call.
     stop_requested: Callable[[], bool] = lambda: False
+    # Tells the platform the provider's id for a call the moment it is placed (scenario key, provider call id), so a
+    # stop can check that call by id. None sends nothing.
+    call_connected: Callable[[str, str], Awaitable[None]] | None = None
     # Under per-user isolation, where the conversation's tool calls run: a handler child's
     # socket. None runs them in this process, as with one fixed user.
     handler_channel: "HandlerChannel | None" = None
@@ -4832,6 +4861,11 @@ class CallRunnerImpl:
                 environ=call_environ,
                 work_directory=self._context.work_directory / "call-workers",
                 stop_requested=self._context.stop_requested,
+                serve=_call_connected_server(
+                    self._context.call_connected,
+                    scenario.scenario_key,
+                    asyncio.get_running_loop(),
+                ),
             )
             return SimulationReport.model_validate(result)
 

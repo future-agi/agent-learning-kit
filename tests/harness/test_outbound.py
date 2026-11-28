@@ -633,6 +633,11 @@ def test_hosted_event_requires_sequence_but_draft_does_not() -> None:
             {"scenario_key": "k", "from_world": 0, "to_world": 1},
         ),
         (
+            OutboundEventType.CALL_CONNECTED,
+            HarnessStage.RUNNING,
+            {"scenario_key": "k", "provider_call_id": "call-1"},
+        ),
+        (
             OutboundEventType.LOG,
             HarnessStage.RUNNING,
             {"level": "warning", "message": "m"},
@@ -789,6 +794,20 @@ def test_scenario_started_scenario_attempt_is_closed_to_one_or_two() -> None:
             HarnessStage.RUNNING,
             {"scenario_key": "k", "world_index": 0, "scenario_attempt": 3},
         )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"scenario_key": "k", "provider_call_id": ""},
+        {"scenario_key": "k", "provider_call_id": "c" * 256},
+        {"scenario_key": "", "provider_call_id": "call-1"},
+        {"scenario_key": "k"},
+    ],
+)
+def test_call_connected_needs_a_scenario_and_a_provider_call_id(payload) -> None:
+    with pytest.raises(ValidationError):
+        _event(OutboundEventType.CALL_CONNECTED, HarnessStage.RUNNING, payload)
 
 
 def test_parallelism_degraded_effective_must_be_strictly_below_requested() -> None:

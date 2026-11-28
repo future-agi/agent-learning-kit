@@ -5467,6 +5467,16 @@ def test_a_scenario_start_reaches_the_platform_as_the_call_starts() -> None:
     assert [record["type"] for record in transport.event_records] == ["scenario_started"]
 
 
+def test_a_placed_call_reaches_the_platform_with_its_provider_id_while_live() -> None:
+    """Sent as the call is placed, not with its receipt: a stop checks this call with its provider by id."""
+    transport = FakeTransport()
+    adapter = _build_adapter(transport)
+    asyncio.run(adapter.call_connected(scenario_key="s1", provider_call_id="call-1"))
+    assert [(record["type"], record["payload"]) for record in transport.event_records] == [
+        ("call_connected", {"scenario_key": "s1", "provider_call_id": "call-1"})
+    ]
+
+
 def test_bad_subfolder_fails_terminal_before_compose(monkeypatch):
     from fi.alk.harness.source_folder import subfolder_not_found
 

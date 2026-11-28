@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
+import asyncio
 import faulthandler
 import logging
 import os
+import socket
 import sys
+import threading
 from pathlib import Path
 
-from .isolated_process import run_worker, stop_requested
+from .isolated_process import (
+    CHANNEL_FD_ENV,
+    MAX_CHANNEL_MESSAGE_BYTES,
+    encode_message,
+    receive_message,
+    run_worker,
+    send_message,
+    stop_requested,
+)
+
+
+def _call_announcer(fd: int):
+    """Sends the provider's id for each call placed to the harness, which tells the platform."""
+    channel = socket.socket(fileno=fd)
+    lock = threading.Lock()
+
+    def ask(provider_call_id: str) -> None:
+        with lock:
+            send_message(
+                channel,
+                encode_message({"op": "call_connected", "provider_call_id": provider_call_id}),
+            )
+            receive_message(channel, limit=MAX_CHANNEL_MESSAGE_BYTES)
+
+    async def announce(provider_call_id: str) -> None:
+        await asyncio.to_thread(ask, provider_call_id)
+
+    return announce
 
 
 async def main() -> None:
@@ -25,6 +55,10 @@ async def main() -> None:
         force=True,
     )
     logging.getLogger(__name__).info("voice worker started")
+    if channel_fd := os.environ.get(CHANNEL_FD_ENV):
+        from fi.simulate.simulation.engines.livekit import CALL_CONNECTED
+
+        CALL_CONNECTED.set(_call_announcer(int(channel_fd)))
     # On the person's stop the engine hangs up at the next turn boundary and still reports the call it kept.
     report = await _default_place_call(spec, stop_when=lambda _messages, _persona: stop_requested())
     output = Path(sys.argv[1])
