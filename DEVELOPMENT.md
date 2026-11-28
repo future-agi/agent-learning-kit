@@ -64,7 +64,9 @@ on every push to `main`, including merges. What a push does depends on whether t
   `pyproject.toml`, and the workflow changes the matching line in `uv.lock`.
 - Not there yet: the push is the release. The workflow publishes the SDK to PyPI,
   builds and certifies the hosted E2B template, and opens a pull request in
-  `future-agi/deployment` that pins the new template.
+  `future-agi/deployment` that pins the new template. It also seals the ready
+  environments, attaches them to a GitHub release, and opens a pull request in
+  `future-agi/future-agi` that pins them (see "Ready environments" below).
 
 To release, merge the open `chore(release): bump ...` pull request, then approve the
 `pypi` and `e2b-template` deployments. The SDK upload and the template build each wait
@@ -80,8 +82,8 @@ One-time setup:
 - `E2B_API_KEY`, a repository Actions secret holding the E2B team's API key.
 - `RELEASE_BOT_APP_ID` and `RELEASE_BOT_PRIVATE_KEY`, the organization Actions
   secrets of the release bot GitHub App, shared with this repository. The app must
-  be installed on this repository and on `future-agi/deployment`, with write access to
-  contents and pull requests on both.
+  be installed on this repository, on `future-agi/deployment` and on
+  `future-agi/future-agi`, with write access to contents and pull requests on each.
 - The PyPI trusted publisher above.
 - Two environments, each with required reviewers and deployments limited to `main`:
   `pypi` for the SDK upload and `e2b-template` for the template build. An
@@ -105,6 +107,37 @@ For a minor, major or pre-release version, close the bump pull request, delete i
 branch, and open one of your own to `main` that runs `uv version --bump minor` (or
 `--bump major`). Its version is not on PyPI either, so merging it releases the same
 way.
+
+## Ready environments
+
+The ready environments are the vertical environments of
+`src/fi/alk/environments/README.md` (`READY_ENVIRONMENTS` in
+`fi.alk.environments.ready`). On a release push or a manual run on `main`, the
+`ready-environments-publish` job seals each one with its suite proved on PostgreSQL
+16, packs it as `ready-environment-<name>.tar.gz`, and attaches the archives and
+`ready-environments.json` (each archive's SHA-256 and both release digests) to the
+GitHub release `ready-environments-v<version>`. No approval is needed and no secret
+beyond the workflow's own token: the archives are built from `main` and are public.
+
+`ready-environments-pin` then opens a pull request to `dev` in
+`future-agi/future-agi` that writes that list, with the release's download URL, to
+`futureagi/simulate/ready_environments.json`. Once it merges, every deploy's bootstrap
+(`manage.py seed_ready_environments`, after `seed_system_evals`) downloads and
+registers each listed environment not registered yet, checking each archive's
+SHA-256 and both digests. Dev gets them on its next deploy, production when the pin
+reaches `main`.
+
+The same source seals to the same digests and packs to the same bytes, so a rerun for
+a version already published is a no-op, an environment unchanged between releases is
+not registered again, and a release whose archives would differ from those already
+published under its version fails: bump the version instead. Pull requests that
+change these inputs seal one environment twice on PostgreSQL
+(`ready-environments-check`). To seal them by hand:
+
+```bash
+uv run --extra harness-stores python -m fi.alk.environments.ready --out DIR \
+  --postgres-dsn postgresql://... [--world retail]
+```
 
 ## E2B template
 
