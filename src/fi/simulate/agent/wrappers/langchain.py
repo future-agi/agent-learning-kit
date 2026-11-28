@@ -1,5 +1,6 @@
 from typing import Any, Union
 from fi.simulate.agent.wrapper import AgentWrapper, AgentInput, AgentResponse
+from fi.simulate.agent.content import text_of
 
 try:
     from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -22,6 +23,7 @@ except ImportError:
     LANGCHAIN_INSTALLED = False
 else:
     LANGCHAIN_INSTALLED = True
+
 
 class LangChainAgentWrapper(AgentWrapper):
     """
@@ -73,8 +75,8 @@ class LangChainAgentWrapper(AgentWrapper):
         if isinstance(response, str):
             return response
         elif hasattr(response, "content"):
-            return response.content
+            return text_of(response.content)
         elif isinstance(response, dict) and "output" in response:
-            return response["output"]
-            
-        return str(response)
+            return text_of(response["output"])
+
+        return text_of(response)
