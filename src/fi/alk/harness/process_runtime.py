@@ -1383,6 +1383,25 @@ def _looks_like_missing_interpreter(argv0: str) -> bool:
     return bool(_INTERPRETER_PATTERN.match(Path(argv0).name))
 
 
+# Toolchain probes run isolated (-I): they start in the source tree, whose modules must not shadow the stdlib.
+# The build reads this exact step's ``runtime_unsupported:`` exit as the image's failure, not the agent's.
+NODE_TOOLCHAIN_PROBE = (
+    "import shutil,subprocess,sys; "
+    "node=shutil.which('node'); corepack=shutil.which('corepack'); "
+    "node and corepack or sys.exit('runtime_unsupported: runtime_node_toolchain_missing: provision Node and Corepack in the certified image'); "
+    "print('Node toolchain '+subprocess.check_output([node,'--version'],text=True).strip(),flush=True)"
+)
+
+
+def _toolchain_probe_unsupported(step: Sequence[str], stderr: str | None) -> str:
+    """The reason the harness's Node toolchain probe gave for the image lacking a toolchain, else
+    empty. Only that exact step can blame the image this way, not a step shaped like it."""
+    lines = (stderr or "").strip().splitlines()
+    if list(step) == ["python3", "-I", "-c", NODE_TOOLCHAIN_PROBE] and lines and lines[-1].startswith("runtime_unsupported:"):
+        return lines[-1]
+    return ""
+
+
 # --- process identity: user resolution and path containment (F1/F3, p5-round1-review) ---------
 
 
@@ -1856,6 +1875,17 @@ def build_process_tree(
                 continue
             break
         assert result is not None
+        unsupported = (
+            _toolchain_probe_unsupported(step, result.stderr) if result.returncode != 0 else ""
+        )
+        if unsupported:
+            raise ProcessRuntimeError(
+                "build",
+                "runtime_unsupported",
+                unsupported,
+                process=process.name,
+                domain=FailureDomain.ENVIRONMENT,
+            )
         if result.returncode != 0:
             raise ProcessRuntimeError(
                 "build",

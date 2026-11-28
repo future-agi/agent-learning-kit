@@ -25,6 +25,8 @@ COPY --from=node20 /usr/local/bin/node /opt/node20/bin/node
 COPY --from=node20 /usr/local/lib/node_modules/npm /opt/node20/lib/node_modules/npm
 COPY --from=node22 /usr/local/bin/node /opt/node22/bin/node
 COPY --from=node22 /usr/local/lib/node_modules/npm /opt/node22/lib/node_modules/npm
+# Corepack installs a Node agent's lockfile with the exact npm or pnpm its packageManager pins.
+COPY --from=node22 /usr/local/lib/node_modules/corepack /opt/node22/lib/node_modules/corepack
 # Keep alternate interpreters at the prefix they were compiled for. Copying the same tree under
 # /opt makes the executable start, but every venv it creates still searches /usr/local for the
 # standard library and fails before it can import ``encodings``.
@@ -48,6 +50,7 @@ RUN python3.12 -m venv /opt/alk-venv \
     && printf '#!/bin/sh\nexec /opt/node22/bin/node /opt/node22/lib/node_modules/npm/bin/npm-cli.js "$@"\n' > /usr/local/bin/npm22 \
     && ln -s /opt/node20/bin/node /usr/local/bin/node20 \
     && ln -s /opt/node22/bin/node /usr/local/bin/node22 \
+    && ln -s /opt/node22/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
     && ln -s /usr/lib/postgresql/16/bin/postgres /usr/local/bin/postgres \
     && ln -s /usr/lib/postgresql/16/bin/initdb /usr/local/bin/initdb \
     && ln -s /opt/erlang/bin/erl /usr/local/bin/erl \
@@ -62,7 +65,8 @@ RUN python3.12 -m venv /opt/alk-venv \
       /usr/local/bin/rabbitmq-diagnostics /usr/local/bin/rabbitmq-plugins \
       /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl \
     && uv --version \
-    && uvx --version
+    && uvx --version \
+    && corepack --version
 
 # Catalog entries are executable promises. Fail the snapshot build if either alternate Python
 # cannot create and execute a writable project-local venv.
