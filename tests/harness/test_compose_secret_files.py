@@ -220,6 +220,7 @@ def test_compiler_rejects_secret_binding_without_target_reference(tmp_path, purp
     job = SimpleNamespace(
         agent=SimpleNamespace(secret_refs=refs),
         public_material_admissions=[], public_test_fixture_admissions=[],
+        routes_target_model_through_gateway=lambda: False,
     )
     contract = {
         "modality": "chat",

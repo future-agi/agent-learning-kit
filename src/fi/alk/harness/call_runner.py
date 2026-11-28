@@ -3698,9 +3698,18 @@ def _pair_tool(
     contested_calls: list[Call] = []
     while True:
         claims: dict[int, tuple[Call, list[tuple[tuple[bool, bool], Call]]]] = {}
+        # Calls the same in all but time fit a span alike: each is weighed once, for all of them. That holds
+        # because `fit` reads nothing `_digest` drops; a rule in `fit` that reads a call's time breaks it.
+        alike: dict[str, list[Call]] = {}
+        for call in free:
+            alike.setdefault(_digest(call), []).append(call)
         for span in rest:
             fits = [
-                (fit(span, call), call) for call in free if _compatible(span, call, fit)
+                (strength, call)
+                for group in alike.values()
+                if _compatible(span, group[0], fit)
+                and (strength := fit(span, group[0])) is not None
+                for call in group
             ]
             if not fits:
                 continue
