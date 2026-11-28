@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import ast
 import json
+import time
 from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import instrumentation_evidence, python_source
+from fi.alk.harness import instrumentation_evidence, python_source, tools, workspace_glob
 from fi.alk.harness.instrumentation_evidence import detect_instrumentation
 from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
 from fi.alk.harness.tools import accept_contract
@@ -144,7 +145,8 @@ def _repository(root: Path, files: dict[str, str]) -> Path:
                 "package.json": '{"dependencies": {"@traceai/langchain": "1.0.0"}}\n',
                 "index.js": "require('@opentelemetry/sdk-trace-node')\n",
             },
-            "none",
+            # A Node agent is read from its package.json, not its code.
+            "traceai",
         ),
         ({"agent.py": "print('hello')\n"}, "none"),
         ({".venv/lib/vendored.py": "import fi_instrumentation\n"}, "none"),
@@ -515,3 +517,599 @@ def test_an_import_spelled_in_escapes_is_found_under_unicode_escape(tmp_path: Pa
     # Python decodes the file before it reads it, so this runs `import traceai_openai`.
     (tmp_path / "agent.py").write_bytes(b"# coding: unicode_escape\nimport \\x74raceai_openai\n")
     assert detect_instrumentation(tmp_path) == "traceai"
+
+
+def _package(dependencies: dict[str, str], field: str = "dependencies") -> str:
+    return json.dumps({"name": "agent", field: dependencies})
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        ({"package.json": _package({"@traceai/fi-core": "^1.4.1"})}, "traceai"),
+        ({"package.json": _package({"@traceai/openai": "1.0.0"}, "devDependencies")}, "traceai"),
+        (
+            {
+                "package.json": _package(
+                    {"@future-agi/omega-runtime": "file:./vendor/omega-runtime-0.0.2.tgz"}
+                )
+            },
+            "traceai",
+        ),
+        ({"package.json": _package({"@future-agi/other": "1.0.0"})}, "none"),
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-trace-node": "^2.0.0",
+                        "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+                    }
+                )
+            },
+            "opentelemetry",
+        ),
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-node": "^0.200.0",
+                        "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+                    }
+                )
+            },
+            "opentelemetry",
+        ),
+        # Spans the hook cannot stamp with a call: protobuf, gRPC, or the SDK's default exporter.
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-trace-node": "^2.0.0",
+                        "@opentelemetry/exporter-trace-otlp-proto": "^0.200.0",
+                        "@opentelemetry/exporter-trace-otlp-grpc": "^0.200.0",
+                    }
+                )
+            },
+            "none",
+        ),
+        ({"package.json": _package({"@opentelemetry/sdk-node": "^0.200.0"})}, "none"),
+        # The browser SDK traces a page, not the agent.
+        (
+            {
+                "package.json": _package(
+                    {
+                        "@opentelemetry/sdk-trace-web": "^2.0.0",
+                        "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+                    }
+                )
+            },
+            "none",
+        ),
+        ({"package.json": _package({"openai": "^4.0.0"})}, "none"),
+        ({"package.json": "{not json"}, "none"),
+        ({"package.json": "[]"}, "none"),
+        ({"package.json": json.dumps({"dependencies": ["@traceai/fi-core"]})}, "none"),
+        # Only the folder's own manifest counts, never an installed package's.
+        (
+            {"node_modules/x/package.json": _package({"@traceai/fi-core": "1.0.0"})},
+            "none",
+        ),
+    ],
+    ids=[
+        "traceai",
+        "traceai_dev_dependency",
+        "omega_runtime_tarball",
+        "other_future_agi_package",
+        "opentelemetry_json",
+        "opentelemetry_sdk_node_json",
+        "protobuf_and_grpc_only",
+        "sdk_node_default_exporter",
+        "web_sdk",
+        "untraced",
+        "unparseable",
+        "not_an_object",
+        "dependencies_not_a_map",
+        "installed_package",
+    ],
+)
+def test_a_folder_without_python_is_read_from_its_package_json(
+    tmp_path: Path, files: dict[str, str], expected: str
+) -> None:
+    assert detect_instrumentation(_repository(tmp_path, files)) == expected
+
+
+def test_a_python_agent_beside_a_traced_frontend_keeps_its_answer(tmp_path: Path) -> None:
+    traced_frontend = _package({"@traceai/fi-core": "^1.4.1"})
+    untraced = _repository(
+        tmp_path / "untraced", {"agent.py": "import openai\n", "package.json": traced_frontend}
+    )
+    assert detect_instrumentation(untraced) == "none"
+    otel = _repository(
+        tmp_path / "otel",
+        {
+            "agent.py": "from opentelemetry.sdk.trace import TracerProvider\n",
+            "package.json": traced_frontend,
+        },
+    )
+    assert detect_instrumentation(otel) == "opentelemetry"
+
+
+def test_a_package_json_that_is_a_link_or_too_large_is_not_read(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(_package({"@traceai/fi-core": "1.0.0"}), encoding="utf-8")
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "package.json").symlink_to(elsewhere)
+    assert detect_instrumentation(linked) == "none"
+
+    large = tmp_path / "large"
+    large.mkdir()
+    padding = " " * (instrumentation_evidence._LARGEST_PACKAGE_JSON)
+    (large / "package.json").write_text(
+        _package({"@traceai/fi-core": "1.0.0"}) + padding, encoding="utf-8"
+    )
+    assert detect_instrumentation(large) == "none"
+
+
+def _saved_instrumentation(
+    tmp_path: Path, files: dict[str, str], runtime: dict, subfolder: str | None = None
+) -> str:
+    source = _repository(tmp_path / "source", files)
+    recorded = json.loads(RECORDED_CONTRACT.read_text(encoding="utf-8"))
+    payload = {
+        **recorded,
+        "runtime": {**recorded["runtime"], **runtime},
+        "instrumentation": "none",
+    }
+    result = accept_contract(payload, tmp_path / "out", source_root=source, subfolder=subfolder)
+    assert not result.get("is_error"), result
+    saved = json.loads((tmp_path / "out" / "contract.json").read_text(encoding="utf-8"))
+    return saved["instrumentation"]
+
+
+_NODE_RUNTIME = {"language": "node", "command": ["node", "index.js"]}
+_WORKSPACE_ROOT = json.dumps({"name": "repo", "private": True, "workspaces": ["agent"]})
+
+
+def test_a_node_agent_with_a_python_helper_is_read_from_its_package_json(tmp_path: Path) -> None:
+    """The selected runtime decides the reader: a build script in Python does not make it a Python agent."""
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "index.js": "require('http');\n",
+        "scripts/build.py": "import json\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _NODE_RUNTIME) == "traceai"
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ["member_declares", "hoisted_to_the_workspace_root"],
+)
+def test_a_node_agent_is_read_from_its_workdir_and_its_package_root(tmp_path: Path, layout: str) -> None:
+    """runtime.workdir's package.json, and the workspace root above it, where a tracing package may be hoisted."""
+    traced = {"@traceai/fi-core": "^1.4.1"}
+    member, root = (traced, {}) if layout == "member_declares" else ({}, traced)
+    files = {
+        "package.json": json.dumps({**json.loads(_WORKSPACE_ROOT), "dependencies": root}),
+        "agent/package.json": _package(member),
+        "agent/index.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, {**_NODE_RUNTIME, "workdir": "agent"}) == "traceai"
+
+
+def test_a_node_agent_in_a_subfolder_counts_the_workspace_roots_packages(tmp_path: Path) -> None:
+    files = {
+        "package.json": json.dumps(
+            {**json.loads(_WORKSPACE_ROOT), "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        "agent/package.json": _package({}),
+        "agent/index.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _NODE_RUNTIME, subfolder="agent") == "traceai"
+
+
+def test_a_python_runtime_keeps_the_answer_its_imports_give(tmp_path: Path) -> None:
+    files = {"agent.py": "import openai\n", "package.json": _package({"@traceai/fi-core": "^1.4.1"})}
+
+    assert _saved_instrumentation(tmp_path, files, {"language": "python"}) == "none"
+
+
+def test_a_node_agent_is_not_read_past_its_package_root(tmp_path: Path) -> None:
+    """A folder above the workspace root is another project: its packages are not the agent's."""
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "app/package.json": _WORKSPACE_ROOT,
+        "app/agent/package.json": _package({}),
+    }
+
+    assert instrumentation_evidence.detect_node_instrumentation(
+        _repository(tmp_path, files), "app/agent"
+    ) == "none"
+
+
+def test_a_manifest_with_both_sdks_is_traceai(tmp_path: Path) -> None:
+    both = {
+        "@traceai/fi-core": "^1.4.1",
+        "@opentelemetry/sdk-trace-node": "^1.0.0",
+        "@opentelemetry/exporter-trace-otlp-http": "^0.50.0",
+    }
+
+    assert detect_instrumentation(_repository(tmp_path, {"package.json": _package(both)})) == "traceai"
+
+
+_INFERRED = {"language": "", "command": [], "workdir": "agent"}
+
+
+def test_a_node_agent_known_only_from_its_dockerfile_is_read_from_its_package_json(
+    tmp_path: Path,
+) -> None:
+    """No language and no command: the workdir Dockerfile's CMD is what makes it Node, as the planner reads it."""
+    files = {
+        "helper.py": "import json\n",
+        "agent/package.json": _package({"@future-agi/omega-runtime": "^0.4.0"}),
+        "agent/server.js": "require('http');\n",
+        "agent/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _INFERRED) == "traceai"
+
+
+def test_a_root_dockerfile_cmd_decides_before_the_workdirs(tmp_path: Path) -> None:
+    """The planner reads the root Dockerfile first; a Python CMD there keeps the Python reading."""
+    files = {
+        "helper.py": "import json\n",
+        "Dockerfile": 'FROM python:3.12\nCMD ["python", "helper.py"]\n',
+        "agent/package.json": _package({"@future-agi/omega-runtime": "^0.4.0"}),
+        "agent/Dockerfile": 'FROM node:22\nCMD ["node", "server.js"]\n',
+    }
+
+    assert _saved_instrumentation(tmp_path, files, _INFERRED) == "none"
+
+
+def test_a_python_callback_beside_a_node_dockerfile_keeps_its_python_reading(tmp_path: Path) -> None:
+    """The root Dockerfile is a frontend's: the planner builds the Python agent and never runs that CMD."""
+    files = {
+        "agent.py": "from fi_instrumentation import register\n\n\ndef agent_callback(message):\n    return message\n",
+        "requirements.txt": "fi-instrumentation-otel\n",
+        "Dockerfile": 'FROM node:22\nCMD ["node", "web/server.js"]\n',
+        "web/package.json": _package({}),
+        "web/server.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, {**_INFERRED, "workdir": ""}) == "traceai"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["npm", "start"], ["npm", "run", "start"], ["pnpm", "start"], ["yarn", "start"]],
+    ids=["npm_start", "npm_run_start", "pnpm", "yarn"],
+)
+def test_an_npm_start_command_with_no_language_is_read_from_its_package_json(
+    tmp_path: Path, command: list[str]
+) -> None:
+    """A package manager starts the package the planner builds, so the planner names the language."""
+    files = {"package.json": _package({"@traceai/fi-core": "^1.4.1"}), "index.js": "require('http');\n"}
+
+    runtime = {"language": "", "command": command, "workdir": ""}
+    assert _saved_instrumentation(tmp_path, files, runtime) == "traceai"
+
+
+def test_an_independent_package_under_a_traced_parent_is_read_alone(tmp_path: Path) -> None:
+    """A parent manifest that does not declare the agent's package in its workspaces is another project's."""
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "agent/package.json": _package({}),
+        "agent/index.js": "require('http');\n",
+    }
+
+    assert _saved_instrumentation(tmp_path, files, {**_NODE_RUNTIME, "workdir": "agent"}) == "none"
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "expected"),
+    [
+        (["packages/*"], "traceai"),
+        ({"packages": ["packages/**"]}, "traceai"),
+        (["./packages/agent/"], "traceai"),
+        (["apps/*"], "none"),
+    ],
+    ids=["glob", "yarn_object", "spelled_path", "other_members"],
+)
+def test_a_workspace_root_counts_only_for_a_member_it_declares(
+    tmp_path: Path, workspaces: object, expected: str
+) -> None:
+    files = {
+        "package.json": json.dumps(
+            {"name": "repo", "workspaces": workspaces, "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        "packages/agent/package.json": _package({}),
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(
+            _repository(tmp_path, files), "packages/agent"
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "workspaces",
+    [["packages/*", "!packages/agent"], {"packages": ["packages/**", "!./packages/agent/"]}],
+    ids=["list", "yarn_object"],
+)
+def test_a_member_the_workspace_excludes_is_read_alone(tmp_path: Path, workspaces: object) -> None:
+    """A `!` pattern takes the folder out of the workspace, so the root's packages are not its own."""
+    files = {
+        "package.json": json.dumps(
+            {"name": "repo", "workspaces": workspaces, "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        "packages/agent/package.json": _package({}),
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(
+            _repository(tmp_path, files), "packages/agent"
+        )
+        == "none"
+    )
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "member"),
+    [
+        (["packages/{api,worker}"], "packages/api"),
+        (["packages/**", "!packages/b/**", "packages/b/a"], "packages/b/a"),
+    ],
+    ids=["brace", "later_positive_re_includes"],
+)
+def test_a_member_npm_maps_reads_the_root_s_packages(
+    tmp_path: Path, workspaces: list[str], member: str
+) -> None:
+    """Two workspaces npm maps that a segment-by-segment glob misses: a brace, and a negation that a
+    later positive takes back."""
+    files = {
+        "package.json": json.dumps(
+            {"name": "repo", "workspaces": workspaces, "dependencies": {"@traceai/fi-core": "^1.4.1"}}
+        ),
+        f"{member}/package.json": _package({}),
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(_repository(tmp_path, files), member)
+        == "traceai"
+    )
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "member", "expected"),
+    [
+        (["packages/{api,worker}"], "packages/api", True),
+        (["packages/**", "!packages/b/**", "packages/b/a"], "packages/b/a", True),
+        (["packages/{api,worker}"], "packages/worker", True),
+        (["packages/{api,worker}"], "packages/web", False),
+        (["packages/{api,{web,cli}}"], "packages/cli", True),
+        (["packages/agent-{1..3}"], "packages/agent-2", True),
+        (["packages/agent-{1..3}"], "packages/agent-4", False),
+        (["packages/@(api|worker)"], "packages/worker", True),
+        (["packages/@(api|worker)"], "packages/apiworker", False),
+        (["packages/+(a|b)"], "packages/abba", True),
+        (["packages/api?(-v2)"], "packages/api-v2", True),
+        (["packages/api?(-v2)"], "packages/api", True),
+        (["packages/*(x)y"], "packages/y", True),
+        (["packages/!(legacy)"], "packages/api", True),
+        (["packages/!(legacy)"], "packages/legacy", False),
+        (["packages/[ab]pi"], "packages/api", True),
+        (["packages/[!ab]pi"], "packages/api", False),
+        (["apps/**/service"], "apps/a/b/service", True),
+        (["apps/**/service"], "apps/service", True),
+        (["apps/**"], "apps/a/b", True),
+        (["packages/*"], "packages/a/b", False),
+        (["packages/*"], "packages/.agent", False),
+        (["**"], "node_modules/agent", False),
+        (["packages/*", "!packages/agent", "packages/agent"], "packages/agent", True),
+        (["packages/*", "!packages/agent", "packages/agent", "!packages/agent"], "packages/agent", False),
+        (["packages/*", "!packages/agent", "packages/*"], "packages/agent", False),
+        (["packages/**", "!packages/b/**", "packages/b/a"], "packages/b/c", True),
+        (["packages/*", "!packages/b/**"], "packages/b", False),
+        (["apps/**", "!apps/*"], "apps/a/service", False),
+        (["packages/*", "!packages/b/**", "packages/b"], "packages/b", False),
+        (["packages/*", "!packages/api", "!packages/a*", "packages/api"], "packages/api", False),
+        (["packages/*", "!!packages/agent"], "packages/agent", True),
+        ({"packages": ["packages/{api,worker}", "!packages/worker"]}, "packages/api", True),
+        ({"packages": ["packages/{api,worker}", "!packages/worker"]}, "packages/worker", False),
+        ({"packages": ["packages/*", "!packages/agent", "packages/agent"]}, "packages/agent", True),
+    ],
+    ids=[
+        "reviewer_brace",
+        "reviewer_later_positive_re_includes",
+        "brace_second",
+        "brace_other",
+        "brace_nested",
+        "brace_range",
+        "brace_range_outside",
+        "extglob_one_of",
+        "extglob_one_of_not_both",
+        "extglob_one_or_more",
+        "extglob_optional_present",
+        "extglob_optional_absent",
+        "extglob_any_number",
+        "extglob_not",
+        "extglob_not_the_excluded",
+        "class",
+        "class_negated",
+        "globstar_deep",
+        "globstar_zero",
+        "globstar_trailing",
+        "star_is_one_segment",
+        "star_skips_dot_folders",
+        "node_modules_never",
+        "later_positive_re_includes",
+        "later_negative_removes_again",
+        "broader_positive_keeps_the_negation",
+        "taken_back_negation_is_dropped_whole",
+        "negation_ending_in_globstar_covers_the_folder",
+        "negation_drops_a_positive_its_text_matches",
+        "trailing_globstar_needs_a_name_below_in_text",
+        "take_back_skips_the_next_negation_as_npm_does",
+        "double_bang_is_positive",
+        "yarn_object_brace",
+        "yarn_object_negation",
+        "yarn_object_re_include",
+    ],
+)
+def test_workspace_membership_follows_npm_s_mapper(
+    workspaces: object, member: str, expected: bool
+) -> None:
+    """npm's @npmcli/map-workspaces: minimatch globs, and a positive pattern that a preceding
+    negation matches takes that negation back."""
+    assert instrumentation_evidence._names_member({"workspaces": workspaces}, member) is expected
+
+
+_ADVERSARIAL_WORKSPACES = {
+    # Each hangs a backtracking regular expression for minutes.
+    "many_stars": (["p/" + "*a" * 20 + "b"], "p/" + "a" * 60, False),
+    "nested_repeats": (["p/*(*(a))b"], "p/" + "a" * 40, False),
+    "overlapping_alternatives": (["p/+(a|aa)b"], "p/" + "a" * 60, False),
+    "deep_extglob_nesting": (["p/" + "@(" * 40 + "a" + ")" * 40 + "b"], "p/" + "a" * 200, False),
+    "globstar_chain_over_a_long_path": (["**/" * 60 + "x"], "/".join(["a"] * 120) + "/y", False),
+    "negated_extglob_over_a_long_path": (["**/!(x)/**"], "/".join(["seg"] * 120), True),
+    "brace_explosion": (["p/" + "{a,b}" * 8 + "c"], "p/" + "ab" * 4 + "d", False),
+    # 128 positives each tested against 128 negations of 256 expansions: past the budget, so the
+    # field names no member.
+    "quadratic_take_back": (
+        [f"!p/{'{a,b}' * 8}x{i}" for i in range(128)]
+        + [f"p/{'{a,b}' * 8}y{i}" for i in range(128)],
+        "p/aaaaaaaay0",
+        False,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("workspaces", "member", "expected"),
+    list(_ADVERSARIAL_WORKSPACES.values()),
+    ids=list(_ADVERSARIAL_WORKSPACES),
+)
+def test_an_adversarial_workspace_field_is_answered_within_its_budget(
+    workspaces: list[str], member: str, expected: bool
+) -> None:
+    """A manifest's patterns cannot stall a save: one question takes at most the budget's steps."""
+    started = time.monotonic()
+    answer = instrumentation_evidence._names_member({"workspaces": workspaces}, member)
+    assert time.monotonic() - started < 0.5
+    assert answer is expected
+
+
+def test_a_workspace_question_stops_at_its_step_budget() -> None:
+    """A real field takes a few hundred steps; the budget stops a match at its limit."""
+    budget = workspace_glob.Budget()
+    assert workspace_glob.matches("packages/@(api|worker)", "packages/worker", budget, folder=True)
+    assert workspace_glob.Budget().left - budget.left < 200
+    with pytest.raises(workspace_glob.TooCostly):
+        workspace_glob.matches("packages/*", "packages/worker", workspace_glob.Budget(5))
+
+
+@pytest.mark.parametrize(
+    "workspaces",
+    [["other/*"] * 256 + ["packages/*"], ["packages/" + "*" * 300]],
+    ids=["past_the_pattern_count", "past_the_pattern_length"],
+)
+def test_a_pattern_past_the_bounds_is_not_read(workspaces: list[str]) -> None:
+    assert instrumentation_evidence._names_member({"workspaces": workspaces}, "packages/agent") is False
+
+
+def test_an_unread_manifest_ends_the_walk(tmp_path: Path) -> None:
+    """A package.json past the size limit is still the agent's package: the walk stops there."""
+    padding = " " * instrumentation_evidence._LARGEST_PACKAGE_JSON
+    files = {
+        "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "agent/package.json": _package({}) + padding,
+    }
+
+    assert (
+        instrumentation_evidence.detect_node_instrumentation(_repository(tmp_path, files), "agent/src")
+        == "none"
+    )
+
+
+@pytest.mark.parametrize("language", ["typescript", "javascript", "js", "ts", "nodejs"])
+def test_a_language_the_planner_reads_as_node_is_read_from_its_package_json(
+    tmp_path: Path, language: str
+) -> None:
+    files = {"package.json": _package({}), "agent/package.json": _package({"@traceai/fi-core": "^1.4.1"})}
+
+    runtime = {"language": language, "command": ["node", "index.js"], "workdir": "agent"}
+    assert _saved_instrumentation(tmp_path, files, runtime) == "traceai"
+
+
+def test_the_root_workdir_sentinel_reads_the_root_manifest(tmp_path: Path) -> None:
+    """The planner reads workdir "/" as the repository root."""
+    files = {"package.json": _package({"@traceai/fi-core": "^1.4.1"}), "index.js": "require('http');\n"}
+
+    assert _saved_instrumentation(tmp_path, files, {**_NODE_RUNTIME, "workdir": "/"}) == "traceai"
+
+
+def test_a_single_nested_node_component_the_planner_infers_is_read_from_its_package_json(
+    tmp_path: Path,
+) -> None:
+    """No language, no command, no Dockerfile: the planner picks the one component in the repository."""
+    files = {
+        "agent/package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+        "agent/index.js": "require('http');\n",
+    }
+
+    runtime = {"language": "", "command": [], "workdir": "", "dockerfile": "", "compose_file": ""}
+    assert _saved_instrumentation(tmp_path, files, runtime) == "traceai"
+
+
+_PYTHON_WITHOUT_READABLE_SOURCE = {
+    "package.json": _package({"@traceai/fi-core": "^1.4.1"}),
+    "pyproject.toml": "[project]\nname = 'agent'\n",
+    "build/agent.py": "import json\n",
+}
+
+
+def test_an_explicit_python_runtime_never_reads_package_json(tmp_path: Path) -> None:
+    runtime = {"language": "python", "command": ["python", "-m", "agent"]}
+
+    assert _saved_instrumentation(tmp_path, _PYTHON_WITHOUT_READABLE_SOURCE, runtime) == "none"
+
+
+def _session_saved(tmp_path: Path, files: dict[str, str], runtime: dict, cached: str) -> str:
+    """The save as the save child runs it: with the session's early answer, read before the runtime was known."""
+    source = _repository(tmp_path / "source", files)
+    recorded = json.loads(RECORDED_CONTRACT.read_text(encoding="utf-8"))
+    payload = {**recorded, "runtime": {**recorded["runtime"], **runtime}}
+    checked = tools._checked_contract(
+        payload,
+        source_root=source,
+        require_setup_contract=False,
+        subfolder=None,
+        instrumentation=cached,
+    )
+    assert not isinstance(checked, dict), checked
+    return checked.instrumentation
+
+
+def test_the_sessions_early_answer_is_replaced_for_a_node_runtime(tmp_path: Path) -> None:
+    files = {"package.json": _package({"@traceai/fi-core": "^1.4.1"}), "scripts/build.py": "import json\n"}
+
+    assert _session_saved(tmp_path, files, _NODE_RUNTIME, cached="none") == "traceai"
+
+
+def test_the_sessions_manifest_answer_is_dropped_for_a_python_runtime(tmp_path: Path) -> None:
+    """The session read package.json because it found no Python file; a Python runtime never counts it."""
+    runtime = {"language": "python", "command": ["python", "-m", "agent"]}
+
+    assert _session_saved(tmp_path, _PYTHON_WITHOUT_READABLE_SOURCE, runtime, cached="traceai") == "none"
+
+
+def test_the_sessions_python_answer_is_kept_for_a_python_runtime(tmp_path: Path) -> None:
+    files = {"agent.py": "from fi_instrumentation import register\n"}
+    runtime = {"language": "python", "command": ["python", "agent.py"]}
+
+    assert _session_saved(tmp_path, files, runtime, cached="traceai") == "traceai"

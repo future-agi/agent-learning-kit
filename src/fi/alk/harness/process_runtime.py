@@ -650,6 +650,18 @@ _SIMULATION_MARK_SITECUSTOMIZE = (
 )
 
 
+# The Node counterpart of `simulation_mark_bootstrap.py`, loaded with `--require` so that it runs
+# before CommonJS and ES module code alike, on every Node version the image carries.
+_NODE_MARK_HOOK = "simulation_mark_node.cjs"
+
+
+def _node_require_option(path: Path) -> str:
+    """The NODE_OPTIONS entry that preloads ``path``. Node splits the variable on spaces outside
+    double quotes and reads a backslash inside them as an escape."""
+    quoted = str(path).replace("\\", "\\\\").replace('"', '\\"')
+    return f'--require="{quoted}"'
+
+
 # --- C1 §4 bind-error attribution -------------------------------------------------------------
 
 # `[Errno 48]` (macOS/BSD) / `[Errno 98]` (Linux) address-in-use, and the textual form both
@@ -2628,6 +2640,12 @@ def spawn_source_process(
                         Path(__file__).with_name(module_name).read_bytes()
                     )
                     mark_module.chmod(0o444)
+        if mark_hook_due:
+            # The Node counterpart of the mark hook, which NODE_OPTIONS names below.
+            node_hook = world_dir / _NODE_MARK_HOOK
+            if not node_hook.exists():
+                node_hook.write_bytes(Path(__file__).with_name(_NODE_MARK_HOOK).read_bytes())
+                node_hook.chmod(0o444)
         if "ALK_WORLD_DOOR_URL" in process.environment:
             # The world's door for tools the agent runs in its own process, imported by the hook above.
             door_hook = world_dir / "in_process_door_bootstrap.py"
@@ -2826,6 +2844,20 @@ def spawn_source_process(
         env[process.local_auth.server_environment] = token
     env = target_provider_environment(env)
     env.update(egress_environment or {})
+    if mark_hook_due:
+        # Node loads the hook before the process's own code, in this process and in every Node
+        # process it starts; another runtime ignores the name. The process's own options follow.
+        # The process lane admits a Node agent only through the native Node runtime; until that
+        # lands, the hook reaches only Node processes that an admitted agent starts.
+        # NODE_DEBUG=http or net writes each request's headers, the ingest pair's included, to
+        # the process's stderr; the Python hook exposes no such output.
+        env.pop("NODE_DEBUG", None)
+        existing_node_options = env.get("NODE_OPTIONS", "").strip()
+        env["NODE_OPTIONS"] = " ".join(
+            part
+            for part in (_node_require_option(world_dir / _NODE_MARK_HOOK), existing_node_options)
+            if part
+        )
     if resolved_user is not None:
         env["HOME"] = _declared_home(resolved_user, process)
     command = list(process.run_command)

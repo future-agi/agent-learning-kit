@@ -89,6 +89,28 @@ jobs:
           ALK_TEST_PYTHON: ${{ steps.traced.outputs.python-path }}
         run: python -m pytest -q -rs tests/harness/test_python_tool_trace_bootstrap.py
 
+  node-mark-hook:
+    # The sandbox's Node mark hook in a real Node process: its wire suite and the option the
+    # sandbox sets. The test skips where there is no node, so this job fails on a skip.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the kit
+        run: python -m pip install . pytest
+      - name: Run the Node mark hook tests, failing if they skip
+        shell: bash
+        run: |
+          python -m pytest -q -rs tests/harness/test_simulation_mark_node.py | tee pytest.out
+          ! grep -q "skipped" pytest.out
+
   python-3-12-3:
     # The hosted image's own Python: Ubuntu 24.04's python3.12, which is 3.12.3 (Dockerfile.hosted,
     # /opt/alk-venv). "3.12" elsewhere floats to the newest release, and setup-python has no

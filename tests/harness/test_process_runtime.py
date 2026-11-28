@@ -10170,6 +10170,7 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
         ]
         assert sorted(path.name for path in world.iterdir()) == [
             "simulation_mark_bootstrap.py",
+            "simulation_mark_node.cjs",
             "simulation_measure.py",
             "simulation_worker_events.py",
             "sitecustomize.py",
@@ -10256,6 +10257,67 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
     finally:
         world.chmod(0o755)
     assert again["env"]["PYTHONPATH"] == str(world)
+
+
+def test_node_mark_hook_is_preloaded_first_for_every_exporting_process(tmp_path: Path) -> None:
+    node_hook = Path(pr.__file__).with_name("simulation_mark_node.cjs")
+    process = _source_process(
+        name="agent", environment={"NODE_OPTIONS": "--max-old-space-size=512"}
+    )
+    captured = _spawn(tmp_path / "exporting", process, _EXPORT)
+    world = captured["world_dir"]
+    assert (world / "simulation_mark_node.cjs").read_bytes() == node_hook.read_bytes()
+    assert stat.S_IMODE((world / "simulation_mark_node.cjs").stat().st_mode) == 0o444
+    # The process's own options stay, after ours.
+    assert captured["env"]["NODE_OPTIONS"] == (
+        f'--require="{world / "simulation_mark_node.cjs"}" --max-old-space-size=512'
+    )
+
+    # No export decision, no hook and no option: the process's own value is left as it is.
+    for environment in ({}, None, {"OTEL_RESOURCE_ATTRIBUTES": "fi.simulation.origin=simulation"}):
+        captured = _spawn(tmp_path / "no-mode", process, environment)
+        assert not (captured["world_dir"] / "simulation_mark_node.cjs").exists()
+        assert captured["env"]["NODE_OPTIONS"] == "--max-old-space-size=512"
+    captured = _spawn(tmp_path / "none-set", _source_process(name="agent"))
+    assert "NODE_OPTIONS" not in captured["env"]
+
+
+def test_node_mark_hook_leaves_the_future_agi_keys_to_the_customer(tmp_path: Path) -> None:
+    # The ingest pair reaches the process only under its own names, as for the Python hook.
+    exporting = {
+        **_EXPORT,
+        "FI_SIMULATION_INGEST_API_KEY": "ingest-key",
+        "FI_SIMULATION_INGEST_SECRET_KEY": "ingest-secret",
+    }
+    captured = _spawn(tmp_path / "keyless", _source_process(name="agent"), exporting)
+    assert "NODE_OPTIONS" in captured["env"]
+    assert "FI_API_KEY" not in captured["env"]
+    assert "FI_SECRET_KEY" not in captured["env"]
+
+    own = _source_process(name="agent", environment={"FI_API_KEY": "customer-key"})
+    captured = _spawn(tmp_path / "own-key", own, exporting)
+    assert captured["env"]["FI_API_KEY"] == "customer-key"
+    assert "FI_SECRET_KEY" not in captured["env"]
+
+
+def test_node_mark_hook_drops_node_debug_which_prints_request_headers(tmp_path: Path) -> None:
+    # NODE_DEBUG=http or net writes each request's headers, the ingest pair's included, to stderr.
+    process = _source_process(name="agent", environment={"NODE_DEBUG": "http,net"})
+    captured = _spawn(tmp_path / "exporting", process, _EXPORT)
+    assert "NODE_OPTIONS" in captured["env"]
+    assert "NODE_DEBUG" not in captured["env"]
+    # Without the hook the process keeps its own value.
+    captured = _spawn(tmp_path / "not-exporting", process)
+    assert captured["env"]["NODE_DEBUG"] == "http,net"
+
+
+def test_node_option_quotes_a_path_as_node_reads_it() -> None:
+    assert pr._node_require_option(Path("/work/worlds/w0/agent/hook.cjs")) == (
+        '--require="/work/worlds/w0/agent/hook.cjs"'
+    )
+    assert pr._node_require_option(Path('/work/a b/say "hi"/hook.cjs')) == (
+        '--require="/work/a b/say \\"hi\\"/hook.cjs"'
+    )
 
 
 def test_mark_hook_that_cannot_be_written_fails_the_spawn(tmp_path: Path) -> None:
@@ -10617,6 +10679,7 @@ def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
     world = captured["world_dir"]
     assert sorted(path.name for path in world.iterdir()) == [
         "simulation_mark_bootstrap.py",
+        "simulation_mark_node.cjs",
         "simulation_measure.py",
         "simulation_worker_events.py",
         "sitecustomize.py",
