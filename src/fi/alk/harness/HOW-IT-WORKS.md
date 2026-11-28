@@ -109,8 +109,45 @@ job's `metadata.browser_allowed_sites` is absent. It checks at the build command
 contract already on disk, else an accepted seed that matches the job), between the reading and the
 environment in the staged run, and when the hosted build first sees a saved contract
 (`browser_environment.py`). The list itself is read strictly: present, it must be a non-empty list
-of host names (`browser_allowed_sites_invalid`), each one the run's egress allows when the job
-controls egress (`browser_site_not_in_egress`).
+of host names or `*.` wildcards (`browser_allowed_sites_invalid`), each one the run's egress covers
+when the job controls egress (`browser_site_not_in_egress`). One entry means one thing, as the
+sandbox firewall reads it: `example.com` is that host only, and `*.example.com` is every host under
+it, not `example.com` itself. Cover, not presence: the platform drops a host from the egress list
+when a wildcard there covers it.
+
+**The environment's browser** (`kit_browser.py`). Where the job has sites and the contract needs a
+browser, the kit starts one headless Chromium for each world (`alk-chromium` from the image, or
+`ALK_CHROMIUM` for a local run), as the agent's user with a bare environment, on an empty profile
+at each spawn of the world. A reset in a browser environment is therefore a full respawn: every
+process of the world starts again and each store is resealed from its baseline, never reset in
+place, so the agent never holds a connection to the last trial's browser. That costs a world's
+start-up on every trial. Each start also gives the browser a new temporary folder of its own under
+`/tmp`, the agent's user's, removed when the browser stops: on Linux Chromium keeps a socket under
+it, and a socket's path holds at most 107 bytes, so it cannot be under the work folder, whose
+length the kit does not choose. A temporary folder still too long fails the start and says so. The agent's process alone
+gets its DevTools address in `ALK_BROWSER_CDP_URL`: a relay in front of the browser's port, fixed
+for the world's life, which counts the clients that attach. The browser's requests go through a
+refusing proxy of its own whose list is the sites and nothing else, each read as above and never
+wider than the firewall (the agent's proxy still reads a name as covering the hosts under it): never
+loopback, and never a
+site any of whose addresses is loopback or unspecified (an IPv4 one written as IPv6 included);
+each address of a site is tried in turn within 30 seconds. Chromium sends loopback through it too,
+QUIC is off, and WebRTC is kept to the proxy (no UDP outside it). A refusal is logged in the world's action log as the agent's
+`egress_blocked` attempt marked `via: browser` while a browser runs, whoever in it asked and however
+that client reached it; with no client the browser asks only for its own service name
+(`kit-browser.invalid`, never logged), so a refusal while it runs is a client's. Nothing is logged
+between a browser's stop and the next one's start. The log reaches the trial's `blocked` list only
+where the chat trial reads the world's log (a world with a door or a tool proxy); a world with no
+postgres endpoint refuses and does not record. The proxy sees a host, not who in the browser
+asked, so its count holds a page's own requests (scripts, fonts, a favicon) as well as the agent's
+navigations. A trial says `browser_not_used` when no client
+attached through the relay and the browser's proxy was asked for nothing, and `browser_not_started` when the job has sites for an agent not read as needing a
+browser; both are reported, not graded. The relay serves as many clients as the egress proxy does
+and lets a connection idle both ways go after as long as the longest call allowed. That bound holds
+for the environment's browser only: the agent's own code, or a browser it starts itself, is bound by
+the sandbox's firewall. It covers what the browser is asked to load over the network, not local
+files the agent's user can read, nor a client that changes the browser's own settings through its
+DevTools address.
 
 **A reading on its own** (`agent_reading.py`, the platform's "read this agent" with no build after
 it) has one budget of model calls for the whole reading: the main loop's, every reader's, and the

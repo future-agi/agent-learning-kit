@@ -100,6 +100,15 @@ from .world_door import (
     SEED_SENTINEL_QUERY,
     PostgresLog,
 )
+from .browser_runtime import (
+    browser_metadata,
+    browser_started,
+    close_browsers,
+    contract_needs_browser,
+    read_browser_allowed_sites,
+    stop_browser,
+    world_browser_environment,
+)
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -4959,6 +4968,13 @@ class SpawnContext:
     # The hosts a controlled run allows (job.json `metadata`); None when egress is not controlled.
     egress_allowed_hosts: tuple[str, ...] | None = None
     egress_proxies: dict[int, EgressProxy] = field(default_factory=dict, repr=False)
+    # The sites the environment's browser may open (job.json `metadata.browser_allowed_sites`); None when the
+    # environment has no browser. A browser is started only where the agent also needs one (`needs_browser`).
+    browser_allowed_sites: tuple[str, ...] | None = None
+    needs_browser: bool = False
+    # Each world's browser (`kit_browser.KitBrowser`), and how one is made: by world index and its action log.
+    browsers: dict[int, Any] = field(default_factory=dict, repr=False)
+    browser_factory: Callable[[int, Any], Any] | None = field(default=None, repr=False)
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
@@ -5037,6 +5053,7 @@ def spawn_world(
     configuration_addresses = configuration_addresses_from_endpoints(endpoints)
     processes_by_name = {process.name: process for process in manifest.processes}
     handles: dict[str, SpawnedWorldProcess] = dict(shared_handles or {})
+    browser_environment: dict[str, str] | None = None
 
     try:
         for name in _topological_order(manifest):
@@ -5073,6 +5090,14 @@ def spawn_world(
                     chown=context.chown,
                 )
             else:
+                agent_environment = None
+                if process.user == ProcessUser.SVC_AGENT:
+                    if browser_environment is None:
+                        browser_environment = world_browser_environment(context, world_index, endpoints)
+                    agent_environment = {
+                        **(_egress_environment(context, world_index, endpoints, configuration_addresses) or {}),
+                        **browser_environment,
+                    }
                 handle = spawn_source_process(
                     process,
                     build_dir=build_tree_dir(context.work_directory, name),
@@ -5091,11 +5116,7 @@ def spawn_world(
                     require_declared_user=context.require_declared_user,
                     chown=context.chown,
                     customer_code_environment=context.customer_code_environment,
-                    egress_environment=_egress_environment(
-                        context, world_index, endpoints, configuration_addresses
-                    )
-                    if process.user == ProcessUser.SVC_AGENT
-                    else None,
+                    egress_environment=agent_environment or None,
                 )
             handles[name] = handle
             if isinstance(process, SourceProcess) and process.started_check is not None:
@@ -7088,6 +7109,8 @@ def _clone_or_reset_world(
     # IS reverse-topological order without recomputing it.
     in_place = (
         keep_processes
+        # A new browser for each trial means a new agent process, never one holding the last browser.
+        and not browser_started(context)
         and bool(existing_handles)
         # A process the harness stopped mid-trial (a worker past its deadline) comes back with a full respawn.
         and all(
@@ -7100,6 +7123,9 @@ def _clone_or_reset_world(
             isinstance(p, SourceProcess) and p.workspaces for p in manifest.processes
         )
     )
+    # The last trial's browser goes before the world's records are sealed again, so a page still open in it never
+    # reaches the next trial's world.
+    stop_browser(context, world_index)
     for name, handle in reversed(list(existing_handles.items())):
         if not in_place and name not in job_shared_handles:
             # M7, p6-review-r1: waits for real exit before `_seal_world_store` below `rmtree`s
@@ -7601,16 +7627,24 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     return dict(typed.customer_code_environment)
 
 
+def read_job_json(work_directory: Path, unknown: Callable[[str], ProcessRuntimeError]) -> Any | None:
+    """`/work/job.json` as JSON, or None when there is none (a local run). One that cannot be read fails the spawn,
+    with ``unknown`` saying which setting could not be told."""
+    try:
+        return json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise unknown(f"job.json cannot be read as JSON ({exc})") from exc
+
+
 def _read_egress_allowed_hosts(work_directory: Path) -> tuple[str, ...] | None:
     """The hosts a controlled run allows the agent, from `/work/job.json` `metadata.egress_allowed_hosts`; None when
     the platform sent none (egress not controlled, or a local run). A `job.json` that cannot say, or a value that is
     not a list of host names, fails the spawn: a controlled run never starts with its egress uncontrolled."""
-    try:
-        raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    raw = read_job_json(work_directory, _egress_unknown)
+    if raw is None:
         return None
-    except (OSError, ValueError) as exc:
-        raise _egress_unknown(f"job.json cannot be read as JSON ({exc})") from exc
     metadata = raw.get("metadata", {}) if isinstance(raw, dict) else None
     if not isinstance(metadata, dict):
         raise _egress_unknown(f"job.json {'metadata' if isinstance(raw, dict) else 'top level'} is not an object")
@@ -8379,6 +8413,7 @@ class ProcessRuntimeProvider:
             )
             self._diagnostic_work_directory = work_directory
             job_id = _read_job_id(work_directory)
+            browser_sites = read_browser_allowed_sites(work_directory)
             context = SpawnContext(
                 work_directory=work_directory,
                 port_plan=port_plan,
@@ -8391,6 +8426,9 @@ class ProcessRuntimeProvider:
                     work_directory
                 ),
                 egress_allowed_hosts=_read_egress_allowed_hosts(work_directory),
+                browser_allowed_sites=browser_sites,
+                # Read only where the job has sites: a job with no browser never parses the contract for one.
+                needs_browser=contract_needs_browser(bundle_dir) if browser_sites is not None else False,
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
@@ -8982,6 +9020,7 @@ class ProcessRuntimeProvider:
         metadata = {
             **self._control_metadata(world_index),
             **_dispatch_metadata(result.handles),
+            **browser_metadata(self._context, world_index),
         }
         if existing is not None:
             existing.runtime_id = new_runtime_id(self._bundle_digest, world_index)
@@ -9174,6 +9213,8 @@ class ProcessRuntimeProvider:
 
     def _teardown_world(self, world_index: int) -> None:
         self._destroy_provider_target(world_index)
+        if self._context is not None:
+            close_browsers(self._context, world_index)
         handles = self._world_handles.pop(world_index, {})
         # N12, p6-review-r2 (MINOR): reversed — `handles`' insertion order is `spawn_world`'s own
         # `_topological_order` (dependencies first), so terminating it forward sends SIGTERM to a
@@ -9394,6 +9435,9 @@ class ProcessRuntimeProvider:
         """
         for world_index in list(self._provider_receipts):
             self._destroy_provider_target(world_index)
+        if self._context is not None:
+            # Before the worlds' folders go: each browser's profile is in its world's scratch.
+            close_browsers(self._context)
 
         # N12, p6-review-r2 (MINOR): reversed per world (dependents before the engine they depend
         # on — see `_teardown_world`'s own note) and bounded by `self._close_wait_timeout_seconds`

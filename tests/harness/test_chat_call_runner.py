@@ -2639,3 +2639,42 @@ def test_a_hosted_job_that_does_not_turn_actors_on_plays_no_actor_and_no_fault(t
 
     assert all(faults == [] for faults in written)
     assert not outcome.world_actions and not outcome.call_actors
+
+
+def test_a_chat_trial_in_a_browser_environment_says_when_its_browser_was_not_used(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from fi.alk.harness.kit_browser import BROWSER_NOT_USED
+
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="I looked it up myself.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    state = tmp_path / "browser-w0.json"
+    state.write_text(json.dumps({"attached": 0}), encoding="utf-8")
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http", protocol="http", address="http://localhost:18080"
+            )
+        },
+        metadata={"browser": {"state": "started", "state_path": str(state)}},
+    )
+    outcome = asyncio.run(
+        chat.HostedChatCallRunner(_Adapter(), _context(tmp_path)).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
+    assert BROWSER_NOT_USED in [one["code"] for one in outcome.notices]

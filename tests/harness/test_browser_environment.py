@@ -127,8 +127,37 @@ def test_each_site_must_be_one_the_egress_allows():
     assert failure.code == BROWSER_SITE_NOT_IN_EGRESS
     assert failure.details == {"sites": ["pay.other.com"]}
     assert failure.message == "The run's egress doesn't allow these browser sites: pay.other.com."
-    metadata["browser_allowed_sites"] = ["shop.example.com", "example.com", "*.docs.example.com"]
-    assert allowed_sites(metadata) == ("shop.example.com", "example.com", "*.docs.example.com")
+    metadata["browser_allowed_sites"] = ["shop.example.com", "pypi.org", "*.docs.example.com"]
+    assert allowed_sites(metadata) == ("shop.example.com", "pypi.org", "*.docs.example.com")
+
+
+@pytest.mark.parametrize(
+    ("site", "egress", "covered"),
+    [
+        # The platform tidies a host out of the egress list when a wildcard there covers it.
+        ("auth.example.com", ["*.example.com"], True),
+        ("a.b.example.com", ["*.example.com"], True),
+        # A wildcard is not the name itself, and a name is not the hosts under it.
+        ("example.com", ["*.example.com"], False),
+        ("shop.example.com", ["example.com"], False),
+        # A wildcard site needs a wildcard at or above it.
+        ("*.example.com", ["*.example.com"], True),
+        ("*.docs.example.com", ["*.example.com"], True),
+        ("*.example.com", ["example.com"], False),
+        ("*.example.com", ["*.docs.example.com"], False),
+        ("*.example.com", ["*.ample.com"], False),
+        # An entry is read in one form: case and a trailing dot change nothing, and an empty one covers nothing.
+        ("*.example.com", ["*.Example.com."], True),
+        ("shop.example.com", ["SHOP.example.com."], True),
+        ("*.example.com", ["", "*.", "  "], False),
+    ],
+)
+def test_a_site_is_in_the_egress_when_an_entry_there_covers_it_as_the_firewall_reads_one(site, egress, covered):
+    metadata = {"browser_allowed_sites": [site], "egress_allowed_hosts": egress}
+    if covered:
+        assert allowed_sites(metadata) == (site,)
+    else:
+        assert _problem(metadata).failure.details == {"sites": [site]}
 
 
 def test_a_long_list_outside_the_egress_keeps_the_message_short_and_the_details_whole():
