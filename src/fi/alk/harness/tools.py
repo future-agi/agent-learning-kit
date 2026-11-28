@@ -1196,8 +1196,13 @@ def contract_tools(
                     "out when it doesn't say), name exactly as written (letters, digits and "
                     ". _ : / @ - only), and the file (relative to "
                     "the source root) and line the name is written on. One model; a voice agent's "
-                    "speech-to-text and text-to-speech models don't count. Leave model out when "
-                    "the name is only set at run time.",
+                    "speech-to-text and text-to-speech models don't count. When the environment can "
+                    "override the name (a default in os.getenv(\"MODEL\", \"gpt-4o-mini\"), or one "
+                    "chosen by which provider's key is set), record the default in effect when the "
+                    "agent starts with nothing overridden, on its line: not one reassigned later "
+                    "or in unused code. When which key is set picks among defaults, record the one "
+                    "the code checks for first. Leave model out when no name the source writes "
+                    "takes effect.",
                 },
                 "hard_constraints": {
                     "type": "array",
