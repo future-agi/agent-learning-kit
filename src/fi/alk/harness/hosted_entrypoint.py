@@ -66,6 +66,7 @@ from .hosted_scheduler import (
 from .job import (
     ArtifactLevel,
     ExecutionMode,
+    FailureCause,
     FailureDomain,
     HarnessArtifactPolicy,
     HarnessFailure,
@@ -2623,6 +2624,7 @@ async def run_job(
         *,
         domain: FailureDomain,
         fail_stage: HarnessStage,
+        cause: FailureCause | None = None,
         code: str,
         message: str,
         retryable: bool | None = None,
@@ -2636,6 +2638,8 @@ async def run_job(
             "code": code,
             "message": message,
         }
+        if cause is not None:
+            failure["cause"] = cause.value
         if retryable is not None:
             failure["retryable"] = retryable
         if details is not None:
@@ -2849,6 +2853,7 @@ async def run_job(
                 domain=_process_runtime_error_domain(exc),
                 fail_stage=HarnessStage.BUILDING_ENVIRONMENT,
                 code=_section_2f_code(exc.code),
+                cause=exc.cause,
                 message=str(exc),
             )
         except Exception as exc:  # noqa: BLE001 - genuinely untyped -> infrastructure is the honest default
@@ -3116,6 +3121,7 @@ async def run_job(
                     "stage": HarnessStage.RUNNING.value,
                     "code": result.aborted.code,
                     "message": result.aborted.message,
+                    **({"cause": result.aborted.cause.value} if result.aborted.cause else {}),
                 },
                 # The scheduler has emitted the errored receipt plus synthesized skipped
                 # receipts for every scenario before reaching this branch. "complete" is an

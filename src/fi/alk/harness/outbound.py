@@ -71,7 +71,7 @@ from pydantic import (
 from fi.simulate.results.futureagi import MAX_TARGET_LATENCY_TURNS
 
 from ..providers.agent import _log_redacted, _redact_text
-from .job import FailureDomain, HarnessStage
+from .job import FailureCause, FailureDomain, HarnessStage
 
 logger = logging.getLogger(__name__)
 
@@ -769,6 +769,7 @@ class TerminalEventFailure(TerminalFailure):
     entrypoint's ``_fail`` builds, which leaves out a key it wasn't given, so every failure that
     never carried them is byte-for-byte what it was."""
 
+    cause: FailureCause | None = None
     retryable: bool | None = None
     details: dict[str, Any] | None = None
 

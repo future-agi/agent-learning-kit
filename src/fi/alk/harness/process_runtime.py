@@ -241,6 +241,7 @@ class EnvironmentRuntime(BaseModel):
     world_index: int = Field(ge=0)
     bundle_digest: str
     state: RuntimeState
+    startup_cause: FailureCause | None = None
     endpoints: dict[str, RuntimeEndpoint] = Field(default_factory=dict)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -5176,11 +5177,17 @@ def probe_runtime_health(
     declared `readiness` entry for a capability this runtime actually exposes must pass; a
     capability with no readiness entry declared carries no health obligation (§2b: "Health/
     readiness is otherwise declared ONLY in the capability-level `readiness` section")."""
+    return _first_failed_readiness_probe(manifest, runtime, prober=prober) is None
+
+
+def _first_failed_readiness_probe(
+    manifest: EnvironmentBundleV2, runtime: EnvironmentRuntime, *, prober: CapabilityProber
+) -> ReadinessProbeV2 | None:
     for probe in manifest.readiness:
         endpoint = runtime.endpoints.get(probe.capability)
         capability = manifest.capabilities.get(probe.capability)
         if endpoint is None or capability is None:
-            return False
+            return probe
         host, port = _split_host_port(endpoint.address)
         user = password = dbname = None
         if capability.protocol is CapabilityProtocol.POSTGRES:
@@ -5203,8 +5210,8 @@ def probe_runtime_health(
             password=password,
             dbname=dbname,
         ):
-            return False
-    return True
+            return probe
+    return None
 
 
 async def healthy(
@@ -5465,6 +5472,7 @@ def _poll_runtime_health(
     runtime: EnvironmentRuntime,
     *,
     prober: CapabilityProber,
+    control: SpawnedWorldProcess | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
@@ -5491,12 +5499,26 @@ def _poll_runtime_health(
         default=_DEFAULT_STORE_READY_INTERVAL_SECONDS,
     )
     deadline = clock() + timeout
-    while True:
-        if probe_runtime_health(manifest, runtime, prober=prober):
+    runtime.startup_cause = None
+    while control is None or control.handle.is_running():
+        failed = _first_failed_readiness_probe(manifest, runtime, prober=prober)
+        # The probe may block until the deadline or return a stale success during shutdown.
+        if control is not None and not control.handle.is_running():
+            break
+        if failed is None:
             return True
         if clock() >= deadline:
+            capability = manifest.capabilities.get(failed.capability)
+            if capability is not None and failed.capability in runtime.endpoints:
+                runtime.startup_cause = (
+                    FailureCause.AGENT_NOT_READY_IN_TIME
+                    if capability.service == manifest.runtime.control_service
+                    else FailureCause.DEPENDENCY_NOT_READY_IN_TIME
+                )
             return False
         sleep(interval)
+    runtime.startup_cause = FailureCause.AGENT_EXITED_BEFORE_READY
+    return False
 
 
 # --- §5.3 build output (`build.json`) ---------------------------------------------------------
@@ -8575,7 +8597,8 @@ class ProcessRuntimeProvider:
                 # bearing process is terminal `UNHEALTHY` on every provision, regardless of how
                 # quickly it actually came up.
                 healthy_now = _poll_runtime_health(
-                    self._manifest, runtime, prober=context.prober
+                    self._manifest, runtime, prober=context.prober,
+                    control=self._world_handles.get(world_index, {}).get(self._manifest.runtime.control_service),
                 )
                 runtime.state = (
                     RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
@@ -9293,7 +9316,8 @@ class ProcessRuntimeProvider:
         # agent still mid-boot. N2, p6-review-r2: polls (`_poll_runtime_health`), the same helper
         # `provision()`'s own promotion uses, instead of sampling `probe_runtime_health` once.
         healthy_now = _poll_runtime_health(
-            self._manifest, current, prober=self._context.prober
+            self._manifest, current, prober=self._context.prober,
+            control=handles.get(self._manifest.runtime.control_service),
         )
         current.state = RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
 
