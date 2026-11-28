@@ -25,6 +25,15 @@ def _needs(job: str) -> set[str]:
     return {needs} if isinstance(needs, str) else set(needs)
 
 
+def _transitive_needs(job: str) -> set[str]:
+    dependencies = _needs(job)
+    return dependencies | {
+        ancestor
+        for dependency in dependencies
+        for ancestor in _transitive_needs(dependency)
+    }
+
+
 def _dump(job: str) -> str:
     return yaml.safe_dump(JOBS[job])
 
@@ -50,6 +59,7 @@ def test_triggers():
     paths = TRIGGERS["pull_request"]["paths"]
     for path in (
         ".github/workflows/publish-pypi.yml",
+        "scripts/check_offline_quickstart.py",
         "scripts/e2b-template.py",
         "scripts/bump_deployment_values.py",
     ):
@@ -58,13 +68,24 @@ def test_triggers():
 
 def test_sdk_jobs_run_on_push_only():
     assert JOBS["sdk-check"]["if"] == "github.event_name == 'push'"
-    assert _needs("sdk-build") == {"sdk-check"}
+    assert _needs("sdk-build") == {"validate", "sdk-check"}
     assert _needs("sdk-publish") == {"sdk-check", "sdk-build"}
     assert JOBS["sdk-publish"]["environment"] == "pypi"
     assert JOBS["sdk-publish"]["permissions"] == {
         "id-token": "write",
         "contents": "read",
     }
+
+
+def test_offline_wheel_check_runs_on_minimum_and_hosted_python():
+    assert JOBS["validate"]["strategy"]["matrix"]["python-version"] == [
+        "3.10",
+        "3.12",
+    ]
+    script = "\n".join(step.get("run", "") for step in _steps("validate"))
+    assert "uv build" in script
+    assert "uv venv .smoke --python ${{ matrix.python-version }}" in script
+    assert "check_offline_quickstart.py --expect-wheel" in script
 
 
 def test_uploads_and_template_builds_wait_for_approval():
@@ -78,10 +99,20 @@ def test_uploads_and_template_builds_wait_for_approval():
 def test_template_does_not_wait_for_the_sdk_upload():
     assert _needs("template-publish") == {"validate", "sdk-check"}
     assert _needs("deployment-bump").isdisjoint(SDK_JOBS)
-    for job in SDK_JOBS:
-        assert _needs(job).isdisjoint(
-            {"validate", "template-publish", "deployment-bump", "release-pr"}
-        )
+    assert _needs("sdk-check").isdisjoint(
+        {"validate", "template-publish", "deployment-bump", "release-pr"}
+    )
+
+
+def test_every_release_mutation_waits_for_validation():
+    for job in (
+        "sdk-build",
+        "sdk-publish",
+        "release-pr",
+        "template-publish",
+        "deployment-bump",
+    ):
+        assert "validate" in _transitive_needs(job), job
 
 
 def test_template_builds_only_for_a_release_or_a_manual_run():
@@ -94,7 +125,7 @@ def test_template_builds_only_for_a_release_or_a_manual_run():
 
 
 def test_bump_pull_request_only_when_the_version_is_published():
-    assert _needs("release-pr") == {"sdk-check"}
+    assert _needs("release-pr") == {"validate", "sdk-check"}
     assert JOBS["release-pr"]["if"] == "needs.sdk-check.outputs.publish == 'false'"
     assert "environment" not in JOBS["release-pr"]
     unpublished = "needs.sdk-check.outputs.publish == 'true'"
