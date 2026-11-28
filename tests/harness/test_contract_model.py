@@ -55,7 +55,8 @@ def _earlier_heap_frozen():
         gc.unfreeze()
 
 EMPTY_NAME = (
-    "model: name is empty; give the model's name as written in the source, or leave model out"
+    "model: name is empty; give the model's name as written in the source, or the setting it "
+    "is read from as setting, or leave model out"
 )
 NAME_CHARACTERS = (
     "model: a model name is letters, digits and . _ : / @ -; write it as it appears in the "
@@ -98,8 +99,9 @@ def outside(line: int, path: str, count: int) -> str:
 def not_named(name: str, line: int, path: str) -> str:
     return (
         f"model: the name {name[:100]} is not the value written on line {line} of {path[:200]}; "
-        "cite the line where it is written in quotes, or after : or = in a configuration file, "
-        "or leave model out if the name is only set at run time"
+        "cite the line where it is written in quotes, or after : or = in a configuration file; "
+        "if it is only set at run time, give the setting it is read from as setting, or leave "
+        "model out"
     )
 
 
@@ -527,9 +529,6 @@ def test_model_name_not_on_the_cited_line_is_refused(root, written, name):
         pytest.param(
             "named.py", 'x = "gpt-4o-mini" or "gpt-4o"', "gpt-4o", id="second-occurrence"
         ),
-        pytest.param(
-            "named.py", 'os.getenv("OPENAI_MODEL", "gpt-4o")', "gpt-4o", id="getenv-default"
-        ),
     ],
 )
 def test_model_whole_name_is_found(root, file, written, name):
@@ -747,7 +746,7 @@ def test_submit_contract_schema_describes_model(tmp_path):
 
     model = schema["properties"]["model"]
 
-    assert set(model["properties"]) == {"provider", "name", "path", "line"}
+    assert set(model["properties"]) == {"provider", "name", "setting", "path", "line"}
     assert "required" not in model
     assert "model" not in schema["required"]
 
@@ -847,15 +846,17 @@ def test_a_quote_under_an_alias_is_not_called_missing(tmp_path, root):
         pytest.param(
             'MODEL = os.getenv("OPENAI_MODEL")',
             "OPENAI_MODEL",
-            "model: OPENAI_MODEL reads as the name of a setting, not a model; cite the line its "
-            "value is written on, or leave model out",
+            "model: OPENAI_MODEL reads as the name of a setting, not a model; give it as "
+            "setting, with the default the line gives it as name if there is one, or leave model "
+            "out",
             id="getenv-setting-name",
         ),
         pytest.param(
             "llm = ChatOpenAI(model=settings.llm_model)",
             "settings.llm_model",
-            "model: settings.llm_model reads as the name of a setting, not a model; cite the line "
-            "its value is written on, or leave model out",
+            "model: settings.llm_model reads as the name of a setting, not a model; give it as "
+            "setting, with the default the line gives it as name if there is one, or leave model "
+            "out",
             id="attribute",
         ),
         pytest.param('model = "gpt-4o"  # was gpt-4o-mini', "gpt-4o-mini", None, id="in-a-comment"),
@@ -1084,8 +1085,8 @@ def test_a_setting_name_is_not_a_model(root, file, written, name):
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
 
     assert problems == [
-        f"model: {name} reads as the name of a setting, not a model; cite the line its value is "
-        "written on, or leave model out"
+        f"model: {name} reads as the name of a setting, not a model; give it as setting, with the "
+        "default the line gives it as name if there is one, or leave model out"
     ]
 
 
@@ -1203,8 +1204,8 @@ def test_settings_in_any_spelling_are_not_models(root, written, name):
     problems, _, _ = checked(root, {"name": name, "path": "llm.py", "line": 2})
 
     assert problems == [
-        f"model: {name} reads as the name of a setting, not a model; cite the line its value is "
-        "written on, or leave model out"
+        f"model: {name} reads as the name of a setting, not a model; give it as setting, with the "
+        "default the line gives it as name if there is one, or leave model out"
     ]
 
 
@@ -1294,8 +1295,6 @@ def test_backticks_in_code_are_values(root):
         pytest.param("Makefile", "MODEL ?= gpt-4o", id="makefile"),
         pytest.param("rules.mk", "MODEL := gpt-4o", id="make-include"),
         pytest.param(".flaskenv", "MODEL=gpt-4o", id="flaskenv"),
-        pytest.param("run.sh", 'python run.py --model "${MODEL:-gpt-4o}"', id="shell-default"),
-        pytest.param(".env", "MODEL=${MODEL:-gpt-4o}", id="env-default"),
     ],
 )
 def test_more_configuration_forms(root, file, written):
@@ -1860,7 +1859,6 @@ def test_a_lookup_key_is_not_the_model(root, written, name):
     [
         pytest.param('MODELS = ["gpt-4o", "gpt-4o-mini"]', "gpt-4o", id="list-literal"),
         pytest.param('model = genai.GenerativeModel("gemini-1.5-pro")', "gemini-1.5-pro", id="constructor"),
-        pytest.param('MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")', "gpt-4o", id="getenv-default"),
         pytest.param('llm = target("gpt-4o")', "gpt-4o", id="a-call-ending-in-get"),
         pytest.param('llm = my_get("gpt-4o")', "gpt-4o", id="a-call-ending-in-_get"),
         pytest.param('["gpt-4o", "gpt-4o-mini"]', "gpt-4o", id="a-list-at-the-line-start"),
@@ -3955,10 +3953,6 @@ def test_a_source_under_a_listed_folder_still_cites_its_model(tmp_path, monkeypa
         pytest.param('OPENAI_MODEL="gpt-4o"', "gpt-4o", id="double-quoted"),
         pytest.param("export OPENAI_MODEL='gpt-4o'  # pinned", "gpt-4o", id="single-quoted-exported"),
         pytest.param("OPENAI_MODEL=gpt-4o # the default", "gpt-4o", id="comment-after"),
-        pytest.param('OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"', "gpt-4o", id="quoted-compose-default"),
-        pytest.param(
-            "CHAT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}", "gpt-4o-mini", id="another-model-setting-default"
-        ),
     ],
 )
 def test_a_env_setting_named_for_a_model_by_any_of_its_words_is_accepted(root, written, name):
@@ -4037,9 +4031,6 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "LLM_URL=fake-guess", "fake-guess", id="part-url"),
         pytest.param(".env", "MODEL_URI=fake-guess", "fake-guess", id="part-uri"),
         pytest.param(".env", "LLM_DSN=fake-guess", "fake-guess", id="part-dsn"),
-        pytest.param(".env", "MODEL_URL=https://admin:fake@llm.local/v1", "https://admin:fake@llm.local/v1", id="model-url"),
-        pytest.param(".env", "MODEL_SERVER=postgres://admin:hunter2@db/app", "postgres://admin:hunter2@db/app", id="model-server-url-with-login"),
-        pytest.param(".env", "LLM_ENDPOINT=https://admin:pw@llm.internal/v1", "https://admin:pw@llm.internal/v1", id="llm-endpoint-url-with-login"),
         pytest.param(".env", "MODEL_HOST=https://llm.internal/v1", "https://llm.internal/v1", id="url-without-login"),
         pytest.param(".env", "MODEL_SERVER=admin:hunter2@db", "admin:hunter2@db", id="bare-login"),
         pytest.param(".env", "LLM_ENDPOINT=gpt-4o@llm.internal", "gpt-4o@llm.internal", id="user-at-host"),
@@ -4052,12 +4043,6 @@ def test_every_kind_of_env_file_takes_the_same_rule(root, file):
         pytest.param(".env", "MODEL_SERVER=root@0", "root@0", id="login-one-digit-host"),
         pytest.param(".env", "MODEL_SERVER=admin@2130706433", "admin@2130706433", id="login-decimal-ip-host"),
         pytest.param(".env", "MODEL_SERVER=user@LATEST", "user@LATEST", id="login-uppercase-latest"),
-        pytest.param(
-            ".env",
-            "DB_ENGINE_URL=postgresql://admin:fake@db/app",
-            "postgresql://admin:fake@db/app",
-            id="database-engine-url",
-        ),
         pytest.param(".env", "DB_ENGINE=postgresql", "postgresql", id="database-engine"),
         pytest.param("prod.env", "URL=http://x/#a MODEL=gpt-4o", "gpt-4o", id="env-suffix-url-first"),
         pytest.param(".env", "OPENAI_MODEL=gpt-4o OPENAI_API_KEY=sk-fakeguess1", "sk-fakeguess1", id="second-setting"),
@@ -4085,6 +4070,53 @@ def test_a_env_line_that_holds_a_secret_or_sets_nothing_is_refused(root, file, w
     problems, _, _ = checked(root, {"name": name, "path": file, "line": 1})
 
     assert problems == [not_a_model_line(file, 1)]
+
+
+@pytest.mark.parametrize(
+    "written, name",
+    [
+        pytest.param("MODEL_URL=https://admin:fake@llm.local/v1", "https://admin:fake@llm.local/v1", id="model-url"),
+        pytest.param("MODEL_SERVER=postgres://admin:hunter2@db/app", "postgres://admin:hunter2@db/app", id="model-server-url-with-login"),
+        pytest.param("LLM_ENDPOINT=https://admin:pw@llm.internal/v1", "https://admin:pw@llm.internal/v1", id="llm-endpoint-url-with-login"),
+        pytest.param("DB_ENGINE_URL=postgresql://admin:fake@db/app", "postgresql://admin:fake@db/app", id="database-engine-url"),
+    ],
+)
+def test_a_env_value_the_credential_scan_masks_is_refused_unshown(root, written, name):
+    # A login in a URL is masked by the scan the stored document is cleaned with, so the save
+    # refuses it before reading the file, and never repeats it.
+    (root / ".env").write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": ".env", "line": 1})
+
+    assert problems == [A_CREDENTIAL_NAME]
+    assert name not in "".join(problems)
+
+
+# A model setting's default, given alone, in each form a default is written in: the save asks
+# for the setting, and with it the same line is accepted.
+
+
+@pytest.mark.parametrize(
+    "file, written, setting, name",
+    [
+        pytest.param("named.py", 'os.getenv("OPENAI_MODEL", "gpt-4o")', "OPENAI_MODEL", "gpt-4o", id="getenv-default"),
+        pytest.param("run.sh", 'python run.py --model "${MODEL:-gpt-4o}"', "MODEL", "gpt-4o", id="shell-default"),
+        pytest.param(".env", "MODEL=${MODEL:-gpt-4o}", "MODEL", "gpt-4o", id="env-default"),
+        pytest.param(".env", 'OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"', "OPENAI_MODEL", "gpt-4o", id="quoted-compose-default"),
+        pytest.param(".env", "CHAT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}", "DEFAULT_MODEL", "gpt-4o-mini", id="another-model-setting-default"),
+    ],
+)
+def test_a_models_setting_default_alone_asks_for_the_setting(root, file, written, setting, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    alone, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+    with_setting, contract, _ = checked(
+        root, {"name": name, "setting": setting, "path": file, "line": 2}
+    )
+
+    assert alone == [a_settings_default(name, setting, 2, file)]
+    assert with_setting == []
+    assert (contract.model.setting, contract.model.name) == (setting, name)
 
 
 def test_a_backup_copy_of_a_credential_file_is_refused(root):
@@ -4142,6 +4174,830 @@ def test_a_first_save_whose_command_runs_inline_code_is_refused(tmp_path, root):
     assert result.get("is_error"), result
     assert "program as an argument" in text_of(result)
     assert not (destination / "contract.json").exists()
+
+
+# The setting a model is read from: the line looks it up, and its default, if any, is the name
+
+
+SETTING_SHAPE = (
+    "model: setting is the name of an environment variable as the code reads it: capital "
+    "letters, digits and _, not starting with a digit, at most 255 characters; or leave setting "
+    "out"
+)
+_SETTING_LEFT_OUT_NEXT_TIME = (
+    "model: if the model is refused again, its name is left out and its setting kept if that "
+    "passes alone; otherwise the model is left out"
+)
+A_CREDENTIAL_NAME = (
+    "model: the name is shaped like a credential, which is never recorded as the model; leave "
+    "model out"
+)
+
+
+def not_looked_up(setting: str, line: int, path: str) -> str:
+    return (
+        f"model: line {line} of {path} doesn't read the setting {setting}; cite the line where "
+        "the code reads it, or the line that statement starts on (a setting whose name is held "
+        "in a constant is read where the constant is written, with the name in quotes), or leave "
+        "setting out"
+    )
+
+
+def not_a_model_setting(setting: str) -> str:
+    return (
+        f"model: {setting} is not a model's setting: its name has none of MODEL, DEPLOYMENT or "
+        "LLM; give the setting the model is read from, or leave setting out"
+    )
+
+
+def a_settings_default(name: str, setting: str, line: int, path: str) -> str:
+    return (
+        f"model: {name} is the default of the setting {setting} on line {line} of {path}; give "
+        f"{setting} as setting and {name} as name"
+    )
+
+
+def not_the_default(name: str, setting: str, line: int, path: str) -> str:
+    return (
+        f"model: the name {name} is not the default written on line {line} of {path}; give as "
+        f"name the default the line gives {setting}, or leave name out if it gives none"
+    )
+
+
+def a_credential_setting(setting: str) -> str:
+    return f"model: {setting} names a credential, not the model; leave model out"
+
+
+def a_credentials_default(looked_up: str, line: int, path: str) -> str:
+    return (
+        f"model: the name given is the default of {looked_up} on line {line} of {path}, which "
+        "names a "
+        "credential; a credential's default is never recorded as the model, so leave model out"
+    )
+
+
+# The reference agents' own line: the customer sets ANTHROPIC_MODEL, and the value written is
+# only what the agent falls back to.
+_READ_FROM_A_SETTING = 'MODEL = os.getenv("ANTHROPIC_MODEL", "vertex_ai/gemini-3.7-flash")'
+
+
+def test_a_setting_with_a_default_is_kept_with_its_default_as_the_name(root):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root,
+        {
+            "provider": "anthropic",
+            "name": " vertex_ai/gemini-3.7-flash ",
+            "setting": " ANTHROPIC_MODEL ",
+            "path": "agent.py",
+            "line": 2,
+        },
+    )
+
+    assert problems == []
+    assert contract.model.model_dump() == {
+        "provider": "anthropic",
+        "name": "vertex_ai/gemini-3.7-flash",
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+
+def test_a_setting_with_a_default_is_saved(tmp_path, root):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+    destination = tmp_path / "out"
+    model = {
+        "name": "vertex_ai/gemini-3.7-flash",
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+    result = accept_contract(payload(model=model), destination, source_root=root)
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["model"] == {"provider": "", **model}
+
+
+@pytest.mark.parametrize(
+    "file, written, setting, name",
+    [
+        pytest.param("llm.py", 'MODEL = os.getenv("OPENAI_MODEL")', "OPENAI_MODEL", "", id="getenv-no-default"),
+        pytest.param("llm.py", 'MODEL = os.environ["OPENAI_MODEL"]', "OPENAI_MODEL", "", id="environ-subscript"),
+        pytest.param(
+            "llm.py", "MODEL = os.environ.get('LLM_MODEL', 'gpt-4o')", "LLM_MODEL", "gpt-4o", id="environ-get"
+        ),
+        pytest.param(
+            "llm.py", 'MODEL = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"', "OPENAI_MODEL", "gpt-4o-mini", id="or-default"
+        ),
+        pytest.param(
+            "llm.ts", 'const model = process.env["OPENAI_MODEL"] ?? "gpt-4o";', "OPENAI_MODEL", "gpt-4o", id="process-env-subscript"
+        ),
+        pytest.param("llm.yaml", "model: ${OPENAI_MODEL:-gpt-4o}", "OPENAI_MODEL", "gpt-4o", id="compose-default"),
+        pytest.param("llm.yaml", "model: ${OPENAI_MODEL}", "OPENAI_MODEL", "", id="compose-no-default"),
+        # Read in any language, through any helper: the setting is written on the line, outside a
+        # comment, and not as a name being set.
+        pytest.param("llm.ts", 'const model = process.env.OPENAI_MODEL ?? "gpt-4o";', "OPENAI_MODEL", "gpt-4o", id="ts-nullish"),
+        pytest.param("llm.ts", 'const model = process.env.OPENAI_MODEL || "gpt-4o";', "OPENAI_MODEL", "gpt-4o", id="ts-or"),
+        pytest.param("llm.go", 'model := os.Getenv("OPENAI_MODEL")', "OPENAI_MODEL", "", id="go"),
+        pytest.param("llm.rb", 'MODEL = ENV.fetch("OPENAI_MODEL", "gpt-4o")', "OPENAI_MODEL", "gpt-4o", id="ruby-fetch"),
+        pytest.param("llm.rb", 'MODEL = ENV["OPENAI_MODEL"] || "gpt-4o"', "OPENAI_MODEL", "gpt-4o", id="ruby-or"),
+        pytest.param(
+            "llm.cs", 'var model = Environment.GetEnvironmentVariable("OPENAI_MODEL") ?? "gpt-4o";', "OPENAI_MODEL", "gpt-4o", id="csharp"
+        ),
+        pytest.param("llm.rs", 'let model = env::var("OPENAI_MODEL").unwrap_or_default();', "OPENAI_MODEL", "", id="rust"),
+        pytest.param(
+            "llm.java", 'String model = System.getenv().getOrDefault("OPENAI_MODEL", "gpt-4o");', "OPENAI_MODEL", "gpt-4o", id="java"
+        ),
+        pytest.param("llm.py", 'model: str = Field("gpt-4o", alias="OPENAI_MODEL")', "OPENAI_MODEL", "gpt-4o", id="pydantic-alias"),
+        pytest.param("llm.py", 'model: str = Field(default="gpt-4o", env="OPENAI_MODEL")', "OPENAI_MODEL", "gpt-4o", id="pydantic-env"),
+        pytest.param("llm.py", 'MODEL = require_env("OPENAI_MODEL")', "OPENAI_MODEL", "", id="a-helper"),
+        pytest.param("llm.py", 'os.environ.setdefault("OPENAI_MODEL", "gpt-4o")', "OPENAI_MODEL", "gpt-4o", id="setdefault"),
+        pytest.param("llm.sh", 'MODEL="${OPENAI_MODEL:-gpt-4o}"', "OPENAI_MODEL", "gpt-4o", id="shell-default"),
+        pytest.param("llm.sh", 'python run.py --model "$OPENAI_MODEL"', "OPENAI_MODEL", "", id="shell-variable"),
+        pytest.param("llm.py", "MODEL = settings.OPENAI_MODEL", "OPENAI_MODEL", "", id="a-settings-attribute"),
+        pytest.param("llm.py", 'OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")', "OPENAI_MODEL", "gpt-4o", id="set-from-itself"),
+    ],
+)
+def test_a_setting_the_line_looks_up_is_kept(root, file, written, setting, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root, {"name": name, "setting": setting, "path": file, "line": 2}
+    )
+
+    assert problems == []
+    assert (contract.model.setting, contract.model.name) == (setting, name)
+
+
+def test_a_setting_with_no_default_is_saved_with_no_name(tmp_path, root):
+    (root / "agent.py").write_text('import os\nMODEL = os.getenv("OPENAI_MODEL")\n', encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = accept_contract(
+        payload(model={"setting": "OPENAI_MODEL", "path": "agent.py", "line": 2}),
+        destination,
+        source_root=root,
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["model"] == {
+        "provider": "",
+        "name": "",
+        "setting": "OPENAI_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param('MODEL = "gpt-4o"', id="not-on-the-line"),
+        pytest.param('MODEL = "gpt-4o"  # os.getenv("OPENAI_MODEL")', id="in-a-comment"),
+        pytest.param('MODEL = os.getenv("OPENAI_MODEL_V2", "gpt-4o")', id="a-longer-name"),
+        pytest.param('MODEL = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")', id="a-name-ending-in-it"),
+        # Written only as a name being set: a constant, a key, a keyword argument.
+        pytest.param('OPENAI_MODEL = "gpt-4o"', id="a-constant"),
+        pytest.param('CONFIG = {"OPENAI_MODEL": "gpt-4o"}', id="a-key"),
+        pytest.param('llm = make(OPENAI_MODEL="gpt-4o")', id="a-keyword-argument"),
+        # A constant of the code passed by name: only a name read off something (process.env.X,
+        # settings.X), a quoted name, or a shell variable ($X) is read from the environment; a
+        # name passed to a call (os.environ.get(X, ...)) is a constant too.
+        pytest.param('llm = ChatOpenAI(model=OPENAI_MODEL, temperature=0)', id="a-constant-passed"),
+        pytest.param('MODEL = OPENAI_MODEL or "gpt-4o"', id="a-constant-used"),
+        pytest.param('MODEL = """os.getenv("OPENAI_MODEL", "gpt-4o")"""', id="in-a-text-stretch"),
+    ],
+)
+def test_a_setting_the_line_does_not_look_up_is_refused(root, written):
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": "gpt-4o", "setting": "OPENAI_MODEL", "path": "llm.py", "line": 2}
+    )
+
+    assert problems == [not_looked_up("OPENAI_MODEL", 2, "llm.py")]
+
+
+def test_a_name_with_a_setting_must_be_its_default(root):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": "gpt-5", "setting": "ANTHROPIC_MODEL", "path": "agent.py", "line": 2}
+    )
+
+    assert problems == [not_the_default("gpt-5", "ANTHROPIC_MODEL", 2, "agent.py")]
+
+
+@pytest.mark.parametrize(
+    "written, setting",
+    [
+        # A setting read beside a model named in the code: the name is not the setting's default.
+        pytest.param(
+            'llm = ChatOpenAI(model="gpt-4o", timeout=int(os.getenv("LLM_TIMEOUT", "30")))', "LLM_TIMEOUT", id="another-settings-default"
+        ),
+        pytest.param('llm = ChatOpenAI(model="gpt-4o", base=os.environ["LLM_HOST"])', "LLM_HOST", id="no-default"),
+        pytest.param('MODEL = "OPENAI_MODEL"', "OPENAI_MODEL", id="a-value"),
+        pytest.param('MODEL = GenerativeModel("OPENAI_MODEL")', "OPENAI_MODEL", id="passed-to-another-call"),
+        pytest.param('MODEL = os.getenv("OPENAI_MODEL") + "gpt-4o"', "OPENAI_MODEL", id="joined-not-a-default"),
+    ],
+)
+def test_a_name_that_is_not_the_settings_default_is_refused(root, written, setting):
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": "gpt-4o", "setting": setting, "path": "llm.py", "line": 2}
+    )
+
+    assert problems == [not_the_default("gpt-4o", setting, 2, "llm.py")]
+
+
+@pytest.mark.parametrize(
+    "written, setting, name",
+    [
+        pytest.param(
+            'llm = ChatBedrock(model_id="anthropic.claude-3", region_name=os.environ["AWS_REGION"])',
+            "AWS_REGION",
+            "anthropic.claude-3",
+            id="a-region",
+        ),
+        pytest.param('temperature = float(os.getenv("TEMPERATURE", "0.2"))', "TEMPERATURE", "0.2", id="a-temperature"),
+        pytest.param('PROVIDER = os.getenv("PROVIDER_ENGINE", "openai")', "PROVIDER_ENGINE", "openai", id="engine-alone"),
+    ],
+)
+def test_a_setting_whose_name_is_not_a_models_is_refused(root, written, setting, name):
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": name, "setting": setting, "path": "llm.py", "line": 2}
+    )
+
+    assert problems == [not_a_model_setting(setting)]
+
+
+@pytest.mark.parametrize(
+    "written, setting",
+    [
+        pytest.param('model = kwargs.get("model", "gpt-4o")', "model", id="a-keyword-argument"),
+        pytest.param('model = MODELS.get("default", "gpt-4o")', "default", id="a-dict-key"),
+        pytest.param('model = request.json["model"]', "model", id="a-request-field"),
+        pytest.param('MODEL = os.getenv("model_name", "gpt-4o")', "model_name", id="lowercase"),
+    ],
+)
+def test_a_setting_not_written_in_capitals_is_refused(root, written, setting):
+    # An environment variable's name is written in capitals: a lowercase one is a key or an
+    # argument's name, and the page would say "Set by model".
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": "gpt-4o", "setting": setting, "path": "llm.py", "line": 2}
+    )
+
+    assert problems == [SETTING_SHAPE]
+
+
+# A lookup that black wraps over lines: the statement the cited line starts is read whole.
+_WRAPPED = (
+    "import os\n"
+    "MODEL = os.getenv(\n"
+    '    "ANTHROPIC_MODEL", "vertex_ai/gemini-3.7-flash"\n'
+    ")\n"
+)
+_ONE_PER_LINE = (
+    "import os\n"
+    "MODEL = os.getenv(\n"
+    '    "ANTHROPIC_MODEL",\n'
+    '    "vertex_ai/gemini-3.7-flash",\n'
+    ")\n"
+)
+
+
+@pytest.mark.parametrize(
+    "written, line",
+    [
+        pytest.param(_WRAPPED, 2, id="wrapped-cited-where-it-starts"),
+        pytest.param(_WRAPPED, 3, id="wrapped-cited-inside"),
+        pytest.param(_ONE_PER_LINE, 2, id="one-per-line-cited-where-it-starts"),
+    ],
+)
+def test_a_lookup_wrapped_over_lines_is_read(root, written, line):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+    model = {"setting": "ANTHROPIC_MODEL", "path": "agent.py", "line": line}
+
+    with_name, contract, _ = checked(root, {**model, "name": "vertex_ai/gemini-3.7-flash"})
+    without_name, _, _ = checked(root, model)
+
+    assert with_name == []
+    assert contract.model.name == "vertex_ai/gemini-3.7-flash"
+    assert without_name == []
+
+
+def test_a_wrapped_lookup_cited_on_its_defaults_line_is_refused_with_where_to_cite(root):
+    (root / "agent.py").write_text(_ONE_PER_LINE, encoding="utf-8")
+
+    problems, _, _ = checked(
+        root,
+        {
+            "name": "vertex_ai/gemini-3.7-flash",
+            "setting": "ANTHROPIC_MODEL",
+            "path": "agent.py",
+            "line": 4,
+        },
+    )
+
+    assert problems == [not_looked_up("ANTHROPIC_MODEL", 4, "agent.py")]
+
+
+def test_a_statement_is_read_no_further_than_its_brackets(root):
+    # The next statement's lookup is not this statement's.
+    (root / "agent.py").write_text(
+        'import os\nMODEL = pick(\n    "gpt-4o"\n)\nOTHER = os.getenv("OPENAI_MODEL", "gpt-4o")\n',
+        encoding="utf-8",
+    )
+
+    problems, _, _ = checked(
+        root, {"setting": "OPENAI_MODEL", "path": "agent.py", "line": 2}
+    )
+
+    assert problems == [not_looked_up("OPENAI_MODEL", 2, "agent.py")]
+
+
+@pytest.mark.parametrize(
+    "file, written, setting, name",
+    [
+        pytest.param("agent.py", _READ_FROM_A_SETTING, "ANTHROPIC_MODEL", "vertex_ai/gemini-3.7-flash", id="getenv"),
+        pytest.param("agent.ts", 'const model = process.env.OPENAI_MODEL ?? "gpt-4o";', "OPENAI_MODEL", "gpt-4o", id="ts-nullish"),
+        pytest.param("agent.py", 'MODEL = os.environ.get("LLM_MODEL") or "gpt-4o"', "LLM_MODEL", "gpt-4o", id="or-fallback"),
+        pytest.param("agent.yaml", "model: ${OPENAI_MODEL:-gpt-4o}", "OPENAI_MODEL", "gpt-4o", id="compose-default"),
+    ],
+)
+def test_a_name_alone_that_is_a_settings_default_is_refused_asking_for_the_setting(
+    root, file, written, setting, name
+):
+    # The original report: the default shown as the model in use. The kit finds the setting on
+    # the line, so it asks for it rather than relying on the reader to give it.
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [a_settings_default(name, setting, 2, file)]
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param('model = kwargs.get("model", "gpt-4o")', id="a-keyword-argument"),
+        pytest.param('TEMPERATURE = os.getenv("TEMPERATURE", "gpt-4o")', id="not-a-models-setting"),
+        # A credential passed beside the model as another argument: not its default.
+        pytest.param('llm = make_llm(settings.OPENAI_API_KEY, "gpt-4o")', id="a-credential-attribute-then-the-model"),
+        pytest.param('llm = make_llm(config.OPENAI_MODEL, "gpt-4o")', id="a-setting-attribute-then-the-model"),
+    ],
+)
+def test_a_name_alone_that_is_the_default_of_no_models_setting_is_kept(root, written):
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 2})
+
+    assert problems == []
+    assert contract.model.name == "gpt-4o"
+
+
+@pytest.mark.parametrize(
+    "written, setting, name",
+    [
+        pytest.param(
+            'MODEL = os.getenv("ANTHROPIC_MODEL", "sk-ant-api03-' + "A" * 90 + '")',
+            "ANTHROPIC_MODEL",
+            "sk-ant-api03-" + "A" * 90,
+            id="a-key-under-a-model-setting",
+        ),
+        pytest.param('MODEL = "ghp_' + "a1B2" * 9 + '"', "", "ghp_" + "a1B2" * 9, id="a-token-alone"),
+    ],
+)
+def test_a_name_the_credential_scan_masks_is_never_recorded(root, written, setting, name):
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"name": name, "setting": setting, "path": "llm.py", "line": 2}
+    )
+
+    assert problems == [A_CREDENTIAL_NAME]
+    assert name not in "".join(problems)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        pytest.param("OPENAI-MODEL", id="a-dash"),
+        pytest.param("1MODEL", id="starts-with-a-digit"),
+        pytest.param("OPENAI MODEL", id="a-space"),
+        pytest.param("os.environ", id="a-dot"),
+        pytest.param("MODÈLE", id="not-ascii"),
+        pytest.param("M" * 256, id="too-long"),
+    ],
+)
+def test_a_setting_not_shaped_like_an_environment_name_is_refused(root, setting):
+    problems, _, _ = checked(
+        root, {"name": "gpt-4o", "setting": setting, "path": "agent.py", "line": 2}
+    )
+
+    assert problems == [SETTING_SHAPE]
+
+
+def test_a_bad_setting_is_refused_once_then_leaves_the_model_out(tmp_path, root):
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    bad = payload(
+        hard_constraints=["Be polite."],
+        model={
+            "provider": "openai",
+            "name": "gpt-4o",
+            "setting": "OPENAI-MODEL",
+            "path": "agent.py",
+            "line": 2,
+        },
+    )
+
+    first = submit(bad)
+
+    assert text_of(first) == REFUSED + SETTING_SHAPE + "\n  - " + _SETTING_LEFT_OUT_NEXT_TIME
+    assert not (destination / "contract.json").exists()
+
+    second = submit(bad)
+
+    assert not second.get("is_error"), second
+    # The name passes alone (root's agent.py writes MODEL = "gpt-4o" on line 2), but the reader
+    # said the model comes from a setting: an unknown model is left out rather than guessed.
+    assert "model" not in saved(destination)
+
+
+def test_a_setting_refused_twice_with_no_name_leaves_the_model_out(tmp_path, root):
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    bad = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "OPENAI-MODEL", "path": "agent.py", "line": 2},
+    )
+
+    first = submit(bad)
+    assert first.get("is_error")
+
+    second = submit(bad)
+
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
+
+
+def test_a_setting_the_line_does_not_read_leaves_the_model_out_the_second_time(tmp_path, root):
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    unread = payload(
+        hard_constraints=["Be polite."],
+        model={"name": "gpt-4o", "setting": "OPENAI_MODEL", "path": "agent.py", "line": 2}
+    )
+
+    first = submit(unread)
+
+    assert text_of(first) == (
+        REFUSED + not_looked_up("OPENAI_MODEL", 2, "agent.py") + "\n  - "
+        + _SETTING_LEFT_OUT_NEXT_TIME
+    )
+
+    second = submit(unread)
+
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
+
+
+def test_a_name_that_is_not_the_default_is_left_out_the_second_time_keeping_the_setting(
+    tmp_path, root
+):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        model={"name": "gpt-5", "setting": "ANTHROPIC_MODEL", "path": "agent.py", "line": 2},
+    )
+
+    first = submit(wrong)
+
+    assert text_of(first) == (
+        REFUSED + not_the_default("gpt-5", "ANTHROPIC_MODEL", 2, "agent.py") + "\n  - "
+        + _SETTING_LEFT_OUT_NEXT_TIME
+    )
+
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["model"] == {
+        "provider": "",
+        "name": "",
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("ft:gpt-4o-mini-2024-07-18:acme::9xYz1234", id="fine-tune"),
+        pytest.param(
+            "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3",
+            id="a-64-hex-version",
+        ),
+        pytest.param("arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc123def456", id="bedrock-arn"),
+        pytest.param("projects/my-proj/locations/us-central1/endpoints/1234567890123456789", id="vertex-endpoint"),
+    ],
+)
+def test_real_model_ids_are_not_taken_for_credentials(root, name):
+    (root / "llm.py").write_text(f'# the model\nMODEL = "{name}"\n', encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": name, "path": "llm.py", "line": 2})
+
+    assert problems == []
+    assert contract.model.name == name
+
+
+def test_a_setting_read_beside_a_model_named_on_the_line_is_never_kept(tmp_path, root):
+    # Dileep's case through the tool: the setting passes alone, but the name refused with it is
+    # written on the line as a value, so the setting sits beside the model, not under it.
+    (root / "agent.py").write_text(
+        'import os\nllm = ChatOpenAI(model="gpt-4o", timeout=int(os.getenv("LLM_TIMEOUT", "30")))\n',
+        encoding="utf-8",
+    )
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    beside = payload(
+        hard_constraints=["Be polite."],
+        model={"name": "gpt-4o", "setting": "LLM_TIMEOUT", "path": "agent.py", "line": 2},
+    )
+
+    first = submit(beside)
+    assert first.get("is_error")
+
+    second = submit(beside)
+
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
+
+
+def test_a_typescript_setting_is_saved_through_the_tool(tmp_path, root):
+    (root / "agent.ts").write_text(
+        'import x from "y";\nconst model = process.env.OPENAI_MODEL ?? "gpt-4o";\n',
+        encoding="utf-8",
+    )
+    destination = tmp_path / "out"
+    model = {
+        "provider": "openai",
+        "name": "gpt-4o",
+        "setting": "OPENAI_MODEL",
+        "path": "agent.ts",
+        "line": 2,
+    }
+
+    result = submitter(destination, root)(payload(hard_constraints=["Be polite."], model=model))
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["model"] == model
+
+
+def test_a_settings_default_given_alone_twice_leaves_the_model_out(tmp_path, root):
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    alone = payload(
+        hard_constraints=["Be polite."],
+        model={"name": "vertex_ai/gemini-3.7-flash", "path": "agent.py", "line": 2},
+    )
+
+    first = submit(alone)
+
+    assert text_of(first) == (
+        REFUSED
+        + a_settings_default("vertex_ai/gemini-3.7-flash", "ANTHROPIC_MODEL", 2, "agent.py")
+        + "\n  - "
+        + _LEFT_OUT_NEXT_TIME
+    )
+
+    second = submit(alone)
+
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
+
+
+def test_accept_contract_refuses_a_bad_setting_every_time(tmp_path, root):
+    bad = payload(model={"name": "gpt-4o", "setting": "OPENAI-MODEL", "path": "agent.py", "line": 2})
+
+    for _ in range(2):
+        result = accept_contract(bad, tmp_path / "out", source_root=root)
+        assert text_of(result) == REFUSED + SETTING_SHAPE
+    assert not (tmp_path / "out" / "contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        pytest.param("OPENAI_API_KEY", id="key"),
+        pytest.param("HF_TOKEN", id="token"),
+        pytest.param("CLIENT_SECRET", id="secret"),
+        pytest.param("DB_PASSWORD", id="password"),
+        pytest.param("AUTHORIZATION", id="scan-authorization"),
+        pytest.param("GOOGLE_CREDENTIALS", id="scan-credentials"),
+        pytest.param("openai_api_key", id="lowercase"),
+        # Every part the module treats as secret, anywhere in the name.
+        pytest.param("DB_PASS", id="pass"),
+        pytest.param("DB_PWD", id="pwd"),
+        pytest.param("OPENAI_AUTH", id="auth"),
+        pytest.param("SENTRY_DSN", id="dsn"),
+        pytest.param("LLM_PASSPHRASE", id="passphrase-beside-a-model-word"),
+        pytest.param("MODEL_SERVER_URL", id="url-beside-a-model-word"),
+        # Rare, and refused whole: a model word doesn't outweigh a secret's part.
+        pytest.param("MAX_TOKEN_MODEL", id="token-beside-a-model-word"),
+        pytest.param("CHAT_MODEL_KEY", id="key-after-a-model-word"),
+    ],
+)
+def test_a_credential_setting_refuses_the_model_whole(root, setting):
+    (root / "agent.py").write_text(
+        f'import os\nVALUE = os.getenv("{setting}", "placeholder-value")\n', encoding="utf-8"
+    )
+
+    problems, _, _ = checked(
+        root,
+        {"name": "placeholder-value", "setting": setting, "path": "agent.py", "line": 2},
+    )
+
+    assert problems == [a_credential_setting(setting)]
+
+
+def test_a_credential_setting_refused_twice_leaves_the_model_out(tmp_path, root):
+    (root / "agent.py").write_text(
+        'import os\nKEY = os.getenv("OPENAI_API_KEY", "sk-placeholder")\n', encoding="utf-8"
+    )
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    credential = payload(
+        hard_constraints=["Be polite."],
+        model={
+            "name": "sk-placeholder",
+            "setting": "OPENAI_API_KEY",
+            "path": "agent.py",
+            "line": 2,
+        }
+    )
+
+    first = submit(credential)
+
+    assert text_of(first) == (
+        REFUSED + a_credential_setting("OPENAI_API_KEY") + "\n  - " + _LEFT_OUT_NEXT_TIME
+    )
+
+    second = submit(credential)
+
+    # Neither the setting nor the default on that line: dropping the setting leaves a name that
+    # is a credential's default, which the line check refuses too.
+    assert not second.get("is_error"), second
+    assert "model" not in saved(destination)
+
+
+@pytest.mark.parametrize(
+    "file, written, looked_up, name",
+    [
+        pytest.param("llm.py", 'KEY = os.getenv("OPENAI_API_KEY", "sk-placeholder")', "OPENAI_API_KEY", "sk-placeholder", id="getenv"),
+        pytest.param("llm.py", "KEY = os.environ.get('HF_TOKEN', 'hf-placeholder')", "HF_TOKEN", "hf-placeholder", id="environ-get"),
+        pytest.param("llm.py", 'KEY = os.getenv("HF_TOKEN") or "hf-placeholder"', "HF_TOKEN", "hf-placeholder", id="or-fallback"),
+        pytest.param("llm.ts", 'const key = process.env["API_SECRET"] ?? "placeholder";', "API_SECRET", "placeholder", id="nullish-fallback"),
+        pytest.param("llm.yaml", "token: ${API_SECRET:-placeholder}", "API_SECRET", "placeholder", id="compose-default"),
+        pytest.param("llm.py", 'PW = os.getenv("DB_PASS", "hunter2")', "DB_PASS", "hunter2", id="pass"),
+        pytest.param("llm.py", 'PW = os.getenv("DB_PWD", "hunter2")', "DB_PWD", "hunter2", id="pwd"),
+        pytest.param("llm.ts", 'const auth = process.env.OPENAI_AUTH ?? "hunter2";', "OPENAI_AUTH", "hunter2", id="auth-bare"),
+        pytest.param("llm.py", 'DSN = os.getenv("SENTRY_DSN", "hunter2")', "SENTRY_DSN", "hunter2", id="dsn"),
+        pytest.param("llm.py", 'P = os.getenv("LLM_PASSPHRASE", "hunter2hunter2")', "LLM_PASSPHRASE", "hunter2hunter2", id="passphrase"),
+    ],
+)
+def test_the_default_of_a_credential_lookup_is_never_the_model(root, file, written, looked_up, name):
+    (root / file).write_text(f"# settings\n{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": name, "path": file, "line": 2})
+
+    assert problems == [a_credentials_default(looked_up, 2, file)]
+    assert name not in problems[0]
+
+
+@pytest.mark.parametrize(
+    "written, model",
+    [
+        pytest.param(
+            'llm = ChatOpenAI(model="gpt-4o", api_key=os.getenv("OPENAI_API_KEY"))',
+            {"name": "gpt-4o"},
+            id="a-name",
+        ),
+        pytest.param(
+            'llm = ChatOpenAI(api_key=os.getenv("OPENAI_API_KEY", "sk-x"), model="gpt-4o")',
+            {"name": "gpt-4o"},
+            id="a-name-after-a-credentials-default",
+        ),
+        pytest.param(
+            'llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o"), api_key=os.getenv("OPENAI_API_KEY"))',
+            {"name": "gpt-4o", "setting": "OPENAI_MODEL"},
+            id="a-setting",
+        ),
+    ],
+)
+def test_a_model_on_a_line_that_also_reads_a_credential_is_kept(root, written, model):
+    # Only a credential's own default is never the model: the model written beside it is.
+    (root / "llm.py").write_text(f"import os\n{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {**model, "path": "llm.py", "line": 2})
+
+    assert problems == []
+    assert contract.model.name == "gpt-4o"
+
+
+def test_a_name_with_no_setting_saves_the_same_bytes_as_before(tmp_path, root):
+    # A model read with no setting is stored as it was before the field existed: four keys, and
+    # the document and its hash as dev builds them.
+    from fi.alk.providers.agent import build_authored_agent
+
+    contract = json.loads((FIXTURES / "chat_source.json").read_text(encoding="utf-8"))["contract"]
+    contract["model"] = {"provider": "openai", "name": "gpt-4o", "path": "agent.py", "line": 9}
+
+    dumped = AgentContract.model_validate(contract).model_dump(mode="json")
+
+    assert dumped["model"] == {"provider": "openai", "name": "gpt-4o", "path": "agent.py", "line": 9}
+    document = build_authored_agent(dumped)
+    assert "model_source" not in document["extension"]
+    assert document["setup_hash"] == (
+        "sh1:33bc380f296679cff54d1f5dd8bc8c67380ea234318cf6f3e368a622224d49eb"
+    )
+
+
+def test_a_setting_reaches_the_document_beside_the_contract(tmp_path, root):
+    from fi.alk.providers.agent import build_authored_agent
+
+    (root / "agent.py").write_text(f"import os\n{_READ_FROM_A_SETTING}\n", encoding="utf-8")
+    destination = tmp_path / "out"
+    model = {
+        "provider": "anthropic",
+        "name": "vertex_ai/gemini-3.7-flash",
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+
+    result = accept_contract(payload(model=model), destination, source_root=root)
+
+    assert not result.get("is_error"), result
+    document = build_authored_agent(
+        AgentContract.model_validate(saved(destination)).model_dump(mode="json")
+    )
+    assert document["model"] == {
+        "provider": "anthropic",
+        "name": "vertex_ai/gemini-3.7-flash",
+        "temperature": None,
+        "max_tokens": None,
+    }
+    assert document["extension"]["model_source"] == {
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 2,
+    }
+    assert document["schema_version"] == "1.0"
+
+
+def test_a_crafted_line_of_lookups_does_not_hold_up_the_check(root):
+    # Every lookup on the line is found, and each credential's is looked past for its default:
+    # a few characters beside each, so the line costs about one pass.
+    crafted = 'f(os.getenv("A_KEY", "y"), os.environ["B_MODEL"], ' * (MIB // 64)
+    (root / "crafted.py").write_text(
+        crafted + 'os.getenv("C_MODEL", "gpt-4o"))\n', encoding="utf-8"
+    )
+
+    problems, _, took = checked(
+        root, {"name": "gpt-4o", "setting": "C_MODEL", "path": "crafted.py", "line": 1}
+    )
+    alone, _, took_alone = checked(root, {"name": "gpt-4o", "path": "crafted.py", "line": 1})
+
+    assert problems == []
+    assert alone == [a_settings_default("gpt-4o", "C_MODEL", 1, "crafted.py")]
+    assert took < QUICK_SECONDS
+    assert took_alone < QUICK_SECONDS
+
+
+def test_a_crafted_statement_of_open_brackets_does_not_hold_up_the_check(root):
+    # A statement left open to the end of the file is read only so far.
+    lines = ["MODEL = f(\n"] + ['    os.getenv("A_KEY", "y"), (\n'] * 20000
+    (root / "crafted.py").write_text("".join(lines), encoding="utf-8")
+
+    problems, _, took = checked(
+        root, {"setting": "C_MODEL", "path": "crafted.py", "line": 1}
+    )
+
+    assert problems == [not_looked_up("C_MODEL", 1, "crafted.py")]
+    assert took < QUICK_SECONDS
 
 
 # Whether the prompt was copied whole is recorded by the save, and only by the save
@@ -4807,6 +5663,1225 @@ def test_a_contract_not_copied_dumps_without_the_record():
     assert AgentContract(agent="pair", system_prompt_copied=True).model_dump()[
         "system_prompt_copied"
     ] is True
+
+
+# A value passed beside the model, a constant and a write are not lookups
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param("llm.py", 'client = make_client(api_key, "gpt-4o")', id="key-then-model"),
+        pytest.param(
+            "llm.ts", 'const client = new Client(apiKey, "gpt-4o");', id="ts-key-then-model"
+        ),
+        pytest.param("llm.py", 'llm = OpenAILike(base_url, "gpt-4o")', id="url-then-model"),
+        pytest.param("llm.py", 'answer = call_llm(token, "gpt-4o", prompt)', id="token-then-model"),
+        pytest.param("llm.py", 'n = count(tokens, "gpt-4o")', id="tokens-then-model"),
+        pytest.param("llm.go", 'os.Setenv("LLM_MODEL", "gpt-4o")', id="go-setenv"),
+        pytest.param("llm.c", 'setenv("LLM_MODEL", "gpt-4o", 1);', id="c-setenv"),
+        pytest.param("llm.py", 'os.putenv("LLM_MODEL", "gpt-4o")', id="putenv"),
+        pytest.param("llm.py", 'set_key(".env", "LLM_MODEL", "gpt-4o")', id="dotenv-set-key"),
+        pytest.param(
+            "llm.py", 'dotenv.set_key(env_path, "LLM_MODEL", "gpt-4o")', id="dotenv-set-key-path"
+        ),
+    ],
+)
+def test_a_model_passed_after_another_value_is_kept_as_the_model(root, file, written):
+    (root / file).write_text(f"{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(root, {"name": "gpt-4o", "path": file, "line": 1})
+
+    assert problems == []
+    assert (contract.model.name, contract.model.setting) == ("gpt-4o", "")
+
+
+def test_a_model_passed_after_a_credential_is_saved_on_the_first_submit(tmp_path, root):
+    (root / "agent.py").write_text('client = make_client(api_key, "gpt-4o")\n', encoding="utf-8")
+    destination = tmp_path / "out"
+
+    result = submitter(destination, root)(
+        payload(
+            hard_constraints=["Be polite."],
+            model={"name": "gpt-4o", "path": "agent.py", "line": 1},
+        )
+    )
+
+    assert not result.get("is_error"), result
+    assert saved(destination)["model"]["name"] == "gpt-4o"
+
+
+def test_a_model_given_to_an_alias_is_asked_about_as_a_setting(root):
+    # Accepted: a quoted model-worded name followed by the model reads like a lookup and
+    # its default, so the reader is asked once whether it is a setting.
+    (root / "llm.py").write_text('register_alias("FAST_MODEL", "gpt-4o-mini")\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o-mini", "path": "llm.py", "line": 1})
+
+    assert len(problems) == 1
+    assert "FAST_MODEL" in problems[0]
+
+
+def test_a_constant_passed_to_a_call_is_not_the_setting(root):
+    (root / "llm.py").write_text(
+        'GEMINI_MODEL = "gemini-1.5-pro"\nllm = genai.GenerativeModel(GEMINI_MODEL)\n',
+        encoding="utf-8",
+    )
+
+    problems, _, _ = checked(root, {"setting": "GEMINI_MODEL", "path": "llm.py", "line": 2})
+
+    assert problems and "doesn't read the setting" in problems[0]
+
+
+def test_a_setting_held_in_a_constant_is_cited_where_its_name_is_written(root):
+    (root / "llm.py").write_text(
+        'MODEL_VAR = "OPENAI_MODEL"\nMODEL = os.environ.get(MODEL_VAR, "gpt-4o")\n',
+        encoding="utf-8",
+    )
+
+    constant, _, _ = checked(root, {"setting": "MODEL_VAR", "path": "llm.py", "line": 2})
+    variable_at_the_call, _, _ = checked(
+        root, {"setting": "OPENAI_MODEL", "path": "llm.py", "line": 2}
+    )
+    variable_where_named, contract, _ = checked(
+        root, {"setting": "OPENAI_MODEL", "path": "llm.py", "line": 1}
+    )
+
+    assert constant and "doesn't read the setting" in constant[0]
+    assert variable_at_the_call
+    assert variable_where_named == []
+    assert contract.model.setting == "OPENAI_MODEL"
+
+
+# A setting beside the model in a wrapped call
+
+
+WRAPPED = (
+    'llm = ChatOpenAI(\n    model="gpt-4o",\n    timeout=os.getenv("LLM_TIMEOUT"),\n)\n'
+)
+
+
+@pytest.mark.parametrize("target", ["llm", "model"])
+def test_a_setting_beside_the_model_in_a_wrapped_call_is_dropped_with_it(
+    tmp_path, root, target
+):
+    (root / "agent.py").write_text(
+        target + WRAPPED.removeprefix("llm"), encoding="utf-8"
+    )
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    beside = payload(
+        hard_constraints=["Be polite."],
+        model={
+            "setting": "LLM_TIMEOUT",
+            "name": "gpt-4o",
+            "path": "agent.py",
+            "line": 1,
+        },
+    )
+
+    assert submit(beside).get("is_error")
+    second = submit(beside)
+
+    assert not second.get("is_error"), second
+    assert saved(destination).get("model") is None
+
+
+@pytest.mark.parametrize(
+    ("written", "cited", "where"),
+    [
+        pytest.param(
+            "agent = Agent(\n"
+            '    model="gpt-4o-mini",\n'
+            "    llm=LLM(\n"
+            '        os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            4,
+            2,
+            id="wrapped",
+        ),
+        pytest.param(
+            'model = os.getenv("LLM_MODEL", "gpt-4o"); llm = LLM("gpt-4o-mini", model=model)\n'
+            'agent = Agent(model="gpt-4o-mini", llm=LLM(os.getenv("LLM_MODEL", "gpt-4o")))\n',
+            2,
+            2,
+            id="one-line",
+        ),
+    ],
+)
+def test_a_refusal_beside_the_model_names_the_line_it_is_written_on(
+    root, written, cited, where
+):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"setting": "LLM_MODEL", "path": "agent.py", "line": cited}
+    )
+
+    assert problems and "writes the model as a value beside LLM_MODEL" in problems[0]
+    if where == cited:
+        assert "give the name written there" in problems[0]
+        assert "citing line" not in problems[0]
+    else:
+        assert f"the model is written on line {where} of agent.py" in problems[0]
+        assert f"citing line {where}" in problems[0]
+
+
+def test_a_name_refused_twice_from_another_statement_on_the_line_keeps_the_setting(
+    tmp_path, root
+):
+    # nova-3 is written after the ;, in another statement: it is not beside the setting, so the
+    # setting is kept without the name, as it is when the statements are on two lines.
+    (root / "agent.py").write_text(
+        'model = os.getenv("LLM_MODEL", "gpt-4o"); stt = STT(model="nova-3")\n',
+        encoding="utf-8",
+    )
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "LLM_MODEL", "name": "nova-3", "path": "agent.py", "line": 1},
+    )
+
+    assert submit(wrong).get("is_error")
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    model = saved(destination).get("model")
+    assert (model["name"], model["setting"]) == ("", "LLM_MODEL")
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param(
+            'llm = ChatOpenAI(model="gpt-4o", timeout=os.getenv("LLM_TIMEOUT"))\n', id="one-line"
+        ),
+        pytest.param(WRAPPED, id="wrapped"),
+        pytest.param(
+            'CONFIG = {"model": "gpt-4o", "timeout": os.getenv("LLM_TIMEOUT")}\n', id="a-dict-key"
+        ),
+    ],
+)
+def test_a_setting_given_alone_beside_a_written_model_is_refused(root, written):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"setting": "LLM_TIMEOUT", "path": "agent.py", "line": 1})
+
+    assert problems and "LLM_TIMEOUT" in problems[0]
+
+
+# The second refusal does not spend the path budget twice
+
+
+def test_a_setting_refused_once_is_saved_on_a_long_link_chain(tmp_path, root):
+    (root / "agent.py").write_text(
+        'import os\nMODEL = os.getenv("OPENAI_MODEL", "gpt-4o")\n', encoding="utf-8"
+    )
+    chain(root, "L", 12)
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    not_the_default = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "OPENAI_MODEL", "name": "gpt-4.1", "path": "L0", "line": 2}
+    )
+
+    assert submit(not_the_default).get("is_error")
+    second = submit(not_the_default)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["model"]["setting"] == "OPENAI_MODEL"
+    assert saved(destination)["model"]["name"] == ""
+
+
+# Credential words are whole words
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "AUTHOR_MODEL",
+        "CURIE_MODEL",
+        "FIRST_PASS_MODEL",
+        "TOKENIZER_MODEL",
+        "KEYWORD_MODEL",
+        "SECOND_PASS_LLM",
+    ],
+)
+def test_a_model_setting_with_a_credential_word_inside_another_word_is_kept(root, setting):
+    (root / "llm.py").write_text(f'MODEL = os.getenv("{setting}", "gpt-4o")\n', encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root, {"setting": setting, "name": "gpt-4o", "path": "llm.py", "line": 1}
+    )
+
+    assert problems == []
+    assert contract.model.setting == setting
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "DB_PASS",
+        "DB_PWD",
+        "OPENAI_AUTH",
+        "SENTRY_DSN",
+        "OPENAI_API_KEY",
+        "LLM_APIKEY",
+        "MODEL_API_KEY",
+        "DB_PASSWORD",
+        "MODEL_CLIENTSECRET",
+        "LLM_APITOKEN",
+        "LLM_AUTHORIZATION",
+        "MODEL_PASSCODE",
+        "LLM_BASEURL",
+        "OPENAI_KEY2_MODEL",
+    ],
+)
+def test_a_credentials_setting_is_still_refused(root, setting):
+    (root / "llm.py").write_text(f'MODEL = os.getenv("{setting}", "gpt-4o")\n', encoding="utf-8")
+
+    problems, _, _ = checked(
+        root, {"setting": setting, "name": "gpt-4o", "path": "llm.py", "line": 1}
+    )
+
+    assert problems
+
+
+# Refusals never repeat a credential's default
+
+
+def test_the_credential_default_refusal_does_not_repeat_the_value(root):
+    (root / "llm.py").write_text('PASSWORD = os.getenv("DB_PASS", "hunter2")\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "hunter2", "path": "llm.py", "line": 1})
+
+    assert problems
+    assert all("hunter2" not in problem for problem in problems)
+
+
+# More ways to write a setting's default
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param(
+            "llm.kt", 'val model = System.getenv("LLM_MODEL") ?: "gpt-4o"', id="kotlin-elvis"
+        ),
+        pytest.param("llm.sh", 'MODEL="${LLM_MODEL:=gpt-4o}"', id="shell-assign-default"),
+        pytest.param("llm.sh", 'MODEL="${LLM_MODEL=gpt-4o}"', id="shell-assign-unset"),
+    ],
+)
+def test_more_default_forms_are_read(root, file, written):
+    (root / file).write_text(f"{written}\n", encoding="utf-8")
+
+    problems, contract, _ = checked(
+        root, {"setting": "LLM_MODEL", "name": "gpt-4o", "path": file, "line": 1}
+    )
+
+    assert problems == []
+    assert (contract.model.setting, contract.model.name) == ("LLM_MODEL", "gpt-4o")
+
+
+def test_a_setting_shaped_like_a_key_is_refused_without_being_repeated(root):
+    shaped = "AKIA" + "QWERTYUIOPASDFGH"
+    (root / "llm.py").write_text(f'MODEL = os.getenv("{shaped}", "gpt-4o")\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"setting": shaped, "path": "llm.py", "line": 1})
+
+    assert problems
+    assert all(shaped not in problem for problem in problems)
+
+
+# Other models written in the statement don't make the model's own setting a neighbour
+
+VOICE = (
+    "session = AgentSession(\n"
+    '    stt=STT(model="nova-3"),\n'
+    '    llm=LLM(model=os.getenv("LLM_MODEL", "gpt-4o")),\n'
+    '    tts=TTS(model="sonic-2"),\n'
+    ")\n"
+)
+
+
+@pytest.mark.parametrize(
+    "written, model",
+    [
+        pytest.param(
+            'agent = Agent(model=os.getenv("AGENT_MODEL", "gpt-4o"), '
+            'embedder=Embedder(model="text-embedding-3-small"))\n',
+            {"setting": "AGENT_MODEL", "name": "gpt-4o"},
+            id="beside-an-embedder",
+        ),
+        pytest.param(VOICE, {"setting": "LLM_MODEL", "name": "gpt-4o"}, id="voice-wrapped"),
+        pytest.param(
+            VOICE.replace('os.getenv("LLM_MODEL", "gpt-4o")', 'os.environ["LLM_MODEL"]'),
+            {"setting": "LLM_MODEL"},
+            id="voice-wrapped-no-default",
+        ),
+    ],
+)
+def test_a_setting_that_is_the_models_value_is_kept_beside_other_models(root, written, model):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(root, {**model, "path": "agent.py", "line": 1})
+
+    assert problems == []
+    assert contract.model.setting == model["setting"]
+
+
+def test_a_wrong_name_given_with_the_models_own_setting_keeps_the_setting(tmp_path, root):
+    (root / "agent.py").write_text(VOICE, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    wrong = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "LLM_MODEL", "name": "nova-3", "path": "agent.py", "line": 1},
+    )
+
+    assert submit(wrong).get("is_error")
+    second = submit(wrong)
+
+    assert not second.get("is_error"), second
+    assert saved(destination)["model"]["setting"] == "LLM_MODEL"
+    assert saved(destination)["model"]["name"] == ""
+
+
+# A setting read inside what a model is given, beside the model written there
+
+TIMEOUT = 'os.getenv("LLM_TIMEOUT")'
+
+
+@pytest.mark.parametrize(
+    "file, written",
+    [
+        pytest.param(
+            "agent.py", f'model = ChatOpenAI(model="gpt-4o", timeout={TIMEOUT})', id="model-target"
+        ),
+        pytest.param(
+            "agent.py",
+            f'self.model = ChatOpenAI(model="gpt-4o", timeout={TIMEOUT})',
+            id="attribute-target",
+        ),
+        pytest.param(
+            "agent.py",
+            f'model: BaseChatModel = ChatOpenAI(model="gpt-4o", timeout={TIMEOUT})',
+            id="annotated-target",
+        ),
+        pytest.param(
+            "agent.py",
+            f'agent = Agent(model=ChatOpenAI(model="gpt-4o", timeout={TIMEOUT}))',
+            id="model-key-given-a-client",
+        ),
+        pytest.param(
+            "agent.py",
+            f'model = pick({TIMEOUT}, fallback=ChatOpenAI(model="gpt-4o"))',
+            id="read-straight-under-the-model-target",
+        ),
+        pytest.param(
+            "agent.ts",
+            "init(this.model = pick(process.env.LLM_TIMEOUT, "
+            'new ChatOpenAI({ model: "gpt-4o" })));',
+            id="read-straight-under-a-model-attribute",
+        ),
+        pytest.param(
+            "agent.py",
+            f'llm = make_llm(model="gpt-4o", *extra({TIMEOUT}))',
+            id="read-after-the-models-value-ends",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const model = new ChatOpenAI({ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT });',
+            id="ts-model-target",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const model: ChatOpenAI = new ChatOpenAI("
+            '{ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT });',
+            id="ts-typed-target",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const agent = new Agent({ model: new ChatOpenAI("
+            '{ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT }) });',
+            id="ts-model-key-given-a-client",
+        ),
+        *(
+            pytest.param(
+                "agent.py", f'llm = ChatOpenAI({key}="gpt-4o", timeout={TIMEOUT})', id=key
+            )
+            for key in ("model_name", "deployment_name", "model_id", "azure_deployment", "engine")
+        ),
+        *(
+            pytest.param(
+                "agent.ts",
+                f'const llm = new ChatOpenAI({{ {key}: "gpt-4o", timeout: process.env.LLM_TIMEOUT }});',
+                id=f"ts-{key}",
+            )
+            for key in ("modelName", "modelId")
+        ),
+    ],
+)
+def test_a_setting_read_beside_a_written_model_is_refused_whatever_holds_it(root, file, written):
+    (root / file).write_text(f"{written}\n", encoding="utf-8")
+
+    problems, _, _ = checked(root, {"setting": "LLM_TIMEOUT", "path": file, "line": 1})
+
+    assert problems and "writes the model as a value beside LLM_TIMEOUT" in problems[0]
+
+
+MODEL_WRAPPED = WRAPPED.replace("llm = ", "model = ")
+
+
+@pytest.mark.parametrize(
+    "written, line",
+    [
+        pytest.param(MODEL_WRAPPED, 1, id="model-target-wrapped"),
+        pytest.param(WRAPPED, 3, id="cited-on-the-settings-line"),
+        pytest.param(MODEL_WRAPPED, 3, id="model-target-cited-on-the-settings-line"),
+    ],
+)
+def test_a_setting_read_beside_a_model_in_a_wrapped_call_is_refused(root, written, line):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, _, _ = checked(root, {"setting": "LLM_TIMEOUT", "path": "agent.py", "line": line})
+
+    assert problems and "writes the model as a value beside LLM_TIMEOUT" in problems[0]
+
+
+def test_the_wrapped_model_with_its_name_is_dropped_on_the_second_submit(tmp_path, root):
+    (root / "agent.py").write_text(MODEL_WRAPPED, encoding="utf-8")
+    destination = tmp_path / "out"
+    submit = submitter(destination, root)
+    beside = payload(
+        hard_constraints=["Be polite."],
+        model={"setting": "LLM_TIMEOUT", "name": "gpt-4o", "path": "agent.py", "line": 1},
+    )
+
+    assert submit(beside).get("is_error")
+    second = submit(beside)
+
+    assert not second.get("is_error"), second
+    assert saved(destination).get("model") is None
+
+
+@pytest.mark.parametrize(
+    "written, model, line",
+    [
+        pytest.param(
+            VOICE, {"setting": "LLM_MODEL", "name": "gpt-4o"}, 3, id="voice-cited-on-its-llm-line"
+        ),
+        pytest.param(
+            VOICE.replace("model=os.getenv", "model_name=os.getenv"),
+            {"setting": "LLM_MODEL", "name": "gpt-4o"},
+            1,
+            id="voice-model-name-key",
+        ),
+        pytest.param(
+            "session = AgentSession(\n"
+            '    stt=STT(model="nova-3"),\n'
+            "    llm=LLM(\n"
+            '        model=os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            {"setting": "LLM_MODEL", "name": "gpt-4o"},
+            4,
+            id="voice-nested-wrap",
+        ),
+    ],
+)
+def test_the_models_own_setting_is_kept_beside_other_models_on_any_line(
+    root, written, model, line
+):
+    (root / "agent.py").write_text(written, encoding="utf-8")
+
+    problems, contract, _ = checked(root, {**model, "path": "agent.py", "line": line})
+
+    assert problems == []
+    assert (contract.model.setting, contract.model.name) == (model["setting"], model["name"])
+
+
+# Another component's model a few lines above the setting: in a function or class body, or in
+# another call beside the one the setting is given to
+
+@pytest.mark.parametrize(
+    "file, written, line",
+    [
+        pytest.param(
+            "agent.ts",
+            "export async function entry(ctx) {\n"
+            '  const stt = new deepgram.STT({ model: "nova-3" });\n'
+            '  const llmModel = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  return llmModel;\n"
+            "}\n",
+            3,
+            id="ts-function-body",
+        ),
+        pytest.param(
+            "agent.ts",
+            "export async function entry(ctx) {\n"
+            '  const model = "nova-3";\n'
+            '  const llmModel = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  return llmModel;\n"
+            "}\n",
+            3,
+            id="ts-function-body-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "class Agent {\n"
+            '    val model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-class-body-with-a-model-field",
+        ),
+        pytest.param(
+            "Agent.scala",
+            "object Agent {\n"
+            "  def run(): Unit = {\n"
+            '    val model = "nova-3"\n'
+            '    val llm = sys.env.getOrElse("LLM_MODEL", "gpt-4o")\n'
+            "  }\n"
+            "}\n",
+            4,
+            id="scala-method-body-after-equals-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.ts",
+            "switch (mode) {\n"
+            '  case "voice": {\n'
+            '    const model = "nova-3";\n'
+            '    const llmModel = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  }\n"
+            "}\n",
+            4,
+            id="ts-case-block-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "val handler = { ctx: Ctx ->\n"
+            '    val model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-assigned-lambda-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "val handler = {\n"
+            '    model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-assigned-lambda-setting-a-model-at-the-line-start",
+        ),
+        pytest.param(
+            "agent.groovy",
+            "def run = {\n"
+            '    def model = "nova-3"\n'
+            '    def llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="groovy-assigned-closure-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.swift",
+            "let configure = { (ctx: Context) in\n"
+            '    let model = "nova-3"\n'
+            '    let llm = ProcessInfo.processInfo.environment["LLM_MODEL"] ?? "gpt-4o"\n'
+            "}\n",
+            3,
+            id="swift-assigned-closure-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.swift",
+            "func make() -> () -> String {\n"
+            "    return {\n"
+            '        let model = "nova-3"\n'
+            '        let llm = ProcessInfo.processInfo.environment["LLM_MODEL"] ?? "gpt-4o"\n'
+            "        return llm\n"
+            "    }\n"
+            "}\n",
+            4,
+            id="swift-returned-closure-with-a-model-constant",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "fun handler(): () -> String {\n"
+            "    return {\n"
+            '        val model = "nova-3"\n'
+            '        val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "        llm\n"
+            "    }\n"
+            "}\n",
+            4,
+            id="kotlin-returned-lambda-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.ts",
+            "function f() {\n"
+            "  {\n"
+            '    const model = "nova-3";\n'
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  }\n"
+            "}\n",
+            4,
+            id="ts-block-straight-inside-a-block-with-a-model-constant",
+        ),
+        pytest.param(
+            "agent.py",
+            "agent = Agent(\n"
+            '    model="gpt-4o-mini",\n'
+            "    llm=LLM(\n"
+            '        model=os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            4,
+            id="the-models-own-key-in-a-call-inside-a-call-with-a-model",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const session = new AgentSession({\n"
+            '  model: "gpt-4o-mini",\n'
+            "  llm: new LLM({\n"
+            '    model: process.env.LLM_MODEL ?? "gpt-4o",\n'
+            "  }),\n"
+            "});\n",
+            4,
+            id="the-models-own-key-in-a-literal-inside-a-literal-with-a-model",
+        ),
+        pytest.param(
+            "agent.py",
+            'llm = os.getenv("LLM_MODEL", "gpt-4o"); stt = STT(model="nova-3")\n',
+            1,
+            id="another-statement-after-a-semicolon-writes-a-model",
+        ),
+        pytest.param(
+            "agent.py",
+            'model = os.getenv("LLM_MODEL", "gpt-4o"); stt = STT(model="nova-3")\n',
+            1,
+            id="model-target-with-another-statement-after-a-semicolon",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const stt = new STT({ model: "nova-3" }); '
+            'const llm = process.env.LLM_MODEL ?? "gpt-4o";\n',
+            1,
+            id="another-statement-before-a-semicolon-writes-a-model",
+        ),
+        pytest.param(
+            "Agent.java",
+            "public class Agent {\n"
+            '    private final Stt stt = new Stt(model = "nova-3");\n'
+            '    private final String llm = System.getenv().getOrDefault("LLM_MODEL", "gpt-4o");\n'
+            "}\n",
+            3,
+            id="java-class-body",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "class Agent {\n"
+            '    val stt = STT(model = "nova-3")\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-class-body",
+        ),
+        pytest.param(
+            "agent.ts",
+            "export const config = {\n"
+            '  stt: { model: "nova-3" },\n'
+            '  llm: process.env.LLM_MODEL ?? "gpt-4o",\n'
+            "};\n",
+            3,
+            id="ts-object-beside-another",
+        ),
+        pytest.param(
+            "agent.py",
+            "agent = Agent(\n"
+            '    stt=STT(model="nova-3"),\n'
+            '    llm=LLM(os.getenv("LLM_MODEL", "gpt-4o")),\n'
+            ")\n",
+            3,
+            id="read-in-a-call-beside-another",
+        ),
+        pytest.param(
+            "agent.py",
+            "agent = create_agent(\n"
+            '    init_chat_model(os.getenv("LLM_MODEL", "gpt-4o")),\n'
+            '    embeddings=OpenAIEmbeddings(model="text-embedding-3-small"),\n'
+            ")\n",
+            2,
+            id="read-before-a-call-beside-it",
+        ),
+        # A read in a function, method or lambda body given inside a literal or call that
+        # writes another component's model: the body is the agent's code, not that literal.
+        pytest.param(
+            "worker.ts",
+            "export default {\n"
+            '  model: "nova-3",\n'
+            "  async fetch(request, env) {\n"
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  },\n"
+            "};\n",
+            4,
+            id="ts-method-body-in-an-exported-literal",
+        ),
+        pytest.param(
+            "worker.ts",
+            "export default {\n"
+            '  model: "nova-3",\n'
+            "  async fetch(request, env) {\n"
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            + "    log(llm);\n"
+            * 30
+            + "  },\n"
+            "};\n",
+            4,
+            id="ts-long-method-body-in-an-exported-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "function make() {\n"
+            "  return {\n"
+            '    model: "nova-3",\n'
+            "    run: async () => {\n"
+            '      const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "    },\n"
+            "  };\n"
+            "}\n",
+            5,
+            id="ts-arrow-body-in-a-returned-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const agent = createVoiceAgent({\n"
+            '  model: "nova-3",\n'
+            "  onStart: async () => {\n"
+            '    const llm = process.env.LLM_MODEL ?? "gpt-4o";\n'
+            "  },\n"
+            "});\n",
+            4,
+            id="ts-arrow-body-in-a-literal-given-to-a-call",
+        ),
+        pytest.param(
+            "Bot.kt",
+            "val bot = Bot(\n"
+            '    model = "nova-3",\n'
+            "    handler = { ctx ->\n"
+            '        val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "    },\n"
+            ")\n",
+            4,
+            id="kotlin-lambda-given-to-a-call",
+        ),
+        pytest.param(
+            "Agent.swift",
+            "let agent = VoiceAgent(\n"
+            '    model: "whisper-1",\n'
+            "    onStart: {\n"
+            '        let llm = ProcessInfo.processInfo.environment["LLM_MODEL"] ?? "gpt-4o"\n'
+            "    }\n"
+            ")\n",
+            4,
+            id="swift-closure-given-to-a-call",
+        ),
+        pytest.param(
+            "agent.groovy",
+            'agent(model: "nova-3", handler: {\n'
+            '    def llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "})\n",
+            2,
+            id="groovy-closure-given-to-a-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "pipeline = Pipeline(\n"
+            '    model="whisper-1",\n'
+            "    on_start=lambda: LLM(\n"
+            '        os.getenv("LLM_MODEL", "gpt-4o"),\n'
+            "    ),\n"
+            ")\n",
+            4,
+            id="python-lambda-given-to-a-call",
+        ),
+        # A { after a word that opens code, not a struct literal: its first line is not a key.
+        pytest.param(
+            "agent.go",
+            "if voice {\n"
+            '\tstt := NewSTT(model: "nova-3")\n'
+            '\tllm := getenvOr("LLM_MODEL", "gpt-4o")\n'
+            "}\n",
+            3,
+            id="go-block-opening-on-a-short-declaration",
+        ),
+        pytest.param(
+            "Agent.kt",
+            "fun handler() = run {\n"
+            '    model = "nova-3"\n'
+            '    val llm = System.getenv("LLM_MODEL") ?: "gpt-4o"\n'
+            "}\n",
+            3,
+            id="kotlin-run-block-assigning-a-model",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "given", [{}, {"name": "gpt-4o"}], ids=["setting", "name-and-setting"]
+)
+def test_the_models_own_setting_is_kept_beside_another_components_model(
+    root, file, written, line, given
+):
+    (root / file).write_text(written, encoding="utf-8")
+    model = {"setting": "LLM_MODEL", **given}
+
+    problems, contract, _ = checked(root, {**model, "path": file, "line": line})
+
+    assert problems == []
+    assert (contract.model.setting, contract.model.name) == (
+        "LLM_MODEL",
+        given.get("name", ""),
+    )
+
+
+def test_a_rust_block_with_a_model_constant_keeps_the_setting(root):
+    # The setting alone: a default after unwrap_or is not read as one, so a name given with it
+    # is refused for that reason, as before this rule.
+    (root / "main.rs").write_text(
+        "let llm = {\n"
+        '    let model = "nova-3";\n'
+        '    std::env::var("LLM_MODEL").unwrap_or("gpt-4o".to_string())\n'
+        "};\n",
+        encoding="utf-8",
+    )
+
+    problems, contract, _ = checked(
+        root, {"setting": "LLM_MODEL", "path": "main.rs", "line": 3}
+    )
+
+    assert problems == []
+    assert contract.model.setting == "LLM_MODEL"
+
+
+@pytest.mark.parametrize(
+    ("file", "written"),
+    [
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    stt=STT(model="nova-3"),\n'
+            '    model="gpt-4o",\n'
+            '    timeout=os.getenv("LLM_TIMEOUT"),\n'
+            ")\n",
+            id="the-calls-own-model-beside-another",
+        ),
+        pytest.param(
+            "agent.py",
+            "def build():\n"
+            "    return ChatOpenAI(\n"
+            '        model="gpt-4o",\n'
+            '        timeout=os.getenv("LLM_TIMEOUT"),\n'
+            "    )\n",
+            id="wrapped-call-in-a-body",
+        ),
+        pytest.param(
+            "agent.py",
+            "config = {\n"
+            '    "model": "gpt-4o",\n'
+            '    "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="quoted-key-of-a-literal-after-equals",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const config = {\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="bare-key-of-a-literal-after-equals",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const llm = new ChatOpenAI({\n"
+            '  temperature: 0, model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "});\n",
+            id="key-after-a-comma-in-a-literal-given-to-a-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "config = {\n"
+            "    # which model\n"
+            '    "model": "gpt-4o",\n'
+            '    "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="key-after-a-comment-line",
+        ),
+        pytest.param(
+            "agent.py",
+            "config = {  # the client\n"
+            '    "model": "gpt-4o",\n'
+            '    "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="key-after-a-comment-on-the-brace-line",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const config = {\n"
+            "  temperature: 0, // warm\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="key-after-a-comment-ending-the-line-before",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const config = {\n"
+            '  /* which */ model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="key-after-a-block-comment",
+        ),
+        pytest.param(
+            "agent.py",
+            "def config():\n"
+            "    return {\n"
+            '        "model": "gpt-4o",\n'
+            '        "timeout": os.getenv("LLM_TIMEOUT"),\n'
+            "    }\n",
+            id="returned-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "export default {\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "};\n",
+            id="default-exported-literal",
+        ),
+        pytest.param(
+            "agent.ts",
+            "function cfg() {\n"
+            "  return {\n"
+            '    model: "gpt-4o",\n'
+            "    timeout: process.env.LLM_TIMEOUT,\n"
+            "  };\n"
+            "}\n",
+            id="ts-returned-literal",
+        ),
+        pytest.param(
+            "agent.tsx",
+            "<Chat config={{\n"
+            '  model: "gpt-4o",\n'
+            "  timeout: process.env.LLM_TIMEOUT,\n"
+            "}} />\n",
+            id="literal-straight-inside-a-brace",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    model_kwargs={\n"
+            '        "timeout": float(os.getenv("LLM_TIMEOUT", "0")),\n'
+            "    },\n"
+            ")\n",
+            id="read-in-a-literal-inside-the-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    http_client=Client(\n"
+            '        timeout=os.getenv("LLM_TIMEOUT"),\n'
+            "    ),\n"
+            ")\n",
+            id="read-in-a-call-inside-the-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    http_client=Client(\n"
+            '        timeout=os.getenv("LLM_TIMEOUT"),\n'
+            "    ),\n" + "".join(f"    arg{i}={i},\n" for i in range(25)) + ")\n",
+            id="read-in-a-call-inside-a-call-still-open-long-after",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const llm = new ChatOpenAI({\n"
+            '  model: "gpt-4o",\n'
+            "  configuration: {\n"
+            "    timeout: process.env.LLM_TIMEOUT,\n"
+            "  },\n"
+            "});\n",
+            id="read-in-a-literal-inside-the-literal",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            "    timeouts=[\n"
+            '        os.getenv("LLM_TIMEOUT"),\n'
+            "    ],\n"
+            ")\n",
+            id="read-in-a-list-inside-the-call",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const llm = new ChatOpenAI({ model: "gpt-4o", timeout: process.env.LLM_TIMEOUT });\n',
+            id="one-statement-ending-in-a-semicolon",
+        ),
+        pytest.param(
+            "agent.py",
+            'llm = ChatOpenAI(model="gpt-4o", stop=";", timeout=os.getenv("LLM_TIMEOUT")); x = 1\n',
+            id="semicolons-in-a-string-and-after-the-call",
+        ),
+        pytest.param(
+            "agent.py",
+            'llm = ChatOpenAI(model="gpt-4o", stop=");", timeout=os.getenv("LLM_TIMEOUT"))\n',
+            id="a-closing-bracket-and-semicolon-in-a-string",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const llm = new ChatOpenAI({ model: "gpt-4o", /* }); */ '
+            "timeout: process.env.LLM_TIMEOUT });\n",
+            id="closing-brackets-and-a-semicolon-in-a-comment",
+        ),
+        pytest.param(
+            "agent.ts",
+            'const llm = new ChatOpenAI({ model: "gpt-4o", callbacks: [() => { log(); }], '
+            "timeout: process.env.LLM_TIMEOUT });\n",
+            id="a-semicolon-inside-a-function-given-to-the-call",
+        ),
+        pytest.param(
+            "agent.py",
+            "llm = ChatOpenAI(\n"
+            '    model="gpt-4o",\n'
+            '    timeout=lambda: os.getenv("LLM_TIMEOUT"),\n'
+            ")\n",
+            id="read-as-a-lambdas-value-in-the-call",
+        ),
+        pytest.param(
+            "agent.ts",
+            "const llm = new ChatOpenAI({\n"
+            '  model: "gpt-4o",\n'
+            "  configuration: { timeout: process.env.LLM_TIMEOUT },\n"
+            "});\n",
+            id="read-in-a-literal-given-in-the-call-on-one-line",
+        ),
+        pytest.param(
+            "main.rs",
+            "let cfg = Config {\n"
+            '    model: "gpt-4o".into(),\n'
+            '    timeout: env::var("LLM_TIMEOUT").ok(),\n'
+            "};\n",
+            id="rust-struct-literal",
+        ),
+        pytest.param(
+            "main.rs",
+            "let cfg = Config {\n"
+            "    // the chat model\n"
+            '    model: "gpt-4o".into(),\n'
+            '    timeout: env::var("LLM_TIMEOUT").ok(),\n'
+            "};\n",
+            id="rust-struct-literal-with-a-comment-before-its-first-key",
+        ),
+        pytest.param(
+            "main.go",
+            "cfg := Config{\n"
+            '\tmodel: "gpt-4o",\n'
+            '\ttimeout: os.Getenv("LLM_TIMEOUT"),\n'
+            "}\n",
+            id="go-composite-literal",
+        ),
+    ],
+)
+def test_a_setting_beside_the_model_its_own_call_is_given_is_still_refused(
+    root, file, written
+):
+    (root / file).write_text(written, encoding="utf-8")
+    line = written.count("\n", 0, written.index("LLM_TIMEOUT")) + 1
+
+    problems, _, _ = checked(
+        root, {"setting": "LLM_TIMEOUT", "path": file, "line": line}
+    )
+
+    assert problems and "writes the model as a value beside LLM_TIMEOUT" in problems[0]
+
+
+# A long line of model keys is read in one pass
+
+KEYS_LINE = 256 * 1024
+
+
+@pytest.mark.parametrize("key", ['model=', '"model": ', "model=\"x' "], ids=["kwarg", "dict", "odd-quotes"])
+def test_a_long_line_of_model_keys_is_checked_quickly(root, key):
+    head = 'x = f(os.getenv("LLM_MODEL", "gpt-4o"), '
+    (root / "agent.py").write_text(
+        head + key * ((KEYS_LINE - len(head)) // len(key)) + ")\n", encoding="utf-8"
+    )
+
+    _, _, took = checked(
+        root, {"setting": "LLM_MODEL", "name": "gpt-4o", "path": "agent.py", "line": 1}
+    )
+
+    assert took < QUICK_SECONDS
+
+
+def test_a_long_line_of_model_keys_before_the_cited_line_is_checked_quickly(root):
+    head = "x = f(\n"
+    keys = "model=" * (KEYS_LINE // len("model="))
+    (root / "agent.py").write_text(
+        head + keys + '\n    os.getenv("LLM_MODEL", "gpt-4o"),\n)\n', encoding="utf-8"
+    )
+
+    _, _, took = checked(
+        root, {"setting": "LLM_MODEL", "name": "gpt-4o", "path": "agent.py", "line": 3}
+    )
+
+    assert took < QUICK_SECONDS
+
+
+@pytest.mark.parametrize("opener", ["(", "[", "{"], ids=["paren", "square", "brace"])
+@pytest.mark.parametrize(
+    "before", [False, True], ids=["on-the-cited-line", "before-the-cited-line"]
+)
+def test_many_reads_inside_deep_brackets_are_checked_quickly(root, opener, before):
+    # Half open brackets, half reads of the setting inside them: each read finds its owner
+    # without walking the brackets still open.
+    reads = '"LLM_MODEL",' * (KEYS_LINE // 2 // len('"LLM_MODEL",'))
+    if before:
+        # Braces that hold values ("{,"), each opened before the cited line and still open at it.
+        unit = opener + "," if opener == "{" else opener
+        brackets = "".join(
+            unit * (KEYS_LINE // 2 // 20 // len(unit)) + "\n" for _ in range(20)
+        )
+        text, line = brackets + reads + "\n", 21
+    else:
+        text, line = "x = " + opener * (KEYS_LINE // 2) + reads + "\n", 1
+    (root / "agent.py").write_text(text, encoding="utf-8")
+
+    _, _, took = checked(
+        root, {"setting": "LLM_MODEL", "path": "agent.py", "line": line}
+    )
+
+    assert took < QUICK_SECONDS
+
+
+# A credential's name shaped like a key is never repeated
+
+
+def test_the_default_of_a_key_shaped_credential_is_refused_without_naming_it(root):
+    owner = "AKIA" + "QWERTYUIOPASDFGH" + "_KEY"
+    (root / "llm.py").write_text(f'KEY = os.getenv("{owner}", "gpt-4o")\n', encoding="utf-8")
+
+    problems, _, _ = checked(root, {"name": "gpt-4o", "path": "llm.py", "line": 1})
+
+    assert problems and "names a credential" in problems[0]
+    assert all(owner not in problem for problem in problems)
 
 
 def test_the_definition_the_reading_is_shown_leaves_out_the_prompt_check(

@@ -383,9 +383,21 @@ Find, in roughly this order:
     or provider is made only of letters, digits and . _ : / @ -, so a name with a space in it
     can't be recorded; leave `model` out then.
 
-    Leave `model` out when the name is only set at run time: an environment variable with no
-    default in the code, or a value fetched from elsewhere. Where the code gives an environment
-    variable a default, record the default.
+    When the code reads the model from an environment variable, the customer's run uses whatever
+    they set it to, so give the variable's name as `setting` and cite the line the code reads it
+    on, in any language and through any helper (`os.getenv("OPENAI_MODEL", "gpt-4o")`,
+    `process.env.OPENAI_MODEL ?? "gpt-4o"` in TypeScript, `os.Getenv("OPENAI_MODEL")` in Go,
+    `${OPENAI_MODEL:-gpt-4o}` in configuration). For a call wrapped over several lines, cite the
+    line the call starts on; when the variable's name is held in a constant (`MODEL_VAR =
+    "OPENAI_MODEL"`), cite the line the constant is written on. Give as `name` the default written
+    for that setting (`gpt-4o` here),
+    and no `name` when it has none; never a model named elsewhere on the line. A setting is the
+    variable's name exactly as the code writes it, in capitals, digits and _, and it names a model
+    (MODEL, DEPLOYMENT or LLM in it); a setting read beside the model, such as a region or a
+    temperature, is not where the model comes from. Never give a credential's variable (a name
+    with a word ending in KEY, TOKEN, SECRET, PASSWORD, PASS, PWD, AUTH, CREDENTIAL, URL, URI or
+    DSN, such as API_KEY or APITOKEN) as the setting, nor its default as the name. Leave `model`
+    out when the name is fetched from elsewhere at run time.
 
 ## A repository may not hold one agent
 

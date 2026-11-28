@@ -371,10 +371,16 @@ class RuleSource(BaseModel):
 
 
 class ModelSource(BaseModel):
-    """The model the agent talks to the person with, and the line its name is written on."""
+    """The model the agent talks to the person with, and the line its name is written on.
+
+    When the code reads the model from an environment variable, ``setting`` is that variable's
+    name in capitals and the statement the cited line starts reads it; ``name`` is then only the
+    default written for it there (empty when there is none), not the model the customer's run
+    uses."""
 
     provider: str = ""
     name: str = ""
+    setting: str = ""
     path: str = ""
     line: int = 0
 
@@ -383,6 +389,15 @@ class ModelSource(BaseModel):
     def _bare_name(cls, value: Any) -> Any:
         # A bare string is the name alone; the save then asks for path and line.
         return {"name": value} if isinstance(value, str) else value
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_setting(self, handler: Any) -> dict[str, Any]:
+        # A model read with no setting writes the same bytes as before the field existed, so its
+        # setup fingerprint is unchanged.
+        data = handler(self)
+        if not data.get("setting"):
+            data.pop("setting", None)
+        return data
 
 
 class DataStore(BaseModel):

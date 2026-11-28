@@ -2,7 +2,10 @@
 agent's own files, while a conversation waits on the answer.
 
 A model is kept only when its name is the value written on the line the reader cites: the
-Agents page shows it as fact, and an unknown model is better left empty than guessed. The files
+Agents page shows it as fact, and an unknown model is better left empty than guessed. When the code
+reads the model from an environment variable, the reader gives that variable as the model's
+setting: the cited line must look it up, and the name is then only the default written there, if
+any, since the customer's run uses whatever value they give the variable. The files
 can be built to stall whoever reads them, so every path is resolved within the save's one lookup
 budget, every read is bounded in size and decoded as UTF-8 whatever coding line the file carries,
 and every check of a line costs at most a few passes over it.
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import html
+import heapq
 import logging
 import os
 import re
@@ -19,11 +23,14 @@ import stat
 import string
 import unicodedata
 from pathlib import Path
+from typing import Iterator
 
 from .backends.files import secret_text
 from .contract import AgentContract
+from .credentials import secret_name
 from .runtime_selection import charged_path
 from .source_folder import is_within
+from ..providers.agent import LONGEST_SETTING, _redact_text, is_a_setting_name
 
 _LOG = logging.getLogger(__name__)
 # The platform refuses the whole agent document past this, for the model's name and provider.
@@ -458,6 +465,7 @@ def named_on(
     hash_comments: str = _HASH_ANYWHERE,
     block_comments: bool = True,
     block: str | None = None,
+    scanned: tuple[int, list[tuple[int, int]]] | None = None,
 ) -> bool:
     """Whether ``name`` is the value written on ``line``: whole, outside a comment and outside
     a triple-quoted string or a block comment (``block`` is the triple quote, or the */ or -->,
@@ -467,19 +475,23 @@ def named_on(
     MODEL_NAME_CHARS, so an occurrence starting inside one that failed has a name character just
     before it, and the search resumes after the failed one. The line is scanned once, its
     triple-quoted stretches walked alongside the occurrences, and each step looks at a few
-    characters beside one, so a line costs about one pass."""
+    characters beside one, so a line costs about one pass. ``scanned`` is the line's comment
+    start and text stretches when the caller has already scanned it with these settings."""
     if not name:
         # find("") matches at every position without moving on.
         return False
-    comment, inside, _ = _line_scan(
-        line,
-        block,
-        dashes=dashes,
-        ini=ini,
-        triple=triple,
-        hash_comments=hash_comments,
-        block_comments=block_comments,
-    )
+    if scanned is None:
+        comment, inside, _ = _line_scan(
+            line,
+            block,
+            dashes=dashes,
+            ini=ini,
+            triple=triple,
+            hash_comments=hash_comments,
+            block_comments=block_comments,
+        )
+    else:
+        comment, inside = scanned
     stretches = iter(inside)
     stretch = next(stretches, None)
     at = line.find(name, 0, comment)
@@ -576,23 +588,53 @@ _ENV_SETTING = re.compile(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*[=:]")
 # counts only beside a provider's word (OPENAI_ENGINE, AZURE_OPENAI_ENGINE).
 _MODEL_WORDS = frozenset({"MODEL", "DEPLOYMENT", "LLM"})
 _ENGINE_PROVIDERS = frozenset({"OPENAI", "AZURE"})
-# What marks a setting that holds a secret, anywhere in its name, joined words included
-# (LLM_APIKEY). A URL can carry a password, and a model's name is never one.
-_SECRET_PARTS = ("KEY", "TOKEN", "SECRET", "PASS", "PWD", "AUTH", "CREDENTIAL", "URL", "URI", "DSN")
+# What marks a setting that holds a secret: one of its words (split at _ . - and between a
+# lowercase letter and a capital, trailing digits aside) ending in one of these, never letters
+# inside a word (AUTHOR_MODEL, CURIE_MODEL, TOKENIZER_MODEL are model settings). These mark a
+# secret wherever they are in the name (MAX_TOKEN_MODEL, CHAT_MODEL_KEY, LLM_APITOKEN,
+# MODEL_CLIENTSECRET, OPENAI_KEY2_MODEL). A word that only ends like one (WHISKEY) counts too:
+# refusing a model's label costs less than showing a credential's default.
+_SECRET_ENDINGS = (
+    "KEY", "KEYS", "TOKEN", "TOKENS", "SECRET", "SECRETS", "PASSWORD", "PASSWORDS", "PASSWD",
+    "PASSPHRASE", "PASSCODE", "PWD", "CREDENTIAL", "CREDENTIALS", "CREDS", "AUTHORIZATION",
+)
+# These mark a secret too (a URL can carry a password), except in a name whose last word names a
+# model: FIRST_PASS_MODEL and AUTH_LLM are model settings, DB_PASS, SENTRY_DSN and LLM_BASEURL
+# are not.
+_WEAK_SECRET_ENDINGS = ("PASS", "AUTH", "URL", "URI", "DSN")
+
+
+def _words(setting: str) -> list[str]:
+    """``setting``'s words in capitals: split at _ . - and where camel case starts a word
+    (apiKey, OpenAIKey)."""
+    split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", setting)
+    split = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", split)
+    return [word for word in re.split(r"[_.-]+", split.upper()) if word]
+
+
+def _has_secret_words(setting: str) -> bool:
+    """Whether ``setting``'s words mark a secret, as _SECRET_ENDINGS and _WEAK_SECRET_ENDINGS
+    say."""
+    words = [word.rstrip(string.digits) for word in _words(setting)]
+    if any(word.endswith(_SECRET_ENDINGS) for word in words):
+        return True
+    if words and words[-1] in _MODEL_WORDS:
+        return False
+    return any(word.endswith(_WEAK_SECRET_ENDINGS) for word in words)
 
 
 def _names_a_model(line: str) -> bool:
     """Whether a `.env` line sets a model: a setting with the word MODEL, DEPLOYMENT or LLM, or
     ENGINE beside OPENAI or AZURE (OPENAI_MODEL, AZURE_OPENAI_DEPLOYMENT, LLM, OPENAI_ENGINE), and
-    nothing anywhere in its name that marks a secret (MODEL_API_KEY, LLM_APIKEY, DB_ENGINE_URL).
+    no word in its name that marks a secret (MODEL_API_KEY, LLM_APIKEY, DB_ENGINE_URL).
     A line that sets nothing (no `=` or `:` after a name) doesn't."""
     found = _ENV_SETTING.match(line)
     if found is None:
         return False
     setting = found.group(1).upper()
-    if any(part in setting for part in _SECRET_PARTS):
+    if _has_secret_words(setting):
         return False
-    words = set(re.split(r"[_.-]+", setting))
+    words = set(_words(setting))
     return bool(words & _MODEL_WORDS) or ("ENGINE" in words and bool(words & _ENGINE_PROVIDERS))
 
 
@@ -649,31 +691,885 @@ def _env_value_is_a_locator(value: str) -> bool:
     return "@" in value and not _VERSIONED_NAME.fullmatch(value)
 
 
-def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
-    """Problems with contract.model, checked against the cited line. On success, strips name and
-    provider and stores path as the resolved file relative to the root, in POSIX form. Resolves
-    one path (charged to the save's budget) and reads at most one file."""
+# A setting as any code may spell a variable, before the capitals rule: so a lowercase
+# credential's name is still refused as a credential, and the whole model goes.
+_ANY_CASE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_NAME_CHAR = frozenset(string.ascii_letters + string.digits + "_")
+# How many lines past the cited one a statement is read while its brackets stay open: a call that
+# black wraps one argument per line takes a few.
+_STATEMENT_LINES = 20
+# What comes between a setting as the code reads it and a default written for it: the next
+# argument (os.getenv("X", "gpt-4o"), ENV.fetch("X", "gpt-4o")), or a fallback after the read
+# (os.getenv("X") or "gpt-4o", process.env.X ?? "gpt-4o", ENV["X"] || "gpt-4o",
+# System.getenv("X") ?: "gpt-4o"), up to the default's opening quote. Line breaks count as
+# spaces, for a call wrapped over lines.
+_DEFAULT_AFTER = re.compile(
+    r"\s*(?:,|[)\]]\s*(?:or\b|\|\||\?\?|\?:)|(?:or\b|\|\||\?\?|\?:))\s*([\"'`])"
+)
+# A call that sets the environment, just before the quoted name it is given first:
+# os.Setenv("LLM_MODEL", "gpt-4o") writes the setting, so "gpt-4o" is the value the code
+# forces, not a default (Go, C, PHP, Python's putenv, Rust's set_var, .NET's
+# SetEnvironmentVariable). python-dotenv's set_key(".env", "LLM_MODEL", "gpt-4o") takes the
+# file first, as a quoted path or a name, so its setting is the second argument.
+_SETS_THE_ENVIRONMENT = re.compile(
+    r"\b(?:(?:[Ss]etenv|putenv|set_var|SetEnvironmentVariable)\s*\("
+    r"|set_key\s*\(\s*(?:([\"'])[^\"'\n,()]*\1|[\w.]+)\s*,)\s*\Z"
+)
+# How far before a setting's opening quote that call is looked for.
+_SETS_THE_ENVIRONMENT_REACH = 160
+# A pydantic field whose default comes first and whose setting is named after it:
+# Field("gpt-4o", alias="OPENAI_MODEL"), Field(default="gpt-4o", env="OPENAI_MODEL").
+_DEFAULT_BEFORE = re.compile(
+    r"\(\s*(?:default\s*=\s*)?([\"'])([^\"'\n]*)\1\s*,[^()]*?"
+    r"\b(?:alias|env|validation_alias)\s*=\s*([\"'])"
+)
+
+
+def names_a_credential(setting: str) -> bool:
+    """Whether an environment variable's name is shaped like a credential's: a word in it that
+    marks a secret (DB_PASS, LLM_PASSPHRASE, OPENAI_API_KEY; see _SECRET_ENDINGS), or a name the
+    credential scan asks for as a secret."""
+    return _has_secret_words(setting) or secret_name(setting.upper())
+
+
+def _names_a_models_setting(setting: str) -> bool:
+    """Whether ``setting`` can be where a model is read from: an environment variable's name in
+    capitals that names a model by its words and holds nothing that marks a secret."""
+    return is_a_setting_name(setting) and _names_a_model(f"{setting}=")
+
+
+def _masked(name: str) -> bool:
+    """Whether the credential scan the stored document is cleaned with would mask any of
+    ``name``: a known key or token shape is never recorded as a model."""
+    refused: list[str] = []
+    hits: list[str] = []
+    return _redact_text(name, refused, hits) != name or bool(refused or hits)
+
+
+def _strings(line: str, comment: int, inside: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The quoted strings on ``line`` before its comment and outside its text stretches, as
+    (where the opening quote is, just after the closing one). An apostrophe or quote that nothing
+    closes is a character: once one fails, no later one of its kind is tried, so a line costs
+    about one pass."""
+    strings: list[tuple[int, int]] = []
+    unclosed: set[str] = set()
+    stretches = iter(inside)
+    stretch = next(stretches, None)
+    at = 0
+    while at < comment:
+        while stretch is not None and stretch[1] <= at:
+            stretch = next(stretches, None)
+        if stretch is not None and stretch[0] <= at:
+            at = stretch[1]
+            continue
+        char = line[at]
+        if stretch is not None and line.startswith(char * 3, at) and stretch[0] == at + 3:
+            # A triple quote opening a text stretch: passed over with its closing quotes.
+            at = stretch[1] + 3
+            continue
+        if char in _QUOTES and char not in unclosed:
+            close = at + 1
+            while True:
+                close = line.find(char, close, comment)
+                if close < 0:
+                    break
+                slashes = 0
+                while line[close - 1 - slashes] == "\\":
+                    slashes += 1
+                if slashes % 2 == 0:
+                    break
+                close += 1
+            if close >= 0:
+                strings.append((at, close + 1))
+                at = close + 1
+                continue
+            unclosed.add(char)
+        at += 1
+    return strings
+
+
+def _open_brackets(line: str, comment: int, strings: list[tuple[int, int]], inside) -> int:
+    """How many more brackets ``line`` opens than it closes, outside its strings, its comment and
+    its text stretches."""
+    depth = 0
+    skipped = sorted([*strings, *inside])
+    at = 0
+    for start, end in [*skipped, (comment, comment)]:
+        piece = line[at:max(at, min(start, comment))]
+        depth += sum(piece.count(one) for one in "([{") - sum(piece.count(one) for one in ")]}")
+        at = max(at, end)
+        if at >= comment:
+            break
+    return depth
+
+
+def _statement(
+    lines: list[str], index: int, scanned: tuple[int, list[tuple[int, int]], str | None], scan
+) -> tuple[str, list[tuple[int, int, list[tuple[int, int]], list[tuple[int, int]]]]]:
+    """The statement the cited line (``lines[index]``, already scanned) starts: that line, and
+    the ones after it while the brackets it opens stay open, at most _STATEMENT_LINES more. Given
+    as the lines joined by line breaks, and for each line where it starts in the joined text,
+    where its comment starts, its text stretches and its strings."""
+    parts: list[str] = []
+    spans = []
+    offset = 0
+    comment, inside, block = scanned
+    at = index
+    depth = 0
+    while True:
+        line = lines[at]
+        strings = _strings(line, comment, inside)
+        parts.append(line)
+        spans.append((offset, comment, inside, strings))
+        offset += len(line) + 1
+        depth += _open_brackets(line, comment, strings, inside)
+        at += 1
+        if depth <= 0 or at >= len(lines) or at - index > _STATEMENT_LINES:
+            break
+        comment, inside, block = _line_scan(lines[at], block, **scan)
+    return "\n".join(parts), spans
+
+
+_BRACKET = re.compile(r"[()\[\]{}]")
+
+
+_RESULT_WORDS = ("return", "default", "yield")
+
+
+def _after_a_result_word(text: str, last: int) -> bool:
+    """Whether ``text`` up to ``last`` ends in return, default or yield as a whole word (return {,
+    export default {), not the end of a longer name."""
+    for word in _RESULT_WORDS:
+        start = last - len(word) + 1
+        if (
+            start >= 0
+            and text.startswith(word, start)
+            and (
+                start == 0
+                or not (text[start - 1].isalnum() or text[start - 1] in "_.$")
+            )
+        ):
+            return True
+    return False
+
+
+# A struct literal's first key after the { that follows its type's name (Rust's Config {
+# model: …, Go's Config{ model: …}): a name or a quoted name, then one : (not ::, not :=).
+_FIRST_KEY = re.compile(r'(?:[A-Za-z_]\w*|"[^"\n]*")[ \t]*:(?![:=])')
+
+
+def _opens_a_struct_literal(text: str, at: int) -> bool:
+    """Whether the { at ``at``, straight after a word, opens a struct literal: its first line,
+    past spaces and line comments, is a key (``model: "gpt-4o"``), not code (``fn``, ``val``,
+    ``stt :=``, ``model = …``). Looks only at the spaces after the { and a few characters past
+    them."""
+    after = at + 1
+    while after < len(text):
+        if text[after] in " \t\r\n":
+            after += 1
+        elif text.startswith("//", after):
+            stop = text.find("\n", after)
+            after = len(text) if stop < 0 else stop
+        else:
+            break
+    return bool(_FIRST_KEY.match(text, after, after + 200))
+
+
+def _brackets(
+    text: str, skipped: list[tuple[int, int]]
+) -> Iterator[tuple[int, str, bool]]:
+    """Each bracket of ``text`` outside ``skipped`` (in order, merged), in order, with whether it
+    holds arguments or a value: ( and [ always, { only after ( [ { , = or : or the words return,
+    default or yield (a literal given as an argument, a value or a result), or after a type's
+    name when its first line is a key (a struct literal), never a { that opens a block (a
+    function, class or method body). The look-back passes over the spaces before a {, and the
+    look-ahead over the spaces after it, each once, so a text costs about its length."""
+    ranges = iter(skipped)
+    current = next(ranges, None)
+    for found in _BRACKET.finditer(text):
+        at = found.start()
+        while current is not None and current[1] <= at:
+            current = next(ranges, None)
+        if current is not None and current[0] <= at:
+            continue
+        char = text[at]
+        holds = True
+        if char == "{":
+            before = at - 1
+            while before >= 0 and text[before] in " \t\r\n":
+                before -= 1
+            holds = before >= 0 and (
+                text[before] in "([{,=:"
+                or _after_a_result_word(text, before)
+                or (
+                    (text[before].isalnum() or text[before] == "_")
+                    and _opens_a_struct_literal(text, at)
+                )
+            )
+        yield at, char, holds
+
+
+# What starts a lambda's or closure's body on the line of its {: its parameters, then -> (Kotlin,
+# Groovy) or in (Swift).
+_LAMBDA_PARAMETERS = re.compile(
+    r"\s*(?:\([^()\n]*\)|[\w$][\w$ \t,:<>?.\[\]]*?)\s*(?:->|\bin\b)"
+)
+# A statement opening a { that is given as a value: a closure's body, not a literal's key.
+_FIRST_STATEMENT = re.compile(
+    r"(?:val|var|let|const|def|fun|func|return|if|for|while|switch|try|await|throw)\b(?!\s*:)"
+)
+# A Python lambda's parameters up to its colon.
+_LAMBDA_HEAD = re.compile(r"\blambda\b[\w \t,*=]*$")
+
+
+def _opens_a_body(text: str, at: int, char: str, holds: bool) -> bool:
+    """Whether the bracket at ``at`` opens code rather than a literal or a call's arguments: a
+    block's { (a function or method body), a lambda's or closure's { (``{ ctx ->``, ``{ ctx in``,
+    or one whose first line is a statement such as ``val llm = …``), or the call a Python lambda
+    returns (``on_start=lambda: LLM(``). Each step looks at a few characters beside the bracket,
+    or the spaces after a {, so a text costs about its length."""
+    if char == "{":
+        if not holds:
+            return True
+        end = text.find("\n", at + 1)
+        end = len(text) if end < 0 else end
+        if _LAMBDA_PARAMETERS.match(text, at + 1, min(end, at + 200)):
+            return True
+        after = at + 1
+        while after < len(text):
+            if text[after] in " \t\r\n":
+                after += 1
+            elif text.startswith("//", after) or text[after] == "#":
+                stop = text.find("\n", after)
+                after = len(text) if stop < 0 else stop
+            else:
+                break
+        return bool(_FIRST_STATEMENT.match(text, after, after + 40))
+    before = at - 1
+    while before >= 0 and (text[before].isalnum() or text[before] in "_."):
+        before -= 1
+    while before >= 0 and text[before] in " \t":
+        before -= 1
+    return (
+        before >= 0
+        and text[before] == ":"
+        and bool(_LAMBDA_HEAD.search(text, max(0, before - 80), before))
+    )
+
+
+def _enclosing_statement(
+    lines: list[str], index: int, block: str | None, scan
+) -> tuple[str, list[tuple[int, int, list[tuple[int, int]], list[tuple[int, int]]]], int] | None:
+    """The statement the cited line (``lines[index]``) sits inside, when a call or a literal
+    opened on one of the _STATEMENT_LINES lines before it is still open there (a call wrapped
+    over lines, cited on one of its arguments): as _statement gives it from the line that bracket
+    opened on, with where the cited line starts in it. A block left open there (a function or
+    class body) is not one. None when no such bracket is open. ``block`` is the block open where
+    the first of those lines starts. Each line is scanned once, so this costs about the length
+    of those lines."""
+    first = max(0, index - _STATEMENT_LINES)
+    if first == index:
+        return None
+    scans: dict[int, tuple[int, list[tuple[int, int]], str | None]] = {}
+    spans = []
+    offset = 0
+    for at in range(first, index):
+        line = lines[at]
+        scans[at] = comment, inside, block = _line_scan(line, block, **scan)
+        spans.append((offset, comment, inside, _strings(line, comment, inside)))
+        offset += len(line) + 1
+    before = "\n".join(lines[first:index])
+    skipped, _ = _skipped(before, spans)
+    open_at: list[tuple[int, bool]] = []
+    for at, char, holds in _brackets(before, skipped):
+        if char in "([{":
+            open_at.append((at, holds))
+        elif open_at:
+            open_at.pop()
+    opened = next((at for at, holds in open_at if holds), None)
+    if opened is None:
+        return None
+    start = first + before.count("\n", 0, opened)
+    text, statement_spans = _statement(lines, start, scans[start], scan)
+    shift = sum(len(lines[at]) + 1 for at in range(start, index))
+    if len(statement_spans) <= index - start:
+        return None
+    return text, statement_spans, shift
+
+
+def _written_in_the_call_read_in(
+    text: str, spans, setting: str, reads: list[tuple[int, int, bool]], shift: int
+) -> int | None:
+    """Where the statement (``text`` and its lines' ``spans``) writes a model as a quoted value
+    into a call or literal that holds a read of ``setting`` and was opened before the cited line
+    (which starts at ``shift``), or None: a ChatOpenAI( call wrapped over lines, given
+    model="gpt-4o" on one and timeout=os.getenv("LLM_TIMEOUT") on the next, does. A model inside
+    another call beside the read (an Agent( given stt=STT(model="nova-3") on one line and
+    llm=LLM(os.getenv("LLM_MODEL")) on the next) is another component's and doesn't count. Any
+    call or literal around the read that opened before the cited line counts, not only the
+    nearest: ChatOpenAI( given model="gpt-4o", then http_client=Client( holding the read, but
+    none outside a body around the read (a method, lambda or closure given in the literal). One
+    pass over the statement. In a { only a key of that literal counts (after the { or a comma,
+    as model: or "model":, or model= on the same line), not a statement in a body that opens
+    after = or : (Scala's def run(): Unit = {, a case "voice": {, an assigned lambda) holding
+    val model = "nova-3": that is a constant beside the read, not a model given with it."""
+    values: list[int] = []
+    keyed: set[int] = set()
+    # Comments, from where each ends to where it starts, so the look-back before a key passes
+    # over them as it does over spaces: a comment line between a { and its "model": key.
+    comments: dict[int, int] = {}
+    for offset, comment, inside, _ in spans:
+        end = offset + len(_span_line(text, offset))
+        if offset + comment < end:
+            comments[end - 1] = offset + comment
+        for start, stop in inside:
+            # A block comment's stretch stops before its */.
+            closed = text.startswith("*/", offset + stop)
+            comments[offset + stop + (1 if closed else -1)] = offset + start
+    for offset, comment, _, _ in spans:
+        line = _span_line(text, offset)[:comment]
+        for found in _MODEL_VALUE.finditer(line):
+            if setting in found.group(3):
+                continue
+            at = offset + found.start()
+            values.append(at)
+            before = at - 1
+            while before >= 0:
+                if text[before] in " \t\r\n":
+                    before -= 1
+                elif before in comments:
+                    before = comments[before] - 1
+                else:
+                    break
+            if before >= 0 and text[before] in "{,":
+                colon = _KEY_SEPARATOR.search(found.group(0)).group() == ":"
+                if colon or "\n" not in text[before:at]:
+                    keyed.add(at)
+    if not values:
+        return None
+    skipped, _ = _skipped(text, spans)
+    points = sorted([(at, 0) for at in values] + [(read, 1) for read, _, _ in reads])
+    marks = heapq.merge(
+        ((at, 2, char, holds) for at, char, holds in _brackets(text, skipped)),
+        ((at, kind, "", False) for at, kind in points),
+    )
+    # The open brackets, whether each holds arguments or a value, how many of them opened before
+    # the cited line (always the first ones), and how many of the first ones are around a read:
+    # those count, each as it closes, so no read walks the brackets still open. A read inside a
+    # body (a method, a lambda) given in a literal or call is the body's code, not that literal's
+    # value, so the brackets outside the innermost body around a read (``bodies``) don't count
+    # for it: from ``floor`` up.
+    stack: list[int] = []
+    braces: list[bool] = []
+    holding: list[bool] = []
+    bodies: list[int] = []
+    earlier = 0
+    around = 0
+    floor = len(text)
+    value_in: list[tuple[int, int]] = []
+    calls: set[int] = set()
+    for at, kind, char, holds in marks:
+        if kind == 2:
+            if char in "([{":
+                if _opens_a_body(text, at, char, holds):
+                    # A call a lambda returns is a body only around a read inside it, not as
+                    # the read itself: lambda: os.getenv("LLM_MODEL") is the read given as a
+                    # value, as llm=os.getenv("LLM_MODEL") is.
+                    bodies.append(len(stack) if char == "{" else -len(stack) - 1)
+                stack.append(at)
+                braces.append(char == "{")
+                holding.append(holds)
+                if at < shift:
+                    earlier = len(stack)
+            elif stack:
+                if floor < len(stack) <= around and holding[-1]:
+                    calls.add(stack[-1])
+                stack.pop()
+                braces.pop()
+                holding.pop()
+                if bodies and bodies[-1] in (len(stack), -len(stack) - 1):
+                    bodies.pop()
+                earlier = min(earlier, len(stack))
+                around = min(around, len(stack))
+        elif kind == 0:
+            if stack and (not braces[-1] or at in keyed):
+                value_in.append((stack[-1], at))
+        else:
+            around = max(around, earlier)
+            inner = next(
+                (
+                    index if index >= 0 else -index - 1
+                    for index in reversed(bodies[-2:])
+                    if index >= 0 or -index - 1 < len(stack) - 1
+                ),
+                0,
+            )
+            floor = min(floor, inner)
+    calls.update(stack[index] for index in range(floor, around) if holding[index])
+    return next((at for bracket, at in value_in if bracket in calls), None)
+
+
+def _reads_on_line(
+    line: str,
+    comment: int,
+    inside: list[tuple[int, int]],
+    strings: list[tuple[int, int]],
+    names: Iterator[tuple[int, int]],
+) -> Iterator[tuple[int, int, bool]]:
+    """Which of ``names`` (where a name starts and ends on ``line``, in the order of the line)
+    are reads of that name: written whole (no name character on either side), outside the
+    comment and the text stretches, and either outside a string, a string by itself
+    ("OPENAI_MODEL"), or a shell or template variable in one ("${OPENAI_MODEL:-gpt-4o}"). Not
+    where it is a name being set: before = (not == or =>), :=, or a : that isn't :- or :: (a
+    constant, a key, an annotation, a keyword argument), or the first argument of a call that
+    sets the environment (os.Setenv("X", ...), setenv, putenv); and not bare unless read off
+    something (after .) or a shell variable ($X, ${X}, whose ${X:=d} and ${X=d} are reads with a
+    default). A bare name passed to a call (os.environ.get(X), GenerativeModel(X)) is a constant
+    of the code, read where the constant is written. As (start, end, shell), ``end`` after a
+    closing quote when the name is one string. The stretches and strings are walked alongside, so
+    a line costs about one pass."""
+    stretches = iter(inside)
+    stretch = next(stretches, None)
+    quoted = iter(strings)
+    string = next(quoted, None)
+    for at, end in names:
+        if at >= comment:
+            return
+        while stretch is not None and stretch[1] <= at:
+            stretch = next(stretches, None)
+        while string is not None and string[1] <= at:
+            string = next(quoted, None)
+        if (at and line[at - 1] in _NAME_CHAR) or (end < len(line) and line[end] in _NAME_CHAR):
+            continue
+        if stretch is not None and stretch[0] <= at:
+            continue
+        in_string = string is not None and string[0] < at
+        shell = line[max(0, at - 2) : at] == "${"
+        variable = shell or line[at - 1 : at] == "$"
+        if in_string and string == (at - 1, end + 1):
+            if _SETS_THE_ENVIRONMENT.search(
+                line, max(0, at - _SETS_THE_ENVIRONMENT_REACH), at - 1
+            ):
+                continue
+            end += 1
+            in_string = False
+        elif not variable:
+            if in_string:
+                continue
+            # Bare, it is read from the environment only off something (process.env.X,
+            # settings.X): elsewhere it is a constant of the code (model=OPENAI_MODEL,
+            # os.environ.get(MODEL_VAR)), whose value is written where the constant is set.
+            if not _read_off_something(line, at):
+                continue
+        after = end
+        while after < len(line) and line[after] in " \t":
+            after += 1
+        rest = line[after : after + 2]
+        if not shell and (
+            (rest[:1] == "=" and rest not in ("==", "=>"))
+            or (rest[:1] == ":" and rest not in (":-", "::"))
+        ):
+            continue
+        yield at, end, shell
+
+
+def _occurrences(line: str, name: str, comment: int) -> Iterator[tuple[int, int]]:
+    at = line.find(name, 0, comment)
+    while at >= 0:
+        yield at, at + len(name)
+        at = line.find(name, at + len(name), comment)
+
+
+def _reads(text: str, spans, setting: str) -> list[tuple[int, int, bool]]:
+    """Where the statement (``text``, its lines' ``spans`` as _statement gives them) reads
+    ``setting``, as _reads_on_line gives each read, placed in ``text``."""
+    found = []
+    for offset, comment, inside, strings in spans:
+        line_end = text.find("\n", offset)
+        line = text[offset : len(text) if line_end < 0 else line_end]
+        found.extend(
+            (offset + start, offset + end, shell)
+            for start, end, shell in _reads_on_line(
+                line, comment, inside, strings, _occurrences(line, setting, comment)
+            )
+        )
+    return found
+
+
+def _is_the_default(
+    text: str, read: tuple[int, int, bool], name: str, *, next_argument: bool = True
+) -> bool:
+    """Whether ``name`` is the default written for the setting read at ``read``: the next
+    argument (unless ``next_argument`` is False) or a fallback after it, in quotes, or a shell
+    default (${X:-gpt-4o}, ${X-gpt-4o}, ${X:=gpt-4o}, ${X=gpt-4o})."""
+    _, end, shell = read
+    if shell:
+        return any(
+            text.startswith(f"{form}{name}}}", end) for form in (":-", "-", ":=", "=")
+        )
+    after = _DEFAULT_AFTER.match(text, end)
+    if after is None or (not next_argument and text[end:after.start(1)].strip() == ","):
+        return False
+    start = after.end()
+    return text.startswith(name, start) and text.startswith(after.group(1), start + len(name))
+
+
+def _is_the_field_default(text: str, reads: list[tuple[int, int, bool]], name: str) -> bool:
+    """Whether a pydantic field gives ``name`` as the default of a setting read at ``reads``:
+    Field("gpt-4o", alias="OPENAI_MODEL")."""
+    starts = {start for start, _, _ in reads}
+    return any(
+        found.group(2) == name and found.end() in starts
+        for found in _DEFAULT_BEFORE.finditer(text)
+    )
+
+
+def _whose_default(line: str, comment: int, inside: list[tuple[int, int]], name: str) -> list[str]:
+    """The names on ``line`` that ``name`` is written as the default of, in the order of the
+    line: each name read there (as _reads_on_line has it) followed by a default form and then
+    ``name``. Each step looks at a few characters beside a name, so a line costs about one
+    pass."""
+    strings = _strings(line, comment, inside)
+    names = ((found.start(), found.end()) for found in _ANY_CASE_NAME.finditer(line, 0, comment))
+    return [
+        line[start : end - 1 if line[end - 1] in _QUOTES else end]
+        for start, end, shell in _reads_on_line(line, comment, inside, strings, names)
+        # A name read off something and then another argument is a value passed beside the
+        # model (make_llm(settings.OPENAI_API_KEY, "gpt-4o")), not a lookup's default.
+        if _is_the_default(
+            line, (start, end, shell), name, next_argument=not _read_off_something(line, start)
+        )
+    ]
+
+
+# The keys a model is given under: model="gpt-4o", "model": "gpt-4o", model_name=, model_id=,
+# deployment_name=, azure_deployment=, engine= (older OpenAI clients), modelName: and modelId:
+# (TypeScript clients).
+_MODEL_KEY_NAMES = frozenset(
+    {
+        "model",
+        "model_name",
+        "model_id",
+        "deployment_name",
+        "azure_deployment",
+        "engine",
+        "modelName",
+        "modelId",
+    }
+)
+_MODEL_KEYS = "|".join(sorted(_MODEL_KEY_NAMES, key=len, reverse=True))
+# A model written as a value in a statement: model="gpt-4o", "model": "gpt-4o", model: gpt-4o
+# in quotes. The quoted value is group 3.
+_MODEL_VALUE = re.compile(
+    rf"""(?<!\w)(["']?)(?:{_MODEL_KEYS})\1\s*(?::|=(?!=))\s*(["'`])([^"'`\n]*)\2"""
+)
+# Any key a value is given under, from where it starts: timeout=, "timeout":, model:. Not ==,
+# =>, :=, ::, :- (a comparison, an arrow, an assignment, a path, a shell default).
+# Where a model value's key ends and its value begins: the first : or = after the key.
+_KEY_SEPARATOR = re.compile(r"[:=]")
+_ANY_KEY = re.compile(r"""(["']?)([A-Za-z_]\w*)\1\s*(?::(?![:=\-])|=(?![=>]))""")
+# What the walk in _owners looks at outside strings and comments: names, brackets, the commas
+# and semicolons that end a value, and line breaks.
+_KEY_TOKEN = re.compile(r"[A-Za-z_]\w*|[()\[\]{},;\n]")
+
+
+def _skipped(text: str, spans) -> tuple[list[tuple[int, int]], list[int]]:
+    """Where in the statement (``text`` and its lines' ``spans``, as _statement gives them) the
+    walk in _owners passes over: each line's strings, text stretches and comment, in order and
+    merged; and where each string starts, since a quoted key ("model": ...) is a string."""
+    ranges: list[tuple[int, int]] = []
+    starts: list[int] = []
+    for offset, comment, inside, strings in spans:
+        end = text.find("\n", offset)
+        end = len(text) if end < 0 else end
+        for start, stop in strings:
+            if start < comment:
+                ranges.append((offset + start, offset + stop))
+                starts.append(offset + start)
+        ranges.extend((offset + start, offset + stop) for start, stop in inside)
+        if offset + comment < end:
+            ranges.append((offset + comment, end))
+    merged: list[tuple[int, int]] = []
+    for start, stop in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], stop))
+        else:
+            merged.append((start, stop))
+    return merged, sorted(starts)
+
+
+def _owners(text: str, spans, positions: list[int]) -> dict[int, bool]:
+    """For each of ``positions`` in the statement (``text`` and its lines' ``spans``), whether
+    the key whose value most closely holds it is a model's key: llm=LLM(model=os.getenv("X"))
+    gives X to model, ChatOpenAI(model="gpt-4o", timeout=os.getenv("X")) gives X to timeout,
+    and Agent(model=ChatOpenAI(timeout=os.getenv("X"))) gives it to timeout too. A key holds
+    what follows it up to the comma, the semicolon or the closing bracket that ends its value;
+    at the statement's own level a line break ends it as well. A name given = there
+    (model = ChatOpenAI(...)) is assigned to, and one after a dot (self.model = ...) is an
+    attribute: neither is a model's key, but either still holds what follows it. One pass over
+    the statement, so a statement costs about its length."""
+    skipped, string_starts = _skipped(text, spans)
+    events: list[tuple[int, int, int]] = [(at, 0, 0) for at in positions]
+    events.extend((at, 1, 0) for at in string_starts)
+    ranges = iter(skipped)
+    current = next(ranges, None)
+    for token in _KEY_TOKEN.finditer(text):
+        at = token.start()
+        while current is not None and current[1] <= at:
+            current = next(ranges, None)
+        if current is not None and current[0] <= at:
+            continue
+        events.append((at, 2, 0))
+    events.sort()
+    # Per open bracket, whether the key holding its value is a model's (None when no key holds
+    # it), and beside it the nearest of those at or below it that has a key, so a read finds
+    # its owner without walking the brackets still open.
+    held: list[bool | None] = [None]
+    nearest: list[bool | None] = [None]
+    owners: dict[int, bool] = {}
+
+    def hold(model: bool | None) -> None:
+        held[-1] = model
+        nearest[-1] = nearest[-2] if model is None and len(nearest) > 1 else model
+
+    def give(key: re.Match[str], at: int) -> None:
+        before = at - 1
+        while before >= 0 and text[before] in " \t":
+            before -= 1
+        attribute = before >= 0 and text[before] == "."
+        assigned = text[key.end() - 1] == "=" and len(held) == 1
+        hold(key.group(2) in _MODEL_KEY_NAMES and not attribute and not assigned)
+
+    for at, kind, _ in events:
+        if kind == 0:
+            owners[at] = bool(nearest[-1])
+        elif kind == 1:
+            key = _ANY_KEY.match(text, at)
+            if key and key.group(1):
+                give(key, at)
+        else:
+            char = text[at]
+            if char in "([{":
+                held.append(None)
+                nearest.append(nearest[-1])
+            elif char in ")]}":
+                if len(held) > 1:
+                    held.pop()
+                    nearest.pop()
+                else:
+                    hold(None)
+            elif char in ",;" or (char == "\n" and len(held) == 1):
+                hold(None)
+            elif char.isalpha() or char == "_":
+                if at and (text[at - 1].isalnum() or text[at - 1] == "_"):
+                    continue
+                key = _ANY_KEY.match(text, at)
+                if key and not key.group(1):
+                    give(key, at)
+    return owners
+
+
+def _is_the_models_value(text: str, spans, reads: list[tuple[int, int, bool]]) -> bool:
+    """Whether a read of the setting at ``reads`` is itself what a model's key in the statement
+    is given, so other models written beside it (stt=STT(model="nova-3")) are not the agent's."""
+    owners = _owners(text, spans, [read for read, _, _ in reads])
+    return any(owners.get(read, False) for read, _, _ in reads)
+
+
+def _span_line(text: str, offset: int) -> str:
+    end = text.find("\n", offset)
+    return text[offset : len(text) if end < 0 else end]
+
+
+_STATEMENT_END = re.compile(r"[()\[\]{};]")
+
+
+def _part_holding(text: str, spans, at: int) -> tuple[int, int]:
+    """Where the part of the statement (``text`` and its lines' ``spans``) that holds ``at``
+    starts and ends: the statement cut at each ; outside its strings, comments and brackets.
+    llm = os.getenv("LLM_MODEL"); stt = STT(model="nova-3") is two parts. One pass."""
+    skipped, _ = _skipped(text, spans)
+    ranges = iter(skipped)
+    current = next(ranges, None)
+    depth = 0
+    start, end = 0, len(text)
+    for found in _STATEMENT_END.finditer(text):
+        where = found.start()
+        while current is not None and current[1] <= where:
+            current = next(ranges, None)
+        if current is not None and current[0] <= where:
+            continue
+        char = text[where]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if where < at:
+                start = where + 1
+            else:
+                end = where
+                break
+    return start, end
+
+
+def _writes_a_model(
+    text: str, spans, setting: str, part: tuple[int, int] | None = None
+) -> int | None:
+    """Where the statement (``text`` and its lines' ``spans``, as _statement gives them) writes
+    a model as a quoted value after model= or model: outside its comments, one that doesn't read
+    ``setting`` (model: "${OPENAI_MODEL:-gpt-4o}" does), or None: ChatOpenAI(model="gpt-4o",
+    timeout=os.getenv("LLM_TIMEOUT")) reads LLM_TIMEOUT beside the model. Only in ``part`` (where
+    it starts and ends) when given: a model after a ; is another statement's."""
+    start, end = part if part is not None else (0, len(text))
+    for offset, comment, _, _ in spans:
+        line = _span_line(text, offset)[:comment]
+        for found in _MODEL_VALUE.finditer(line):
+            if setting not in found.group(3) and start <= offset + found.start() < end:
+                return offset + found.start()
+    return None
+
+
+def _read_off_something(line: str, start: int) -> bool:
+    """Whether the name starting at ``start`` is bare and read off something (settings.X)."""
+    before = start - 1
+    while before >= 0 and line[before] in " \t":
+        before -= 1
+    return before >= 0 and line[before] == "."
+
+
+def _blanked_outside(line: str, offset: int, part: tuple[int, int]) -> str:
+    """``line`` (starting at ``offset`` in its statement) with what lies outside ``part`` of the
+    statement turned to spaces, so the line keeps its length and its scanned offsets."""
+    start, end = part[0] - offset, part[1] - offset
+    if start <= 0 and end >= len(line):
+        return line
+    start, end = max(0, start), min(len(line), max(0, end))
+    return " " * start + line[start:end] + " " * (len(line) - end)
+
+
+def _written_beside(
+    text: str,
+    spans,
+    outer: str,
+    outer_spans,
+    outer_reads,
+    shift: int,
+    reads,
+    setting: str,
+    beside: str,
+    named,
+) -> int | None:
+    """How many lines after the cited one (before it, when negative) a model is written beside
+    the setting's read, or None. ``outer`` is ``text`` (the cited statement) itself unless the
+    cited statement sits inside a wrapped call, which then starts ``shift`` before it. Written:
+    as a value in the cited statement's part that holds the read, in a call or literal around the
+    read, or, given ``beside`` (a name refused with the setting), named on one of its lines, the
+    cited statement cut at its ; as for a value. ``named`` says whether a line names ``beside``."""
+    if _is_the_models_value(outer, outer_spans, outer_reads):
+        return None
+    part = _part_holding(text, spans, reads[0][0]) if reads else None
+    at = _writes_a_model(text, spans, setting, part)
+    if at is not None:
+        return text.count("\n", 0, at)
+    cited = outer.count("\n", 0, shift)
+    if outer is not text:
+        at = _written_in_the_call_read_in(
+            outer, outer_spans, setting, outer_reads, shift
+        )
+        if at is not None:
+            return outer.count("\n", 0, at) - cited
+    if beside:
+        for offset, comment, inside, _ in outer_spans:
+            line = _span_line(outer, offset)
+            if outer is text and part is not None:
+                line = _blanked_outside(line, offset, part)
+            if named(line, offset, (comment, inside)):
+                return outer.count("\n", 0, offset) - cited
+    return None
+
+
+def model_problems(
+    contract: AgentContract,
+    source_root: Path,
+    *,
+    beside: str = "",
+    resolved_paths: dict[str, Path | None] | None = None,
+) -> list[str]:
+    """Problems with contract.model, checked against the cited line. On success, strips name,
+    provider and setting and stores path as the resolved file relative to the root, in POSIX
+    form. Resolves one path (charged to the save's budget) and reads at most one file.
+
+    With a setting, the setting must name a model (capitals, a model's word, nothing secret),
+    the statement the cited line starts must read it (written there outside comments and text,
+    not as a name being set), and the name, when given, is the default written for it there. A
+    setting shaped like a credential, a name that is a credential's default, or a name the
+    credential scan would mask is refused: a credential's default is a placeholder or a leak,
+    never a model. A name given alone that is the default of a model's setting on the line is
+    refused once, asking for the setting. A setting whose statement writes the model as a value
+    (model="gpt-4o") is read beside the model, not as it, and is refused. ``beside`` is a name
+    refused with the setting: when the statement writes it as a value, the setting is refused
+    too. ``resolved_paths`` keeps where each path resolved, so a second check in the same save
+    resolves nothing again."""
     model = contract.model
     if model is None:
         return []
     name, provider, path = model.name.strip(), model.provider.strip(), model.path.strip()
-    shown_name, shown_path = name[:100], path[:200]
+    setting = model.setting.strip()
+    shown_name, shown_path, shown_setting = name[:100], path[:200], setting[:100]
     problems: list[str] = []
-    if not name:
+    setting_shape = (
+        "model: setting is the name of an environment variable as the code reads it: capital "
+        "letters, digits and _, not starting with a digit, at most 255 characters; or leave "
+        "setting out"
+    )
+    if setting and (len(setting) > LONGEST_SETTING or not _ANY_CASE_NAME.fullmatch(setting)):
+        problems.append(setting_shape)
+    elif setting and _masked(setting):
+        # Never echoed: the credential scan would mask it.
         problems.append(
-            "model: name is empty; give the model's name as written in the source, or leave "
+            "model: the setting is shaped like a credential, which is never recorded; leave "
             "model out"
         )
+    elif setting and names_a_credential(setting):
+        # Neither the setting nor a default for it is recorded: a credential's default is a
+        # placeholder or a leak, and the page would show it.
+        problems.append(
+            f"model: {shown_setting} names a credential, not the model; leave model out"
+        )
+    elif setting and not is_a_setting_name(setting):
+        # In lowercase it is a key or an argument's name (kwargs.get("model")), and the page would
+        # say "Set by model".
+        problems.append(setting_shape)
+    elif setting and not _names_a_models_setting(setting):
+        # A setting read beside the model (AWS_REGION, TEMPERATURE) is not where it comes from.
+        problems.append(
+            f"model: {shown_setting} is not a model's setting: its name has none of MODEL, "
+            "DEPLOYMENT or LLM; give the setting the model is read from, or leave setting out"
+        )
+    if not name:
+        if not setting:
+            problems.append(
+                "model: name is empty; give the model's name as written in the source, or the "
+                "setting it is read from as setting, or leave model out"
+            )
     elif not MODEL_NAME_CHARS.issuperset(name):
         problems.append(
             "model: a model name is letters, digits and . _ : / @ -; write it as it appears in "
             "the source, or leave model out"
         )
+    elif _masked(name):
+        # Never echoed: it is shaped like a key or a token.
+        problems.append(
+            "model: the name is shaped like a credential, which is never recorded as the model; "
+            "leave model out"
+        )
     elif _reads_as_a_setting(name):
         # OPENAI_MODEL in os.getenv("OPENAI_MODEL") is where the model is read from, not which.
         problems.append(
-            f"model: {shown_name} reads as the name of a setting, not a model; cite the line its "
-            "value is written on, or leave model out"
+            f"model: {shown_name} reads as the name of a setting, not a model; give it as "
+            "setting, with the default the line gives it as name if there is one, or leave model "
+            "out"
         )
     if not MODEL_NAME_CHARS.issuperset(provider):
         problems.append(
@@ -692,7 +1588,12 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     if problems:
         return problems
     root = source_root.resolve()
-    resolved = resolved_in_source(root, path)
+    if resolved_paths is not None and path in resolved_paths:
+        resolved = resolved_paths[path]
+    else:
+        resolved = resolved_in_source(root, path)
+        if resolved_paths is not None:
+            resolved_paths[path] = resolved
     if resolved is None:
         return [f"model: {shown_path} is not a file in the source"]
     # Judged where it resolves, inside the source, before anything is opened, so a file that
@@ -726,11 +1627,14 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
             return [f"model: line {model.line} is outside {shown_path}"]
         return [f"model: line {model.line} is outside {shown_path}, which has {len(lines)} lines"]
     # In a .env file the name must be the value of the one setting that names the model, so a
-    # guess is never checked against another setting on the same line.
+    # guess is never checked against another setting on the same line. With a setting and no
+    # name, the line still has to set the model.
     if env_file and (
         not _names_a_model(lines[model.line - 1])
-        or _env_value(lines[model.line - 1]) != name
-        or _env_value_is_a_locator(name)
+        or (
+            bool(name)
+            and (_env_value(lines[model.line - 1]) != name or _env_value_is_a_locator(name))
+        )
     ):
         return [
             f"model: in a .env file, cite the line whose setting names the model (such as "
@@ -756,41 +1660,133 @@ def model_problems(contract: AgentContract, source_root: Path) -> list[str]:
     # Configuration files have no block comments, but JSON read as JSONC (appsettings.json,
     # tsconfig.json) has: outside a string, // and /* can only be comments there.
     block_comments = suffix == ".json" or not (config or suffix in _NO_BLOCK_COMMENT_SUFFIXES)
-    if not named_on(
-        lines[model.line - 1],
+    # A block open from an earlier line: a triple quote, /* where block comments are, <!--
+    # outside code and configuration.
+    opens = {
+        "triple": triple,
+        "dashes": dashes,
+        "ini": ini,
+        "hash_comments": hash_comments,
+        "block_comments": block_comments,
+        # Configuration by its suffix or its whole name: env.xml is markup. A name that is
+        # configuration by itself stays so whatever its suffix (Dockerfile.xml, .env.xml).
+        "markup": not (
+            suffix in CONFIG_SUFFIXES
+            or _names_configuration(name_lower)
+            or suffix in _NO_MARKUP_COMMENT_SUFFIXES
+        ),
+    }
+    block = block_open_before(lines, model.line - 1, **opens)
+    scan = {
+        "dashes": dashes,
+        "ini": ini,
+        "triple": triple,
+        "hash_comments": hash_comments,
+        "block_comments": block_comments,
+    }
+    cited_line = lines[model.line - 1]
+    # The cited line is scanned once, for the setting's reads and for the name.
+    scanned = _line_scan(cited_line, block, **scan)
+    comment, inside, _ = scanned
+    if setting:
+        # Any language, any helper: the setting is read where the statement writes it.
+        text, spans = _statement(lines, model.line - 1, scanned, scan)
+        reads = _reads(text, spans, setting)
+        if not reads:
+            return [
+                f"model: line {model.line} of {shown_path} doesn't read the setting "
+                f"{shown_setting}; cite the line where the code reads it, or the line that "
+                "statement starts on (a setting whose name is held in a constant is read where "
+                "the constant is written, with the name in quotes), or leave setting out"
+            ]
+        if name and not (
+            any(_is_the_default(text, read, name) for read in reads)
+            or _is_the_field_default(text, reads, name)
+        ):
+            return [
+                f"model: the name {shown_name} is not the default written on line {model.line} "
+                f"of {shown_path}; give as name the default the line gives {shown_setting}, or "
+                "leave name out if it gives none"
+            ]
+        # Cited inside a call wrapped over lines, what is beside the setting is read in the
+        # whole call: the model may be written on a line before the cited one.
+        outer, outer_spans, outer_reads, shift = text, spans, reads, 0
+        first = max(0, model.line - 1 - _STATEMENT_LINES)
+        if enclosing := _enclosing_statement(
+            lines, model.line - 1, block_open_before(lines, first, **opens), scan
+        ):
+            outer, outer_spans, shift = enclosing
+            outer_reads = [
+                (start + shift, end + shift, shell)
+                for start, end, shell in reads
+                if start + shift < len(outer)
+            ]
+        # Where the model is written beside the setting: the line it is on is the one to cite.
+        written = _written_beside(
+            text,
+            spans,
+            outer,
+            outer_spans,
+            outer_reads,
+            shift,
+            reads,
+            setting,
+            beside,
+            named=lambda line, at, scanned: named_on(
+                line,
+                beside,
+                config=config,
+                yaml=suffix in _YAML_SUFFIXES,
+                block=block if outer is text and at == 0 else None,
+                scanned=scanned,
+                **scan,
+            ),
+        )
+        if written is not None:
+            on = model.line + written
+            where = (
+                "give the name written there"
+                if on == model.line
+                else f"the model is written on line {on} of {shown_path}: give the name written "
+                f"there, citing line {on}"
+            )
+            return [
+                f"model: the statement on line {model.line} of {shown_path} writes the model as a "
+                f"value beside {shown_setting}, so {shown_setting} is not where the model comes "
+                f"from; {where}, with no setting, or leave model out"
+            ]
+    elif name and not named_on(
+        cited_line,
         name,
         config=config,
         yaml=suffix in _YAML_SUFFIXES,
-        dashes=dashes,
-        ini=ini,
-        triple=triple,
-        hash_comments=hash_comments,
-        block_comments=block_comments,
-        # A block open from an earlier line: a triple quote, /* where block comments are, <!--
-        # outside code and configuration.
-        block=block_open_before(
-            lines,
-            model.line - 1,
-            triple=triple,
-            dashes=dashes,
-            ini=ini,
-            hash_comments=hash_comments,
-            block_comments=block_comments,
-            # Configuration by its suffix or its whole name: env.xml is markup. A name that
-            # is configuration by itself stays so whatever its suffix (Dockerfile.xml, .env.xml).
-            markup=not (
-                suffix in CONFIG_SUFFIXES
-                or _names_configuration(name_lower)
-                or suffix in _NO_MARKUP_COMMENT_SUFFIXES
-            ),
-        ),
+        block=block,
+        scanned=(comment, inside),
+        **scan,
     ):
         return [
             f"model: the name {shown_name} is not the value written on line {model.line} of "
             f"{shown_path}; cite the line where it is written in quotes, or after : or = in a "
-            "configuration file, or leave model out if the name is only set at run time"
+            "configuration file; if it is only set at run time, give the setting it is read from "
+            "as setting, or leave model out"
         ]
-    model.name, model.provider = name, provider
+    owners = _whose_default(cited_line, comment, inside, name) if name and not setting else []
+    if credential := next((one for one in owners if names_a_credential(one)), None):
+        # The value is not repeated: a credential's default may be the credential.
+        named = "a setting" if _masked(credential) else credential[:100]
+        return [
+            f"model: the name given is the default of {named} on line {model.line} of "
+            f"{shown_path}, which names a credential; a credential's default is never recorded "
+            "as the model, so leave model out"
+        ]
+    if found := next((one for one in owners if _names_a_models_setting(one)), None):
+        # The original report: a setting's default shown as the model in use.
+        return [
+            f"model: {shown_name} is the default of the setting {found[:100]} on line "
+            f"{model.line} of {shown_path}; give {found[:100]} as setting and {shown_name} as "
+            "name"
+        ]
+    model.name, model.provider, model.setting = name, provider, setting
     # The file the path leads to, so a link inside the source is stored as its target.
     model.path = resolved.relative_to(root).as_posix()
     return []

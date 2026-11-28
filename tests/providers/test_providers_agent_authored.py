@@ -270,3 +270,148 @@ def test_model_goes_to_the_document() -> None:
     }
     assert "token=abc" not in json.dumps(with_url)
     assert "u:p@" not in json.dumps(with_url)
+
+
+def test_model_source_is_written_only_with_a_setting() -> None:
+    def built(model: dict) -> dict:
+        return build_authored_agent({**_chat_contract(), "model": model})
+
+    named = {
+        "provider": "anthropic",
+        "name": "vertex_ai/gemini-3.7-flash",
+        "path": "agent.py",
+        "line": 19,
+    }
+    without = built(named)
+    agent = built({**named, "setting": "ANTHROPIC_MODEL"})
+
+    # The document's model is as before: the default, when the line gives one, with four keys.
+    assert (
+        agent["model"]
+        == without["model"]
+        == {
+            "provider": "anthropic",
+            "name": "vertex_ai/gemini-3.7-flash",
+            "temperature": None,
+            "max_tokens": None,
+        }
+    )
+    assert "model_source" not in without["extension"]
+    assert agent["extension"]["model_source"] == {
+        "setting": "ANTHROPIC_MODEL",
+        "path": "agent.py",
+        "line": 19,
+    }
+    assert agent["schema_version"] == without["schema_version"] == "1.0"
+    assert agent["setup_hash"] == compute_setup_hash(agent)
+    assert agent["setup_hash"] != without["setup_hash"]
+
+    # A blank setting is no setting.
+    assert "model_source" not in built({**named, "setting": "  "})["extension"]
+
+
+def test_a_setting_with_no_default_has_no_document_model() -> None:
+    agent = build_authored_agent(
+        {
+            **_chat_contract(),
+            "model": {
+                "name": "",
+                "setting": "OPENAI_MODEL",
+                "path": "agent.py",
+                "line": 6,
+            },
+        }
+    )
+
+    assert agent["model"] is None
+    assert agent["extension"]["model_source"] == {
+        "setting": "OPENAI_MODEL",
+        "path": "agent.py",
+        "line": 6,
+    }
+
+
+def test_the_setup_hash_covers_model_source() -> None:
+    from fi.alk.providers.agent import Agent
+
+    agent = build_authored_agent(
+        {
+            **_chat_contract(),
+            "model": {
+                "name": "gpt-4o",
+                "setting": "OPENAI_MODEL",
+                "path": "agent.py",
+                "line": 6,
+            },
+        }
+    )
+    tampered = copy.deepcopy(agent)
+    tampered["extension"]["model_source"]["setting"] = "OTHER_MODEL"
+
+    with pytest.raises(ValueError, match="setup_hash_mismatch"):
+        Agent.model_validate(tampered)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "ANTHROPIC_MODEL",
+        "AZURE_OPENAI_DEPLOYMENT_NAME_FOR_THE_PRODUCTION_CHAT_ASSISTANT_V2",
+        "AKIA_MODEL",
+        "GHP_MODEL",
+        "SK_MODEL",
+        "EYJ_MODEL",
+    ],
+)
+def test_the_redaction_pass_keeps_a_setting_as_written(setting: str) -> None:
+    agent = build_authored_agent(
+        {
+            **_chat_contract(),
+            "model": {"name": "gpt-4o", "setting": setting, "path": "a.py", "line": 1},
+        }
+    )
+
+    assert agent["extension"]["model_source"]["setting"] == setting
+    assert agent["extension"]["contract"]["model"]["setting"] == setting
+
+
+def test_a_setting_the_redaction_pass_masks_is_not_written() -> None:
+    # Only an environment name is written: a setting that is not one (here a URL with a
+    # password, which the save would have refused) is never passed on masked.
+    agent = build_authored_agent(
+        {
+            **_chat_contract(),
+            "model": {
+                "name": "gpt-4o",
+                "setting": "https://u:p@h/x",
+                "path": "a.py",
+                "line": 1,
+            },
+        }
+    )
+
+    assert "model_source" not in agent["extension"]
+
+
+def test_a_setting_not_in_capitals_is_not_written() -> None:
+    # The save refuses it; the document applies the same rule to whatever it is handed.
+    agent = build_authored_agent(
+        {
+            **_chat_contract(),
+            "model": {
+                "name": "gpt-4o",
+                "setting": "model_name",
+                "path": "a.py",
+                "line": 1,
+            },
+        }
+    )
+
+    assert "model_source" not in agent["extension"]
+
+
+def test_the_document_and_the_save_share_one_setting_rule() -> None:
+    from fi.alk.harness import model_citation
+    from fi.alk.providers import agent
+
+    assert model_citation.is_a_setting_name is agent.is_a_setting_name

@@ -83,6 +83,7 @@ from .runtime_selection import (
 )
 from .model_citation import (
     model_problems,
+    names_a_credential,
     quote_pieces,
     quote_problem,
     says_something,
@@ -473,14 +474,41 @@ def _checked_against_source(
                             "fewer than 16 letters"
                         )
             stage_ended("prompt_copy", "model")
-            if cited := model_problems(contract, source_root):
+            # Where the model's path resolved, so the check made again below costs no lookups.
+            resolved_paths: dict[str, Path | None] = {}
+            if cited := model_problems(contract, source_root, resolved_paths=resolved_paths):
+                model = contract.model
+                setting = model.setting.strip() if model is not None else ""
+                # Refused twice: the reader said the model comes from a setting, so the name is
+                # never kept alone (it would be the default, shown as the model in use). The
+                # setting is kept without the name if it passes alone; otherwise the model is
+                # left out, as an unknown model is. A credential's setting always loses the whole
+                # model, so no default of it can stay.
+                droppable = bool(setting) and not names_a_credential(setting)
                 if asked is not None and "model" in asked:
-                    contract.model = None
+                    if model is not None and droppable:
+                        # A name refused with the setting and written on the line as a value
+                        # means the setting sits beside the model, so the setting goes too.
+                        refused_name, model.name = model.name.strip(), ""
+                        if model_problems(
+                            contract,
+                            source_root,
+                            beside=refused_name,
+                            resolved_paths=resolved_paths,
+                        ):
+                            contract.model = None
+                    else:
+                        contract.model = None
                 else:
                     problems.extend(cited)
                     if asked is not None:
                         asked.add("model")
-                        problems.append("model: if the model is refused again, it is left out")
+                        problems.append(
+                            "model: if the model is refused again, its name is left out and its "
+                            "setting kept if that passes alone; otherwise the model is left out"
+                            if droppable
+                            else "model: if the model is refused again, it is left out"
+                        )
             stage_ended("model", None)
         except PathLookupsSpent as spent:
             if progress is not None:
@@ -1188,6 +1216,7 @@ def contract_tools(
                     "properties": {
                         "provider": {"type": "string"},
                         "name": {"type": "string"},
+                        "setting": {"type": "string"},
                         "path": {"type": "string"},
                         "line": {"type": "integer"},
                     },
@@ -1195,9 +1224,15 @@ def contract_tools(
                     "source: provider as the source names it (openai, anthropic, google...; leave "
                     "out when it doesn't say), name exactly as written (letters, digits and "
                     ". _ : / @ - only), and the file (relative to "
-                    "the source root) and line the name is written on. One model; a voice agent's "
-                    "speech-to-text and text-to-speech models don't count. Leave model out when "
-                    "the name is only set at run time.",
+                    "the source root) and line the name is written on. When the code reads the "
+                    "model from an environment variable, in any language "
+                    "(os.getenv(\"OPENAI_MODEL\", \"gpt-4o\"), "
+                    "process.env.OPENAI_MODEL ?? \"gpt-4o\"), give the variable's name, in "
+                    "capitals, as setting, cite the line the code reads it on (where a wrapped "
+                    "call starts), and give as name the default written for it, or no name "
+                    "when it has none. One model; a voice agent's speech-to-text and "
+                    "text-to-speech models don't count. Leave model out when the name is only "
+                    "fetched from elsewhere at run time.",
                 },
                 "hard_constraints": {
                     "type": "array",

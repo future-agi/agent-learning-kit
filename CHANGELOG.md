@@ -4,6 +4,15 @@ All notable release changes for Agent Learning Kit are tracked here.
 
 ## Unreleased
 
+- The contract's `model` takes a `setting`: the environment variable the code reads the model from
+  (`OPENAI_MODEL` in `os.getenv("OPENAI_MODEL", "gpt-4o")` or `process.env.OPENAI_MODEL ?? "gpt-4o"`),
+  with `name` then only the default written for it. The save checks that the cited statement reads
+  the setting and that the name is its default, in any language, and refuses a setting or a name
+  shaped like a credential. A name given alone that is a model setting's default is refused once,
+  asking for the setting. The stored agent document carries the setting as
+  `extension.model_source` (`setting`, `path`, `line`), so the platform can say where the model is
+  set instead of showing the default as the model in use. A model with no setting is stored as
+  before, with the same setup hash.
 - A voice agent's built-in suite evals now send `agent_prompt` only when the contract save copied the
   agent's instructions whole (the new `system_prompt_copied`): the lines the reading named in the
   source, as written, or a provider agent's whole prompt from its own definition. The provider's
