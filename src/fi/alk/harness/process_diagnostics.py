@@ -4,8 +4,11 @@ import json
 import os
 import re
 import stat
+import sys
 import uuid
-from collections.abc import Iterable, Mapping
+from collections import deque
+from collections.abc import Iterable, Iterator, Mapping
+from itertools import chain
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -387,6 +390,185 @@ def mask_source_secrets(text: str, masks: Iterable[str]) -> str:
     return text
 
 
+# Only parts that are clearly volatile are ignored when comparing two records: times and durations,
+# memory addresses, uuids and hex ids, long letter-and-digit ids and long numbers. Short numbers
+# (404, 500, a line number) and names (gpt-4) are compared as written, so two different errors
+# never count as copies.
+_VOLATILE = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"
+    r"|\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b"
+    r"|\b0x[0-9a-fA-F]+\b"
+    r"|\b\d{5,}\b"
+    r"|\b\d+(?:\.\d+)?\s?(?:ms|s)\b"
+)
+# Opaque ids: hex runs that carry a digit (uuids, hashes), and letter-and-digit runs of twelve or more (job, request
+# and sandbox ids). Each alternative starts only where a run starts, so a long run is scanned once, not once per
+# position: the log is written by the tested agent and must not make this slow.
+_OPAQUE_ID = re.compile(
+    r"(?<![0-9A-Za-z-])(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b"
+    r"|(?<![A-Za-z0-9])(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{12,}(?![A-Za-z0-9])"
+)
+
+
+_CHAINED = (
+    "During handling of the above exception",
+    "The above exception was the direct cause",
+)
+
+
+def _records(lines: Iterable[str]) -> list[list[str]]:
+    """Split log lines into records (see ``_iter_records``)."""
+    return list(_iter_records(lines))
+
+
+def _iter_records(lines: Iterable[str]) -> Iterator[list[str]]:
+    """Split log lines into records, one at a time: a line with its indented continuation lines, and a Python
+    traceback kept whole from its header to its exception line, chained tracebacks included."""
+
+    record: list[str] | None = None
+    in_traceback = False
+    for line in lines:
+        indented = line[:1] in (" ", "\t")
+        if line.startswith("Traceback (most recent call last)"):
+            # Python prints a blank line between "...direct cause..." and the next traceback.
+            said = [one for one in record if one.strip()] if record else []
+            if record is not None and said and said[-1].strip().startswith(_CHAINED):
+                record.append(line)
+            else:
+                if record is not None:
+                    yield record
+                record = [line]
+            in_traceback = True
+        elif record is not None and (indented or not line.strip()):
+            record.append(line)
+        elif record is not None and line.startswith(_CHAINED):
+            record.append(line)
+        elif record is not None and in_traceback:
+            # The exception line closes the traceback.
+            record.append(line)
+            in_traceback = False
+        else:
+            if record is not None:
+                yield record
+            record = [line]
+            in_traceback = False
+    if record is not None:
+        yield record
+
+
+def _shape(record: list[str]) -> str:
+    """A record with its clearly volatile parts (times, durations, addresses, ids, long numbers) replaced, so only
+    real copies share a shape."""
+
+    # Line endings are not part of a record: the log's last line has none, and CRLF and LF are the same line.
+    text = "\n".join(one.rstrip("\r\n") for one in record)
+    return _OPAQUE_ID.sub("#", _VOLATILE.sub("#", text))
+
+
+def _collapse_repeated_lines(text: str) -> str:
+    """Collapse a record repeated back to back into its last copy, with the count of the copies before it
+    above it.
+
+    A healthy process can repeat one line many times in a row (a stream notice, a poll, a retry); left in,
+    the copies push the line that explains a failure out of the retained tail. A record is a line with its
+    indented continuation, and a Python traceback stays whole. Only consecutive copies collapse, with
+    nothing in between: a record is never collapsed across another record, and no line is moved, so every
+    record stays next to what it was written with, in any language's log format. Two records are copies when
+    they differ only in clearly volatile parts: times and durations, memory addresses, uuids and hex ids,
+    long ids and numbers of five or more digits. Short numbers and names are compared as written. The kept copy is the
+    last one, so its time is the latest. A run collapses only when its note and kept copy are shorter than the
+    run, so collapsing never makes the text longer.
+    """
+
+    return "".join(_collapsed(_iter_records(text.splitlines(keepends=True))))
+
+
+# Longer than any omission note, so a run longer than its last copy and this is sure to shrink when collapsed.
+_NOTE_ROOM = 96
+
+
+def _collapsed(records: Iterable[list[str]]) -> Iterator[str]:
+    """``_collapse_repeated_lines`` over a stream of records, holding one run's copies only while they are
+    short enough that collapsing them might not pay."""
+
+    shape: str | None = None
+    count = size = 0
+    last: list[str] = []
+    held: list[list[str]] | None = []
+    for record in chain(records, (None,)):
+        # A record written again as it was is its last copy's shape, with no need to read it again.
+        current = (shape if record == last else _shape(record)) if record is not None else None
+        if record is not None and count and current == shape:
+            count += 1
+            last = record
+            size += sum(map(len, record))
+            if held is not None:
+                held.append(record)
+                if size > sum(map(len, record)) + _NOTE_ROOM:
+                    held = None
+            continue
+        if count:
+            what = "line" if len(last) == 1 else f"{len(last)} lines"
+            note = f"[earlier copies of the next {what} omitted: {count - 1}]\n"
+            if held is not None and len(note) + sum(map(len, last)) >= size:
+                for copy in held:
+                    yield from copy
+            else:
+                yield note
+                yield from last
+        if record is None:
+            return
+        shape, count, last = current, 1, record
+        held, size = [record], sum(map(len, record))
+
+
+# How far back a log is read, and how much collapsed text is kept for the retained 8 KB tail.
+_SCANNED_BYTES = 16 * 1024 * 1024
+_KEPT_CHARS = 64 * 1024
+_BACK_CHUNK = 64 * 1024
+
+
+def _lines_before(stream, position: int) -> Iterator[tuple[str, int]]:
+    """The log's lines that end at byte ``position`` (exclusive), last first, each with where it starts; read back
+    in chunks, a line split across two chunks carried to the next."""
+    carry = b""
+    while position > 0:
+        size = min(_BACK_CHUNK, position)
+        position -= size
+        stream.seek(position)
+        buffer = stream.read(size) + carry
+        pieces = buffer.split(b"\n")
+        # The first piece may begin in an earlier chunk.
+        carry = pieces[0]
+        end = position + len(buffer)
+        for piece in reversed(pieces[1:]):
+            begins = end - len(piece)
+            yield piece.decode("utf-8", errors="replace"), begins
+            end = begins - 1
+    if carry:
+        yield carry.decode("utf-8", errors="replace"), 0
+
+
+def _scan_start(stream, size: int) -> int:
+    """Where to start reading: the last _SCANNED_BYTES, moved back past any run of one line that reaches into it
+    (it collapses to one note, so whatever came before it, the error that started it say, is kept)."""
+    offset = max(0, size - _SCANNED_BYTES)
+    if not offset:
+        return 0
+    stream.seek(offset)
+    stream.readline()
+    start = stream.tell()
+    first = stream.readline()
+    if not first:
+        return offset
+    shape = _shape([first.decode("utf-8", errors="replace")])
+    for line, begins in _lines_before(stream, start - 1):
+        if _shape([line + "\n"]) != shape:
+            break
+        start = begins
+    return max(0, start - _KEPT_CHARS)
+
+
 def retain_process_log(
     path: Path, *, work: Path, destination: Path, secrets: Mapping[str, str] | None
 ) -> None:
@@ -406,15 +588,28 @@ def retain_process_log(
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode):
                 return
-            offset = max(0, info.st_size - 65536)
+            offset = _scan_start(stream, info.st_size)
             stream.seek(offset)
-            raw = stream.read(65536)
             if offset:
                 # Drop the incomplete first record, including any split credential.
-                raw = raw.partition(b"\n")[2]
-        text = sanitize_diagnostic(
-            raw.decode("utf-8", errors="replace"), secrets, limit=65536
-        )[-8192:]
+                stream.readline()
+            # Collapse as the log streams by, before redacting (a redacted value can split lines that differ
+            # only in digits), keeping the last _KEPT_CHARS of the collapsed text in whole records: a root
+            # error followed by any amount of one repeated line survives, in bounded memory.
+            kept: deque[str] = deque()
+            held = 0
+            lines = (
+                piece
+                for raw in stream
+                for piece in raw.decode("utf-8", "replace").splitlines(True)
+            )
+            for piece in _collapsed(_iter_records(lines)):
+                kept.append(piece)
+                held += len(piece)
+                while held > _KEPT_CHARS and len(kept) > 1:
+                    held -= len(kept.popleft())
+        # All of the kept text is redacted before its tail is taken.
+        text = sanitize_diagnostic("".join(kept), secrets, limit=sys.maxsize)[-8192:]
         if not text:
             return
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
