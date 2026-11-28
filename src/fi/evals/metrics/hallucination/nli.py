@@ -2,7 +2,7 @@
 Natural Language Inference utilities for hallucination detection.
 
 Provides entailment checking between claims and context.
-Uses transformer-based NLI when available (pip install ai-evaluation[nli]),
+Uses transformer-based NLI when available (the agent-learning-kit[nli] extra),
 falls back to word-overlap heuristic with a warning.
 """
 
@@ -54,7 +54,7 @@ def _get_nli_pipeline():
         warnings.warn(
             f"Failed to load NLI model '{_NLI_MODEL}': {exc}. "
             "Falling back to word-overlap heuristic. "
-            "Install with: pip install ai-evaluation[nli]",
+            'Check the model weights and the dependencies installed by: python -m pip install "agent-learning-kit[nli]"',
             RuntimeWarning,
             stacklevel=2,
         )
@@ -71,7 +71,7 @@ def _warn_heuristic_fallback():
         warnings.warn(
             "NLI model not available — using word-overlap heuristic for "
             "hallucination detection. Results will be approximate. "
-            "For accurate NLI, install: pip install ai-evaluation[nli]",
+            'For model-based NLI, install: python -m pip install "agent-learning-kit[nli]"',
             RuntimeWarning,
             stacklevel=3,
         )

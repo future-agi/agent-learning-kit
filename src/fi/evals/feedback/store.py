@@ -127,7 +127,7 @@ class ChromaFeedbackStore(FeedbackStore):
         except ImportError:
             raise ImportError(
                 "chromadb is required for ChromaFeedbackStore. "
-                "Install it with: pip install ai-evaluation[feedback]"
+                'Install it with: python -m pip install "agent-learning-kit[feedback]"'
             )
 
         self._collection_prefix = collection_prefix
