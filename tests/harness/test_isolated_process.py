@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import signal
+import stat
 import sys
 from pathlib import Path
 
@@ -295,3 +296,62 @@ def test_a_stopped_worker_exits_without_waiting_on_a_call_stuck_in_a_thread(tmp_
     result, elapsed = asyncio.run(run())
     assert result == {"sealed": "stopped"}
     assert elapsed < 20
+
+
+def test_a_new_work_directory_is_this_account_s_alone(tmp_path, worker_env):
+    work = tmp_path / "workers"
+    result = asyncio.run(run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=work))
+    assert result["marker"] == "parent"
+    assert stat.S_IMODE(os.lstat(work).st_mode) == 0o700
+
+
+@pytest.mark.parametrize("made", ["writable by others", "a link"])
+def test_a_work_directory_another_account_could_change_is_not_used(tmp_path, worker_env, made):
+    """A worker's result is written in its work directory: one others may write in, or a link to one, is passed
+    over for a new private one, and the worker still runs."""
+    work = tmp_path / "workers"
+    if made == "a link":
+        (tmp_path / "elsewhere").mkdir(mode=0o700)
+        work.symlink_to(tmp_path / "elsewhere")
+    else:
+        work.mkdir()
+        work.chmod(0o777)
+    result = asyncio.run(run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=work))
+    assert result["marker"] == "parent"
+    scratch = Path(result["tmp"]).resolve()
+    assert not scratch.is_relative_to(work.resolve()) and not scratch.is_relative_to((tmp_path / "elsewhere").resolve())
+    # The private directory used instead is gone with the worker.
+    assert not scratch.parent.exists()
+
+
+@pytest.mark.parametrize(("parent_mode", "used"), [(0o777, False), (0o1777, True)])
+def test_a_private_work_directory_under_a_parent_others_may_write_is_used_only_if_sticky(
+    tmp_path, worker_env, parent_mode, used
+):
+    """Another account that may write in the parent could rename the private directory away and put its own in
+    its place; a sticky parent lets only the directory's owner move it."""
+    parent = tmp_path / "shared"
+    parent.mkdir()
+    parent.chmod(parent_mode)
+    work = parent / "workers"
+    work.mkdir(mode=0o700)
+    result = asyncio.run(run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=work))
+    assert result["marker"] == "parent"
+    assert Path(result["tmp"]).resolve().is_relative_to(work.resolve()) is used
+
+
+def test_a_work_directory_reached_through_a_link_others_may_swap_is_used_by_its_real_path(tmp_path, worker_env):
+    """The path names a link in a directory anyone may change, to a private directory: the worker runs in the real
+    directory, so swapping the link afterwards changes nothing it reads or writes."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    (shared / "link").symlink_to(private)
+    result = asyncio.run(
+        run_json_worker("fixture_worker", {}, environ=worker_env, work_directory=shared / "link" / "workers")
+    )
+    assert result["marker"] == "parent"
+    scratch = Path(result["tmp"])
+    assert scratch.is_relative_to(Path(os.path.realpath(private))) and not scratch.is_relative_to(shared)

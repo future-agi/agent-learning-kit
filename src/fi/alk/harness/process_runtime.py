@@ -100,6 +100,7 @@ from .world_door import (
     SEED_SENTINEL_QUERY,
     PostgresLog,
 )
+from .bundle_sql import BundleSqlRefused, run_bundle_sql
 from .job import FailureCause, FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
@@ -4579,143 +4580,21 @@ def _without_trigger_toggles(file: Path) -> tuple[Path, int]:
     return Path(name), changed
 
 
-# psql's own meta-commands psql would run from a bundle's file: a shell (`\!`), another file (`\i`), output to a file
-# (`\o`), another database (`\c`) or each row run as SQL (`\gexec`). Only pg_dump's own restriction lines are left, and
-# only as whole lines of pg_dump's exact shape: anything after one on its line would be a second command psql runs.
-_ALLOWED_META = re.compile(r"^\\(?:un)?restrict [A-Za-z0-9]+\s*$")
-_COPY_FROM_STDIN = re.compile(r"^\s*COPY\b.*\bFROM\s+stdin\b", re.IGNORECASE)
-_DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$")
-
-
-def _meta_in_line(line: str, state: str | None, pending: bool) -> tuple[int | None, str | None, bool]:
-    """Read one line as psql does: where its first meta-command starts outside every string (an E'' string takes
-    backslash escapes), name, comment and dollar-quoted body (None when it has none); the state the line leaves
-    (None, "'", "E'", '"', "/*<depth>" or a dollar tag); and whether a statement is still unfinished after it."""
-    i = 0
-    while i < len(line):
-        if state is None:
-            char = line[i]
-            if line.startswith("--", i):
-                return None, None, pending
-            if line.startswith("/*", i):
-                state, i = "/*1", i + 2
-                continue
-            if char == "'":
-                before = line[i - 1] if i else " "
-                earlier = line[i - 2] if i > 1 else " "
-                escaped = before in "eE" and not (earlier.isalnum() or earlier in "_$")
-                state, i, pending = ("E'" if escaped else "'"), i + 1, True
-                continue
-            if char == '"':
-                state, i, pending = '"', i + 1, True
-                continue
-            if char == "$":
-                tag = _DOLLAR_TAG.match(line, i)
-                before = line[i - 1] if i else " "
-                if tag and not (before.isalnum() or before in "_$"):
-                    state, i, pending = tag.group(), tag.end(), True
-                    continue
-            if char == "\\":
-                return i, None, pending
-            if char == ";":
-                pending = False
-            elif not char.isspace():
-                pending = True
-            i += 1
-        elif state == "E'":
-            if line[i] == "\\":
-                i += 2
-            elif line[i] == "'":
-                if line.startswith("''", i):
-                    i += 2
-                else:
-                    state, i = None, i + 1
-            else:
-                i += 1
-        elif state in ("'", '"'):
-            closing = line.find(state, i)
-            if closing < 0:
-                return None, state, pending
-            if line.startswith(state * 2, closing):
-                i = closing + 2
-                continue
-            state, i = None, closing + 1
-        elif state.startswith("/*"):
-            depth = int(state[2:])
-            opening, closing = line.find("/*", i), line.find("*/", i)
-            if closing < 0 and opening < 0:
-                return None, state, pending
-            if opening >= 0 and (closing < 0 or opening < closing):
-                state, i = f"/*{depth + 1}", opening + 2
-            else:
-                state, i = (f"/*{depth - 1}" if depth > 1 else None), closing + 2
-        else:
-            closing = line.find(state, i)
-            if closing < 0:
-                return None, state, pending
-            i, state = closing + len(state), None
-    return None, state, pending
-
-
-def _meta_commands(file: Path) -> list[str]:
-    """Each line of a file on which psql would run a meta-command: outside its strings, comments, dollar-quoted bodies
-    and the data of a COPY FROM stdin that really started, any backslash but pg_dump's own whole restriction lines."""
-    if file.suffix.lower() != ".sql":
-        return []
+def _run_sql_as_login(
+    file: Path, *, relative_path: str, port: int, dbname: str, login: EngineCredentials, process_name: str
+) -> None:
+    """Run one of a bundle's SQL files as the restricted login (`bundle_sql.run_bundle_sql`); a refusal fails the
+    build naming the file and what to change."""
     try:
-        lines = file.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        return []
-    found: list[str] = []
-    state: str | None = None
-    pending = False
-    copying = False
-    for number, line in enumerate(lines, start=1):
-        if copying:
-            copying = line != "\\."
-            continue
-        if state is None and _ALLOWED_META.match(line):
-            continue
-        started_clean = state is None and not pending
-        at, state, pending = _meta_in_line(line, state, pending)
-        if at is not None:
-            found.append(f"line {number}: {line[at:].split()[0]}")
-            state, pending = None, False
-            continue
-        # COPY data follows only a COPY ... FROM stdin statement that began and ended on this line.
-        copying = started_clean and state is None and not pending and bool(_COPY_FROM_STDIN.match(line))
-    return found
-
-
-def _bundle_sql_identity(user: int | None, group: int | None) -> tuple[int | None, int | None]:
-    """The OS user psql runs a bundle's SQL as. Under per-user isolation an account that is not the database
-    server's and can neither read nor write its data directory or `pg_hba.conf` (`nobody`), so a meta-command psql
-    ran anyway could do no more than that account; with one fixed user, the user given."""
-    import pwd
-
-    from .privilege import IsolationMode, isolation_mode
-
-    if isolation_mode() is not IsolationMode.PER_USER:
-        return user, group
-    try:
-        entry = pwd.getpwnam("nobody")
-    except KeyError as missing:
+        run_bundle_sql(file, port=port, dbname=dbname, user=login.username, password=login.password)
+    except BundleSqlRefused as refused:
         raise ProcessRuntimeError(
             "seed",
-            "internal_no_unprivileged_account",
-            "no unprivileged account (nobody) to run a bundle's SQL as",
-            domain=FailureDomain.INFRASTRUCTURE,
-        ) from missing
-    return entry.pw_uid, entry.pw_gid
-
-
-def _readable_copy(file: Path) -> Path:
-    """A copy of a bundle's SQL file any account can read, for psql run as the unprivileged one."""
-    descriptor, name = tempfile.mkstemp(prefix="bundle-sql-", suffix=file.suffix, dir="/tmp")
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(file.read_bytes())
-    os.chmod(name, 0o644)
-    return Path(name)
+            "seed_failed",
+            _refused_as_login(relative_path, f"ERROR:  {refused}"),
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
+        ) from refused
 
 
 # What a file run as the restricted login asked for that only a superuser may do, and what to change instead.
@@ -4743,11 +4622,16 @@ def _refused_as_login(relative_path: str, failure: str) -> str:
         said = " ".join(line for line in said.splitlines() if line.strip() and line.strip() not in {"SET", "BEGIN"})
         errors = [said.strip() or "the file could not be applied"]
     hints = [hint for marker, hint in _LOGIN_REFUSALS if any(marker.lower() in error.lower() for error in errors)]
+    permission = any(
+        marker in error.lower() for error in errors for marker in ("permission denied", "must be superuser", "must be owner")
+    )
     hint = "; ".join(dict.fromkeys(hints)) or (
         "migrations and the seed run as a login that is no superuser and owns only this database: drop the "
         "statement that needs more, or use a trusted extension instead"
+        if permission
+        else ""
     )
-    return f"{relative_path}: {'; '.join(errors)}. {hint[:1].upper()}{hint[1:]}."
+    return f"{relative_path}: {'; '.join(errors)}." + (f" {hint[:1].upper()}{hint[1:]}." if hint else "")
 
 
 def apply_store_seed(
@@ -4786,15 +4670,6 @@ def apply_store_seed(
                         relative_path,
                         skipped,
                     )
-            if as_login and (meta := _meta_commands(path)):
-                raise ProcessRuntimeError(
-                    "seed",
-                    "seed_failed",
-                    f"{relative_path}: psql meta-commands are not run ({', '.join(meta[:5])}); remove them and keep "
-                    "the file to SQL statements",
-                    process=process_name,
-                    domain=FailureDomain.ENVIRONMENT,
-                )
             if as_login:
                 path, toggled = _without_trigger_toggles(path)
                 if toggled:
@@ -4804,17 +4679,21 @@ def apply_store_seed(
                         relative_path,
                         toggled,
                     )
-            run_as = (user, group)
             if as_login and engine is ManagedEngine.POSTGRES and path.suffix.lower() == ".sql":
-                # Last, after every rewrite: psql reads it as the unprivileged account.
-                run_as = _bundle_sql_identity(user, group)
-                if run_as != (user, group):
-                    path = _readable_copy(path)
+                _run_sql_as_login(
+                    path,
+                    relative_path=relative_path,
+                    port=port,
+                    dbname=dbname,
+                    login=migration_credentials,
+                    process_name=process_name,
+                )
+                continue
             try:
                 apply_seed_file(
                     engine, path, port=port, dbname=dbname,
                     credentials=migration_credentials if as_login else credentials, process_name=process_name,
-                    sync_run=sync_run, user=run_as[0], group=run_as[1], rabbitmq_import=rabbitmq_import,
+                    sync_run=sync_run, user=user, group=group, rabbitmq_import=rabbitmq_import,
                     source_digest=source_digest, generic_artifact_root=generic_artifact_root,
                 )
             except ProcessRuntimeError as failed:
@@ -4847,16 +4726,21 @@ def sentinel_credentials(
     login: EngineCredentials | None = None,
     world_index: int | None = None,
     world_roles: bool = False,
+    query: str | None = None,
 ) -> EngineCredentials | None:
     """Who reads a Postgres store's sentinel, at the baseline and at every reset: never the harness. At the baseline
-    the restricted login the bundle's files ran as; at a reset with world roles, that world's log reader. Only with
+    the restricted login the bundle's files ran as; at a reset with world roles, that world's log reader for the
+    harness's own query and its store role for a bundle's own. Only with
     one fixed user (no roles at all) is it the harness, as every other process is."""
     if engine is not ManagedEngine.POSTGRES or credentials is None:
         return credentials
     if login is not None:
         return login
     if world_roles and world_index is not None and credentials.world_secret:
-        return log_role(credentials, world_index)
+        # The log reader runs only the harness's own fixed query; a bundle's own sentinel is the world's SQL, run as
+        # the world's store role like any other read of its rows.
+        harness_query = _LEGACY_SENTINEL_QUERIES.get(str(query), query) == SEED_SENTINEL_QUERY
+        return log_role(credentials, world_index) if harness_query else store_role(credentials, world_index)
     return credentials
 
 
@@ -5747,27 +5631,32 @@ def _freeze_one_store(
         sentinel_dbname = (
             baseline_dbname if process.engine is ManagedEngine.POSTGRES else None
         )
-        if not check_sentinel(
-            store,
-            engine=process.engine,
-            host="localhost",
-            port=port,
-            dbname=sentinel_dbname,
-            credentials=sentinel_credentials(process.engine, credentials, login=login),
-            sql_runner=context.sql_runner,
-            redis_runner=context.redis_runner,
-            rabbitmq_inspector=context.rabbitmq_inspector,
-            process_name=process.name,
-            stage="baseline",
-        ):
-            raise ProcessRuntimeError(
-                "baseline",
-                "seed_failed",
-                f"{process.name}: sentinel check failed against the freshly seeded baseline",
-                process=process.name,
-                domain=FailureDomain.ENVIRONMENT,
+        try:
+            if not check_sentinel(
+                store,
+                engine=process.engine,
+                host="localhost",
+                port=port,
+                dbname=sentinel_dbname,
+                credentials=sentinel_credentials(process.engine, credentials, login=login),
+                sql_runner=context.sql_runner,
+                redis_runner=context.redis_runner,
+                rabbitmq_inspector=context.rabbitmq_inspector,
+                process_name=process.name,
+                stage="baseline",
+            ):
+                raise ProcessRuntimeError(
+                    "baseline",
+                    "seed_failed",
+                    f"{process.name}: sentinel check failed against the freshly seeded baseline",
+                    process=process.name,
+                    domain=FailureDomain.ENVIRONMENT,
+                )
+        finally:
+            # Whether the sentinel passed or not, the login can no longer log in.
+            retire_login(
+                login, port=port, credentials=credentials, sql_runner=context.sql_runner, process_name=process.name
             )
-        retire_login(login, port=port, credentials=credentials, sql_runner=context.sql_runner, process_name=process.name)
 
         row_counts: dict[str, int] = {}
         seed_digest: dict[str, str] = {}
@@ -5806,6 +5695,14 @@ def _freeze_one_store(
                     sql_runner=context.sql_runner,
                     process_name=process.name,
                     door=has_world_door(manifest),
+                )
+            if process.engine is ManagedEngine.POSTGRES:
+                _refuse_other_sessions(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=baseline_dbname,
+                    sql_runner=context.sql_runner,
+                    process_name=process.name,
                 )
             # Sealed: marked a TEMPLATE and closed to new connections, so nothing can write into
             # it after this — "the sealed post-migrate+seed datastore state" (glossary, "Baseline").
@@ -6358,6 +6255,17 @@ def _harness_shape_problems(
     return sorted(problems)
 
 
+# The action log's `outcome` as an older harness made it (committed unless said otherwise), made today's: no default.
+_OLDER_OUTCOME_COLUMN = (
+    "DO $$ BEGIN IF EXISTS (SELECT FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid = a.attrelid "
+    "AND d.adnum = a.attnum WHERE a.attrelid = to_regclass('public._alk_tool_trace') AND a.attname = 'outcome' "
+    "AND a.attnotnull AND a.atttypid = 'text'::regtype "
+    "AND pg_get_expr(d.adbin, d.adrelid) = $q$'committed'::text$q$) THEN "
+    "ALTER TABLE public._alk_tool_trace ALTER COLUMN outcome DROP DEFAULT, ALTER COLUMN outcome DROP NOT NULL; "
+    "END IF; END $$"
+)
+
+
 def _adopt_harness_tables(
     *,
     port: int,
@@ -6386,6 +6294,10 @@ def _adopt_harness_tables(
         )
 
     found = [str(row[0]) for row in run(HARNESS_TABLES_WITH_CODE, read_only=True) or [] if row]
+    if not found:
+        # A bundle made before outcomes lost their default: its log, exactly as the older harness made it, takes
+        # today's column.
+        run(_OLDER_OUTCOME_COLUMN)
     found += _harness_shape_problems(
         port=port,
         credentials=credentials,
@@ -6449,12 +6361,14 @@ def migrator_credentials(
         f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{READER_ROLE}') "
         f'THEN CREATE ROLE "{READER_ROLE}" NOLOGIN; END IF; END $$',
     )
+    # Whatever an earlier build's files set on the login (`ALTER ROLE ... SET`), gone before these run.
+    run("postgres", _without_settings(MIGRATOR_ROLE))
     run(
         "postgres",
         # BYPASSRLS while the store's files run, as the superuser's load did: a table that forces row security still
         # takes the seed's rows. Taken away again before anything is checked (`seed_store_safely`).
         f'ALTER ROLE "{MIGRATOR_ROLE}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS '
-        f"PASSWORD '{password}'",
+        f"PASSWORD {_literal(password)}",
     )
     # The database and its `public` stay the superuser's (since Postgres 15 `public` belongs to whoever owns the
     # database): the migrations may create schemas, trusted extensions and objects in `public`, never drop or alter
@@ -6538,6 +6452,18 @@ def _settle_harness_rows(
         )
 
 
+# Every membership of a per-world role but its own group, revoked.
+_NORMALISE_MEMBERSHIPS = (
+    "DO $$ DECLARE r record; BEGIN FOR r IN SELECT m.rolname AS member, g.rolname AS grp FROM pg_auth_members a "
+    "JOIN pg_roles m ON m.oid = a.member JOIN pg_roles g ON g.oid = a.roleid WHERE "
+    f"(m.rolname ~ '^{WORLD_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{WORLD_ROLE_GROUP}') "
+    f"OR (m.rolname ~ '^{STORE_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{WORLD_ROLE_GROUP}') "
+    f"OR (m.rolname ~ '^{LOG_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{LOG_ROLE_GROUP}') "
+    f"OR (m.rolname ~ '^{DOOR_ROLE_PREFIX}[0-9]+$' AND g.rolname <> '{DOOR_ROLE_GROUP}') "
+    "LOOP EXECUTE format('REVOKE %I FROM %I', r.grp, r.member); END LOOP; END $$"
+)
+
+
 def seed_store_safely(
     store: StoreEntry,
     *,
@@ -6561,6 +6487,20 @@ def seed_store_safely(
     the migrations ran, and the seed is checked (`_refuse_seed_escalation`) before anything else reads the database.
     Other engines apply their files as before. Returns the restricted login, for any other SQL of the bundle's."""
     postgres = engine is ManagedEngine.POSTGRES and credentials is not None
+    if postgres:
+        # Roles outlive a build: before anything is checked, every per-world role is in its own group and no other,
+        # whatever an older harness granted it.
+        _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname="postgres",
+            statement=_NORMALISE_MEMBERSHIPS,
+        )
     login = store_login(
         store,
         engine=engine,
@@ -6571,16 +6511,78 @@ def seed_store_safely(
         process_name=process_name,
     )
     before_seed: set[SeedEscalation] = set()
+    try:
 
-    def after_migrations() -> None:
-        # What the source's own migrations made: the seed check refuses only what the seed adds or changes.
+        def after_migrations() -> None:
+            # What the source's own migrations made: the seed check refuses only what the seed adds or changes.
+            _end_sessions_of(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
+            if postgres:
+                _adopt_harness_tables(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=dbname,
+                    sql_runner=sql_runner,
+                    process_name=process_name,
+                    complete=complete,
+                )
+                _settle_harness_rows(
+                    port=port,
+                    credentials=credentials,
+                    baseline_db=dbname,
+                    sql_runner=sql_runner,
+                    process_name=process_name,
+                    bundle_dir=bundle_dir,
+                    made_by="migrations",
+                )
+                before_seed.update(
+                    seed_escalation_snapshot(
+                        port=port,
+                        credentials=credentials,
+                        baseline_db=dbname,
+                        sql_runner=sql_runner,
+                        process_name=process_name,
+                    )
+                )
+
+        apply_store_seed(
+            store,
+            engine=engine,
+            bundle_dir=bundle_dir,
+            port=port,
+            dbname=dbname,
+            credentials=credentials,
+            process_name=process_name,
+            sync_run=sync_run,
+            user=user,
+            group=group,
+            rabbitmq_import=rabbitmq_import,
+            source_digest=source_digest,
+            generic_artifact_root=generic_artifact_root,
+            after_migrations=after_migrations,
+            migration_credentials=login,
+        )
+        if login is not None:
+            _call_sql(
+                sql_runner,
+                stage="baseline",
+                process_name=process_name,
+                host="localhost",
+                port=port,
+                user=credentials.username,
+                password=credentials.password,
+                dbname="postgres",
+                statement=f'ALTER ROLE "{login.username}" NOBYPASSRLS',
+            )
+        # No session of the login's outlives its files: none can act after the checks below.
+        _end_sessions_of(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
         if postgres:
-            _adopt_harness_tables(
+            _refuse_seed_escalation(
                 port=port,
                 credentials=credentials,
                 baseline_db=dbname,
                 sql_runner=sql_runner,
                 process_name=process_name,
+                before_seed=before_seed,
                 complete=complete,
             )
             _settle_harness_rows(
@@ -6590,68 +6592,8 @@ def seed_store_safely(
                 sql_runner=sql_runner,
                 process_name=process_name,
                 bundle_dir=bundle_dir,
-                made_by="migrations",
+                made_by="seed",
             )
-            before_seed.update(
-                seed_escalation_snapshot(
-                    port=port,
-                    credentials=credentials,
-                    baseline_db=dbname,
-                    sql_runner=sql_runner,
-                    process_name=process_name,
-                )
-            )
-
-    apply_store_seed(
-        store,
-        engine=engine,
-        bundle_dir=bundle_dir,
-        port=port,
-        dbname=dbname,
-        credentials=credentials,
-        process_name=process_name,
-        sync_run=sync_run,
-        user=user,
-        group=group,
-        rabbitmq_import=rabbitmq_import,
-        source_digest=source_digest,
-        generic_artifact_root=generic_artifact_root,
-        after_migrations=after_migrations,
-        migration_credentials=login,
-    )
-    if login is not None:
-        _call_sql(
-            sql_runner,
-            stage="baseline",
-            process_name=process_name,
-            host="localhost",
-            port=port,
-            user=credentials.username,
-            password=credentials.password,
-            dbname="postgres",
-            statement=f'ALTER ROLE "{login.username}" NOBYPASSRLS',
-        )
-    if postgres:
-        _refuse_seed_escalation(
-            port=port,
-            credentials=credentials,
-            baseline_db=dbname,
-            sql_runner=sql_runner,
-            process_name=process_name,
-            before_seed=before_seed,
-            complete=complete,
-        )
-        _settle_harness_rows(
-            port=port,
-            credentials=credentials,
-            baseline_db=dbname,
-            sql_runner=sql_runner,
-            process_name=process_name,
-            bundle_dir=bundle_dir,
-            made_by="seed",
-        )
-        if login is not None:
-            # Every check done: the bundle's sentinel is read as the restricted login, never as the harness.
             _call_sql(
                 sql_runner,
                 stage="baseline",
@@ -6661,9 +6603,26 @@ def seed_store_safely(
                 user=credentials.username,
                 password=credentials.password,
                 dbname=dbname,
-                statement="DO $$ BEGIN IF to_regclass('public.harness_seed_sentinel') IS NOT NULL THEN "
-                f'GRANT SELECT ON public.harness_seed_sentinel TO "{login.username}"; END IF; END $$',
+                statement=_NO_CREATE_IN_WORLD,
             )
+            if login is not None:
+                # Every check done: the bundle's sentinel is read as the restricted login, never as the harness.
+                _call_sql(
+                    sql_runner,
+                    stage="baseline",
+                    process_name=process_name,
+                    host="localhost",
+                    port=port,
+                    user=credentials.username,
+                    password=credentials.password,
+                    dbname=dbname,
+                    statement="DO $$ BEGIN IF to_regclass('public.harness_seed_sentinel') IS NOT NULL THEN "
+                    f'GRANT SELECT ON public.harness_seed_sentinel TO "{login.username}"; END IF; END $$',
+                )
+    except BaseException:
+        # A build that fails anywhere after the login was made leaves it unable to log in, holding nothing.
+        retire_login(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
+        raise
     return login
 
 
@@ -6688,8 +6647,83 @@ def retire_login(
         user=credentials.username,
         password=credentials.password,
         dbname="postgres",
-        statement=f'ALTER ROLE "{login.username}" NOLOGIN PASSWORD NULL',
+        statement=f'ALTER ROLE "{login.username}" NOLOGIN NOBYPASSRLS PASSWORD NULL',
     )
+    _end_sessions_of(login, port=port, credentials=credentials, sql_runner=sql_runner, process_name=process_name)
+
+
+def _refuse_other_sessions(
+    *, port: int, credentials: EngineCredentials, baseline_db: str, sql_runner: SqlRunner, process_name: str
+) -> None:
+    """The baseline is sealed only with no session but the harness's own connected to it: one held open by another
+    role could change it after the checks."""
+    rows = _call_sql(
+        sql_runner,
+        stage="baseline",
+        process_name=process_name,
+        host="localhost",
+        port=port,
+        user=credentials.username,
+        password=credentials.password,
+        dbname="postgres",
+        statement="SELECT usename::text FROM pg_stat_activity "
+        f"WHERE datname = {_literal(baseline_db)} AND usename <> current_user AND pid <> pg_backend_pid()",
+        read_only=True,
+    )
+    held = sorted({str(row[0]) for row in rows or [] if row and row[0]})
+    if held:
+        raise ProcessRuntimeError(
+            "baseline",
+            "seed_failed",
+            f"{process_name}: the baseline still has sessions of {', '.join(held)} open; it is sealed only when the "
+            "harness's own are the only ones",
+            process=process_name,
+            domain=FailureDomain.ENVIRONMENT,
+        )
+
+
+def _end_sessions_of(
+    login: EngineCredentials | None,
+    *,
+    port: int,
+    credentials: EngineCredentials | None,
+    sql_runner: SqlRunner,
+    process_name: str,
+) -> None:
+    """Every session of the restricted login, in any database, ended: one held open past its files could otherwise
+    act after the checks passed."""
+    if login is None or credentials is None:
+        return
+    _call_sql(
+        sql_runner,
+        stage="baseline",
+        process_name=process_name,
+        host="localhost",
+        port=port,
+        user=credentials.username,
+        password=credentials.password,
+        dbname="postgres",
+        statement="SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+        f"WHERE usename = {_literal(login.username)} AND pid <> pg_backend_pid()",
+    )
+    # Ending a session is asynchronous: wait (briefly) until none is left, so a check that follows sees them gone.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        left = _call_sql(
+            sql_runner,
+            stage="baseline",
+            process_name=process_name,
+            host="localhost",
+            port=port,
+            user=credentials.username,
+            password=credentials.password,
+            dbname="postgres",
+            statement=f"SELECT count(*) FROM pg_stat_activity WHERE usename = {_literal(login.username)}",
+            read_only=True,
+        )
+        if not left or not left[0] or not left[0][0]:
+            return
+        time.sleep(0.05)
 
 
 def store_login(
@@ -6898,14 +6932,36 @@ def _grant_world_role_group(
         )
     run(
         baseline_db,
-        "DO $$ DECLARE q text := pg_get_serial_sequence('public._alk_tool_trace', 'id'); BEGIN "
-        f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); "
+        # A world seeded without the log has no sequence to grant (the name of a missing table is an error).
+        "DO $$ DECLARE q text; BEGIN IF to_regclass('public._alk_tool_trace') IS NOT NULL THEN "
+        "q := pg_get_serial_sequence('public._alk_tool_trace', 'id'); "
+        f"IF q IS NOT NULL THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {door_group}', q); END IF; "
         "END IF; END $$",
     )
     _grant_log_role_group(run, baseline_db)
 
 
 def _grant_log_role_group(run: Callable[[str, str], None], baseline_db: str) -> None:
+    _no_notify(run, baseline_db)
+    _no_large_objects(run, baseline_db)
+    _grant_log_readers(run, baseline_db)
+
+
+def _no_notify(run: Callable[[str, str], None], baseline_db: str) -> None:
+    """No world role may call the `pg_notify` function from its world's code. (The NOTIFY statement needs no grant
+    and cannot be revoked; no world role can read the harness's log, so it carries only what that role may read.)"""
+    run(baseline_db, "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_notify(text, text) FROM PUBLIC")
+
+
+def _no_large_objects(run: Callable[[str, str], None], baseline_db: str) -> None:
+    """No world role may make a new large object with `lo_create`, `lo_creat` or `lo_from_bytea` (`lo_import` is a
+    superuser's already): one outlives a reset of the world's rows. Large objects the seed made keep the rights the
+    seed gave them; a reset checks their contents where its role may read them."""
+    for function in ("lo_create(oid)", "lo_creat(integer)", "lo_from_bytea(oid, bytea)"):
+        run(baseline_db, f"REVOKE EXECUTE ON FUNCTION pg_catalog.{function} FROM PUBLIC")
+
+
+def _grant_log_readers(run: Callable[[str, str], None], baseline_db: str) -> None:
     """The group every world's log reader belongs to may read the log (checks read the world's events) and the seed's
     marker (each reset reads it), and nothing else. No world's role, store role or door is in it."""
     run(
@@ -6921,18 +6977,74 @@ def _grant_log_role_group(run: Callable[[str, str], None], baseline_db: str) -> 
         )
 
 
+# The one setting a store role keeps: every session of its starts with the world's triggers suspended.
+STORE_ROLE_DEFAULT = 'ALTER ROLE "{role}" SET session_replication_role = replica'
+
+
+def _literal(value: str) -> str:
+    """A name as a SQL string literal, never pasted between quotes by hand: each quote doubled, and with a backslash
+    the escape form, backslashes doubled, so it reads the same whatever the server's standard_conforming_strings.
+    The kit installs without a Postgres driver, so this is built here, the way the driver builds it. Some of these
+    literals sit inside a DO $$ body, where a $$ in the value would end the body: the names quoted here are the
+    harness's own (role names it derives), never a customer's."""
+    if "\x00" in value:
+        raise ValueError("a SQL string literal cannot hold a NUL character")
+    quoted = value.replace("'", "''")
+    if "\\" in value:
+        return " E'" + quoted.replace("\\", "\\\\") + "'"
+    return "'" + quoted + "'"
+
+
+def _only_member_of(role: str, group: str) -> list[str]:
+    """A per-world role in its one group and no other, and with no setting of its own: roles outlive a build, and a
+    group or a setting an older harness, or the world's code, gave one would otherwise stay."""
+    return [
+        "DO $$ DECLARE g text; BEGIN FOR g IN SELECT gr.rolname FROM pg_auth_members a "
+        "JOIN pg_roles gr ON gr.oid = a.roleid JOIN pg_roles r ON r.oid = a.member "
+        f"WHERE r.rolname = {_literal(role)} AND gr.rolname <> {_literal(group)} LOOP "
+        f"EXECUTE format('REVOKE %I FROM %I', g, {_literal(role)}); END LOOP; END $$",
+        f'GRANT "{group}" TO "{role}"',
+        _without_settings(role),
+    ]
+
+
+def _without_settings(role: str) -> str:
+    """Every `ALTER ROLE ... SET` a role carries, in any database, taken back."""
+    return (
+        f"DO $$ DECLARE d text; BEGIN EXECUTE format('ALTER ROLE %I RESET ALL', {_literal(role)}); "
+        "FOR d IN SELECT db.datname FROM pg_db_role_setting s JOIN pg_database db ON db.oid = s.setdatabase "
+        f"JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = {_literal(role)} LOOP "
+        f"EXECUTE format('ALTER ROLE %I IN DATABASE %I RESET ALL', {_literal(role)}, d); END LOOP; END $$"
+    )
+
+
+# After the build no one but a superuser creates anything in the world's schemas: a world role's own table would
+# outlive every reset (and could stop one), and nothing the harness runs later needs to.
+_NO_CREATE_IN_WORLD = (
+    "DO $$ DECLARE r record; BEGIN FOR r IN SELECT n.nspname, a.grantee FROM pg_namespace n, "
+    "aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a WHERE n.nspname NOT IN ('pg_catalog', "
+    "'information_schema') AND n.nspname NOT LIKE 'pg\\_%' AND a.privilege_type = 'CREATE' AND (a.grantee = 0 "
+    "OR NOT (SELECT rolsuper FROM pg_roles WHERE oid = a.grantee)) LOOP IF r.grantee = 0 THEN "
+    "EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM PUBLIC', r.nspname); ELSE "
+    "EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', r.nspname, pg_get_userbyid(r.grantee)); END IF; "
+    "END LOOP; END $$"
+)
+
+
 def _reader_login_statements(reader: EngineCredentials | None, world_db: str) -> list[str]:
-    """The world's reader login, in the group the seed granted the listed tables to and nothing else."""
+    """The world's reader login, in the group the seed granted the listed tables to and nothing else, with no setting
+    of its own, as every other world role is."""
     if reader is None:
         return []
     return [
-        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{READER_ROLE}') "
+        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {_literal(READER_ROLE)}) "
         f'THEN CREATE ROLE "{READER_ROLE}" NOLOGIN; END IF; '
-        f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{reader.username}') "
+        f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {_literal(reader.username)}) "
         f'THEN CREATE ROLE "{reader.username}" LOGIN IN ROLE "{READER_ROLE}"; END IF; END $$',
-        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
-        f"PASSWORD '{reader.password}'",
+        f'ALTER ROLE "{reader.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION '
+        f"INHERIT CONNECTION LIMIT -1 VALID UNTIL 'infinity' PASSWORD {_literal(reader.password)}",
         f'GRANT CONNECT ON DATABASE "{world_db}" TO "{reader.username}"',
+        *_only_member_of(reader.username, READER_ROLE),
     ]
 
 
@@ -7007,42 +7119,49 @@ def _reset_template_database(
     if role is not None:
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{role.username}') THEN CREATE ROLE \"{role.username}\" LOGIN IN ROLE "
+            f"{_literal(role.username)}) THEN CREATE ROLE \"{role.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{role.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
-            f"PASSWORD '{role.password}'",
+            f"PASSWORD {_literal(role.password)}",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{role.username}"',
+            *_only_member_of(role.username, WORLD_ROLE_GROUP),
         ]
         # The world's store role: the world group's rights, past row security, and replica mode for a reset.
         store = _store_role_of(credentials, role)
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{store.username}') THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
+            f"{_literal(store.username)}) THEN CREATE ROLE \"{store.username}\" LOGIN IN ROLE "
             f'"{WORLD_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{store.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS '
-            f"PASSWORD '{store.password}'",
+            f"PASSWORD {_literal(store.password)}",
+            # The store role resets with the world's triggers suspended from its first statement, and can never
+            # turn them back on: no right to set the mode, which its every session starts in.
             "DO $$ BEGIN IF current_setting('server_version_num')::int >= 150000 THEN "
-            f"EXECUTE 'GRANT SET ON PARAMETER session_replication_role TO \"{store.username}\"'; END IF; END $$",
+            f"EXECUTE 'REVOKE SET ON PARAMETER session_replication_role FROM \"{store.username}\"'; END IF; END $$",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{store.username}"',
+            *_only_member_of(store.username, WORLD_ROLE_GROUP),
+            STORE_ROLE_DEFAULT.format(role=store.username),
         ]
         # The world's log reader: in no world group, only the log group's read of the log and the marker.
         log = _log_role_of(credentials, role)
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{log.username}') THEN CREATE ROLE \"{log.username}\" LOGIN IN ROLE "
+            f"{_literal(log.username)}) THEN CREATE ROLE \"{log.username}\" LOGIN IN ROLE "
             f'"{LOG_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{log.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS '
-            f"PASSWORD '{log.password}'",
+            f"PASSWORD {_literal(log.password)}",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{log.username}"',
+            *_only_member_of(log.username, LOG_ROLE_GROUP),
         ]
     if role is not None and door is not None:
         statements += [
             "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = "
-            f"'{door.username}') THEN CREATE ROLE \"{door.username}\" LOGIN IN ROLE "
+            f"{_literal(door.username)}) THEN CREATE ROLE \"{door.username}\" LOGIN IN ROLE "
             f'"{DOOR_ROLE_GROUP}"; END IF; END $$',
             f'ALTER ROLE "{door.username}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
-            f"PASSWORD '{door.password}'",
+            f"PASSWORD {_literal(door.password)}",
             f'GRANT CONNECT ON DATABASE "{world_db}" TO "{door.username}"',
+            *_only_member_of(door.username, DOOR_ROLE_GROUP),
         ]
     statements += _reader_login_statements(reader, world_db)
     statements.append(f'ALTER DATABASE "{world_db}" ALLOW_CONNECTIONS true')
@@ -7197,6 +7316,7 @@ def _check_all_sentinels(
                 context.credentials.get(process.name),
                 world_index=world_index,
                 world_roles=context.require_declared_user,
+                query=store.sentinel.query,
             ),
             sql_runner=context.sql_runner,
             redis_runner=context.redis_runner,
