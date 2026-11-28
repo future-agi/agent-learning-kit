@@ -41,18 +41,22 @@ _TIMEOUT_ERRORS = (asyncio.TimeoutError, TimeoutError)
 
 
 class RetellWebCallError(RuntimeError):
-    def __init__(self, code: str, status: int | None = None) -> None:
+    def __init__(
+        self, code: str, status: int | None = None, *, transient: bool = False
+    ) -> None:
         super().__init__(code if status is None else f"{code}:{status}")
         self.code = code
         self.status = status
+        self.transient = transient
 
     @property
     def retryable(self) -> bool:
         """A cause that passes: a rate limit, Retell's media servers at capacity (502/503 on
-        the session call) or another 5xx, or a timeout."""
+        the session call) or another 5xx, a timeout, or a connection refused or reset before
+        Retell answered (``transient``)."""
         if self.status is not None:
             return self.status == 429 or self.status >= 500
-        return self.code.endswith("_timeout")
+        return self.transient or self.code.endswith("_timeout")
 
 
 class _CallerAudioTrack(MediaStreamTrack):
@@ -258,8 +262,10 @@ class RetellWebCallConnector(ProviderConnector):
         except (aiohttp.ContentTypeError, ValueError) as exc:
             # A 201 whose body isn't JSON.
             raise RetellWebCallError("retell_webcall_response_invalid") from exc
+        except aiohttp.ClientConnectionError as exc:
+            # Refused or reset before Retell answered: it passes, so the case is retried.
+            raise RetellWebCallError("retell_webcall_create_failed", transient=True) from exc
         except aiohttp.ClientError as exc:
-            # Refused or reset before Retell answered.
             raise RetellWebCallError("retell_webcall_create_failed") from exc
         if not isinstance(payload, dict):
             raise RetellWebCallError("retell_webcall_response_invalid")
@@ -319,6 +325,8 @@ class RetellWebCallConnector(ProviderConnector):
             raise RetellWebCallError("retell_webcall_session_timeout") from exc
         except (aiohttp.ContentTypeError, ValueError) as exc:
             raise RetellWebCallError("retell_webcall_session_response_invalid") from exc
+        except aiohttp.ClientConnectionError as exc:
+            raise RetellWebCallError("retell_webcall_session_failed", transient=True) from exc
         except aiohttp.ClientError as exc:
             raise RetellWebCallError("retell_webcall_session_failed") from exc
         session_id = answer.get("session_id") if isinstance(answer, dict) else None
